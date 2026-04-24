@@ -44,9 +44,10 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 
 ## Repository layer note
 
-- Foundational async SQLAlchemy repository modules are now available under `app/slaif_gateway/db/repositories/` for identity/admin/key/audit/one-time-secret/email/job tables.
+- Async SQLAlchemy repository modules are now available under `app/slaif_gateway/db/repositories/` for foundational identity/admin/key/audit/email/job tables **and** accounting/provider-routing/pricing/FX tables.
 - Unit repository tests run without PostgreSQL and validate importability plus safety constraints.
-- Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and run only when `DATABASE_URL` is configured against a migrated database.
+- Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and `tests/integration/test_repositories_accounting_and_pricing.py`, and run only when `DATABASE_URL` is configured against an already migrated database.
+- Repositories do not own transaction boundaries (no internal commit); higher-level services will own transactions.
 
 ## Security utility note
 
