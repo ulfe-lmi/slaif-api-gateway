@@ -39,6 +39,10 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
 )
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
+PURPOSE_VALUES_ONE_TIME_SECRETS = ("gateway_key_email", "gateway_key_rotation_email")
+STATUS_VALUES_ONE_TIME_SECRETS = ("pending", "consumed", "expired", "revoked")
+STATUS_VALUES_EMAIL_DELIVERIES = ("pending", "sent", "failed", "cancelled")
+STATUS_VALUES_BACKGROUND_JOBS = ("queued", "running", "succeeded", "failed", "cancelled")
 
 
 def utcnow() -> datetime:
@@ -106,6 +110,8 @@ class Owner(Base):
     institution: Mapped[Institution | None] = relationship(back_populates="owners")
     gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="owner")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="owner")
+    one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="owner")
+    email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="owner")
 
     __table_args__ = (Index("ix_owners_institution_id", "institution_id"), Index("ix_owners_is_active", "is_active"))
 
@@ -127,6 +133,7 @@ class AdminUser(Base):
 
     sessions: Mapped[list[AdminSession]] = relationship(back_populates="admin_user")
     gateway_keys_created: Mapped[list[GatewayKey]] = relationship(back_populates="created_by_admin_user")
+    background_jobs: Mapped[list[BackgroundJob]] = relationship(back_populates="created_by_admin_user")
 
     __table_args__ = (
         CheckConstraint(
@@ -245,6 +252,8 @@ class GatewayKey(Base):
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
+    one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
+    email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
 
     __table_args__ = (
         CheckConstraint(
@@ -581,4 +590,117 @@ class AuditLog(Base):
         Index("ix_audit_log_entity_type_entity_id", "entity_type", "entity_id"),
         Index("ix_audit_log_action_created_at", "action", "created_at"),
         Index("ix_audit_log_request_id", "request_id"),
+    )
+
+
+class OneTimeSecret(Base):
+    __tablename__ = "one_time_secrets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    gateway_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="CASCADE"), nullable=True
+    )
+    encrypted_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    encryption_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    owner: Mapped[Owner | None] = relationship(back_populates="one_time_secrets")
+    gateway_key: Mapped[GatewayKey | None] = relationship(back_populates="one_time_secrets")
+    email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="one_time_secret")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"purpose in {PURPOSE_VALUES_ONE_TIME_SECRETS}",
+            name="one_time_secrets_purpose_allowed_values",
+        ),
+        CheckConstraint(
+            f"status in {STATUS_VALUES_ONE_TIME_SECRETS}",
+            name="one_time_secrets_status_allowed_values",
+        ),
+        Index("ix_one_time_secrets_status_expires_at", "status", "expires_at"),
+        Index("ix_one_time_secrets_gateway_key_id", "gateway_key_id"),
+        Index("ix_one_time_secrets_expires_at", "expires_at"),
+        Index("ix_one_time_secrets_consumed_at", "consumed_at"),
+    )
+
+
+class EmailDelivery(Base):
+    __tablename__ = "email_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    gateway_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="SET NULL"), nullable=True
+    )
+    one_time_secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("one_time_secrets.id", ondelete="SET NULL"), nullable=True
+    )
+    recipient_email: Mapped[str] = mapped_column(CITEXT, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
+    provider_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    owner: Mapped[Owner | None] = relationship(back_populates="email_deliveries")
+    gateway_key: Mapped[GatewayKey | None] = relationship(back_populates="email_deliveries")
+    one_time_secret: Mapped[OneTimeSecret | None] = relationship(back_populates="email_deliveries")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_EMAIL_DELIVERIES}",
+            name="email_deliveries_status_allowed_values",
+        ),
+        Index("ix_email_deliveries_owner_id", "owner_id"),
+        Index("ix_email_deliveries_gateway_key_id", "gateway_key_id"),
+        Index("ix_email_deliveries_status_created_at", "status", "created_at"),
+        Index("ix_email_deliveries_one_time_secret_id", "one_time_secret_id"),
+    )
+
+
+class BackgroundJob(Base):
+    __tablename__ = "background_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    celery_task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued", server_default=text("'queued'"))
+    created_by_admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )
+    payload_summary: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    result_summary: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="background_jobs")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_BACKGROUND_JOBS}",
+            name="background_jobs_status_allowed_values",
+        ),
+        Index("ix_background_jobs_celery_task_id", "celery_task_id"),
+        Index("ix_background_jobs_job_type_created_at", "job_type", "created_at"),
+        Index("ix_background_jobs_status_created_at", "status", "created_at"),
+        Index("ix_background_jobs_created_by_admin_user_id_created_at", "created_by_admin_user_id", "created_at"),
     )
