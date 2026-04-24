@@ -1,0 +1,150 @@
+"""Repository helpers for gateway_keys table operations."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from sqlalchemy import Select, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from slaif_gateway.db.models import GatewayKey
+
+
+class GatewayKeysRepository:
+    """Encapsulates CRUD-style access for GatewayKey rows."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create_gateway_key_record(
+        self,
+        *,
+        public_key_id: str,
+        token_hash: str,
+        owner_id: uuid.UUID,
+        valid_from: datetime,
+        valid_until: datetime,
+        status: str = "active",
+        key_prefix: str = "sk-slaif",
+        key_hint: str | None = None,
+        hash_algorithm: str = "hmac-sha256",
+        hmac_key_version: int = 1,
+        cohort_id: uuid.UUID | None = None,
+        cost_limit_eur: Decimal | None = None,
+        token_limit_total: int | None = None,
+        request_limit_total: int | None = None,
+        created_by_admin_user_id: uuid.UUID | None = None,
+    ) -> GatewayKey:
+        gateway_key = GatewayKey(
+            public_key_id=public_key_id,
+            token_hash=token_hash,
+            owner_id=owner_id,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            status=status,
+            key_prefix=key_prefix,
+            key_hint=key_hint,
+            hash_algorithm=hash_algorithm,
+            hmac_key_version=hmac_key_version,
+            cohort_id=cohort_id,
+            cost_limit_eur=cost_limit_eur,
+            token_limit_total=token_limit_total,
+            request_limit_total=request_limit_total,
+            created_by_admin_user_id=created_by_admin_user_id,
+        )
+        self._session.add(gateway_key)
+        await self._session.flush()
+        return gateway_key
+
+    async def get_gateway_key_by_id(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
+        return await self._session.get(GatewayKey, gateway_key_id)
+
+    async def get_gateway_key_by_public_key_id(self, public_key_id: str) -> GatewayKey | None:
+        statement = select(GatewayKey).where(GatewayKey.public_key_id == public_key_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def list_gateway_keys(
+        self,
+        *,
+        owner_id: uuid.UUID | None = None,
+        cohort_id: uuid.UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[GatewayKey]:
+        statement: Select[tuple[GatewayKey]] = select(GatewayKey)
+        if owner_id is not None:
+            statement = statement.where(GatewayKey.owner_id == owner_id)
+        if cohort_id is not None:
+            statement = statement.where(GatewayKey.cohort_id == cohort_id)
+        if status is not None:
+            statement = statement.where(GatewayKey.status == status)
+
+        statement = statement.order_by(GatewayKey.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def update_gateway_key_status(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        status: str,
+        revoked_at: datetime | None = None,
+        revoked_reason: str | None = None,
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+        gateway_key.status = status
+        gateway_key.revoked_at = revoked_at
+        gateway_key.revoked_reason = revoked_reason
+        await self._session.flush()
+        return True
+
+    async def update_gateway_key_limits(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        cost_limit_eur: Decimal | None = None,
+        token_limit_total: int | None = None,
+        request_limit_total: int | None = None,
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        gateway_key.cost_limit_eur = cost_limit_eur
+        gateway_key.token_limit_total = token_limit_total
+        gateway_key.request_limit_total = request_limit_total
+        await self._session.flush()
+        return True
+
+    async def update_gateway_key_validity(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        if valid_from is not None:
+            gateway_key.valid_from = valid_from
+        if valid_until is not None:
+            gateway_key.valid_until = valid_until
+        await self._session.flush()
+        return True
+
+    async def set_last_used_at(self, gateway_key_id: uuid.UUID, *, last_used_at: datetime) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        gateway_key.last_used_at = last_used_at
+        await self._session.flush()
+        return True
