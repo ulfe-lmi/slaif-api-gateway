@@ -55,3 +55,11 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - Persistence logic should store only HMAC token digests (never plaintext gateway keys).
 - One-time key email payloads are intended to use encrypted temporary secret blobs.
 - Current crypto helpers are pure utilities and do not create database rows by themselves.
+
+
+## Service-layer key creation status
+
+- A dedicated service-layer workflow now creates gateway keys and returns the plaintext key exactly once in a transient service result.
+- Database persistence stores only the HMAC-SHA-256 token digest and key metadata in `gateway_keys` (never plaintext key material).
+- One-time delivery data is stored as encrypted payload + nonce in `one_time_secrets` for a later email workflow.
+- CLI key creation, dashboard key creation, and email sending workflows are intentionally not implemented in this slice yet.

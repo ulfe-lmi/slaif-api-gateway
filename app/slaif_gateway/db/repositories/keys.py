@@ -36,6 +36,13 @@ class GatewayKeysRepository:
         token_limit_total: int | None = None,
         request_limit_total: int | None = None,
         created_by_admin_user_id: uuid.UUID | None = None,
+        allow_all_models: bool = False,
+        allowed_models: list[str] | None = None,
+        allow_all_endpoints: bool = False,
+        allowed_endpoints: list[str] | None = None,
+        rate_limit_requests_per_minute: int | None = None,
+        rate_limit_tokens_per_minute: int | None = None,
+        max_concurrent_requests: int | None = None,
     ) -> GatewayKey:
         gateway_key = GatewayKey(
             public_key_id=public_key_id,
@@ -53,6 +60,13 @@ class GatewayKeysRepository:
             token_limit_total=token_limit_total,
             request_limit_total=request_limit_total,
             created_by_admin_user_id=created_by_admin_user_id,
+            allow_all_models=allow_all_models,
+            allowed_models=allowed_models or [],
+            allow_all_endpoints=allow_all_endpoints,
+            allowed_endpoints=allowed_endpoints or [],
+            rate_limit_requests_per_minute=rate_limit_requests_per_minute,
+            rate_limit_tokens_per_minute=rate_limit_tokens_per_minute,
+            max_concurrent_requests=max_concurrent_requests,
         )
         self._session.add(gateway_key)
         await self._session.flush()
