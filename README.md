@@ -4,11 +4,13 @@ SLAIF API Gateway is an open-source OpenAI-compatible API gateway for educationa
 
 The gateway is intended for workshops, courses, training events, and AI-factory environments where users need practical access to LLM APIs but organizers must protect upstream provider credentials, control spending, and generate usage reports.
 
-## Development (baseline skeleton)
+## Local non-Docker setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 pytest
+uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
