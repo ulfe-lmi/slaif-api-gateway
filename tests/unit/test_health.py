@@ -18,9 +18,11 @@ def test_readyz() -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_v1_models() -> None:
+def test_v1_models_requires_authentication() -> None:
     response = client.get("/v1/models")
-    assert response.status_code == 200
+    assert response.status_code == 401
+
     body = response.json()
-    assert body["object"] == "list"
-    assert body["data"] == []
+    assert "error" in body
+    assert set(body["error"].keys()) == {"message", "type", "param", "code"}
+    assert body["error"]["type"] == "authentication_error"

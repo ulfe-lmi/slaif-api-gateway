@@ -1,9 +1,10 @@
 """ASGI app entrypoint for the SLAIF API Gateway."""
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
     http_exception_handler,
@@ -11,6 +12,7 @@ from slaif_gateway.api.errors import (
     request_validation_exception_handler,
 )
 from slaif_gateway.config import Settings, get_settings
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -36,7 +38,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/v1/models")
-    def list_models() -> dict[str, object]:
+    def list_models(
+        authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+    ) -> dict[str, object]:
+        _ = authenticated_key
         return {"object": "list", "data": []}
 
     return app
