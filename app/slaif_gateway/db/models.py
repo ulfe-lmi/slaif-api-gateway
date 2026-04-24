@@ -27,6 +27,15 @@ from slaif_gateway.db.base import Base
 
 STATUS_VALUES_GATEWAY_KEYS = ("active", "suspended", "revoked")
 ROLE_VALUES_ADMIN_USERS = ("viewer", "operator", "admin", "superadmin")
+STATUS_VALUES_QUOTA_RESERVATIONS = ("pending", "finalized", "released", "expired")
+STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
+    "pending",
+    "finalized",
+    "estimated",
+    "failed",
+    "interrupted",
+    "released",
+)
 
 
 def utcnow() -> datetime:
@@ -46,6 +55,7 @@ class Institution(Base):
     )
 
     owners: Mapped[list[Owner]] = relationship(back_populates="institution")
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="institution")
 
     __table_args__ = (
         Index("uq_institutions_name_lower", func.lower(name), unique=True),
@@ -66,6 +76,7 @@ class Cohort(Base):
     )
 
     gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="cohort")
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="cohort")
 
     __table_args__ = (Index("ix_cohorts_starts_at_ends_at", "starts_at", "ends_at"),)
 
@@ -91,6 +102,7 @@ class Owner(Base):
 
     institution: Mapped[Institution | None] = relationship(back_populates="owners")
     gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="owner")
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="owner")
 
     __table_args__ = (Index("ix_owners_institution_id", "institution_id"), Index("ix_owners_is_active", "is_active"))
 
@@ -228,6 +240,8 @@ class GatewayKey(Base):
     owner: Mapped[Owner] = relationship(back_populates="gateway_keys")
     cohort: Mapped[Cohort | None] = relationship(back_populates="gateway_keys")
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
+    quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
 
     __table_args__ = (
         CheckConstraint(
@@ -254,6 +268,142 @@ class GatewayKey(Base):
         Index("ix_gateway_keys_cohort_id", "cohort_id"),
         Index("ix_gateway_keys_status", "status"),
         Index("ix_gateway_keys_valid_until", "valid_until"),
+    )
+
+
+class QuotaReservation(Base):
+    __tablename__ = "quota_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reserved_cost_eur: Mapped[Decimal] = mapped_column(
+        Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    reserved_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=text("1"))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="quota_reservations")
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="quota_reservation")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_QUOTA_RESERVATIONS}",
+            name="quota_reservations_status_allowed_values",
+        ),
+        CheckConstraint("reserved_cost_eur >= 0", name="quota_reservations_reserved_cost_eur_non_negative"),
+        CheckConstraint("reserved_tokens >= 0", name="quota_reservations_reserved_tokens_non_negative"),
+        CheckConstraint("reserved_requests >= 0", name="quota_reservations_reserved_requests_non_negative"),
+        Index("ix_quota_reservations_gateway_key_id", "gateway_key_id"),
+        Index("ix_quota_reservations_status_expires_at", "status", "expires_at"),
+    )
+
+
+class UsageLedger(Base):
+    __tablename__ = "usage_ledger"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    client_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quota_reservation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quota_reservations.id", ondelete="SET NULL"), nullable=True
+    )
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="SET NULL"), nullable=True
+    )
+    cohort_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cohorts.id", ondelete="SET NULL"), nullable=True
+    )
+    owner_email_snapshot: Mapped[str | None] = mapped_column(CITEXT, nullable=True)
+    owner_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_surname_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    institution_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cohort_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    http_method: Mapped[str] = mapped_column(Text, nullable=False, default="POST", server_default=text("'POST'"))
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upstream_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    streaming: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    accounting_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    completion_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    cached_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    reasoning_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    estimated_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    actual_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    actual_cost_native: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    native_currency: Mapped[str | None] = mapped_column(Text, nullable=True)
+    usage_raw: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    response_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    quota_reservation: Mapped[QuotaReservation | None] = relationship(back_populates="usage_ledger_rows")
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="usage_ledger_rows")
+    owner: Mapped[Owner | None] = relationship(back_populates="usage_ledger_rows")
+    institution: Mapped[Institution | None] = relationship(back_populates="usage_ledger_rows")
+    cohort: Mapped[Cohort | None] = relationship(back_populates="usage_ledger_rows")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"accounting_status in {STATUS_VALUES_USAGE_LEDGER_ACCOUNTING}",
+            name="usage_ledger_accounting_status_allowed_values",
+        ),
+        CheckConstraint("prompt_tokens >= 0", name="usage_ledger_prompt_tokens_non_negative"),
+        CheckConstraint("completion_tokens >= 0", name="usage_ledger_completion_tokens_non_negative"),
+        CheckConstraint("input_tokens >= 0", name="usage_ledger_input_tokens_non_negative"),
+        CheckConstraint("output_tokens >= 0", name="usage_ledger_output_tokens_non_negative"),
+        CheckConstraint("cached_tokens >= 0", name="usage_ledger_cached_tokens_non_negative"),
+        CheckConstraint("reasoning_tokens >= 0", name="usage_ledger_reasoning_tokens_non_negative"),
+        CheckConstraint("total_tokens >= 0", name="usage_ledger_total_tokens_non_negative"),
+        CheckConstraint(
+            "estimated_cost_eur is null or estimated_cost_eur >= 0",
+            name="usage_ledger_estimated_cost_eur_non_negative",
+        ),
+        CheckConstraint(
+            "actual_cost_eur is null or actual_cost_eur >= 0",
+            name="usage_ledger_actual_cost_eur_non_negative",
+        ),
+        Index("ix_usage_ledger_gateway_key_id_created_at", "gateway_key_id", "created_at"),
+        Index("ix_usage_ledger_owner_id_created_at", "owner_id", "created_at"),
+        Index("ix_usage_ledger_institution_id_created_at", "institution_id", "created_at"),
+        Index("ix_usage_ledger_cohort_id_created_at", "cohort_id", "created_at"),
+        Index("ix_usage_ledger_provider_resolved_model", "provider", "resolved_model"),
+        Index("ix_usage_ledger_endpoint_created_at", "endpoint", "created_at"),
+        Index("ix_usage_ledger_accounting_status_created_at", "accounting_status", "created_at"),
     )
 
 

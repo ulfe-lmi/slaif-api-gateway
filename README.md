@@ -35,6 +35,6 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 ## Migration status note
 
 - The first Alembic migration currently creates foundational identity/admin/gateway-key tables (`institutions`, `cohorts`, `owners`, `admin_users`, `admin_sessions`, `gateway_keys`, `audit_log`).
+- The second Alembic migration adds accounting schema tables only (`quota_reservations`, `usage_ledger`); quota reservation/finalization business logic is intentionally not implemented in this slice yet.
 - Running migrations requires a configured PostgreSQL database (`DATABASE_URL`).
 - Current unit tests for this schema slice do not require PostgreSQL.
-
