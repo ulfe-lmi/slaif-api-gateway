@@ -38,4 +38,4 @@ def test_alembic_has_exactly_one_head_revision() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0002_quota_reservations_and_usage_ledger"]
+    assert heads == ["0003_provider_routing_pricing_fx"]
