@@ -1,3 +1,9 @@
+<div style="text-align: center;">
+  <a href="https://www.slaif.si">
+    <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="400" height="400">
+  </a>
+</div>
+
 # SLAIF API Gateway
 
 SLAIF API Gateway is an open-source OpenAI-compatible API gateway for educational and institutional LLM access. It lets users run ordinary OpenAI SDK examples by setting `OPENAI_API_KEY` and `OPENAI_BASE_URL`, while administrators retain control over issued keys, quotas, model access, provider routing, usage accounting, and audit logs.
