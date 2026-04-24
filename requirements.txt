@@ -17,3 +17,4 @@ itsdangerous
 aiosmtplib
 structlog
 prometheus-client
+cryptography
