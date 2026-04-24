@@ -63,3 +63,10 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - Database persistence stores only the HMAC-SHA-256 token digest and key metadata in `gateway_keys` (never plaintext key material).
 - One-time delivery data is stored as encrypted payload + nonce in `one_time_secrets` for a later email workflow.
 - CLI key creation, dashboard key creation, and email sending workflows are intentionally not implemented in this slice yet.
+
+## Service-layer authentication status
+
+- A dedicated gateway key authentication service is now implemented at the service layer.
+- It validates `Authorization: Bearer ...` gateway keys using HMAC digest verification plus status and validity-window checks.
+- This authentication workflow is not yet wired into `/v1` routes or middleware.
+- Quota checks, rate limits, and model/endpoint/provider policy enforcement are intentionally not implemented in this slice.
