@@ -13,9 +13,23 @@ authors = [{ name = "SLAIF" }]
 dependencies = [
   "fastapi",
   "uvicorn",
+  "gunicorn",
   "pydantic",
   "pydantic-settings",
   "httpx",
+  "sqlalchemy",
+  "asyncpg",
+  "alembic",
+  "redis",
+  "celery",
+  "typer",
+  "jinja2",
+  "python-multipart",
+  "argon2-cffi",
+  "itsdangerous",
+  "aiosmtplib",
+  "structlog",
+  "prometheus-client",
 ]
 
 [project.optional-dependencies]
@@ -23,8 +37,13 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "respx",
+  "testcontainers",
+  "hypothesis",
   "ruff",
 ]
+
+[project.scripts]
+slaif-gateway = "slaif_gateway.cli.main:app"
 
 [tool.setuptools]
 package-dir = {"" = "app"}
@@ -38,4 +57,3 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-
