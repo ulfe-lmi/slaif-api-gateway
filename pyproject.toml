@@ -30,6 +30,7 @@ dependencies = [
   "aiosmtplib",
   "structlog",
   "prometheus-client",
+  "cryptography",
 ]
 
 [project.optional-dependencies]

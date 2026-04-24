@@ -40,3 +40,11 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - The fourth Alembic migration adds schema-only encrypted key-delivery and email/job tracking tables (`one_time_secrets`, `email_deliveries`, `background_jobs`); runtime email sending, encryption/decryption helpers, and Celery worker logic are intentionally not implemented in this slice yet.
 - Running migrations requires a configured PostgreSQL database (`DATABASE_URL`).
 - Current unit tests for this schema slice do not require PostgreSQL.
+
+
+## Security utility note
+
+- Gateway key utility helpers now generate OpenAI-compatible user tokens in `sk-ulfe-...` format.
+- Persistence logic should store only HMAC token digests (never plaintext gateway keys).
+- One-time key email payloads are intended to use encrypted temporary secret blobs.
+- Current crypto helpers are pure utilities and do not create database rows by themselves.
