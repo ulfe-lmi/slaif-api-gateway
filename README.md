@@ -42,6 +42,12 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - Current unit tests for this schema slice do not require PostgreSQL.
 
 
+## Repository layer note
+
+- Foundational async SQLAlchemy repository modules are now available under `app/slaif_gateway/db/repositories/` for identity/admin/key/audit/one-time-secret/email/job tables.
+- Unit repository tests run without PostgreSQL and validate importability plus safety constraints.
+- Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and run only when `DATABASE_URL` is configured against a migrated database.
+
 ## Security utility note
 
 - Gateway key utility helpers now generate OpenAI-compatible user tokens in `sk-ulfe-...` format.
