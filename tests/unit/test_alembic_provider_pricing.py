@@ -36,4 +36,4 @@ def test_alembic_has_exactly_one_head_revision_after_third_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0003_provider_routing_pricing_fx"]
+    assert heads == ["0004_email_secrets_and_background_jobs"]
