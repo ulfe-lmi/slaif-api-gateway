@@ -20,3 +20,14 @@ python -m pip install -e ".[dev]"
 pytest
 uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
+
+
+## Database configuration note
+
+- `DATABASE_URL` is optional for unit tests.
+- PostgreSQL is required for future integration tests and actual DB operations.
+- Example local URL:
+
+```bash
+export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway"
+```
