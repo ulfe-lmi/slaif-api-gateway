@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from slaif_gateway.config import get_settings
 from slaif_gateway.db.base import metadata
+from slaif_gateway.db import models  # noqa: F401
 
 config = context.config
 

@@ -31,3 +31,10 @@ uvicorn --app-dir app slaif_gateway.main:app --reload
 ```bash
 export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway"
 ```
+
+## Migration status note
+
+- The first Alembic migration currently creates foundational identity/admin/gateway-key tables (`institutions`, `cohorts`, `owners`, `admin_users`, `admin_sessions`, `gateway_keys`, `audit_log`).
+- Running migrations requires a configured PostgreSQL database (`DATABASE_URL`).
+- Current unit tests for this schema slice do not require PostgreSQL.
+
