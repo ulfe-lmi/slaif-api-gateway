@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -36,6 +37,8 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
     "interrupted",
     "released",
 )
+KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
+MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
 
 
 def utcnow() -> datetime:
@@ -404,6 +407,152 @@ class UsageLedger(Base):
         Index("ix_usage_ledger_provider_resolved_model", "provider", "resolved_model"),
         Index("ix_usage_ledger_endpoint_created_at", "endpoint", "created_at"),
         Index("ix_usage_ledger_accounting_status_created_at", "accounting_status", "created_at"),
+    )
+
+
+class ProviderConfig(Base):
+    __tablename__ = "provider_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Text, nullable=False, default="openai_compatible", server_default=text("'openai_compatible'")
+    )
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_env_var: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default=text("300"))
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default=text("2"))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"kind in {KIND_VALUES_PROVIDER_CONFIGS}",
+            name="provider_configs_kind_allowed_values",
+        ),
+        Index("ix_provider_configs_enabled", "enabled"),
+    )
+
+
+class ModelRoute(Base):
+    __tablename__ = "model_routes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requested_model: Mapped[str] = mapped_column(Text, nullable=False)
+    match_type: Mapped[str] = mapped_column(Text, nullable=False, default="exact", server_default=text("'exact'"))
+    endpoint: Mapped[str] = mapped_column(
+        Text, nullable=False, default="/v1/chat/completions", server_default=text("'/v1/chat/completions'")
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    upstream_model: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    visible_in_models: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    supports_streaming: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    capabilities: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"match_type in {MATCH_TYPE_VALUES_MODEL_ROUTES}",
+            name="model_routes_match_type_allowed_values",
+        ),
+        Index("ix_model_routes_requested_model_enabled", "requested_model", "enabled"),
+        Index("ix_model_routes_provider_enabled", "provider", "enabled"),
+        Index("ix_model_routes_endpoint_enabled", "endpoint", "enabled"),
+        Index("ix_model_routes_priority", "priority"),
+    )
+
+
+class PricingRule(Base):
+    __tablename__ = "pricing_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    upstream_model: Mapped[str] = mapped_column(Text, nullable=False)
+    endpoint: Mapped[str] = mapped_column(
+        Text, nullable=False, default="/v1/chat/completions", server_default=text("'/v1/chat/completions'")
+    )
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD", server_default=text("'USD'"))
+    input_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    cached_input_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    output_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    reasoning_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    request_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    pricing_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "input_price_per_1m is null or input_price_per_1m >= 0",
+            name="pricing_rules_input_price_per_1m_non_negative",
+        ),
+        CheckConstraint(
+            "cached_input_price_per_1m is null or cached_input_price_per_1m >= 0",
+            name="pricing_rules_cached_input_price_per_1m_non_negative",
+        ),
+        CheckConstraint(
+            "output_price_per_1m is null or output_price_per_1m >= 0",
+            name="pricing_rules_output_price_per_1m_non_negative",
+        ),
+        CheckConstraint(
+            "reasoning_price_per_1m is null or reasoning_price_per_1m >= 0",
+            name="pricing_rules_reasoning_price_per_1m_non_negative",
+        ),
+        CheckConstraint("request_price is null or request_price >= 0", name="pricing_rules_request_price_non_negative"),
+        UniqueConstraint("provider", "upstream_model", "endpoint", "valid_from", name="uq_pricing_rules_identity"),
+        Index("ix_pricing_rules_provider_upstream_model_endpoint_enabled", "provider", "upstream_model", "endpoint", "enabled"),
+        Index("ix_pricing_rules_valid_from_valid_until", "valid_from", "valid_until"),
+    )
+
+
+class FxRate(Base):
+    __tablename__ = "fx_rates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    base_currency: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_currency: Mapped[str] = mapped_column(Text, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 9), nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("rate > 0", name="fx_rates_rate_positive"),
+        UniqueConstraint("base_currency", "quote_currency", "valid_from", name="uq_fx_rates_pair_valid_from"),
+        Index(
+            "ix_fx_rates_base_quote_valid_from_valid_until",
+            "base_currency",
+            "quote_currency",
+            "valid_from",
+            "valid_until",
+        ),
     )
 
 
