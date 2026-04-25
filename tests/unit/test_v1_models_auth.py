@@ -58,15 +58,27 @@ def test_v1_models_requires_authentication_by_default() -> None:
     assert body["error"]["type"] == "authentication_error"
 
 
-def test_v1_models_returns_empty_list_for_overridden_authenticated_dependency() -> None:
+def test_v1_models_returns_empty_list_for_overridden_authenticated_dependency(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependencies_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
+    import slaif_gateway.main as main_module
 
     app = create_app()
 
     async def fake_auth() -> AuthenticatedGatewayKey:
         return _fake_authenticated_gateway_key()
 
+    async def _dummy_db_session():
+        yield object()
+
+    async def _fake_list_visible_models(self, authenticated_key: AuthenticatedGatewayKey):
+        _ = authenticated_key
+        return []
+
     app.dependency_overrides[get_authenticated_gateway_key] = fake_auth
+    monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module.ModelCatalogService, "list_visible_models", _fake_list_visible_models)
     client = TestClient(app)
 
     response = client.get("/v1/models")

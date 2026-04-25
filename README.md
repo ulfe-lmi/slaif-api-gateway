@@ -79,10 +79,11 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 ## Service-layer authentication status
 
 - A dedicated gateway key authentication service is now implemented at the service layer.
-- `/v1` routes currently wired in this slice (`GET /v1/models`) now require `Authorization: Bearer ...` gateway-key authentication via FastAPI dependency wiring and return OpenAI-shaped auth errors.
+- `/v1` routes currently wired in this slice (`GET /v1/models`) require `Authorization: Bearer ...` gateway-key authentication via FastAPI dependency wiring and return OpenAI-shaped auth errors.
 - `/healthz` and `/readyz` remain unauthenticated.
-- `/v1/models` currently returns an empty model list (`{"object": "list", "data": []}`) until routing/model-catalog logic is implemented.
-- Quota checks, rate limits, model-policy enforcement, and provider forwarding are intentionally not implemented in this slice.
+- `/v1/models` now reads from configured model routes plus provider configuration metadata through the service layer and returns OpenAI-shaped model objects.
+- `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
+- Provider forwarding, `/v1/chat/completions`, quota checks, rate limits, and pricing/cost logic are intentionally not implemented in this slice.
 
 ## Testing modes
 
