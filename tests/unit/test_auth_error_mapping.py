@@ -49,5 +49,5 @@ def test_auth_error_mapping_never_contains_plaintext_or_hash_material() -> None:
     )
 
     payload = response.body.decode("utf-8")
-    assert "sk-ulfe-" not in payload
+    assert "sk-slaif-" not in payload
     assert "token_hash" not in payload

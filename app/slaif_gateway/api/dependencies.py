@@ -30,14 +30,14 @@ async def get_authenticated_gateway_key(
 ) -> AuthenticatedGatewayKey:
     """Authenticate gateway key from Authorization header for /v1 endpoints."""
     try:
+        settings = get_settings()
         token = GatewayAuthService._extract_bearer_token(authorization)
-        parse_gateway_key_public_id(token)
+        parse_gateway_key_public_id(token, settings.get_gateway_key_accepted_prefixes())
     except ValueError as exc:
         raise openai_error_from_auth_error(MalformedGatewayKeyError()) from exc
     except GatewayAuthError as exc:
         raise openai_error_from_auth_error(exc) from exc
 
-    settings = get_settings()
     async for session in _get_db_session_after_auth_header_check():
         repository = GatewayKeysRepository(session)
         service = GatewayAuthService(settings=settings, gateway_keys_repository=repository)

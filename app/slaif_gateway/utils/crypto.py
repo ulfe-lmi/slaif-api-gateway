@@ -7,9 +7,10 @@ import hashlib
 import hmac
 import re
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-_GATEWAY_KEY_PREFIX = "sk-ulfe-"
+_DEFAULT_GATEWAY_KEY_PREFIX = "sk-slaif-"
 _PUBLIC_ID_LENGTH = 16
 _SECRET_BYTES = 32
 _SECRET_TOKEN_BYTES = 43
@@ -29,26 +30,34 @@ def _urlsafe_b64_no_padding(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
-def generate_gateway_key() -> GeneratedGatewayKey:
-    """Generate an OpenAI-compatible gateway key in sk-ulfe-<public_id>.<secret> format."""
+def generate_gateway_key(prefix: str = _DEFAULT_GATEWAY_KEY_PREFIX) -> GeneratedGatewayKey:
+    """Generate an OpenAI-compatible gateway key in <prefix><public_id>.<secret> format."""
     public_key_id = _urlsafe_b64_no_padding(secrets.token_bytes(_PUBLIC_ID_LENGTH))
     secret = _urlsafe_b64_no_padding(secrets.token_bytes(_SECRET_BYTES))
-    plaintext_key = f"{_GATEWAY_KEY_PREFIX}{public_key_id}.{secret}"
+    plaintext_key = f"{prefix}{public_key_id}.{secret}"
     return GeneratedGatewayKey(
         plaintext_key=plaintext_key,
         public_key_id=public_key_id,
-        display_prefix=f"{_GATEWAY_KEY_PREFIX}{public_key_id[:8]}",
+        display_prefix=f"{prefix}{public_key_id[:8]}",
     )
 
 
-def parse_gateway_key_public_id(key: str) -> str:
+def _best_matching_prefix(key: str, accepted_prefixes: Iterable[str]) -> str | None:
+    matches = [prefix for prefix in accepted_prefixes if prefix and key.startswith(prefix)]
+    if not matches:
+        return None
+    return max(matches, key=len)
+
+
+def parse_gateway_key_public_id(key: str, accepted_prefixes: Iterable[str]) -> str:
     """Parse and return public_key_id from gateway key, raising ValueError if malformed."""
     if not key or not isinstance(key, str):
         raise ValueError("gateway key must be a non-empty string")
-    if not key.startswith(_GATEWAY_KEY_PREFIX):
+    matched_prefix = _best_matching_prefix(key, accepted_prefixes)
+    if not matched_prefix:
         raise ValueError("gateway key has invalid prefix")
 
-    payload = key[len(_GATEWAY_KEY_PREFIX) :]
+    payload = key[len(matched_prefix) :]
     if "." not in payload:
         raise ValueError("gateway key must contain public key id and secret separated by '.'")
 
@@ -63,28 +72,32 @@ def parse_gateway_key_public_id(key: str) -> str:
     return public_key_id
 
 
-def is_plausible_gateway_key(key: str) -> bool:
+def is_plausible_gateway_key(key: str, accepted_prefixes: Iterable[str]) -> bool:
     """Return True when key appears to match gateway key format and constraints."""
     try:
-        parse_gateway_key_public_id(key)
+        parse_gateway_key_public_id(key, accepted_prefixes)
     except ValueError:
         return False
     return True
 
 
-def redact_gateway_key(key: str) -> str:
+def redact_gateway_key(key: str, accepted_prefixes: Iterable[str] | None = None) -> str:
     """Redact a gateway key to keep only safe shape information."""
     if not key:
         return "<redacted>"
 
-    if not is_plausible_gateway_key(key):
+    prefixes = tuple(accepted_prefixes) if accepted_prefixes is not None else (_DEFAULT_GATEWAY_KEY_PREFIX,)
+    if not is_plausible_gateway_key(key, prefixes):
         return "<redacted>"
 
-    public_key_id = parse_gateway_key_public_id(key)
-    payload = key[len(_GATEWAY_KEY_PREFIX) :]
+    public_key_id = parse_gateway_key_public_id(key, prefixes)
+    prefix = _best_matching_prefix(key, prefixes)
+    if prefix is None:
+        return "<redacted>"
+    payload = key[len(prefix) :]
     _, secret = payload.split(".", 1)
     secret_hint = f"{secret[:4]}...{secret[-4:]}"
-    return f"{_GATEWAY_KEY_PREFIX}{public_key_id}.{secret_hint}"
+    return f"{prefix}{public_key_id}.{secret_hint}"
 
 
 def hmac_sha256_token(token: str, secret: str | bytes) -> str:

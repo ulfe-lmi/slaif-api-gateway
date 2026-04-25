@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scripts.seed_test_data import async_main
+from slaif_gateway.config import Settings
 from slaif_gateway.db.models import (
     FxRate,
     GatewayKey,
@@ -63,13 +64,16 @@ async def test_seed_script_populates_safe_dummy_data(
     assert "sk-" not in openai_provider.api_key_env_var
 
     gateway_keys = (await async_test_session.scalars(select(GatewayKey))).all()
+    settings = Settings()
+    expected_prefix = settings.get_gateway_key_prefix().rstrip("-")
     for key_row in gateway_keys:
         assert key_row.token_hash
-        assert "sk-slaif-" not in key_row.token_hash
+        assert "sk-" not in key_row.token_hash
+        assert key_row.key_prefix == expected_prefix
 
     one_time_secrets = (await async_test_session.scalars(select(OneTimeSecret))).all()
     for secret in one_time_secrets:
-        assert "sk-slaif-" not in secret.encrypted_payload
+        assert "sk-" not in secret.encrypted_payload
         assert "secret" not in secret.encrypted_payload.lower() or len(secret.encrypted_payload) > 20
 
     assert os.getenv("DATABASE_URL") is None or os.getenv("DATABASE_URL") != migrated_postgres_url

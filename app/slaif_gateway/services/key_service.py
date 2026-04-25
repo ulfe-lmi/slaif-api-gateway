@@ -37,20 +37,21 @@ class KeyService:
 
     async def create_gateway_key(self, payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
         """Create key metadata and encrypted one-time delivery payload safely."""
-        if not self._settings.TOKEN_HMAC_SECRET:
-            raise ValueError("TOKEN_HMAC_SECRET is required for gateway key creation")
+        active_hmac_version, active_hmac_secret = self._settings.get_active_hmac_secret()
         if not self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY:
             raise ValueError("ONE_TIME_SECRET_ENCRYPTION_KEY is required for gateway key creation")
 
-        generated = generate_gateway_key()
+        active_prefix = self._settings.get_gateway_key_prefix()
+        generated = generate_gateway_key(prefix=active_prefix)
         token_hash = hmac_sha256_token(
             token=generated.plaintext_key,
-            secret=self._settings.TOKEN_HMAC_SECRET,
+            secret=active_hmac_secret,
         )
 
         rate_limit_policy = payload.rate_limit_policy or {}
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
+            key_prefix=active_prefix.rstrip("-"),
             key_hint=generated.display_prefix,
             token_hash=token_hash,
             owner_id=payload.owner_id,
@@ -67,7 +68,7 @@ class KeyService:
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
             created_by_admin_user_id=payload.created_by_admin_id,
-            hmac_key_version=self._extract_version_number(self._settings.TOKEN_HMAC_KEY_VERSION),
+            hmac_key_version=int(active_hmac_version),
         )
 
         one_time_plaintext = json.dumps(

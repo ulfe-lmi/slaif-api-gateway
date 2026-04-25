@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from slaif_gateway.config import Settings
 from slaif_gateway.db.models import (
     Cohort,
     FxRate,
@@ -79,6 +80,7 @@ async def _get_or_create_institution(repo: InstitutionsRepository) -> tuple[Inst
 
 async def _seed(session: AsyncSession) -> SeedResult:
     counts = SeedResult(0, 0, 0, 0, 0, 0, 0, 0, 0)
+    settings = Settings()
 
     institutions = InstitutionsRepository(session)
     cohorts = CohortsRepository(session)
@@ -238,6 +240,7 @@ async def _seed(session: AsyncSession) -> SeedResult:
 
     if await session.scalar(select(GatewayKey).where(GatewayKey.public_key_id == "k_demo_non_usable")) is None:
         now = datetime.now(UTC)
+        key_prefix = settings.get_gateway_key_prefix().rstrip("-")
         await keys.create_gateway_key_record(
             public_key_id="k_demo_non_usable",
             token_hash="hmac-sha256:demo-non-usable-token-digest",
@@ -246,7 +249,7 @@ async def _seed(session: AsyncSession) -> SeedResult:
             valid_from=now,
             valid_until=now + timedelta(days=7),
             status="suspended",
-            key_prefix="sk-slaif",
+            key_prefix=key_prefix,
             key_hint="...demo",
             created_by_admin_user_id=admin.id,
         )

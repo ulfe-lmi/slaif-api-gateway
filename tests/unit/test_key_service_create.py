@@ -11,7 +11,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
 from slaif_gateway.services.key_service import KeyService
-from slaif_gateway.utils.crypto import parse_gateway_key_public_id
+from slaif_gateway.utils.crypto import hmac_sha256_token, parse_gateway_key_public_id
 from slaif_gateway.utils.secrets import EncryptedSecret, decrypt_secret, generate_secret_key
 
 
@@ -55,10 +55,11 @@ class _FakeAuditRepository:
 async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
     encryption_key = generate_secret_key()
     settings = Settings(
-        TOKEN_HMAC_SECRET="h" * 48,
+        ACTIVE_HMAC_KEY_VERSION="1",
+        TOKEN_HMAC_SECRET_V1="h" * 48,
         ONE_TIME_SECRET_ENCRYPTION_KEY=encryption_key,
-        TOKEN_HMAC_KEY_VERSION="v1",
         ONE_TIME_SECRET_KEY_VERSION="v1",
+        GATEWAY_KEY_PREFIX="sk-slaif-",
     )
     keys_repo = _FakeGatewayKeysRepository()
     one_time_repo = _FakeOneTimeSecretsRepository()
@@ -87,12 +88,14 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
 
     result = await service.create_gateway_key(payload)
 
-    assert result.plaintext_key.startswith("sk-ulfe-")
-    assert result.public_key_id == parse_gateway_key_public_id(result.plaintext_key)
+    assert result.plaintext_key.startswith("sk-slaif-")
+    assert result.public_key_id == parse_gateway_key_public_id(result.plaintext_key, ("sk-slaif-",))
 
     key_call = keys_repo.calls[0]
+    assert key_call["key_prefix"] == "sk-slaif"
     assert key_call["token_hash"] != result.plaintext_key
     assert len(str(key_call["token_hash"])) == 64
+    assert key_call["token_hash"] == hmac_sha256_token(result.plaintext_key, "h" * 48)
     assert "plaintext_key" not in key_call
 
     one_time_call = one_time_repo.calls[0]

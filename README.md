@@ -49,9 +49,21 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and `tests/integration/test_repositories_accounting_and_pricing.py`, and run against `TEST_DATABASE_URL` or an automatic Testcontainers PostgreSQL instance.
 - Repositories do not own transaction boundaries (no internal commit); higher-level services will own transactions.
 
+## Gateway key prefix configuration
+
+- Gateway keys use `<GATEWAY_KEY_PREFIX><public_key_id>.<secret>` format.
+- Default `GATEWAY_KEY_PREFIX` is `sk-slaif-`.
+- `GATEWAY_KEY_ACCEPTED_PREFIXES` controls which key prefixes are accepted during parsing/authentication and must include the active `GATEWAY_KEY_PREFIX`.
+- Example:
+
+```bash
+export GATEWAY_KEY_PREFIX="sk-slaif-"
+export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
+```
+
 ## Security utility note
 
-- Gateway key utility helpers now generate OpenAI-compatible user tokens in `sk-ulfe-...` format.
+- Gateway key utility helpers generate OpenAI-compatible user tokens with a configurable prefix (default `sk-slaif-`).
 - Persistence logic should store only HMAC token digests (never plaintext gateway keys).
 - One-time key email payloads are intended to use encrypted temporary secret blobs.
 - Current crypto helpers are pure utilities and do not create database rows by themselves.

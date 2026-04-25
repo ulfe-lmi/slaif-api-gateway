@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import re
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -10,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MIN_PRODUCTION_SECRET_LENGTH = 32
 _ONE_TIME_SECRET_KEY_BYTES = 32
+_GATEWAY_PREFIX_PATTERN = re.compile(r"^sk-[a-z0-9-]+-$")
 
 
 class Settings(BaseSettings):
@@ -22,8 +25,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
     REDIS_URL: str | None = None
 
+    ACTIVE_HMAC_KEY_VERSION: str = "1"
+    TOKEN_HMAC_SECRET_V1: str | None = None
     TOKEN_HMAC_SECRET: str | None = None
-    TOKEN_HMAC_KEY_VERSION: str = "v1"
     ADMIN_SESSION_SECRET: str | None = None
 
     ONE_TIME_SECRET_ENCRYPTION_KEY: str | None = None
@@ -36,14 +40,29 @@ class Settings(BaseSettings):
     ENABLE_OPENROUTER_PROVIDER: bool = True
     ENABLE_ADMIN_DASHBOARD: bool = True
     ENABLE_METRICS: bool = True
+    GATEWAY_KEY_PREFIX: str = "sk-slaif-"
+    GATEWAY_KEY_ACCEPTED_PREFIXES: str | None = None
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         """Enforce minimum secret requirements for production."""
+        self._validate_gateway_key_prefix(self.GATEWAY_KEY_PREFIX)
+        accepted_prefixes = self.get_gateway_key_accepted_prefixes()
+        if self.get_gateway_key_prefix() not in accepted_prefixes:
+            raise ValueError("GATEWAY_KEY_ACCEPTED_PREFIXES must include GATEWAY_KEY_PREFIX")
+
         if self.APP_ENV.lower() == "production":
-            self._validate_production_secret("TOKEN_HMAC_SECRET", self.TOKEN_HMAC_SECRET)
+            version = self.ACTIVE_HMAC_KEY_VERSION.strip()
+            if not version:
+                raise ValueError("ACTIVE_HMAC_KEY_VERSION is required when APP_ENV=production")
+
+            active_secret = self.get_hmac_secret(version)
+            self._validate_production_secret(
+                f"TOKEN_HMAC_SECRET_V{version}",
+                active_secret,
+            )
             self._validate_production_secret("ADMIN_SESSION_SECRET", self.ADMIN_SESSION_SECRET)
             self._validate_required_encryption_key(
                 "ONE_TIME_SECRET_ENCRYPTION_KEY",
@@ -86,6 +105,77 @@ class Settings(BaseSettings):
 
         if len(key_bytes) != _ONE_TIME_SECRET_KEY_BYTES:
             raise ValueError("ONE_TIME_SECRET_ENCRYPTION_KEY must decode to exactly 32 bytes")
+
+    @staticmethod
+    def _validate_gateway_key_prefix(prefix: str) -> None:
+        if not prefix:
+            raise ValueError("Gateway key prefix cannot be empty")
+        if any(ch.isspace() for ch in prefix):
+            raise ValueError("Gateway key prefix cannot contain whitespace")
+        if "." in prefix:
+            raise ValueError("Gateway key prefix cannot contain '.'")
+        if "/" in prefix or "\\" in prefix:
+            raise ValueError("Gateway key prefix cannot contain slash characters")
+        if '"' in prefix or "'" in prefix:
+            raise ValueError("Gateway key prefix cannot contain quotes")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in prefix):
+            raise ValueError("Gateway key prefix cannot contain control characters")
+        if not _GATEWAY_PREFIX_PATTERN.fullmatch(prefix):
+            raise ValueError(
+                "Gateway key prefix must start with 'sk-', end with '-', and use lowercase "
+                "ASCII letters, digits, and hyphens only"
+            )
+
+    def get_gateway_key_prefix(self) -> str:
+        """Return active gateway key prefix after validation."""
+        prefix = self.GATEWAY_KEY_PREFIX.strip()
+        self._validate_gateway_key_prefix(prefix)
+        return prefix
+
+    def get_gateway_key_accepted_prefixes(self) -> tuple[str, ...]:
+        """Return normalized accepted gateway key prefixes."""
+        raw = self.GATEWAY_KEY_ACCEPTED_PREFIXES
+        if raw is None:
+            prefixes = (self.get_gateway_key_prefix(),)
+        else:
+            prefixes = tuple(item.strip() for item in raw.split(",") if item.strip())
+            if not prefixes:
+                raise ValueError("GATEWAY_KEY_ACCEPTED_PREFIXES cannot be empty")
+
+        for prefix in prefixes:
+            self._validate_gateway_key_prefix(prefix)
+
+        if self.get_gateway_key_prefix() not in prefixes:
+            raise ValueError("GATEWAY_KEY_ACCEPTED_PREFIXES must include GATEWAY_KEY_PREFIX")
+
+        return prefixes
+
+    def get_hmac_secret(self, version: str) -> str | None:
+        """Return configured HMAC secret for the requested version."""
+        normalized = version.strip()
+        if not normalized:
+            return None
+
+        versioned_name = f"TOKEN_HMAC_SECRET_V{normalized}"
+        versioned_secret = os.getenv(versioned_name) or getattr(self, versioned_name, None)
+        if versioned_secret:
+            return versioned_secret
+
+        if self.APP_ENV.lower() != "production" and normalized == "1" and self.TOKEN_HMAC_SECRET:
+            return self.TOKEN_HMAC_SECRET
+
+        return None
+
+    def get_active_hmac_secret(self) -> tuple[str, str]:
+        """Return active HMAC version and secret."""
+        version = self.ACTIVE_HMAC_KEY_VERSION.strip()
+        if not version:
+            raise ValueError("ACTIVE_HMAC_KEY_VERSION cannot be empty")
+
+        secret = self.get_hmac_secret(version)
+        if not secret:
+            raise ValueError(f"TOKEN_HMAC_SECRET_V{version} is required for active HMAC version")
+        return version, secret
 
 
 @lru_cache(maxsize=1)
