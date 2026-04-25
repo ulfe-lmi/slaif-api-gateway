@@ -334,11 +334,37 @@ Rules:
 
 Generate OpenAI-looking gateway keys for compatibility.
 
-Recommended key format:
+Recommended/default key format:
 
 ```text
+<GATEWAY_KEY_PREFIX><public_key_id>.<secret>
+````
+
+Default:
+
+```
 sk-slaif-<public_key_id>.<secret>
 ```
+
+Configuration:
+
+```
+GATEWAY_KEY_PREFIX=sk-slaif-
+GATEWAY_KEY_ACCEPTED_PREFIXES=sk-slaif-
+```
+
+Rules:
+
+*   `GATEWAY_KEY_PREFIX` controls the prefix used for newly generated keys.
+*   `GATEWAY_KEY_ACCEPTED_PREFIXES` controls prefixes accepted during parsing/authentication.
+*   `GATEWAY_KEY_ACCEPTED_PREFIXES` must include `GATEWAY_KEY_PREFIX`.
+*   Prefixes should start with `sk-` for OpenAI-tool compatibility.
+*   Prefixes must end with `-`.
+*   Prefixes must not contain `.`, whitespace, `/`, `\`, quotes, or control characters.
+*   Prefixes should use lowercase ASCII letters, digits, and hyphens only.
+*   Parsing must use the configured accepted prefixes, not a hardcoded `sk-slaif-`.
+*   If an old deployment used `sk-ulfe-`, it may be accepted by setting:  
+    `GATEWAY_KEY_ACCEPTED_PREFIXES=sk-slaif-,sk-ulfe-`.
 
 Where:
 
@@ -1265,6 +1291,9 @@ ENABLE_OPENAI_PROVIDER=true
 ENABLE_OPENROUTER_PROVIDER=true
 ENABLE_ADMIN_DASHBOARD=true
 ENABLE_METRICS=true
+
+GATEWAY_KEY_PREFIX=sk-slaif-
+GATEWAY_KEY_ACCEPTED_PREFIXES=sk-slaif-
 ```
 
 Rules:
@@ -1790,6 +1819,9 @@ At every stage, keep OpenAI-compatible client usage working.
 - Do not seed real personal data.
 - Do not store plaintext gateway keys or plaintext one-time secrets in seed data.
 - Do not make the Codex/local PostgreSQL harness a requirement for normal unit tests.
+- Do not hardcode the gateway API key prefix in key generation, parsing, authentication, tests, seed data, or documentation.
+- New keys must use `GATEWAY_KEY_PREFIX`.
+- Authentication/parsing must use `GATEWAY_KEY_ACCEPTED_PREFIXES`.
 
 ---
 
