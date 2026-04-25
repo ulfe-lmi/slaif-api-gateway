@@ -2,6 +2,7 @@
 pytest
 pytest-asyncio
 respx
+openai
 testcontainers[postgres]
 hypothesis
 ruff
