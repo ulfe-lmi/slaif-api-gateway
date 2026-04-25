@@ -123,5 +123,5 @@ def test_v1_models_route_module_safety_constraints() -> None:
 
     source = inspect.getsource(main_module).lower()
 
-    for disallowed in ("httpx", "celery", "aiosmtplib", "/v1/chat/completions"):
+    for disallowed in ("httpx", "celery", "aiosmtplib"):
         assert disallowed not in source

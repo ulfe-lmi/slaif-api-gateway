@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -17,3 +17,11 @@ class OpenAIModel(BaseModel):
 class OpenAIModelList(BaseModel):
     object: Literal["list"] = "list"
     data: list[OpenAIModel]
+
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: list[dict[str, Any]]
+    stream: bool | None = False
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
