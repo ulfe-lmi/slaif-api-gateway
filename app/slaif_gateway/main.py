@@ -1,5 +1,7 @@
 """ASGI app entrypoint for the SLAIF API Gateway."""
 
+import uuid
+
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -16,11 +18,14 @@ from slaif_gateway.api.errors import (
 )
 from slaif_gateway.api.policy_errors import openai_error_from_request_policy_error
 from slaif_gateway.api.pricing_errors import openai_error_from_pricing_error
+from slaif_gateway.api.quota_errors import openai_error_from_quota_error
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList
@@ -28,6 +33,8 @@ from slaif_gateway.services.model_catalog import ModelCatalogService
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
+from slaif_gateway.services.quota_errors import QuotaError
+from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
@@ -127,13 +134,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 fx_rates_repository=FxRatesRepository(session),
             )
             try:
-                await pricing_service.estimate_chat_completion_cost(
+                cost_estimate = await pricing_service.estimate_chat_completion_cost(
                     route=route,
                     policy=policy_result,
                     endpoint="chat.completions",
                 )
             except PricingError as exc:
                 raise openai_error_from_pricing_error(exc) from exc
+
+            quota_service = QuotaService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+            )
+            try:
+                reservation = await quota_service.reserve_for_chat_completion(
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=f"gw-{uuid.uuid4()}",
+                )
+                await quota_service.release_reservation(
+                    reservation.reservation_id,
+                    reason="provider_forwarding_not_implemented",
+                )
+            except QuotaError as exc:
+                raise openai_error_from_quota_error(exc) from exc
 
             raise OpenAICompatibleError(
                 "Provider forwarding is not implemented yet.",

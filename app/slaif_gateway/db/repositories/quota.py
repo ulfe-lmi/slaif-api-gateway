@@ -49,6 +49,15 @@ class QuotaReservationsRepository:
     async def get_reservation_by_id(self, reservation_id: uuid.UUID) -> QuotaReservation | None:
         return await self._session.get(QuotaReservation, reservation_id)
 
+    async def get_reservation_by_id_for_update(
+        self,
+        reservation_id: uuid.UUID,
+    ) -> QuotaReservation | None:
+        """Return a quota reservation row locked for lifecycle mutation."""
+        statement = select(QuotaReservation).where(QuotaReservation.id == reservation_id).with_for_update()
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_reservation_by_request_id(self, request_id: str) -> QuotaReservation | None:
         result = await self._session.execute(
             select(QuotaReservation).where(QuotaReservation.request_id == request_id)
@@ -108,6 +117,18 @@ class QuotaReservationsRepository:
         )
         result = await self._session.execute(statement)
         return result.rowcount > 0
+
+    async def mark_pending_reservation_released(
+        self,
+        reservation: QuotaReservation,
+        *,
+        released_at: datetime,
+    ) -> QuotaReservation:
+        """Mark an already locked pending reservation released."""
+        reservation.status = "released"
+        reservation.released_at = released_at
+        await self._session.flush()
+        return reservation
 
     async def list_expired_pending_reservations(
         self,

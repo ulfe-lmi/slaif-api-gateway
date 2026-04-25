@@ -83,14 +83,16 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/healthz` and `/readyz` remain unauthenticated.
 - `/v1/models` now reads from configured model routes plus provider configuration metadata through the service layer and returns OpenAI-shaped model objects.
 - `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
-- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, service-backed model route resolution, and pricing/FX lookup before returning a placeholder provider-forwarding response.
+- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, service-backed model route resolution, pricing/FX lookup, and PostgreSQL-backed quota reservation before returning a placeholder provider-forwarding response.
 - Chat Completions request-cap settings are configurable via `DEFAULT_MAX_OUTPUT_TOKENS` (default `1024`), `HARD_MAX_OUTPUT_TOKENS` (default `4096`), and `HARD_MAX_INPUT_TOKENS` (default `128000`).
 - A service-layer pricing and FX lookup workflow can estimate the maximum possible cost for Chat Completions after request policy and route resolution have run.
 - Pricing and FX calculations use `Decimal`; unknown pricing and unknown FX conversion data fail closed.
-- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful request policy, route resolution, and pricing/FX validation.
+- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful request policy, route resolution, pricing/FX validation, and quota reservation.
+- Because provider forwarding is not implemented yet, the placeholder path releases the quota reservation before returning `501`; no quota is consumed for an unforwarded request.
+- Hard quota reservation uses PostgreSQL row locking and reserved counters, not Redis.
 - Unsupported models from `/v1/chat/completions` return OpenAI-shaped route-resolution errors before any forwarding attempt.
 - Unknown pricing or FX data fails closed before the placeholder `501` response.
-- Provider forwarding, quota reservation, rate limits, usage ledger writes, final accounting, and streaming behavior are intentionally not implemented in this slice.
+- Provider forwarding, usage ledger finalization, final accounting, streaming behavior, and Redis rate limiting are intentionally not implemented in this slice.
 
 ## Testing modes
 
