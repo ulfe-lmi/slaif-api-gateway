@@ -46,7 +46,7 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 
 - Async SQLAlchemy repository modules are now available under `app/slaif_gateway/db/repositories/` for foundational identity/admin/key/audit/email/job tables **and** accounting/provider-routing/pricing/FX tables.
 - Unit repository tests run without PostgreSQL and validate importability plus safety constraints.
-- Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and `tests/integration/test_repositories_accounting_and_pricing.py`, and run only when `DATABASE_URL` is configured against an already migrated database.
+- Optional integration repository smoke checks live in `tests/integration/test_repositories_foundation.py` and `tests/integration/test_repositories_accounting_and_pricing.py`, and run against `TEST_DATABASE_URL` or an automatic Testcontainers PostgreSQL instance.
 - Repositories do not own transaction boundaries (no internal commit); higher-level services will own transactions.
 
 ## Security utility note
@@ -71,3 +71,37 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - `/healthz` and `/readyz` remain unauthenticated.
 - `/v1/models` currently returns an empty model list (`{"object": "list", "data": []}`) until routing/model-catalog logic is implemented.
 - Quota checks, rate limits, model-policy enforcement, and provider forwarding are intentionally not implemented in this slice.
+
+## Testing modes
+
+- Unit tests:
+
+```bash
+python -m pytest tests/unit
+```
+
+- Default integration tests (uses `TEST_DATABASE_URL` when set, otherwise attempts Docker/Testcontainers, otherwise skips cleanly):
+
+```bash
+python -m pytest tests/integration
+```
+
+- Integration tests with an existing test database:
+
+```bash
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/integration
+```
+
+- Explicit Codex/local PostgreSQL harness:
+
+```bash
+./scripts/codex-install-postgres.sh
+./scripts/codex-start-postgres.sh
+./scripts/create-test-db.sh
+export TEST_DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway_test"
+alembic upgrade head
+python scripts/seed_test_data.py
+python -m pytest tests/integration
+```
+
+Integration tests never use `DATABASE_URL` for destructive setup by default.

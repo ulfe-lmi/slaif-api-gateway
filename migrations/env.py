@@ -23,10 +23,14 @@ target_metadata = metadata
 
 
 def _configured_database_url() -> str:
+    configured_url = config.get_main_option("sqlalchemy.url")
+    if configured_url and configured_url != "driver://user:pass@localhost/dbname":
+        return configured_url
+
     database_url = get_settings().DATABASE_URL
     if not database_url:
         raise RuntimeError(
-            "DATABASE_URL is not configured. Set DATABASE_URL before running Alembic commands."
+            "DATABASE_URL is not configured. Set DATABASE_URL (or sqlalchemy.url) before running Alembic commands."
         )
     return database_url
 
