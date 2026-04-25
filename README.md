@@ -81,11 +81,17 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 
 - Service-layer gateway key management now supports suspend, activate, revoke, update validity, update limits, reset usage counters, and rotate.
 - Rotation returns the replacement plaintext key exactly once, stores only the new HMAC digest, and creates encrypted one-time delivery material for a later email workflow.
+- Typer CLI commands now support admin bootstrap plus prerequisite key-owner records:
+  - `slaif-gateway admin create --email admin@example.org --display-name "Admin User" --password-stdin`
+  - `slaif-gateway institutions create --name "SLAIF Test Institute" --country SI`
+  - `slaif-gateway cohorts create --name "SLAIF Workshop 2026"`
+  - `slaif-gateway owners create --name Ada --surname Lovelace --email ada@example.org --institution-id <institution-id>`
 - Typer CLI commands now expose service-backed key management:
   - `slaif-gateway keys create --owner-id <uuid> --valid-days 30`
   - `slaif-gateway keys list`
   - `slaif-gateway keys rotate <gateway-key-id>`
 - `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
+- Admin password commands never print plaintext passwords or password hashes. Institution, cohort, and owner commands print safe metadata only.
 - Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
 - PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior. They require `TEST_DATABASE_URL` and a migrated test database, and verify HMAC-only key storage, encrypted one-time delivery material, audit rows, and rotation behavior. Normal unit tests still do not require PostgreSQL.
 

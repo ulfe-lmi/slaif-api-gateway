@@ -48,10 +48,21 @@ class OwnersRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
-    async def list_owners(self, *, limit: int = 100, offset: int = 0) -> list[Owner]:
-        statement: Select[tuple[Owner]] = (
-            select(Owner).order_by(Owner.created_at.desc()).limit(limit).offset(offset)
-        )
+    async def list_owners(
+        self,
+        *,
+        institution_id: uuid.UUID | None = None,
+        email: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Owner]:
+        statement: Select[tuple[Owner]] = select(Owner)
+        if institution_id is not None:
+            statement = statement.where(Owner.institution_id == institution_id)
+        if email is not None:
+            statement = statement.where(Owner.email == email)
+
+        statement = statement.order_by(Owner.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
