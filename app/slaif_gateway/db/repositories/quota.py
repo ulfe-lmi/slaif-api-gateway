@@ -130,6 +130,19 @@ class QuotaReservationsRepository:
         await self._session.flush()
         return reservation
 
+    async def mark_pending_reservation_finalized(
+        self,
+        reservation: QuotaReservation,
+        *,
+        finalized_at: datetime,
+    ) -> QuotaReservation:
+        """Mark an already locked pending reservation finalized."""
+        reservation.status = "finalized"
+        reservation.finalized_at = finalized_at
+        reservation.released_at = None
+        await self._session.flush()
+        return reservation
+
     async def list_expired_pending_reservations(
         self,
         *,
