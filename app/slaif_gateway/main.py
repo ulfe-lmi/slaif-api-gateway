@@ -14,12 +14,15 @@ from slaif_gateway.api.errors import (
     openai_compatible_error_handler,
     request_validation_exception_handler,
 )
+from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.openai import OpenAIModelList
+from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList
 from slaif_gateway.services.model_catalog import ModelCatalogService
+from slaif_gateway.services.route_resolution import RouteResolutionService
+from slaif_gateway.services.routing_errors import RouteResolutionError
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -57,6 +60,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return OpenAIModelList(data=models)
 
         return OpenAIModelList(data=[])
+
+    @app.post("/v1/chat/completions")
+    async def validate_chat_completions(
+        payload: ChatCompletionRequest,
+        authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+    ):
+        if not payload.model:
+            raise OpenAICompatibleError(
+                "The 'model' field is required.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="missing_model",
+                param="model",
+            )
+
+        if not isinstance(payload.messages, list):
+            raise OpenAICompatibleError(
+                "The 'messages' field must be a list.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="invalid_messages",
+                param="messages",
+            )
+
+        async for session in _get_db_session_after_auth_header_check():
+            service = RouteResolutionService(
+                model_routes_repository=ModelRoutesRepository(session),
+                provider_configs_repository=ProviderConfigsRepository(session),
+            )
+            try:
+                await service.resolve_model(payload.model, authenticated_key)
+            except RouteResolutionError as exc:
+                raise openai_error_from_route_resolution_error(exc) from exc
+
+            raise OpenAICompatibleError(
+                "Provider forwarding is not implemented yet.",
+                status_code=501,
+                error_type="server_error",
+                code="provider_forwarding_not_implemented",
+            )
+
+        raise OpenAICompatibleError(
+            "Provider forwarding is not implemented yet.",
+            status_code=501,
+            error_type="server_error",
+            code="provider_forwarding_not_implemented",
+        )
 
     return app
 

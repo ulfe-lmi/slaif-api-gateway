@@ -83,6 +83,9 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/healthz` and `/readyz` remain unauthenticated.
 - `/v1/models` now reads from configured model routes plus provider configuration metadata through the service layer and returns OpenAI-shaped model objects.
 - `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
+- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), and service-backed model route resolution only.
+- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful route resolution.
+- Unsupported models from `/v1/chat/completions` return OpenAI-shaped route-resolution errors before any forwarding attempt.
 - Provider forwarding, `/v1/chat/completions`, quota checks, rate limits, and pricing/cost logic are intentionally not implemented in this slice.
 
 ## Testing modes
