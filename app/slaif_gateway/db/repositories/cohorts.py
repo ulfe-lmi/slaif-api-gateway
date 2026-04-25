@@ -38,6 +38,11 @@ class CohortsRepository:
     async def get_cohort_by_id(self, cohort_id: uuid.UUID) -> Cohort | None:
         return await self._session.get(Cohort, cohort_id)
 
+    async def get_cohort_by_name(self, name: str) -> Cohort | None:
+        statement = select(Cohort).where(Cohort.name == name)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def list_cohorts(self, *, limit: int = 100, offset: int = 0) -> list[Cohort]:
         statement: Select[tuple[Cohort]] = (
             select(Cohort)

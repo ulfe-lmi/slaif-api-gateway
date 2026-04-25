@@ -3,10 +3,18 @@
 import typer
 
 from slaif_gateway import __version__
+from slaif_gateway.cli.admin import app as admin_app
+from slaif_gateway.cli.cohorts import app as cohorts_app
 from slaif_gateway.cli.db import app as db_app
+from slaif_gateway.cli.institutions import app as institutions_app
 from slaif_gateway.cli.keys import app as keys_app
+from slaif_gateway.cli.owners import app as owners_app
 
 app = typer.Typer(help="SLAIF API Gateway CLI")
+app.add_typer(admin_app, name="admin")
+app.add_typer(institutions_app, name="institutions")
+app.add_typer(cohorts_app, name="cohorts")
+app.add_typer(owners_app, name="owners")
 app.add_typer(db_app, name="db")
 app.add_typer(keys_app, name="keys")
 

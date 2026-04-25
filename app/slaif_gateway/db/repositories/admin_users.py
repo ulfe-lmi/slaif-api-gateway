@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AdminUser
@@ -43,6 +43,13 @@ class AdminUsersRepository:
         statement = select(AdminUser).where(AdminUser.email == email)
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def list_admin_users(self, *, limit: int = 100, offset: int = 0) -> list[AdminUser]:
+        statement: Select[tuple[AdminUser]] = (
+            select(AdminUser).order_by(AdminUser.created_at.desc()).limit(limit).offset(offset)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
 
     async def set_admin_password_hash(self, admin_user_id: uuid.UUID, password_hash: str) -> bool:
         admin_user = await self.get_admin_user_by_id(admin_user_id)
