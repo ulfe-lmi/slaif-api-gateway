@@ -143,3 +143,15 @@ python -m pytest tests/integration
 ```
 
 Integration tests never use `DATABASE_URL` for destructive setup by default.
+
+- OpenAI Python client E2E test:
+
+```bash
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/e2e/test_openai_python_client_chat.py
+```
+
+This E2E test uses the official `openai` Python package with `OpenAI()` reading only
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` from the client environment. It runs the local
+FastAPI app against a migrated PostgreSQL test database, issues a gateway key through
+the safe key service, mocks upstream OpenAI HTTP with RESPX, and requires no real
+OpenAI/OpenRouter API keys. Unit tests still do not require PostgreSQL or upstream keys.

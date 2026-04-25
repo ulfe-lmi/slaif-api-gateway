@@ -38,6 +38,7 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "respx",
+  "openai",
   "testcontainers[postgres]",
   "hypothesis",
   "ruff",
@@ -55,6 +56,9 @@ where = ["app"]
 [tool.pytest.ini_options]
 pythonpath = ["app"]
 addopts = "-q"
+markers = [
+  "e2e: end-to-end tests that require an explicit local test database",
+]
 
 [tool.ruff]
 line-length = 100
