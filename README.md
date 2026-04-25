@@ -36,7 +36,7 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 
 - The first Alembic migration currently creates foundational identity/admin/gateway-key tables (`institutions`, `cohorts`, `owners`, `admin_users`, `admin_sessions`, `gateway_keys`, `audit_log`).
 - The second Alembic migration adds accounting schema tables only (`quota_reservations`, `usage_ledger`); quota reservation/finalization business logic is intentionally not implemented in this slice yet.
-- The third Alembic migration adds schema-only provider/routing/pricing/FX tables (`provider_configs`, `model_routes`, `pricing_rules`, `fx_rates`); runtime routing and pricing logic are intentionally not implemented in this slice yet.
+- The third Alembic migration adds schema-only provider/routing/pricing/FX tables (`provider_configs`, `model_routes`, `pricing_rules`, `fx_rates`); provider forwarding and quota/accounting workflows remain intentionally unimplemented.
 - The fourth Alembic migration adds schema-only encrypted key-delivery and email/job tracking tables (`one_time_secrets`, `email_deliveries`, `background_jobs`); runtime email sending, encryption/decryption helpers, and Celery worker logic are intentionally not implemented in this slice yet.
 - Running migrations requires a configured PostgreSQL database (`DATABASE_URL`).
 - Current unit tests for this schema slice do not require PostgreSQL.
@@ -83,12 +83,13 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/healthz` and `/readyz` remain unauthenticated.
 - `/v1/models` now reads from configured model routes plus provider configuration metadata through the service layer and returns OpenAI-shaped model objects.
 - `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
-- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, and service-backed model route resolution.
+- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, service-backed model route resolution, and pricing/FX lookup before returning a placeholder provider-forwarding response.
 - Chat Completions request-cap settings are configurable via `DEFAULT_MAX_OUTPUT_TOKENS` (default `1024`), `HARD_MAX_OUTPUT_TOKENS` (default `4096`), and `HARD_MAX_INPUT_TOKENS` (default `128000`).
 - A service-layer pricing and FX lookup workflow can estimate the maximum possible cost for Chat Completions after request policy and route resolution have run.
 - Pricing and FX calculations use `Decimal`; unknown pricing and unknown FX conversion data fail closed.
-- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful route resolution.
+- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful request policy, route resolution, and pricing/FX validation.
 - Unsupported models from `/v1/chat/completions` return OpenAI-shaped route-resolution errors before any forwarding attempt.
+- Unknown pricing or FX data fails closed before the placeholder `501` response.
 - Provider forwarding, quota reservation, rate limits, usage ledger writes, final accounting, and streaming behavior are intentionally not implemented in this slice.
 
 ## Testing modes

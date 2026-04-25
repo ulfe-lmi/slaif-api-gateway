@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.routing import RouteResolutionResult
 
 
 def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
@@ -50,6 +51,32 @@ def _wire_auth_and_db(monkeypatch, app) -> None:
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+
+
+def _route_result(requested_model: str = "gpt-4.1-mini") -> RouteResolutionResult:
+    return RouteResolutionResult(
+        requested_model=requested_model,
+        resolved_model=requested_model,
+        provider="openai",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern=requested_model,
+        priority=100,
+    )
+
+
+def _wire_successful_pricing(monkeypatch) -> None:
+    import slaif_gateway.main as main_module
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, endpoint, at)
+        return object()
+
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
 
 
 def test_unauthenticated_request_returns_openai_shaped_401() -> None:
@@ -177,9 +204,10 @@ def test_valid_request_with_no_output_limit_reaches_route_resolution_then_return
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = authenticated_key
         resolver_calls.append(requested_model)
-        return object()
+        return _route_result(requested_model)
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    _wire_successful_pricing(monkeypatch)
 
     client = TestClient(app)
     response = client.post(
@@ -200,9 +228,10 @@ def test_valid_request_with_route_still_returns_501_not_model_response(monkeypat
 
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (requested_model, authenticated_key)
-        return object()
+        return _route_result(requested_model)
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    _wire_successful_pricing(monkeypatch)
 
     client = TestClient(app)
     response = client.post(
@@ -226,9 +255,10 @@ def test_stream_true_returns_501_not_streaming(monkeypatch) -> None:
 
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (requested_model, authenticated_key)
-        return object()
+        return _route_result(requested_model)
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    _wire_successful_pricing(monkeypatch)
 
     client = TestClient(app)
     response = client.post(
@@ -252,7 +282,6 @@ def test_chat_completions_module_safety_constraints() -> None:
         "celery",
         "aiosmtplib",
         "quota",
-        "pricing",
         "accounting",
     ):
         assert disallowed not in source
