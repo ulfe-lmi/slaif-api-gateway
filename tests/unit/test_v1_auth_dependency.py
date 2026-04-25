@@ -6,8 +6,10 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
+from slaif_gateway.config import get_settings
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.services.auth_service import MalformedGatewayKeyError
 
 _DISALLOWED_IMPORT_TERMS = (
     "openrouter",
@@ -81,9 +83,24 @@ def test_missing_authorization_returns_401_without_database_url(monkeypatch) -> 
     assert calls["count"] == 0
 
 
-def test_invalid_auth_scheme_and_malformed_bearer_return_openai_shaped_401() -> None:
+def test_invalid_auth_scheme_and_malformed_bearer_return_openai_shaped_401(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependency_module
+
     app = create_app()
     client = TestClient(app)
+
+    calls = {"count": 0}
+
+    async def _failing_db_session_dependency():
+        calls["count"] += 1
+        raise AssertionError("DB session should not be opened for malformed Authorization")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        dependency_module,
+        "_get_db_session_after_auth_header_check",
+        _failing_db_session_dependency,
+    )
 
     basic_response = client.get("/v1/models", headers={"Authorization": "Basic abc"})
     assert basic_response.status_code == 401
@@ -96,6 +113,97 @@ def test_invalid_auth_scheme_and_malformed_bearer_return_openai_shaped_401() -> 
     malformed_body = malformed_response.json()
     assert "error" in malformed_body
     assert malformed_body["error"]["type"] == "authentication_error"
+    assert calls["count"] == 0
+
+
+def test_unconfigured_prefix_is_rejected_with_openai_shaped_401(monkeypatch) -> None:
+    monkeypatch.setenv("GATEWAY_KEY_PREFIX", "sk-slaif-")
+    monkeypatch.setenv("GATEWAY_KEY_ACCEPTED_PREFIXES", "sk-slaif-")
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer sk-ulfe-public1234abcd.sssssssssssssssssssssssssssssssssssssssssss"},
+    )
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["type"] == "authentication_error"
+    assert body["error"]["code"] == "malformed_gateway_key"
+    get_settings.cache_clear()
+
+
+def test_configured_legacy_prefix_reaches_service_layer(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependency_module
+
+    monkeypatch.setenv("GATEWAY_KEY_PREFIX", "sk-slaif-")
+    monkeypatch.setenv("GATEWAY_KEY_ACCEPTED_PREFIXES", "sk-slaif-,sk-ulfe-")
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    async def _dummy_db_session():
+        yield object()
+
+    async def _raise_not_found(self, authorization_header, now=None):
+        raise MalformedGatewayKeyError()
+
+    monkeypatch.setattr(
+        dependency_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(
+        dependency_module.GatewayAuthService,
+        "authenticate_authorization_header",
+        _raise_not_found,
+    )
+
+    response = client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer sk-ulfe-public1234abcd.sssssssssssssssssssssssssssssssssssssssssss"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "malformed_gateway_key"
+    get_settings.cache_clear()
+
+
+def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependency_module
+
+    app = create_app()
+    client = TestClient(app)
+
+    async def _dummy_db_session():
+        yield object()
+
+    async def _fake_authenticate(self, authorization_header, now=None) -> AuthenticatedGatewayKey:
+        _ = (authorization_header, now)
+        return _fake_authenticated_gateway_key()
+
+    monkeypatch.setattr(
+        dependency_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(
+        dependency_module.GatewayAuthService,
+        "authenticate_authorization_header",
+        _fake_authenticate,
+    )
+
+    response = client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer sk-slaif-public1234abcd.sssssssssssssssssssssssssssssssssssssssssss"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"object": "list", "data": []}
 
 
 def test_auth_dependency_override_supports_authenticated_test_path() -> None:
