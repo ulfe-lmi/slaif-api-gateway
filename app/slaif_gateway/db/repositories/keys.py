@@ -84,6 +84,12 @@ class GatewayKeysRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def get_gateway_key_for_update(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
+        """Return a gateway key row locked for administrative mutation."""
+        statement = select(GatewayKey).where(GatewayKey.id == gateway_key_id).with_for_update()
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_gateway_key_by_public_key_id(self, public_key_id: str) -> GatewayKey | None:
         statement = select(GatewayKey).where(GatewayKey.public_key_id == public_key_id)
         result = await self._session.execute(statement)
@@ -162,6 +168,30 @@ class GatewayKeysRepository:
             gateway_key.valid_until = valid_until
         await self._session.flush()
         return True
+
+    async def reset_gateway_key_usage_counters(
+        self,
+        gateway_key: GatewayKey,
+        *,
+        reset_used_counters: bool = True,
+        reset_reserved_counters: bool = False,
+        reset_at: datetime,
+    ) -> GatewayKey:
+        """Reset selected usage counters on an already loaded gateway key row."""
+        if reset_used_counters:
+            gateway_key.cost_used_eur = Decimal("0")
+            gateway_key.tokens_used_total = 0
+            gateway_key.requests_used_total = 0
+            gateway_key.last_used_at = None
+        if reset_reserved_counters:
+            gateway_key.cost_reserved_eur = Decimal("0")
+            gateway_key.tokens_reserved_total = 0
+            gateway_key.requests_reserved_total = 0
+
+        gateway_key.last_quota_reset_at = reset_at
+        gateway_key.quota_reset_count += 1
+        await self._session.flush()
+        return gateway_key
 
     async def set_last_used_at(self, gateway_key_id: uuid.UUID, *, last_used_at: datetime) -> bool:
         gateway_key = await self.get_gateway_key_by_id(gateway_key_id)

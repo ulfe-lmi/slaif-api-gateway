@@ -12,7 +12,17 @@ from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.utils.crypto import hmac_sha256_token
 from slaif_gateway.utils.secrets import generate_secret_key
 
-_DISALLOWED_IMPORT_TERMS = ("openai", "openrouter", "aiosmtplib", "celery", "fastapi")
+_DISALLOWED_IMPORT_TERMS = (
+    "openai",
+    "openrouter",
+    "aiosmtplib",
+    "celery",
+    "fastapi",
+    "redis",
+    "dashboard",
+    "create_async_engine",
+    "get_sessionmaker",
+)
 
 
 class _NoopRepo:
@@ -73,6 +83,15 @@ def test_key_service_module_does_not_import_disallowed_runtime_layers() -> None:
     for line in import_lines:
         for term in _DISALLOWED_IMPORT_TERMS:
             assert term not in line, f"forbidden import term '{term}' in key_service: {line}"
+
+
+def test_key_service_module_does_not_own_transaction_boundaries() -> None:
+    import slaif_gateway.services.key_service as key_service_module
+
+    source = inspect.getsource(key_service_module)
+
+    assert ".commit(" not in source
+    assert "create_async_engine" not in source
 
 
 def test_hmac_digest_is_not_raw_token() -> None:
