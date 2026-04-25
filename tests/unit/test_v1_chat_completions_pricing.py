@@ -3,12 +3,14 @@ from __future__ import annotations
 import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import (
     FxRateNotFoundError,
@@ -67,9 +69,44 @@ def _wire_auth_and_db(monkeypatch, app) -> None:
     async def _dummy_db_session():
         yield object()
 
+    async def _fake_reserve(
+        self,
+        *,
+        authenticated_key,
+        route,
+        policy,
+        cost_estimate,
+        request_id,
+        now=None,
+    ):
+        _ = (self, route, policy, cost_estimate, now)
+        return QuotaReservationResult(
+            reservation_id=uuid.uuid4(),
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            reserved_cost_eur=Decimal("0"),
+            reserved_tokens=0,
+            status="pending",
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+
+    async def _fake_release(self, reservation_id, *, reason=None, now=None):
+        _ = (self, reason, now)
+        return QuotaReservationResult(
+            reservation_id=reservation_id,
+            gateway_key_id=uuid.uuid4(),
+            request_id="req",
+            reserved_cost_eur=Decimal("0"),
+            reserved_tokens=0,
+            status="released",
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module.QuotaService, "release_reservation", _fake_release)
 
 
 def _chat_request(model: str = "classroom-cheap") -> dict[str, object]:
@@ -269,7 +306,6 @@ def test_chat_completions_pricing_path_safety_constraints() -> None:
         "openrouter",
         "openai_upstream",
         "openrouter_api_key",
-        "quota",
         "usage_ledger",
         "accounting",
         "rate_limit",

@@ -75,6 +75,15 @@ class GatewayKeysRepository:
     async def get_gateway_key_by_id(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
         return await self._session.get(GatewayKey, gateway_key_id)
 
+    async def get_gateway_key_by_id_for_quota_update(
+        self,
+        gateway_key_id: uuid.UUID,
+    ) -> GatewayKey | None:
+        """Return a gateway key row locked for quota counter mutation."""
+        statement = select(GatewayKey).where(GatewayKey.id == gateway_key_id).with_for_update()
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_gateway_key_by_public_key_id(self, public_key_id: str) -> GatewayKey | None:
         statement = select(GatewayKey).where(GatewayKey.public_key_id == public_key_id)
         result = await self._session.execute(statement)
@@ -162,3 +171,36 @@ class GatewayKeysRepository:
         gateway_key.last_used_at = last_used_at
         await self._session.flush()
         return True
+
+    async def add_reserved_counters(
+        self,
+        gateway_key: GatewayKey,
+        *,
+        cost_reserved_eur: Decimal,
+        tokens_reserved_total: int,
+        requests_reserved_total: int,
+    ) -> GatewayKey:
+        """Increment reserved counters on an already locked gateway key row."""
+        gateway_key.cost_reserved_eur += cost_reserved_eur
+        gateway_key.tokens_reserved_total += tokens_reserved_total
+        gateway_key.requests_reserved_total += requests_reserved_total
+        await self._session.flush()
+        return gateway_key
+
+    async def subtract_reserved_counters(
+        self,
+        gateway_key: GatewayKey,
+        *,
+        cost_reserved_eur: Decimal,
+        tokens_reserved_total: int,
+        requests_reserved_total: int,
+    ) -> GatewayKey:
+        """Decrement reserved counters on an already locked row without going below zero."""
+        gateway_key.cost_reserved_eur = max(Decimal("0"), gateway_key.cost_reserved_eur - cost_reserved_eur)
+        gateway_key.tokens_reserved_total = max(0, gateway_key.tokens_reserved_total - tokens_reserved_total)
+        gateway_key.requests_reserved_total = max(
+            0,
+            gateway_key.requests_reserved_total - requests_reserved_total,
+        )
+        await self._session.flush()
+        return gateway_key
