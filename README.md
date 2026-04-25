@@ -83,30 +83,32 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/healthz` and `/readyz` remain unauthenticated.
 - `/v1/models` now reads from configured model routes plus provider configuration metadata through the service layer and returns OpenAI-shaped model objects.
 - `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
-- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, service-backed model route resolution, pricing/FX lookup, and PostgreSQL-backed quota reservation before returning a placeholder provider-forwarding response.
+- `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, service-backed model route resolution, pricing/FX lookup, PostgreSQL-backed quota reservation, non-streaming provider forwarding, and accounting finalization.
 - Chat Completions request-cap settings are configurable via `DEFAULT_MAX_OUTPUT_TOKENS` (default `1024`), `HARD_MAX_OUTPUT_TOKENS` (default `4096`), and `HARD_MAX_INPUT_TOKENS` (default `128000`).
 - A service-layer pricing and FX lookup workflow can estimate the maximum possible cost for Chat Completions after request policy and route resolution have run.
 - Pricing and FX calculations use `Decimal`; unknown pricing and unknown FX conversion data fail closed.
-- `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful request policy, route resolution, pricing/FX validation, and quota reservation.
-- Because provider forwarding is not implemented yet, the placeholder path releases the quota reservation before returning `501`; no quota is consumed for an unforwarded request.
+- `/v1/chat/completions` forwards non-streaming requests through the provider adapter layer and returns provider JSON only after accounting finalization succeeds.
+- If provider forwarding fails after quota reservation, the route releases the reservation and writes failure accounting before returning an OpenAI-shaped provider error.
 - Hard quota reservation uses PostgreSQL row locking and reserved counters, not Redis.
 - Unsupported models from `/v1/chat/completions` return OpenAI-shaped route-resolution errors before any forwarding attempt.
-- Unknown pricing or FX data fails closed before the placeholder `501` response.
-- Provider forwarding, usage ledger finalization, final accounting, streaming behavior, and Redis rate limiting are intentionally not implemented in this slice.
+- Unknown pricing or FX data fails closed before any quota reservation or provider forwarding attempt.
+- Streaming behavior and Redis rate limiting are intentionally not implemented in this slice.
 
 ## Provider adapter status
 
-- A provider adapter interface now exists for future non-streaming Chat Completions forwarding.
+- `/v1/chat/completions` now supports non-streaming provider forwarding through the OpenAI and OpenRouter adapter layer after authentication, request policy, route resolution, pricing, quota reservation, and accounting finalization.
 - Mock-tested non-streaming OpenAI and OpenRouter adapters are implemented using `httpx.AsyncClient`, safe outbound header allowlists, upstream API-key injection, basic usage parsing, and safe provider-domain errors.
-- `/v1/chat/completions` is still not wired to provider forwarding.
-- Normal tests do not require real OpenAI or OpenRouter API keys and do not call real upstream providers.
+- Provider forwarding is covered by mocked tests; normal tests do not require real OpenAI or OpenRouter API keys and do not call real upstream providers.
+- Streaming is still not implemented.
+- Redis rate limiting is still not implemented.
+- CLI, dashboard, email, Celery worker, and Docker deployment work remain out of scope for this slice.
 
 ## Accounting finalization status
 
 - A service-layer accounting workflow can extract provider usage metadata, compute actual cost from the earlier pricing estimate, finalize pending quota reservations, move reserved counters into used counters, and create usage ledger rows.
 - Provider failures can release pending reservations and create failure ledger rows without charging actual cost.
-- `/v1/chat/completions` is still not wired to provider forwarding or finalization.
-- Streaming and final production forwarding remain out of scope for this slice.
+- `/v1/chat/completions` uses this accounting workflow for non-streaming provider responses.
+- Streaming remains out of scope for this slice.
 
 ## Testing modes
 
