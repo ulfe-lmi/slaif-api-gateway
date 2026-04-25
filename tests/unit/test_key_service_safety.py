@@ -40,14 +40,14 @@ async def test_create_gateway_key_requires_token_hmac_secret() -> None:
         valid_until=datetime.now(UTC) + timedelta(days=7),
     )
 
-    with pytest.raises(ValueError, match="TOKEN_HMAC_SECRET"):
+    with pytest.raises(ValueError, match="TOKEN_HMAC_SECRET_V1"):
         await service.create_gateway_key(payload)
 
 
 @pytest.mark.asyncio
 async def test_create_gateway_key_requires_one_time_secret_encryption_key() -> None:
     service = KeyService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 64),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 64),
         gateway_keys_repository=_NoopRepo(),
         one_time_secrets_repository=_NoopRepo(),
         audit_repository=_NoopRepo(),
@@ -76,7 +76,7 @@ def test_key_service_module_does_not_import_disallowed_runtime_layers() -> None:
 
 
 def test_hmac_digest_is_not_raw_token() -> None:
-    token = "sk-ulfe-public.secret"
+    token = "sk-slaif-public.secret"
     digest = hmac_sha256_token(token, "h" * 64)
 
     assert digest != token

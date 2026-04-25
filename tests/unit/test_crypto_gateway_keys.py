@@ -8,16 +8,16 @@ from slaif_gateway.utils.crypto import (
 )
 
 
-def test_generate_gateway_key_format_and_parse() -> None:
-    generated = generate_gateway_key()
+def test_generate_gateway_key_uses_supplied_prefix() -> None:
+    generated = generate_gateway_key(prefix="sk-slaif-")
 
-    assert generated.plaintext_key.startswith("sk-ulfe-")
+    assert generated.plaintext_key.startswith("sk-slaif-")
     assert "." in generated.plaintext_key
-    assert parse_gateway_key_public_id(generated.plaintext_key) == generated.public_key_id
+    assert parse_gateway_key_public_id(generated.plaintext_key, ("sk-slaif-",)) == generated.public_key_id
 
 
 def test_generate_gateway_key_uniqueness() -> None:
-    keys = {generate_gateway_key().plaintext_key for _ in range(200)}
+    keys = {generate_gateway_key(prefix="sk-slaif-").plaintext_key for _ in range(200)}
 
     assert len(keys) == 200
 
@@ -26,24 +26,38 @@ def test_generate_gateway_key_uniqueness() -> None:
     "key",
     [
         "",
-        "sk-ulfe-no-dot",
-        "sk-ulfe-.nosecret",
-        "sk-ulfe-public.",
+        "sk-slaif-no-dot",
+        "sk-slaif-.nosecret",
+        "sk-slaif-public.",
         "sk-wrong-public.secret",
-        "sk-ulfe-public.abc",
+        "sk-slaif-public.abc",
     ],
 )
 def test_malformed_keys_are_rejected(key: str) -> None:
-    assert not is_plausible_gateway_key(key)
+    assert not is_plausible_gateway_key(key, ("sk-slaif-",))
 
     with pytest.raises(ValueError):
-        parse_gateway_key_public_id(key)
+        parse_gateway_key_public_id(key, ("sk-slaif-",))
 
 
-def test_redacted_key_hides_full_secret() -> None:
-    generated = generate_gateway_key()
-    redacted = redact_gateway_key(generated.plaintext_key)
+def test_parser_rejects_unconfigured_prefix() -> None:
+    key = f"{generate_gateway_key(prefix='sk-ulfe-').plaintext_key}"
+
+    assert not is_plausible_gateway_key(key, ("sk-slaif-",))
+    with pytest.raises(ValueError):
+        parse_gateway_key_public_id(key, ("sk-slaif-",))
+
+
+def test_parser_accepts_legacy_prefix_when_configured() -> None:
+    generated = generate_gateway_key(prefix="sk-ulfe-")
+
+    assert parse_gateway_key_public_id(generated.plaintext_key, ("sk-slaif-", "sk-ulfe-")) == generated.public_key_id
+
+
+def test_redacted_key_hides_full_secret_for_custom_prefix() -> None:
+    generated = generate_gateway_key(prefix="sk-custom-")
+    redacted = redact_gateway_key(generated.plaintext_key, accepted_prefixes=("sk-custom-",))
 
     secret = generated.plaintext_key.split(".", 1)[1]
     assert secret not in redacted
-    assert redacted.startswith(f"sk-ulfe-{generated.public_key_id}.")
+    assert redacted.startswith(f"sk-custom-{generated.public_key_id}.")

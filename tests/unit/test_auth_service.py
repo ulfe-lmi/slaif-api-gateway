@@ -63,7 +63,7 @@ class _FakeGatewayKeysRepository:
 
 @pytest.mark.asyncio
 async def test_authenticate_authorization_header_happy_path_returns_safe_context() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -84,7 +84,7 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
         rate_limit_requests_per_minute=60,
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48, TOKEN_HMAC_KEY_VERSION="v1"),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
 
@@ -100,7 +100,7 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
 @pytest.mark.asyncio
 async def test_missing_header_raises_missing_authorization_error() -> None:
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(None),
     )
     with pytest.raises(MissingAuthorizationError):
@@ -110,7 +110,7 @@ async def test_missing_header_raises_missing_authorization_error() -> None:
 @pytest.mark.asyncio
 async def test_wrong_scheme_raises_invalid_authorization_scheme_error() -> None:
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(None),
     )
     with pytest.raises(InvalidAuthorizationSchemeError):
@@ -120,7 +120,7 @@ async def test_wrong_scheme_raises_invalid_authorization_scheme_error() -> None:
 @pytest.mark.asyncio
 async def test_empty_bearer_token_raises_malformed_gateway_key_error() -> None:
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(None),
     )
     with pytest.raises(MalformedGatewayKeyError):
@@ -130,7 +130,7 @@ async def test_empty_bearer_token_raises_malformed_gateway_key_error() -> None:
 @pytest.mark.asyncio
 async def test_malformed_gateway_key_raises_malformed_gateway_key_error() -> None:
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(None),
     )
     with pytest.raises(MalformedGatewayKeyError):
@@ -140,30 +140,30 @@ async def test_malformed_gateway_key_raises_malformed_gateway_key_error() -> Non
 @pytest.mark.asyncio
 async def test_unknown_public_key_id_raises_gateway_key_not_found_error() -> None:
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(None),
     )
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     with pytest.raises(GatewayKeyNotFoundError):
         await service.authenticate_authorization_header(f"Bearer {token}")
 
 
 @pytest.mark.asyncio
 async def test_digest_mismatch_raises_gateway_key_digest_mismatch_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
         owner_id=uuid.uuid4(),
         public_key_id="public1234abcd",
-        token_hash=hmac_sha256_token(f"sk-ulfe-public1234abcd.{'t'*43}", "h" * 48),
+        token_hash=hmac_sha256_token(f"sk-slaif-public1234abcd.{'t'*43}", "h" * 48),
         hmac_key_version=1,
         status="active",
         valid_from=now - timedelta(minutes=5),
         valid_until=now + timedelta(minutes=30),
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
     with pytest.raises(GatewayKeyDigestMismatchError):
@@ -172,7 +172,7 @@ async def test_digest_mismatch_raises_gateway_key_digest_mismatch_error() -> Non
 
 @pytest.mark.asyncio
 async def test_missing_hmac_secret_raises_missing_token_hmac_secret_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -194,7 +194,7 @@ async def test_missing_hmac_secret_raises_missing_token_hmac_secret_error() -> N
 
 @pytest.mark.asyncio
 async def test_suspended_key_raises_gateway_key_suspended_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -207,7 +207,7 @@ async def test_suspended_key_raises_gateway_key_suspended_error() -> None:
         valid_until=now + timedelta(minutes=30),
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
     with pytest.raises(GatewayKeySuspendedError):
@@ -216,7 +216,7 @@ async def test_suspended_key_raises_gateway_key_suspended_error() -> None:
 
 @pytest.mark.asyncio
 async def test_revoked_key_raises_gateway_key_revoked_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -229,7 +229,7 @@ async def test_revoked_key_raises_gateway_key_revoked_error() -> None:
         valid_until=now + timedelta(minutes=30),
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
     with pytest.raises(GatewayKeyRevokedError):
@@ -238,7 +238,7 @@ async def test_revoked_key_raises_gateway_key_revoked_error() -> None:
 
 @pytest.mark.asyncio
 async def test_key_before_valid_from_raises_not_yet_valid_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -251,7 +251,7 @@ async def test_key_before_valid_from_raises_not_yet_valid_error() -> None:
         valid_until=now + timedelta(minutes=30),
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
     with pytest.raises(GatewayKeyNotYetValidError):
@@ -260,7 +260,7 @@ async def test_key_before_valid_from_raises_not_yet_valid_error() -> None:
 
 @pytest.mark.asyncio
 async def test_key_at_or_after_valid_until_raises_expired_error() -> None:
-    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
     now = datetime.now(UTC)
     row = _FakeGatewayKey(
         id=uuid.uuid4(),
@@ -273,8 +273,52 @@ async def test_key_at_or_after_valid_until_raises_expired_error() -> None:
         valid_until=now,
     )
     service = GatewayAuthService(
-        settings=Settings(TOKEN_HMAC_SECRET="h" * 48),
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
         gateway_keys_repository=_FakeGatewayKeysRepository(row),
     )
     with pytest.raises(GatewayKeyExpiredError):
         await service.authenticate_authorization_header(f"Bearer {token}", now=now)
+
+
+@pytest.mark.asyncio
+async def test_legacy_prefix_accepted_only_when_configured() -> None:
+    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    now = datetime.now(UTC)
+    row = _FakeGatewayKey(
+        id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        public_key_id="public1234abcd",
+        token_hash=hmac_sha256_token(token, "h" * 48),
+        hmac_key_version=1,
+        status="active",
+        valid_from=now - timedelta(minutes=5),
+        valid_until=now + timedelta(minutes=30),
+    )
+    service = GatewayAuthService(
+        settings=Settings(
+            TOKEN_HMAC_SECRET_V1="h" * 48,
+            GATEWAY_KEY_PREFIX="sk-slaif-",
+            GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-ulfe-",
+        ),
+        gateway_keys_repository=_FakeGatewayKeysRepository(row),
+    )
+
+    result = await service.authenticate_authorization_header(f"Bearer {token}", now=now)
+
+    assert result.public_key_id == "public1234abcd"
+
+
+@pytest.mark.asyncio
+async def test_legacy_prefix_rejected_when_not_configured() -> None:
+    token = f"sk-ulfe-public1234abcd.{LONG_SECRET}"
+    service = GatewayAuthService(
+        settings=Settings(
+            TOKEN_HMAC_SECRET_V1="h" * 48,
+            GATEWAY_KEY_PREFIX="sk-slaif-",
+            GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-",
+        ),
+        gateway_keys_repository=_FakeGatewayKeysRepository(None),
+    )
+
+    with pytest.raises(MalformedGatewayKeyError):
+        await service.authenticate_authorization_header(f"Bearer {token}")

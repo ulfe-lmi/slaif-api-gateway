@@ -17,7 +17,7 @@ def test_redact_database_url_handles_missing_value() -> None:
 
 
 def test_redact_authorization_header_hides_bearer_token() -> None:
-    redacted = redact_authorization_header("Bearer sk-ulfe-public.secret-value")
+    redacted = redact_authorization_header("Bearer sk-slaif-public.secret-value")
 
     assert redacted.startswith("Bearer ")
     assert "secret-value" not in redacted
@@ -25,7 +25,7 @@ def test_redact_authorization_header_hides_bearer_token() -> None:
 
 def test_redact_mapping_hides_secret_like_fields_and_keeps_safe_fields() -> None:
     payload = {
-        "Authorization": "Bearer sk-ulfe-public.secret-value",
+        "Authorization": "Bearer sk-slaif-public.secret-value",
         "api_key": "abc1234567890",
         "password": "supersecret",
         "name": "alice",

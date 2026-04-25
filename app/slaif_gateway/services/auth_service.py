@@ -93,9 +93,10 @@ class GatewayAuthService:
         now: datetime | None = None,
     ) -> AuthenticatedGatewayKey:
         token = self._extract_bearer_token(authorization_header)
+        accepted_prefixes = self._settings.get_gateway_key_accepted_prefixes()
 
         try:
-            public_key_id = parse_gateway_key_public_id(token)
+            public_key_id = parse_gateway_key_public_id(token, accepted_prefixes)
         except ValueError as exc:
             raise MalformedGatewayKeyError() from exc
 
@@ -103,17 +104,17 @@ class GatewayAuthService:
         if gateway_key is None:
             raise GatewayKeyNotFoundError()
 
-        if not self._settings.TOKEN_HMAC_SECRET:
+        hmac_secret = self._settings.get_hmac_secret(str(gateway_key.hmac_key_version))
+        if not hmac_secret:
             raise MissingTokenHmacSecretError()
 
         if not verify_hmac_sha256_token(
             token=token,
             expected_hex_digest=gateway_key.token_hash,
-            secret=self._settings.TOKEN_HMAC_SECRET,
+            secret=hmac_secret,
         ):
             raise GatewayKeyDigestMismatchError()
 
-        self._validate_hmac_key_version(gateway_key)
         self._validate_status(gateway_key.status)
 
         check_now = now or datetime.now(UTC)
@@ -169,20 +170,6 @@ class GatewayAuthService:
             raise MalformedGatewayKeyError()
 
         return token
-
-    def _validate_hmac_key_version(self, gateway_key: GatewayKey) -> None:
-        expected_version = self._extract_version_number(self._settings.TOKEN_HMAC_KEY_VERSION)
-        if gateway_key.hmac_key_version != expected_version:
-            raise MissingTokenHmacSecretError(
-                "Server authentication configuration does not support this key version"
-            )
-
-    @staticmethod
-    def _extract_version_number(version: str) -> int:
-        normalized = version.strip().lower()
-        if not normalized.startswith("v") or not normalized[1:].isdigit():
-            raise MissingTokenHmacSecretError()
-        return int(normalized[1:])
 
     @staticmethod
     def _validate_status(status: str) -> None:
