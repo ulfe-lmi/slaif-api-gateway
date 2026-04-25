@@ -14,6 +14,7 @@ from slaif_gateway.api.errors import (
     openai_compatible_error_handler,
     request_validation_exception_handler,
 )
+from slaif_gateway.api.policy_errors import openai_error_from_request_policy_error
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
@@ -21,6 +22,8 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList
 from slaif_gateway.services.model_catalog import ModelCatalogService
+from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 
@@ -66,7 +69,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ChatCompletionRequest,
         authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
     ):
-        if not payload.model:
+        body = payload.model_dump(mode="python", exclude_none=True)
+
+        if not body.get("model"):
             raise OpenAICompatibleError(
                 "The 'model' field is required.",
                 status_code=400,
@@ -75,7 +80,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 param="model",
             )
 
-        if not isinstance(payload.messages, list):
+        if "messages" not in body:
+            raise OpenAICompatibleError(
+                "The 'messages' field is required.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="missing_messages",
+                param="messages",
+            )
+
+        if not isinstance(body.get("messages"), list):
             raise OpenAICompatibleError(
                 "The 'messages' field must be a list.",
                 status_code=400,
@@ -84,13 +98,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 param="messages",
             )
 
+        policy = ChatCompletionRequestPolicy(settings=app_settings)
+        try:
+            policy_result = policy.apply(body)
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
+
         async for session in _get_db_session_after_auth_header_check():
             service = RouteResolutionService(
                 model_routes_repository=ModelRoutesRepository(session),
                 provider_configs_repository=ProviderConfigsRepository(session),
             )
             try:
-                await service.resolve_model(payload.model, authenticated_key)
+                await service.resolve_model(policy_result.effective_body["model"], authenticated_key)
             except RouteResolutionError as exc:
                 raise openai_error_from_route_resolution_error(exc) from exc
 

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = True
     GATEWAY_KEY_PREFIX: str = "sk-slaif-"
     GATEWAY_KEY_ACCEPTED_PREFIXES: str | None = None
+    DEFAULT_MAX_OUTPUT_TOKENS: int = 1024
+    HARD_MAX_OUTPUT_TOKENS: int = 4096
+    HARD_MAX_INPUT_TOKENS: int = 128000
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
@@ -72,7 +75,18 @@ class Settings(BaseSettings):
         if self.ONE_TIME_SECRET_ENCRYPTION_KEY:
             self._validate_encryption_key_shape(self.ONE_TIME_SECRET_ENCRYPTION_KEY)
 
+        self._validate_request_caps()
         return self
+
+    def _validate_request_caps(self) -> None:
+        if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:
+            raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be a positive integer")
+        if self.HARD_MAX_OUTPUT_TOKENS <= 0:
+            raise ValueError("HARD_MAX_OUTPUT_TOKENS must be a positive integer")
+        if self.HARD_MAX_INPUT_TOKENS <= 0:
+            raise ValueError("HARD_MAX_INPUT_TOKENS must be a positive integer")
+        if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
+            raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
 
     @staticmethod
     def _validate_production_secret(name: str, value: str | None) -> None:

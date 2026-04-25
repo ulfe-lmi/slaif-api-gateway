@@ -16,6 +16,9 @@ def _clear_env(monkeypatch) -> None:
         "ONE_TIME_SECRET_ENCRYPTION_KEY",
         "GATEWAY_KEY_PREFIX",
         "GATEWAY_KEY_ACCEPTED_PREFIXES",
+        "DEFAULT_MAX_OUTPUT_TOKENS",
+        "HARD_MAX_OUTPUT_TOKENS",
+        "HARD_MAX_INPUT_TOKENS",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -32,6 +35,43 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.ACTIVE_HMAC_KEY_VERSION == "1"
     assert settings.get_gateway_key_prefix() == "sk-slaif-"
     assert settings.get_gateway_key_accepted_prefixes() == ("sk-slaif-",)
+    assert settings.DEFAULT_MAX_OUTPUT_TOKENS == 1024
+    assert settings.HARD_MAX_OUTPUT_TOKENS == 4096
+    assert settings.HARD_MAX_INPUT_TOKENS == 128000
+
+
+def test_default_output_tokens_must_not_exceed_hard_max(monkeypatch) -> None:
+    monkeypatch.setenv("DEFAULT_MAX_OUTPUT_TOKENS", "4097")
+    monkeypatch.setenv("HARD_MAX_OUTPUT_TOKENS", "4096")
+    get_settings.cache_clear()
+
+    try:
+        get_settings()
+        assert False, "Expected settings creation to fail"
+    except ValidationError as exc:
+        assert "DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS" in str(exc)
+
+
+def test_invalid_zero_or_negative_caps_fail(monkeypatch) -> None:
+    invalid_cases = (
+        ("DEFAULT_MAX_OUTPUT_TOKENS", "0"),
+        ("DEFAULT_MAX_OUTPUT_TOKENS", "-1"),
+        ("HARD_MAX_OUTPUT_TOKENS", "0"),
+        ("HARD_MAX_OUTPUT_TOKENS", "-1"),
+        ("HARD_MAX_INPUT_TOKENS", "0"),
+        ("HARD_MAX_INPUT_TOKENS", "-1"),
+    )
+
+    for name, value in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        try:
+            get_settings()
+            assert False, f"Expected settings creation to fail for {name}={value}"
+        except ValidationError as exc:
+            assert "positive integer" in str(exc)
 
 
 def test_environment_override(monkeypatch) -> None:
