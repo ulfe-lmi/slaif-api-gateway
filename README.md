@@ -94,6 +94,13 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - Unknown pricing or FX data fails closed before the placeholder `501` response.
 - Provider forwarding, usage ledger finalization, final accounting, streaming behavior, and Redis rate limiting are intentionally not implemented in this slice.
 
+## Provider adapter status
+
+- A provider adapter interface now exists for future non-streaming Chat Completions forwarding.
+- Mock-tested non-streaming OpenAI and OpenRouter adapters are implemented using `httpx.AsyncClient`, safe outbound header allowlists, upstream API-key injection, basic usage parsing, and safe provider-domain errors.
+- `/v1/chat/completions` is still not wired to provider forwarding.
+- Normal tests do not require real OpenAI or OpenRouter API keys and do not call real upstream providers.
+
 ## Testing modes
 
 - Unit tests:
