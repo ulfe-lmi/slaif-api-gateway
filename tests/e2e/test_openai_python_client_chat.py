@@ -26,6 +26,7 @@ TEST_MODEL = "gpt-test-mini"
 PROMPT_TEXT = "Hello from SLAIF test"
 COMPLETION_TEXT = "Hello from mocked upstream"
 FAKE_OPENAI_UPSTREAM_KEY = "fake-openai-upstream-key"
+FAKE_OPENROUTER_UPSTREAM_KEY = "fake-openrouter-upstream-key"
 TEST_HMAC_SECRET = "test-hmac-secret-for-openai-client-e2e-123456"
 TEST_ADMIN_SECRET = "test-admin-secret-for-openai-client-e2e-123456"
 TEST_ONE_TIME_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
@@ -65,14 +66,22 @@ def _configure_runtime_environment(monkeypatch: pytest.MonkeyPatch, database_url
     monkeypatch.setenv("ADMIN_SESSION_SECRET", TEST_ADMIN_SECRET)
     monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", TEST_ONE_TIME_SECRET_KEY)
     monkeypatch.setenv("OPENAI_UPSTREAM_API_KEY", FAKE_OPENAI_UPSTREAM_KEY)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-openrouter-upstream-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_OPENROUTER_UPSTREAM_KEY)
 
     from slaif_gateway.config import get_settings
 
     get_settings.cache_clear()
 
 
-async def _create_test_data(database_url: str) -> CreatedE2EData:
+async def _create_test_data(
+    database_url: str,
+    *,
+    provider: str = "openai",
+    model: str = TEST_MODEL,
+    base_url: str = "https://api.openai.com/v1",
+    api_key_env_var: str = "OPENAI_UPSTREAM_API_KEY",
+    owner_label: str = "OpenAI",
+) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
     from slaif_gateway.db.repositories.audit import AuditRepository
@@ -91,19 +100,21 @@ async def _create_test_data(database_url: str) -> CreatedE2EData:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     unique_id = uuid.uuid4().hex
     now = datetime.now(UTC)
+    display_name = f"{owner_label} E2E"
+    notes_prefix = f"{owner_label} Python client E2E test"
 
     try:
         async with session_factory() as session:
             await session.execute(
                 delete(ModelRoute).where(
-                    ModelRoute.requested_model == TEST_MODEL,
-                    ModelRoute.provider == "openai",
+                    ModelRoute.requested_model == model,
+                    ModelRoute.provider == provider,
                 )
             )
             await session.execute(
                 delete(PricingRule).where(
-                    PricingRule.provider == "openai",
-                    PricingRule.upstream_model == TEST_MODEL,
+                    PricingRule.provider == provider,
+                    PricingRule.upstream_model == model,
                     PricingRule.endpoint == CHAT_COMPLETIONS_ENDPOINT,
                 )
             )
@@ -116,64 +127,64 @@ async def _create_test_data(database_url: str) -> CreatedE2EData:
             pricing = PricingRulesRepository(session)
 
             institution = await institutions.create_institution(
-                name=f"SLAIF E2E Institute {unique_id}",
+                name=f"SLAIF {owner_label} E2E Institute {unique_id}",
                 country="SI",
-                notes="OpenAI Python client E2E test data",
+                notes=f"{notes_prefix} data",
             )
             owner = await owners.create_owner(
-                name="OpenAI",
+                name=owner_label,
                 surname="Client",
-                email=f"openai-client-e2e-{unique_id}@example.org",
+                email=f"{provider}-client-e2e-{unique_id}@example.org",
                 institution_id=institution.id,
-                notes="OpenAI Python client E2E test owner",
+                notes=f"{notes_prefix} owner",
             )
             cohort = await cohorts.create_cohort(
-                name=f"openai-client-e2e-{unique_id}",
-                description="OpenAI Python client E2E test cohort",
+                name=f"{provider}-client-e2e-{unique_id}",
+                description=f"{notes_prefix} cohort",
                 starts_at=now - timedelta(days=1),
                 ends_at=now + timedelta(days=1),
             )
 
-            provider = await providers.get_provider_config_by_provider("openai")
-            if provider is None:
+            provider_config = await providers.get_provider_config_by_provider(provider)
+            if provider_config is None:
                 await providers.create_provider_config(
-                    provider="openai",
-                    display_name="OpenAI E2E",
-                    base_url="https://api.openai.com/v1",
-                    api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                    provider=provider,
+                    display_name=display_name,
+                    base_url=base_url,
+                    api_key_env_var=api_key_env_var,
                     notes="E2E test provider config without secrets",
                 )
             else:
                 await providers.update_provider_metadata(
-                    provider.id,
-                    display_name="OpenAI E2E",
-                    base_url="https://api.openai.com/v1",
-                    api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                    provider_config.id,
+                    display_name=display_name,
+                    base_url=base_url,
+                    api_key_env_var=api_key_env_var,
                     notes="E2E test provider config without secrets",
                 )
-                await providers.set_provider_enabled(provider.id, enabled=True)
+                await providers.set_provider_enabled(provider_config.id, enabled=True)
 
             await routes.create_model_route(
-                requested_model=TEST_MODEL,
-                provider="openai",
-                upstream_model=TEST_MODEL,
+                requested_model=model,
+                provider=provider,
+                upstream_model=model,
                 match_type="exact",
                 endpoint=CHAT_COMPLETIONS_ENDPOINT,
                 priority=1,
                 visible_in_models=True,
                 supports_streaming=False,
-                notes="OpenAI Python client E2E test route",
+                notes=f"{notes_prefix} route",
             )
             await pricing.create_pricing_rule(
-                provider="openai",
-                upstream_model=TEST_MODEL,
+                provider=provider,
+                upstream_model=model,
                 endpoint=CHAT_COMPLETIONS_ENDPOINT,
                 valid_from=now - timedelta(days=1),
                 currency="EUR",
                 input_price_per_1m=Decimal("1.000000000"),
                 output_price_per_1m=Decimal("1.000000000"),
                 request_price=Decimal("0.000000000"),
-                notes="OpenAI Python client E2E test pricing",
+                notes=f"{notes_prefix} pricing",
             )
 
             key_service = KeyService(
@@ -191,9 +202,9 @@ async def _create_test_data(database_url: str) -> CreatedE2EData:
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
                     request_limit_total=100,
-                    allowed_models=[TEST_MODEL],
+                    allowed_models=[model],
                     allowed_endpoints=[CHAT_COMPLETIONS_ENDPOINT],
-                    note="OpenAI Python client E2E test key",
+                    note=f"{notes_prefix} key",
                 )
             )
             await session.commit()
@@ -206,7 +217,12 @@ async def _create_test_data(database_url: str) -> CreatedE2EData:
         await engine.dispose()
 
 
-async def _load_accounting_state(database_url: str, gateway_key_id: uuid.UUID) -> AccountingState:
+async def _load_accounting_state(
+    database_url: str,
+    gateway_key_id: uuid.UUID,
+    *,
+    provider: str = "openai",
+) -> AccountingState:
     from slaif_gateway.db.models import (
         GatewayKey,
         OneTimeSecret,
@@ -247,7 +263,7 @@ async def _load_accounting_state(database_url: str, gateway_key_id: uuid.UUID) -
             ).scalar_one()
             provider_config = (
                 await session.execute(
-                    select(ProviderConfig).where(ProviderConfig.provider == "openai")
+                    select(ProviderConfig).where(ProviderConfig.provider == provider)
                 )
             ).scalar_one()
             return AccountingState(
