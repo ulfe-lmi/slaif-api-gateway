@@ -27,7 +27,7 @@ class GatewayKeysRepository:
         valid_from: datetime,
         valid_until: datetime,
         status: str = "active",
-        key_prefix: str = "sk-slaif",
+        key_prefix: str = "sk-slaif-",
         key_hint: str | None = None,
         hash_algorithm: str = "hmac-sha256",
         hmac_key_version: int = 1,

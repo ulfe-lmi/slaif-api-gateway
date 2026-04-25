@@ -240,7 +240,7 @@ async def _seed(session: AsyncSession) -> SeedResult:
 
     if await session.scalar(select(GatewayKey).where(GatewayKey.public_key_id == "k_demo_non_usable")) is None:
         now = datetime.now(UTC)
-        key_prefix = settings.get_gateway_key_prefix().rstrip("-")
+        key_prefix = settings.get_gateway_key_prefix()
         await keys.create_gateway_key_record(
             public_key_id="k_demo_non_usable",
             token_hash="hmac-sha256:demo-non-usable-token-digest",

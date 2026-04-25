@@ -19,7 +19,7 @@ The project must be designed so normal users can use the standard OpenAI Python 
 - Docker image name: `slaif-api-gateway`
 - Preferred license: Apache License 2.0
 - Public production-style base URL: `https://api.ulfe.slaif.si/v1`
-- Recommended gateway API key prefix: `sk-slaif-`
+- Default gateway API key prefix: `sk-slaif-` (active generation prefix is configurable via `GATEWAY_KEY_PREFIX`; accepted parsing/auth prefixes are configured via `GATEWAY_KEY_ACCEPTED_PREFIXES`)
 
 ### 1.2 Distribution model
 
@@ -1059,10 +1059,10 @@ slaif-api-gateway/
 │       │       ├── cohorts.py
 │       │       ├── usage.py
 │       │       ├── quota.py
-│       │       ├── providers.py
+│       │       ├── provider_configs.py
 │       │       ├── pricing.py
 │       │       ├── routing.py
-│       │       ├── fx.py
+│       │       ├── fx_rates.py
 │       │       ├── one_time_secrets.py
 │       │       ├── email.py
 │       │       └── audit.py
@@ -1858,4 +1858,3 @@ without changing application code.
 7. The repository can be cloned and run with Docker Compose.
 
 8. Documentation clearly explains deployment, security, accounting, provider routing, database schema, and compatibility.
-

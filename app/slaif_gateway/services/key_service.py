@@ -51,7 +51,7 @@ class KeyService:
         rate_limit_policy = payload.rate_limit_policy or {}
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
-            key_prefix=active_prefix.rstrip("-"),
+            key_prefix=active_prefix,
             key_hint=generated.display_prefix,
             token_hash=token_hash,
             owner_id=payload.owner_id,

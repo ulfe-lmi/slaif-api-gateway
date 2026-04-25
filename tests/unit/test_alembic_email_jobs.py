@@ -37,4 +37,4 @@ def test_alembic_has_exactly_one_head_revision_after_fourth_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0004_email_secrets_and_background_jobs"]
+    assert heads == ["0005_fix_gateway_key_prefix_default"]
