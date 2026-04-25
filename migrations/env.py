@@ -5,7 +5,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -20,6 +20,8 @@ if config.config_file_name is not None:
 
 
 target_metadata = metadata
+
+ALEMBIC_VERSION_NUM_LENGTH = 255
 
 
 def _configured_database_url() -> str:
@@ -54,7 +56,32 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
     with context.begin_transaction():
+        _prepare_alembic_version_table(connection)
         context.run_migrations()
+
+
+def _prepare_alembic_version_table(connection: Connection) -> None:
+    """Ensure Alembic's version table can store this project's long revision IDs."""
+    if connection.dialect.name != "postgresql":
+        return
+
+    connection.execute(
+        text(
+            f"""
+            CREATE TABLE IF NOT EXISTS alembic_version (
+                version_num VARCHAR({ALEMBIC_VERSION_NUM_LENGTH}) NOT NULL PRIMARY KEY
+            )
+            """
+        )
+    )
+    connection.execute(
+        text(
+            f"""
+            ALTER TABLE alembic_version
+            ALTER COLUMN version_num TYPE VARCHAR({ALEMBIC_VERSION_NUM_LENGTH})
+            """
+        )
+    )
 
 
 def run_migrations_online() -> None:

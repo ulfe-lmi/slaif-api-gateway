@@ -56,15 +56,6 @@ async def _reset_public_schema(database_url: str) -> None:
             await connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             await connection.execute(text("CREATE SCHEMA public"))
             await connection.execute(text("GRANT ALL ON SCHEMA public TO public"))
-            await connection.execute(
-                text(
-                    """
-                    CREATE TABLE IF NOT EXISTS alembic_version (
-                        version_num VARCHAR(255) NOT NULL PRIMARY KEY
-                    )
-                    """
-                )
-            )
     finally:
         await engine.dispose()
 

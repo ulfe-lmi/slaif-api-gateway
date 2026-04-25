@@ -39,6 +39,7 @@ export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gatew
 - The third Alembic migration adds schema-only provider/routing/pricing/FX tables (`provider_configs`, `model_routes`, `pricing_rules`, `fx_rates`); provider forwarding and quota/accounting workflows remain intentionally unimplemented.
 - The fourth Alembic migration adds schema-only encrypted key-delivery and email/job tracking tables (`one_time_secrets`, `email_deliveries`, `background_jobs`); runtime email sending, encryption/decryption helpers, and Celery worker logic are intentionally not implemented in this slice yet.
 - Running migrations requires a configured PostgreSQL database (`DATABASE_URL`).
+- Fresh `alembic upgrade head` runs create an Alembic version table wide enough for this project's long revision IDs; the integration harness does not need to pre-create or patch `alembic_version`.
 - Current unit tests for this schema slice do not require PostgreSQL.
 
 

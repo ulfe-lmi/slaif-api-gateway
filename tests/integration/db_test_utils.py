@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from urllib.parse import urlparse
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 
 def _assert_safe_postgres_test_url(database_url: str) -> None:
@@ -28,27 +25,9 @@ def _assert_safe_postgres_test_url(database_url: str) -> None:
         )
 
 
-async def _prepare_alembic_version_table(database_url: str) -> None:
-    engine = create_async_engine(database_url, future=True)
-    try:
-        async with engine.begin() as connection:
-            await connection.execute(
-                text(
-                    """
-                    CREATE TABLE IF NOT EXISTS alembic_version (
-                        version_num VARCHAR(255) NOT NULL PRIMARY KEY
-                    )
-                    """
-                )
-            )
-    finally:
-        await engine.dispose()
-
-
 def run_alembic_upgrade_head(database_url: str) -> None:
     """Run Alembic upgrade head against an explicitly supplied test database URL."""
     _assert_safe_postgres_test_url(database_url)
-    asyncio.run(_prepare_alembic_version_table(database_url))
 
     repo_root = Path(__file__).resolve().parents[2]
     alembic_ini = repo_root / "alembic.ini"
