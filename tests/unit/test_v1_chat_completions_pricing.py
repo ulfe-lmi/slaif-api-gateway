@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import (
@@ -117,7 +118,32 @@ def _chat_request(model: str = "classroom-cheap") -> dict[str, object]:
     }
 
 
-def test_valid_route_and_pricing_reaches_501_without_forwarding(monkeypatch) -> None:
+def _wire_successful_forwarding(monkeypatch) -> None:
+    import slaif_gateway.main as main_module
+
+    class _FakeAdapter:
+        async def forward_chat_completion(self, request):
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "chatcmpl_test"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+    async def _fake_finalize_successful_response(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return object()
+
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+
+
+def test_valid_route_and_pricing_reaches_provider_forwarding(monkeypatch) -> None:
     import slaif_gateway.main as main_module
 
     app = create_app()
@@ -146,14 +172,13 @@ def test_valid_route_and_pricing_reaches_501_without_forwarding(monkeypatch) -> 
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
     )
+    _wire_successful_forwarding(monkeypatch)
 
     response = TestClient(app).post("/v1/chat/completions", json=_chat_request())
 
     assert calls == [("classroom-cheap", "gpt-4.1-mini", "chat.completions")]
-    assert response.status_code == 501
-    body = response.json()
-    assert body["error"]["type"] == "server_error"
-    assert body["error"]["code"] == "provider_forwarding_not_implemented"
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl_test"
 
 
 def test_missing_pricing_rule_returns_openai_error_before_501(monkeypatch) -> None:
@@ -303,11 +328,8 @@ def test_chat_completions_pricing_path_safety_constraints() -> None:
 
     for disallowed in (
         "httpx",
-        "openrouter",
         "openai_upstream",
         "openrouter_api_key",
-        "usage_ledger",
-        "accounting",
         "rate_limit",
         "streamingresponse",
         "celery",

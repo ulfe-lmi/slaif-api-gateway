@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 
@@ -113,6 +114,31 @@ def _wire_successful_pricing(monkeypatch) -> None:
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+
+
+def _wire_successful_forwarding(monkeypatch, response_body: dict[str, object] | None = None) -> None:
+    import slaif_gateway.main as main_module
+
+    class _FakeAdapter:
+        async def forward_chat_completion(self, request):
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body=response_body or {"id": "chatcmpl_test", "object": "chat.completion"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+    async def _fake_finalize_successful_response(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return object()
+
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
     )
 
 
@@ -231,7 +257,7 @@ def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> Non
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-def test_valid_request_with_no_output_limit_reaches_route_resolution_then_returns_501(monkeypatch) -> None:
+def test_valid_request_with_no_output_limit_reaches_route_resolution_then_forwards(monkeypatch) -> None:
     import slaif_gateway.main as main_module
 
     app = create_app()
@@ -245,6 +271,7 @@ def test_valid_request_with_no_output_limit_reaches_route_resolution_then_return
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
     _wire_successful_pricing(monkeypatch)
+    _wire_successful_forwarding(monkeypatch)
 
     client = TestClient(app)
     response = client.post(
@@ -253,11 +280,11 @@ def test_valid_request_with_no_output_limit_reaches_route_resolution_then_return
     )
 
     assert resolver_calls == ["gpt-4.1-mini"]
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "provider_forwarding_not_implemented"
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl_test"
 
 
-def test_valid_request_with_route_still_returns_501_not_model_response(monkeypatch) -> None:
+def test_valid_request_with_route_returns_provider_response(monkeypatch) -> None:
     import slaif_gateway.main as main_module
 
     app = create_app()
@@ -269,6 +296,7 @@ def test_valid_request_with_route_still_returns_501_not_model_response(monkeypat
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
     _wire_successful_pricing(monkeypatch)
+    _wire_successful_forwarding(monkeypatch, {"id": "chatcmpl_ok", "choices": []})
 
     client = TestClient(app)
     response = client.post(
@@ -280,22 +308,25 @@ def test_valid_request_with_route_still_returns_501_not_model_response(monkeypat
         },
     )
 
-    assert response.status_code == 501
-    assert response.json()["error"]["message"] == "Provider forwarding is not implemented yet."
+    assert response.status_code == 200
+    assert response.json() == {"id": "chatcmpl_ok", "choices": []}
 
 
-def test_stream_true_returns_501_not_streaming(monkeypatch) -> None:
+def test_stream_true_returns_501_without_route_resolution_or_forwarding(monkeypatch) -> None:
     import slaif_gateway.main as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
+    route_calls: list[str] = []
 
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (requested_model, authenticated_key)
+        route_calls.append(requested_model)
         return _route_result(requested_model)
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
     _wire_successful_pricing(monkeypatch)
+    _wire_successful_forwarding(monkeypatch)
 
     client = TestClient(app)
     response = client.post(
@@ -304,7 +335,8 @@ def test_stream_true_returns_501_not_streaming(monkeypatch) -> None:
     )
 
     assert response.status_code == 501
-    assert response.json()["error"]["message"] == "Provider forwarding is not implemented yet."
+    assert response.json()["error"]["code"] == "streaming_not_implemented"
+    assert route_calls == []
 
 
 def test_chat_completions_module_safety_constraints() -> None:
@@ -314,10 +346,8 @@ def test_chat_completions_module_safety_constraints() -> None:
 
     for disallowed in (
         "httpx",
-        "openrouter",
         "openai_upstream",
         "celery",
         "aiosmtplib",
-        "accounting",
     ):
         assert disallowed not in source

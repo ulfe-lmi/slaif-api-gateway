@@ -10,6 +10,7 @@ from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.policy_errors import OutputTokenLimitExceededError
@@ -156,17 +157,71 @@ def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tu
     return reserve_calls, release_calls
 
 
-def test_valid_path_reserves_releases_then_returns_501(monkeypatch) -> None:
+def _wire_successful_forwarding(monkeypatch) -> list[str]:
+    import slaif_gateway.main as main_module
+
+    finalize_calls: list[str] = []
+
+    class _FakeAdapter:
+        async def forward_chat_completion(self, request):
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "chatcmpl_test"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            endpoint,
+            started_at,
+            finished_at,
+        )
+        finalize_calls.append(route.requested_model)
+        return object()
+
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+    return finalize_calls
+
+
+def test_valid_path_reserves_finalizes_then_returns_provider_response(monkeypatch) -> None:
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
     reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls = _wire_successful_forwarding(monkeypatch)
 
     response = TestClient(app).post("/v1/chat/completions", json=_chat_request())
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "provider_forwarding_not_implemented"
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl_test"
     assert reserve_calls == ["classroom-cheap"]
-    assert len(release_calls) == 1
+    assert release_calls == []
+    assert finalize_calls == ["classroom-cheap"]
 
 
 def test_quota_exceeded_returns_openai_error_before_501(monkeypatch) -> None:
@@ -299,4 +354,3 @@ def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None
     assert route_calls == []
     assert pricing_calls == []
     assert quota_calls == []
-
