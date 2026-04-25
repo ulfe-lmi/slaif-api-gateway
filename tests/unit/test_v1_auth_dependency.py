@@ -175,6 +175,7 @@ def test_configured_legacy_prefix_reaches_service_layer(monkeypatch) -> None:
 
 def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependency_module
+    import slaif_gateway.main as main_module
 
     app = create_app()
     client = TestClient(app)
@@ -186,8 +187,17 @@ def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> N
         _ = (authorization_header, now)
         return _fake_authenticated_gateway_key()
 
+    async def _fake_list_visible_models(self, authenticated_key: AuthenticatedGatewayKey):
+        _ = authenticated_key
+        return []
+
     monkeypatch.setattr(
         dependency_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(
+        main_module,
         "_get_db_session_after_auth_header_check",
         _dummy_db_session,
     )
@@ -196,6 +206,7 @@ def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> N
         "authenticate_authorization_header",
         _fake_authenticate,
     )
+    monkeypatch.setattr(main_module.ModelCatalogService, "list_visible_models", _fake_list_visible_models)
 
     response = client.get(
         "/v1/models",
@@ -206,15 +217,27 @@ def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> N
     assert response.json() == {"object": "list", "data": []}
 
 
-def test_auth_dependency_override_supports_authenticated_test_path() -> None:
+def test_auth_dependency_override_supports_authenticated_test_path(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependency_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
+    import slaif_gateway.main as main_module
 
     app = create_app()
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
         return _fake_authenticated_gateway_key()
 
+    async def _dummy_db_session():
+        yield object()
+
+    async def _fake_list_visible_models(self, authenticated_key: AuthenticatedGatewayKey):
+        _ = authenticated_key
+        return []
+
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
+    monkeypatch.setattr(dependency_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module.ModelCatalogService, "list_visible_models", _fake_list_visible_models)
     client = TestClient(app)
 
     response = client.get("/v1/models")
