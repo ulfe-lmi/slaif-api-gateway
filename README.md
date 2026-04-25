@@ -86,6 +86,7 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
   - `slaif-gateway keys rotate <gateway-key-id>`
 - `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
 - Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
+- PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior. They require `TEST_DATABASE_URL` and a migrated test database, and verify HMAC-only key storage, encrypted one-time delivery material, audit rows, and rotation behavior. Normal unit tests still do not require PostgreSQL.
 
 ## Service-layer authentication status
 
