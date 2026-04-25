@@ -80,7 +80,12 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 
 - Service-layer gateway key management now supports suspend, activate, revoke, update validity, update limits, reset usage counters, and rotate.
 - Rotation returns the replacement plaintext key exactly once, stores only the new HMAC digest, and creates encrypted one-time delivery material for a later email workflow.
-- CLI commands, dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
+- Typer CLI commands now expose service-backed key management:
+  - `slaif-gateway keys create --owner-id <uuid> --valid-days 30`
+  - `slaif-gateway keys list`
+  - `slaif-gateway keys rotate <gateway-key-id>`
+- `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
+- Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
 
 ## Service-layer authentication status
 

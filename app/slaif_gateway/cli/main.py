@@ -4,9 +4,11 @@ import typer
 
 from slaif_gateway import __version__
 from slaif_gateway.cli.db import app as db_app
+from slaif_gateway.cli.keys import app as keys_app
 
 app = typer.Typer(help="SLAIF API Gateway CLI")
 app.add_typer(db_app, name="db")
+app.add_typer(keys_app, name="keys")
 
 
 @app.callback()
