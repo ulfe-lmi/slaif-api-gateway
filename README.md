@@ -155,3 +155,14 @@ This E2E test uses the official `openai` Python package with `OpenAI()` reading 
 FastAPI app against a migrated PostgreSQL test database, issues a gateway key through
 the safe key service, mocks upstream OpenAI HTTP with RESPX, and requires no real
 OpenAI/OpenRouter API keys. Unit tests still do not require PostgreSQL or upstream keys.
+
+- OpenRouter Python client E2E test:
+
+```bash
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/e2e/test_openrouter_python_client_chat.py
+```
+
+This E2E test uses the same official OpenAI Python client environment-variable flow,
+but resolves the gateway route to OpenRouter and mocks upstream OpenRouter HTTP with
+RESPX. It requires `TEST_DATABASE_URL` with a migrated test database and does not
+require real OpenRouter keys. Unit tests still do not require PostgreSQL or upstream keys.
