@@ -101,6 +101,13 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/v1/chat/completions` is still not wired to provider forwarding.
 - Normal tests do not require real OpenAI or OpenRouter API keys and do not call real upstream providers.
 
+## Accounting finalization status
+
+- A service-layer accounting workflow can extract provider usage metadata, compute actual cost from the earlier pricing estimate, finalize pending quota reservations, move reserved counters into used counters, and create usage ledger rows.
+- Provider failures can release pending reservations and create failure ledger rows without charging actual cost.
+- `/v1/chat/completions` is still not wired to provider forwarding or finalization.
+- Streaming and final production forwarding remain out of scope for this slice.
+
 ## Testing modes
 
 - Unit tests:

@@ -110,6 +110,22 @@ class UsageLedgerRepository:
         await self._session.flush()
         return row
 
+    async def create_success_record(self, **kwargs: object) -> UsageLedger:
+        """Create a finalized successful usage ledger row."""
+        return await self.create_usage_record(
+            success=True,
+            accounting_status="finalized",
+            **kwargs,
+        )
+
+    async def create_failure_record(self, **kwargs: object) -> UsageLedger:
+        """Create a failure usage ledger row without prompt or response content."""
+        return await self.create_usage_record(
+            success=False,
+            accounting_status="failed",
+            **kwargs,
+        )
+
     async def get_usage_record_by_id(self, usage_id: uuid.UUID) -> UsageLedger | None:
         return await self._session.get(UsageLedger, usage_id)
 

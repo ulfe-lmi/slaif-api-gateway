@@ -204,3 +204,35 @@ class GatewayKeysRepository:
         )
         await self._session.flush()
         return gateway_key
+
+    async def finalize_reserved_counters(
+        self,
+        gateway_key: GatewayKey,
+        *,
+        reserved_cost_eur: Decimal,
+        reserved_tokens_total: int,
+        reserved_requests_total: int,
+        actual_cost_eur: Decimal,
+        actual_tokens_total: int,
+        actual_requests_total: int,
+        last_used_at: datetime,
+    ) -> GatewayKey:
+        """Move reserved counters into used counters on an already locked key row."""
+        gateway_key.cost_reserved_eur = max(
+            Decimal("0"),
+            gateway_key.cost_reserved_eur - reserved_cost_eur,
+        )
+        gateway_key.tokens_reserved_total = max(
+            0,
+            gateway_key.tokens_reserved_total - reserved_tokens_total,
+        )
+        gateway_key.requests_reserved_total = max(
+            0,
+            gateway_key.requests_reserved_total - reserved_requests_total,
+        )
+        gateway_key.cost_used_eur += actual_cost_eur
+        gateway_key.tokens_used_total += actual_tokens_total
+        gateway_key.requests_used_total += actual_requests_total
+        gateway_key.last_used_at = last_used_at
+        await self._session.flush()
+        return gateway_key
