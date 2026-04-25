@@ -174,7 +174,12 @@ class GatewayKey(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     public_key_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    key_prefix: Mapped[str] = mapped_column(Text, nullable=False, default="sk-slaif", server_default=text("'sk-slaif'"))
+    key_prefix: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="sk-slaif-",
+        server_default=text("'sk-slaif-'"),
+    )
     key_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     hash_algorithm: Mapped[str] = mapped_column(

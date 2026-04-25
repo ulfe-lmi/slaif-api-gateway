@@ -402,7 +402,7 @@ Columns:
 ```text
 id UUID primary key
 public_key_id text not null
-key_prefix text not null default 'sk-slaif'
+key_prefix text not null default 'sk-slaif-'
 key_hint text null
 token_hash text not null
 hash_algorithm text not null default 'hmac-sha256'

@@ -92,7 +92,7 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
     assert result.public_key_id == parse_gateway_key_public_id(result.plaintext_key, ("sk-slaif-",))
 
     key_call = keys_repo.calls[0]
-    assert key_call["key_prefix"] == "sk-slaif"
+    assert key_call["key_prefix"] == "sk-slaif-"
     assert key_call["token_hash"] != result.plaintext_key
     assert len(str(key_call["token_hash"])) == 64
     assert key_call["token_hash"] == hmac_sha256_token(result.plaintext_key, "h" * 48)

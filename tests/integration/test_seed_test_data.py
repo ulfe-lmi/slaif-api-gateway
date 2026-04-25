@@ -65,7 +65,7 @@ async def test_seed_script_populates_safe_dummy_data(
 
     gateway_keys = (await async_test_session.scalars(select(GatewayKey))).all()
     settings = Settings()
-    expected_prefix = settings.get_gateway_key_prefix().rstrip("-")
+    expected_prefix = settings.get_gateway_key_prefix()
     for key_row in gateway_keys:
         assert key_row.token_hash
         assert "sk-" not in key_row.token_hash
