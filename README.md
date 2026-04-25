@@ -85,9 +85,11 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `/v1/models` does not call upstream providers and may return an empty list until routes/providers are seeded and enabled.
 - `/v1/chat/completions` now performs authentication, minimal request-shape validation (`model`, `messages`), request-cap policy validation/normalization, and service-backed model route resolution.
 - Chat Completions request-cap settings are configurable via `DEFAULT_MAX_OUTPUT_TOKENS` (default `1024`), `HARD_MAX_OUTPUT_TOKENS` (default `4096`), and `HARD_MAX_INPUT_TOKENS` (default `128000`).
+- A service-layer pricing and FX lookup workflow can estimate the maximum possible cost for Chat Completions after request policy and route resolution have run.
+- Pricing and FX calculations use `Decimal`; unknown pricing and unknown FX conversion data fail closed.
 - `/v1/chat/completions` does **not** forward to providers yet and returns an OpenAI-shaped `501` error (`provider_forwarding_not_implemented`) after successful route resolution.
 - Unsupported models from `/v1/chat/completions` return OpenAI-shaped route-resolution errors before any forwarding attempt.
-- Provider forwarding, quota reservation, rate limits, pricing/cost logic, accounting, and streaming behavior are intentionally not implemented in this slice.
+- Provider forwarding, quota reservation, rate limits, usage ledger writes, final accounting, and streaming behavior are intentionally not implemented in this slice.
 
 ## Testing modes
 
