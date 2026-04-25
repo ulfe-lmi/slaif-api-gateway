@@ -1640,6 +1640,84 @@ Open-source users may simply clone and build locally.
 
 Do not add CI/CD-specific requirements unless requested later.
 
+## 10.5 Codex CLI Git and pull-request workflow
+
+This project uses pull requests only. Codex CLI work must always happen on a
+feature branch.
+
+Rules:
+
+- Codex must never commit directly to `main` or `master`.
+- Codex must never push directly to `main` or `master`.
+- Codex must never merge pull requests.
+- The maintainer merges PRs manually in the GitHub web UI.
+- After the maintainer merges a PR, the next task starts by updating local
+  `main` from `origin/main`.
+- After updating `main`, Codex creates a new task branch with
+  `git switch -c feature/<short-task-name>`.
+- Codex implements the task, runs tests, commits, pushes the feature branch, and
+  creates a PR with `gh`.
+- Each task should normally produce exactly one focused branch and one focused
+  PR.
+- Codex must not mix unrelated tasks in the same branch or PR.
+- Codex must not continue working on an old feature branch after its PR has
+  been merged.
+- If the current branch is already a feature branch with unrelated changes,
+  Codex must stop and report instead of mixing work.
+- If `gh` authentication fails, Codex must report the exact failure and must not
+  fake PR creation.
+- If `gh` reports an invalid `GH_TOKEN` or `GITHUB_TOKEN`, Codex should try:
+
+  ```bash
+  env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+  ```
+
+  If that succeeds, Codex should use the env-unset form for `gh` commands.
+- Codex must not commit local Codex state such as `.codex`.
+- At the end of every task, Codex must report the branch name, commit hash,
+  pushed status, PR URL, tests run, and any failures or skips.
+
+Required start-of-task update sequence after a previous PR has been merged:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+```
+
+Then create a fresh task branch:
+
+```bash
+git switch -c feature/<short-task-name>
+```
+
+Concrete command sequence:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git switch -c feature/<short-task-name>
+
+# implement task
+
+python -m pytest tests/unit
+python -m ruff check app tests
+alembic heads
+
+git status --short
+git add <task files only>
+git commit -m "<clear task message>"
+git push -u origin HEAD
+
+gh auth status
+gh pr create \
+  --base main \
+  --head "$(git branch --show-current)" \
+  --title "<PR title>" \
+  --body "<summary, tests run, and scope constraints>"
+```
+
 ---
 
 ## 11. Nginx deployment guidance
