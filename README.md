@@ -76,6 +76,12 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - One-time delivery data is stored as encrypted payload + nonce in `one_time_secrets` for a later email workflow.
 - CLI key creation, dashboard key creation, and email sending workflows are intentionally not implemented in this slice yet.
 
+## Service-layer key management status
+
+- Service-layer gateway key management now supports suspend, activate, revoke, update validity, update limits, reset usage counters, and rotate.
+- Rotation returns the replacement plaintext key exactly once, stores only the new HMAC digest, and creates encrypted one-time delivery material for a later email workflow.
+- CLI commands, dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
+
 ## Service-layer authentication status
 
 - A dedicated gateway key authentication service is now implemented at the service layer.
