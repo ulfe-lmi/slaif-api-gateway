@@ -90,6 +90,13 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
   - `slaif-gateway keys create --owner-id <uuid> --valid-days 30`
   - `slaif-gateway keys list`
   - `slaif-gateway keys rotate <gateway-key-id>`
+- Typer CLI commands now expose local provider/model catalog configuration:
+  - `slaif-gateway providers add --provider openai --api-key-env-var OPENAI_UPSTREAM_API_KEY`
+  - `slaif-gateway routes add --requested-model gpt-test-mini --match-type exact --provider openai --upstream-model gpt-test-mini`
+  - `slaif-gateway pricing add --provider openai --model gpt-test-mini --endpoint chat.completions --currency EUR --input-price-per-1m 0.10 --output-price-per-1m 0.20`
+  - `slaif-gateway fx add --base-currency USD --quote-currency EUR --rate 0.920000000`
+- The provider, route, pricing, and FX commands configure local database metadata only. They do not call upstream providers, fetch live pricing, or fetch live FX rates.
+- `slaif-gateway pricing import --file pricing.json --dry-run` validates a local JSON or CSV file before writing. JSON imports use a list of objects with fields such as `provider`, `model`, `endpoint`, `currency`, `input_price_per_1m`, `output_price_per_1m`, `valid_from`, and `enabled`.
 - `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
 - Admin password commands never print plaintext passwords or password hashes. Institution, cohort, and owner commands print safe metadata only.
 - Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.

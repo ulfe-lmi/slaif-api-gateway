@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import typer
@@ -77,6 +77,25 @@ def parse_datetime(value: str | None, *, field_name: str) -> datetime | None:
     return parsed
 
 
+def parse_decimal(value: str | None, *, field_name: str) -> Decimal | None:
+    """Parse a decimal CLI value without going through float."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise typer.BadParameter(f"{field_name} cannot be empty")
+    try:
+        return Decimal(normalized)
+    except InvalidOperation as exc:
+        raise typer.BadParameter(f"{field_name} must be a decimal value") from exc
+
+
+def require_positive_limit(limit: int) -> None:
+    """Validate common positive limit options."""
+    if limit <= 0:
+        raise typer.BadParameter("--limit must be positive")
+
+
 def json_default(value: object) -> object:
     """Serialize common database values as JSON-safe values."""
     if isinstance(value, datetime):
@@ -120,6 +139,9 @@ def handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     elif isinstance(exc, IntegrityError):
         message = "Duplicate or invalid record"
         code = "record_integrity_error"
+    elif isinstance(exc, typer.BadParameter):
+        message = str(exc)
+        code = "invalid_parameter"
     elif isinstance(exc, ValueError):
         message = str(exc) or "Invalid value"
         code = "invalid_value"
