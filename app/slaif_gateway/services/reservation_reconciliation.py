@@ -81,6 +81,19 @@ class ReservationReconciliationService:
         if _aware_now(reservation.expires_at) > checked_at:
             raise ReservationNotExpiredError()
 
+        existing_ledger = await self._usage_ledger_repository.get_usage_record_by_request_id(
+            reservation.request_id
+        )
+        if (
+            not dry_run
+            and existing_ledger is not None
+            and (getattr(existing_ledger, "response_metadata", None) or {}).get("needs_reconciliation")
+            is True
+        ):
+            raise ReconciliationInvariantError(
+                "Provider completed before accounting finalization failed; do not release as zero-cost stale reservation"
+            )
+
         if dry_run:
             return _result(
                 reservation,

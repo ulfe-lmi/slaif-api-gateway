@@ -4,6 +4,7 @@ import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -158,11 +159,29 @@ def _wire_successful_forwarding(monkeypatch, response_body: dict[str, object] | 
         _ = (self, args, kwargs)
         return object()
 
+    async def _fake_provider_completed(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return SimpleNamespace(usage_ledger_id=uuid.uuid4())
+
+    async def _fake_mark_finalization_failed(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return object()
+
     monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_provider_completed_before_finalization",
+        _fake_provider_completed,
+    )
     monkeypatch.setattr(
         main_module.AccountingService,
         "finalize_successful_response",
         _fake_finalize_successful_response,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "mark_provider_completed_finalization_failed",
+        _fake_mark_finalization_failed,
     )
 
 

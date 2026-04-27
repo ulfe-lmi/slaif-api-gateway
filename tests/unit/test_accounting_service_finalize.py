@@ -97,6 +97,9 @@ class FakeQuotaReservationsRepository:
     async def get_reservation_by_id_for_update(self, reservation_id):
         return self.row if reservation_id == self.row.id else None
 
+    async def get_reservation_by_id(self, reservation_id):
+        return self.row if reservation_id == self.row.id else None
+
     async def mark_pending_reservation_finalized(self, reservation, *, finalized_at):
         reservation.status = "finalized"
         reservation.finalized_at = finalized_at
@@ -106,11 +109,70 @@ class FakeQuotaReservationsRepository:
 class FakeUsageLedgerRepository:
     def __init__(self) -> None:
         self.success_calls: list[dict[str, object]] = []
+        self.provider_completed_calls: list[dict[str, object]] = []
+        self.rows: dict[uuid.UUID, SimpleNamespace] = {}
         self.commits = 0
 
     async def create_success_record(self, **kwargs):
         self.success_calls.append(kwargs)
-        return SimpleNamespace(id=uuid.uuid4(), accounting_status="finalized", **kwargs)
+        row = SimpleNamespace(id=uuid.uuid4(), accounting_status="finalized", **kwargs)
+        self.rows[row.id] = row
+        return row
+
+    async def get_usage_record_by_request_id(self, request_id):
+        return next(
+            (row for row in self.rows.values() if row.request_id == request_id),
+            None,
+        )
+
+    async def get_usage_record_by_id(self, usage_id):
+        return self.rows.get(usage_id)
+
+    async def create_provider_completed_record(self, **kwargs):
+        self.provider_completed_calls.append(kwargs)
+        row = SimpleNamespace(id=uuid.uuid4(), accounting_status="pending", success=None, **kwargs)
+        self.rows[row.id] = row
+        return row
+
+    async def mark_provider_completed_record_finalized(
+        self,
+        usage_ledger_id,
+        *,
+        http_status,
+        response_metadata,
+        finished_at,
+        latency_ms,
+    ):
+        row = self.rows[usage_ledger_id]
+        row.success = True
+        row.accounting_status = "finalized"
+        row.http_status = http_status
+        row.error_type = None
+        row.error_message = None
+        row.response_metadata = response_metadata
+        row.finished_at = finished_at
+        row.latency_ms = latency_ms
+        return row
+
+    async def mark_provider_completed_record_finalization_failed(
+        self,
+        usage_ledger_id,
+        *,
+        error_type,
+        error_message,
+        response_metadata,
+        finished_at,
+        latency_ms,
+    ):
+        row = self.rows[usage_ledger_id]
+        row.success = None
+        row.accounting_status = "failed"
+        row.error_type = error_type
+        row.error_message = error_message
+        row.response_metadata = response_metadata
+        row.finished_at = finished_at
+        row.latency_ms = latency_ms
+        return row
 
 
 def _auth(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:
@@ -245,6 +307,90 @@ async def test_finalize_successful_response_moves_counters_and_writes_ledger() -
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
     assert usage_repo.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_completed_record_can_be_finalized_without_duplicate_ledger() -> None:
+    service, key, reservation, _, _, usage_repo = _service()
+
+    record = await service.record_provider_completed_before_finalization(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+        streaming=True,
+        started_at=datetime(2026, 4, 25, 12, 0, tzinfo=UTC),
+    )
+    result = await service.finalize_successful_response(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+        streaming=True,
+        provider_completed_usage_ledger_id=record.usage_ledger_id,
+        finished_at=datetime(2026, 4, 25, 12, 0, 1, tzinfo=UTC),
+    )
+
+    row = usage_repo.rows[record.usage_ledger_id]
+    assert result.usage_ledger_id == record.usage_ledger_id
+    assert result.accounting_status == "finalized"
+    assert row.accounting_status == "finalized"
+    assert row.success is True
+    assert row.response_metadata["needs_reconciliation"] is False
+    assert row.response_metadata["recovery_state"] == "finalized"
+    assert usage_repo.success_calls == []
+    assert len(usage_repo.provider_completed_calls) == 1
+    assert key.tokens_used_total == 75
+    assert reservation.status == "finalized"
+
+
+@pytest.mark.asyncio
+async def test_provider_completed_finalization_failure_marks_recovery_record() -> None:
+    service, key, reservation, _, _, usage_repo = _service()
+    key.cost_reserved_eur = Decimal("0")
+
+    record = await service.record_provider_completed_before_finalization(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+        streaming=True,
+    )
+
+    with pytest.raises(QuotaCounterInvariantError):
+        await service.finalize_successful_response(
+            reservation.id,
+            _auth(key.id),
+            _route(),
+            _policy(),
+            _estimate(),
+            _response(),
+            request_id="req_1",
+            streaming=True,
+            provider_completed_usage_ledger_id=record.usage_ledger_id,
+        )
+    recovery = await service.mark_provider_completed_finalization_failed(
+        record.usage_ledger_id,
+        reservation.id,
+        QuotaCounterInvariantError(param="cost_reserved_eur"),
+    )
+
+    row = usage_repo.rows[record.usage_ledger_id]
+    assert recovery.needs_reconciliation is True
+    assert row.accounting_status == "failed"
+    assert row.success is None
+    assert row.error_type == "accounting_finalization_failed"
+    assert row.response_metadata["needs_reconciliation"] is True
+    assert row.response_metadata["recovery_state"] == "provider_completed_finalization_failed"
+    assert row.actual_cost_eur == Decimal("0.1000000000")
+    assert reservation.status == "pending"
 
 
 @pytest.mark.asyncio

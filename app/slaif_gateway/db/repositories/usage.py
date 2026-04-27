@@ -126,6 +126,81 @@ class UsageLedgerRepository:
             **kwargs,
         )
 
+    async def create_provider_completed_record(self, **kwargs: object) -> UsageLedger:
+        """Create a durable provider-completed row before final counter mutation."""
+        return await self.create_usage_record(
+            success=None,
+            accounting_status="pending",
+            **kwargs,
+        )
+
+    async def mark_provider_completed_record_finalized(
+        self,
+        usage_ledger_id: uuid.UUID,
+        *,
+        http_status: int,
+        response_metadata: dict[str, object],
+        finished_at: datetime,
+        latency_ms: int | None,
+    ) -> UsageLedger:
+        """Mark a provider-completed recovery row finalized after quota finalization."""
+        row = await self.get_usage_record_by_id(usage_ledger_id)
+        if row is None:
+            raise LookupError("Usage ledger row was not found")
+
+        row.success = True
+        row.accounting_status = "finalized"
+        row.http_status = http_status
+        row.error_type = None
+        row.error_message = None
+        row.response_metadata = response_metadata
+        row.finished_at = finished_at
+        row.latency_ms = latency_ms
+        await self._session.flush()
+        return row
+
+    async def mark_provider_completed_record_finalization_failed(
+        self,
+        usage_ledger_id: uuid.UUID,
+        *,
+        error_type: str,
+        error_message: str,
+        response_metadata: dict[str, object],
+        finished_at: datetime,
+        latency_ms: int | None,
+    ) -> UsageLedger:
+        """Mark a provider-completed row as requiring accounting reconciliation."""
+        row = await self.get_usage_record_by_id(usage_ledger_id)
+        if row is None:
+            raise LookupError("Usage ledger row was not found")
+
+        row.success = None
+        row.accounting_status = "failed"
+        row.error_type = error_type
+        row.error_message = error_message
+        row.response_metadata = response_metadata
+        row.finished_at = finished_at
+        row.latency_ms = latency_ms
+        await self._session.flush()
+        return row
+
+    async def list_provider_completed_recovery_records(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[UsageLedger]:
+        statement: Select[tuple[UsageLedger]] = (
+            select(UsageLedger)
+            .where(
+                UsageLedger.accounting_status == "failed",
+                UsageLedger.response_metadata["needs_reconciliation"].as_boolean().is_(True),
+            )
+            .order_by(UsageLedger.created_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
     async def get_usage_record_by_id(self, usage_id: uuid.UUID) -> UsageLedger | None:
         return await self._session.get(UsageLedger, usage_id)
 

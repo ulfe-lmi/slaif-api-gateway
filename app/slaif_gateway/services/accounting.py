@@ -15,7 +15,9 @@ from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.schemas.accounting import (
     ActualCost,
     ActualUsage,
+    FinalizationRecoveryResult,
     FinalizedAccountingResult,
+    ProviderCompletedAccountingRecord,
     ProviderFailureAccountingResult,
 )
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
@@ -24,9 +26,13 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderResponse
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting_errors import (
+    AccountingError,
+    AccountingFinalizationRecoveryError,
     ActualCostExceededReservationError,
+    FinalizationRecoveryNotSupportedError,
     InvalidUsageError,
     LedgerWriteError,
+    ProviderCompletionRecordError,
     ReservationAlreadyFinalizedError,
     ReservationFinalizationError,
     UnsupportedProviderCostError,
@@ -35,6 +41,9 @@ from slaif_gateway.services.accounting_errors import (
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 _EUR = "EUR"
+_PROVIDER_COMPLETED_PENDING = "provider_completed_finalization_pending"
+_PROVIDER_COMPLETED_FAILED = "provider_completed_finalization_failed"
+_ACCOUNTING_FINALIZATION_FAILED = "accounting_finalization_failed"
 _FORBIDDEN_METADATA_KEYS = {
     "authorization",
     "api_key",
@@ -184,6 +193,7 @@ class AccountingService:
         streaming: bool = False,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
+        provider_completed_usage_ledger_id: uuid.UUID | None = None,
     ) -> FinalizedAccountingResult:
         _ = policy
         finished = _aware_now(finished_at)
@@ -228,20 +238,29 @@ class AccountingService:
         )
 
         started = _aware_now(started_at or getattr(reservation, "created_at", None))
-        ledger = await self._create_success_ledger(
-            request_id=request_id,
-            reservation_id=reservation.id,
-            authenticated_key=authenticated_key,
-            route=route,
-            provider_response=provider_response,
-            endpoint=_normalize_endpoint(endpoint),
-            usage=usage,
-            pricing_estimate=pricing_estimate,
-            actual_cost=actual_cost,
-            streaming=streaming,
-            started_at=started,
-            finished_at=finished,
-        )
+        if provider_completed_usage_ledger_id is not None:
+            ledger = await self._mark_provider_completed_ledger_finalized(
+                usage_ledger_id=provider_completed_usage_ledger_id,
+                provider_response=provider_response,
+                actual_cost=actual_cost,
+                finished_at=finished,
+                latency_ms=_latency_ms(started, finished),
+            )
+        else:
+            ledger = await self._create_success_ledger(
+                request_id=request_id,
+                reservation_id=reservation.id,
+                authenticated_key=authenticated_key,
+                route=route,
+                provider_response=provider_response,
+                endpoint=_normalize_endpoint(endpoint),
+                usage=usage,
+                pricing_estimate=pricing_estimate,
+                actual_cost=actual_cost,
+                streaming=streaming,
+                started_at=started,
+                finished_at=finished,
+            )
 
         return FinalizedAccountingResult(
             usage_ledger_id=ledger.id,
@@ -256,6 +275,172 @@ class AccountingService:
             completion_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
             accounting_status=ledger.accounting_status,
+        )
+
+    async def record_provider_completed_before_finalization(
+        self,
+        reservation_id: uuid.UUID,
+        authenticated_key: AuthenticatedGatewayKey,
+        route: RouteResolutionResult,
+        pricing_estimate: ChatCostEstimate,
+        provider_response: ProviderResponse,
+        request_id: str,
+        endpoint: str = "chat.completions",
+        streaming: bool = False,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> ProviderCompletedAccountingRecord:
+        """Write durable provider-completed state before final counter mutation."""
+        finished = _aware_now(finished_at)
+        reservation = await self._quota_reservations_repository.get_reservation_by_id(
+            reservation_id
+        )
+        if reservation is None:
+            raise FinalizationRecoveryNotSupportedError("Quota reservation was not found")
+        if reservation.gateway_key_id != authenticated_key.gateway_key_id:
+            raise FinalizationRecoveryNotSupportedError(
+                "Quota reservation does not belong to gateway key"
+            )
+        if reservation.status != "pending":
+            raise FinalizationRecoveryNotSupportedError("Quota reservation is not pending")
+
+        usage = self.extract_usage(provider_response)
+        actual_cost = self.compute_actual_cost(
+            provider_response,
+            route,
+            usage,
+            pricing_estimate,
+            at=finished,
+        )
+
+        existing = await self._usage_ledger_repository.get_usage_record_by_request_id(request_id)
+        if existing is not None:
+            return ProviderCompletedAccountingRecord(
+                usage_ledger_id=existing.id,
+                reservation_id=reservation.id,
+                gateway_key_id=authenticated_key.gateway_key_id,
+                request_id=request_id,
+                provider=existing.provider,
+                requested_model=existing.requested_model,
+                resolved_model=existing.resolved_model,
+                endpoint=existing.endpoint,
+                upstream_request_id=existing.upstream_request_id,
+                prompt_tokens=existing.prompt_tokens,
+                completion_tokens=existing.completion_tokens,
+                total_tokens=existing.total_tokens,
+                estimated_cost_eur=existing.estimated_cost_eur or Decimal("0"),
+                computed_actual_cost_eur=existing.actual_cost_eur,
+                accounting_status=existing.accounting_status,
+            )
+
+        started = _aware_now(started_at or getattr(reservation, "created_at", None))
+        try:
+            ledger = await self._usage_ledger_repository.create_provider_completed_record(
+                request_id=request_id,
+                quota_reservation_id=reservation.id,
+                gateway_key_id=authenticated_key.gateway_key_id,
+                owner_id=authenticated_key.owner_id,
+                cohort_id=authenticated_key.cohort_id,
+                endpoint=_normalize_endpoint(endpoint),
+                provider=route.provider,
+                requested_model=route.requested_model,
+                resolved_model=route.resolved_model,
+                upstream_request_id=provider_response.upstream_request_id,
+                streaming=streaming,
+                http_status=provider_response.status_code,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                cached_tokens=usage.cached_tokens or 0,
+                reasoning_tokens=usage.reasoning_tokens or 0,
+                total_tokens=usage.total_tokens,
+                estimated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+                actual_cost_eur=actual_cost.actual_cost_eur,
+                actual_cost_native=actual_cost.actual_cost_native,
+                native_currency=actual_cost.native_currency,
+                usage_raw=dict(usage.other_usage),
+                response_metadata={
+                    **_response_metadata(provider_response, actual_cost),
+                    "recovery_state": _PROVIDER_COMPLETED_PENDING,
+                    "needs_reconciliation": False,
+                },
+                started_at=started,
+                finished_at=None,
+                latency_ms=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderCompletionRecordError() from exc
+
+        return ProviderCompletedAccountingRecord(
+            usage_ledger_id=ledger.id,
+            reservation_id=reservation.id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            provider=route.provider,
+            requested_model=route.requested_model,
+            resolved_model=route.resolved_model,
+            endpoint=_normalize_endpoint(endpoint),
+            upstream_request_id=provider_response.upstream_request_id,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            estimated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+            computed_actual_cost_eur=actual_cost.actual_cost_eur,
+            accounting_status=ledger.accounting_status,
+        )
+
+    async def mark_provider_completed_finalization_failed(
+        self,
+        usage_ledger_id: uuid.UUID,
+        reservation_id: uuid.UUID,
+        error: AccountingError | Exception,
+        *,
+        finished_at: datetime | None = None,
+    ) -> FinalizationRecoveryResult:
+        """Mark pre-finalization provider-completed state as needing repair."""
+        finished = _aware_now(finished_at)
+        row = await self._usage_ledger_repository.get_usage_record_by_id(usage_ledger_id)
+        if row is None:
+            raise AccountingFinalizationRecoveryError("Provider completion record was not found")
+        if row.quota_reservation_id != reservation_id:
+            raise AccountingFinalizationRecoveryError("Provider completion record mismatch")
+
+        previous_status = row.accounting_status
+        metadata = dict(row.response_metadata or {})
+        error_code = getattr(error, "error_code", _ACCOUNTING_FINALIZATION_FAILED)
+        safe_message = getattr(
+            error,
+            "safe_message",
+            "Provider completed but accounting finalization failed",
+        )
+        metadata.update(
+            {
+                "recovery_state": _PROVIDER_COMPLETED_FAILED,
+                "needs_reconciliation": True,
+                "finalization_error_code": _safe_short_string(error_code),
+            }
+        )
+        try:
+            row = await self._usage_ledger_repository.mark_provider_completed_record_finalization_failed(
+                usage_ledger_id,
+                error_type=_ACCOUNTING_FINALIZATION_FAILED,
+                error_message=_safe_short_string(error_code) or _ACCOUNTING_FINALIZATION_FAILED,
+                response_metadata=metadata,
+                finished_at=finished,
+                latency_ms=_latency_ms(_aware_now(row.started_at), finished),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise AccountingFinalizationRecoveryError() from exc
+
+        return FinalizationRecoveryResult(
+            usage_ledger_id=row.id,
+            reservation_id=reservation_id,
+            previous_status=previous_status,
+            new_status=row.accounting_status,
+            needs_reconciliation=True,
+            safe_message=_safe_short_string(safe_message)
+            or "Provider completed but accounting finalization failed",
         )
 
     async def record_provider_failure_and_release(
@@ -393,6 +578,30 @@ class AccountingService:
                 started_at=started_at,
                 finished_at=finished_at,
                 latency_ms=_latency_ms(started_at, finished_at),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LedgerWriteError() from exc
+
+    async def _mark_provider_completed_ledger_finalized(
+        self,
+        *,
+        usage_ledger_id: uuid.UUID,
+        provider_response: ProviderResponse,
+        actual_cost: ActualCost,
+        finished_at: datetime,
+        latency_ms: int | None,
+    ):
+        try:
+            return await self._usage_ledger_repository.mark_provider_completed_record_finalized(
+                usage_ledger_id,
+                http_status=provider_response.status_code,
+                response_metadata={
+                    **_response_metadata(provider_response, actual_cost),
+                    "recovery_state": "finalized",
+                    "needs_reconciliation": False,
+                },
+                finished_at=finished_at,
+                latency_ms=latency_ms,
             )
         except Exception as exc:  # noqa: BLE001
             raise LedgerWriteError() from exc
