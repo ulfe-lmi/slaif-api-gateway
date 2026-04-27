@@ -103,12 +103,20 @@ def _route(
     )
 
 
-def _provider(provider: str, *, enabled: bool = True) -> SimpleNamespace:
+def _provider(
+    provider: str,
+    *,
+    enabled: bool = True,
+    timeout_seconds: int = 300,
+    max_retries: int = 2,
+) -> SimpleNamespace:
     return SimpleNamespace(
         provider=provider,
         enabled=enabled,
         base_url=f"https://{provider}.example/v1",
         api_key_env_var=f"{provider.upper()}_API_KEY",
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
     )
 
 
@@ -123,6 +131,10 @@ async def test_exact_route_resolves() -> None:
 
     assert result.provider == "openai"
     assert result.resolved_model == "gpt-4.1-mini"
+    assert result.provider_base_url == "https://openai.example/v1"
+    assert result.provider_api_key_env_var == "OPENAI_API_KEY"
+    assert result.provider_timeout_seconds == 300
+    assert result.provider_max_retries == 2
 
 
 @pytest.mark.asyncio

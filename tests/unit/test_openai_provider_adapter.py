@@ -81,6 +81,32 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
 
 
 @pytest.mark.asyncio
+async def test_openai_chat_completion_uses_configured_base_url_and_api_key(respx_mock) -> None:
+    secret_value = "custom-openai-upstream-key"
+    route = respx_mock.post("https://openai-proxy.example/custom/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "chatcmpl_custom", "object": "chat.completion", "usage": {"total_tokens": 1}},
+        )
+    )
+    adapter = OpenAIProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY=None),
+        base_url="https://openai-proxy.example/custom/v1",
+        api_key=secret_value,
+        timeout_seconds=11,
+        max_retries=1,
+    )
+
+    response = await adapter.forward_chat_completion(_request({"model": "client-model", "messages": []}))
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == f"Bearer {secret_value}"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert response.json_body["id"] == "chatcmpl_custom"
+    assert route.called
+
+
+@pytest.mark.asyncio
 async def test_openai_non_2xx_raises_safe_http_error(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(

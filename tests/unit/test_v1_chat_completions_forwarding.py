@@ -47,7 +47,13 @@ def _auth() -> AuthenticatedGatewayKey:
     )
 
 
-def _route(provider: str = "openai", resolved_model: str = "gpt-4.1-mini") -> RouteResolutionResult:
+def _route(
+    provider: str = "openai",
+    resolved_model: str = "gpt-4.1-mini",
+    *,
+    provider_base_url: str | None = None,
+    provider_api_key_env_var: str | None = None,
+) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
         resolved_model=resolved_model,
@@ -56,6 +62,8 @@ def _route(provider: str = "openai", resolved_model: str = "gpt-4.1-mini") -> Ro
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        provider_base_url=provider_base_url,
+        provider_api_key_env_var=provider_api_key_env_var,
     )
 
 
@@ -90,6 +98,8 @@ def _wire_pipeline(
     *,
     provider: str = "openai",
     resolved_model: str = "gpt-4.1-mini",
+    provider_base_url: str | None = None,
+    provider_api_key_env_var: str | None = None,
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as main_module
@@ -101,7 +111,12 @@ def _wire_pipeline(
         "provider_responses": [],
     }
     auth = _auth()
-    route_result = _route(provider=provider, resolved_model=resolved_model)
+    route_result = _route(
+        provider=provider,
+        resolved_model=resolved_model,
+        provider_base_url=provider_base_url,
+        provider_api_key_env_var=provider_api_key_env_var,
+    )
     estimate = _estimate(provider=provider, resolved_model=resolved_model)
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
@@ -250,3 +265,45 @@ def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) 
     upstream_body = json.loads(upstream_request.content)
     assert upstream_body["model"] == "openai/gpt-4.1-mini"
     assert state["finalize_calls"]
+
+
+def test_route_provider_config_controls_adapter_base_url_and_key_env_var(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("CLASSROOM_OPENAI_KEY", "configured-openai-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-test-mini",
+        provider_base_url="https://openai-proxy.example/v1",
+        provider_api_key_env_var="CLASSROOM_OPENAI_KEY",
+    )
+    route = respx_mock.post("https://openai-proxy.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_configured",
+                "object": "chat.completion",
+                "model": "gpt-test-mini",
+                "choices": [],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            },
+        )
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=_chat_request(),
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl_configured"
+    assert route.called
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer configured-openai-key"
+    assert upstream_request.headers["authorization"] != "Bearer client-gateway-key"
+    assert "client-gateway-key" not in upstream_request.headers["authorization"]

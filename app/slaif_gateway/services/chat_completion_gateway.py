@@ -111,7 +111,7 @@ async def handle_chat_completion(
         request_id=request_id,
     )
     try:
-        adapter = get_provider_adapter(route.provider, settings)
+        adapter = get_provider_adapter(route, settings)
         provider_response = await adapter.forward_chat_completion(provider_request)
     except ProviderError as exc:
         try:

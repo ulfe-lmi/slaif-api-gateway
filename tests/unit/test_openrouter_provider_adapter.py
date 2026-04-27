@@ -80,6 +80,36 @@ async def test_openrouter_chat_completion_posts_non_streaming_request(respx_mock
 
 
 @pytest.mark.asyncio
+async def test_openrouter_chat_completion_uses_configured_base_url_and_api_key(respx_mock) -> None:
+    secret_value = "custom-openrouter-upstream-key"
+    route = respx_mock.post("https://openrouter-proxy.example/custom/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "gen_custom",
+                "object": "chat.completion",
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    adapter = OpenRouterProviderAdapter(
+        Settings(OPENROUTER_API_KEY=None),
+        base_url="https://openrouter-proxy.example/custom/v1",
+        api_key=secret_value,
+        timeout_seconds=13,
+        max_retries=1,
+    )
+
+    response = await adapter.forward_chat_completion(_request({"model": "client-model", "messages": []}))
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == f"Bearer {secret_value}"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert response.json_body["id"] == "gen_custom"
+    assert route.called
+
+
+@pytest.mark.asyncio
 async def test_openrouter_non_2xx_raises_safe_http_error(respx_mock) -> None:
     route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(
