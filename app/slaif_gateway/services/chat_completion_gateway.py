@@ -35,7 +35,9 @@ from slaif_gateway.metrics import (
     add_tokens,
     increment_accounting_failure,
     increment_quota_rejection,
+    increment_rate_limit_heartbeat_failure,
     increment_rate_limit_rejection,
+    increment_rate_limit_release_failure,
     observe_provider_call,
     record_provider_call_result,
 )
@@ -247,6 +249,11 @@ def _streaming_chat_completion_response(
         done_event: str | None = None
         completed = False
         provider_status = "error"
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = _start_rate_limit_heartbeat(
+            rate_limit_reservation,
+            stop_event=heartbeat_stop,
+        )
         try:
             async for chunk in adapter.stream_chat_completion(provider_request):
                 if chunk.upstream_request_id:
@@ -376,6 +383,13 @@ def _streaming_chat_completion_response(
                 code=exc.error_code,
             )
         finally:
+            heartbeat_stop.set()
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
             record_provider_call_result(
                 provider=route.provider,
@@ -449,6 +463,44 @@ async def _reserve_redis_rate_limit(
     )
 
 
+def _start_rate_limit_heartbeat(
+    reservation: _RateLimitReservation | None,
+    *,
+    stop_event: asyncio.Event,
+) -> asyncio.Task[None] | None:
+    if reservation is None or not reservation.concurrency_reserved:
+        return None
+    interval = reservation.policy.concurrency_heartbeat_seconds or 30
+    return asyncio.create_task(
+        _heartbeat_rate_limit_concurrency_loop(
+            reservation,
+            interval_seconds=interval,
+            stop_event=stop_event,
+        )
+    )
+
+
+async def _heartbeat_rate_limit_concurrency_loop(
+    reservation: _RateLimitReservation,
+    *,
+    interval_seconds: int,
+    stop_event: asyncio.Event,
+) -> None:
+    while True:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            return
+        except TimeoutError:
+            try:
+                await reservation.service.heartbeat_concurrency(
+                    gateway_key_id=reservation.gateway_key_id,
+                    request_id=reservation.request_id,
+                    policy=reservation.policy,
+                )
+            except RateLimitError as exc:
+                increment_rate_limit_heartbeat_failure(exc.error_code)
+
+
 async def _release_rate_limit_concurrency(
     reservation: _RateLimitReservation | None,
     *,
@@ -462,7 +514,7 @@ async def _release_rate_limit_concurrency(
             request_id=reservation.request_id,
         )
     except RateLimitError as exc:
-        increment_rate_limit_rejection(exc.error_code)
+        increment_rate_limit_release_failure(exc.error_code)
         if not suppress:
             raise openai_error_from_rate_limit_error(exc) from exc
 

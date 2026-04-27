@@ -1,3 +1,4 @@
+import pytest
 from pydantic import ValidationError
 
 from slaif_gateway.config import get_settings
@@ -22,6 +23,9 @@ def _clear_env(monkeypatch) -> None:
         "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
         "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
         "RATE_LIMIT_FAIL_CLOSED",
+        "RATE_LIMIT_CONCURRENCY_TTL_SECONDS",
+        "RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS",
+        "RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS",
         "GATEWAY_KEY_PREFIX",
         "GATEWAY_KEY_ACCEPTED_PREFIXES",
         "DEFAULT_MAX_OUTPUT_TOKENS",
@@ -64,6 +68,9 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE is None
     assert settings.DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE is None
     assert settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS is None
+    assert settings.RATE_LIMIT_CONCURRENCY_TTL_SECONDS == 300
+    assert settings.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS == 30
+    assert settings.RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS == 30
     assert settings.rate_limit_fail_closed() is False
 
 
@@ -100,6 +107,9 @@ def test_redis_rate_limit_settings_are_validated(monkeypatch) -> None:
         ("DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "0"),
         ("DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE", "-5"),
         ("DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS", "0"),
+        ("RATE_LIMIT_CONCURRENCY_TTL_SECONDS", "0"),
+        ("RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS", "0"),
+        ("RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS", "-1"),
     )
 
     for name, value in invalid_cases:
@@ -121,6 +131,9 @@ def test_redis_rate_limit_settings_load_when_enabled(monkeypatch) -> None:
     monkeypatch.setenv("DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "30")
     monkeypatch.setenv("DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE", "12000")
     monkeypatch.setenv("DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS", "4")
+    monkeypatch.setenv("RATE_LIMIT_CONCURRENCY_TTL_SECONDS", "120")
+    monkeypatch.setenv("RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS", "15")
+    monkeypatch.setenv("RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS", "45")
     monkeypatch.setenv("RATE_LIMIT_FAIL_CLOSED", "true")
     get_settings.cache_clear()
 
@@ -131,7 +144,22 @@ def test_redis_rate_limit_settings_load_when_enabled(monkeypatch) -> None:
     assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE == 30
     assert settings.DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE == 12000
     assert settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS == 4
+    assert settings.RATE_LIMIT_CONCURRENCY_TTL_SECONDS == 120
+    assert settings.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS == 15
+    assert settings.RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS == 45
     assert settings.rate_limit_fail_closed() is True
+
+
+def test_redis_rate_limit_heartbeat_must_be_less_than_ttl(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("RATE_LIMIT_CONCURRENCY_TTL_SECONDS", "30")
+    monkeypatch.setenv("RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS", "30")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    assert "HEARTBEAT_SECONDS must be less than RATE_LIMIT_CONCURRENCY_TTL_SECONDS" in str(exc.value)
 
 
 def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:

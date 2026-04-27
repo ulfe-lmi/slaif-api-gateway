@@ -29,6 +29,9 @@ def build_rate_limit_policy(
             settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS,
         ),
         window_seconds=_first_configured(key_policy.get("window_seconds"), 60) or 60,
+        concurrency_ttl_seconds=settings.RATE_LIMIT_CONCURRENCY_TTL_SECONDS,
+        concurrency_heartbeat_seconds=settings.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS,
+        concurrency_ttl_grace_seconds=settings.RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS,
     )
 
 

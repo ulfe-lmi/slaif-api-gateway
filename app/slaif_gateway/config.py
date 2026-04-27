@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE: int | None = None
     DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS: int | None = None
     RATE_LIMIT_FAIL_CLOSED: bool | None = None
+    RATE_LIMIT_CONCURRENCY_TTL_SECONDS: int = 300
+    RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS: int = 30
+    RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS: int = 30
 
     ACTIVE_HMAC_KEY_VERSION: str = "1"
     TOKEN_HMAC_SECRET_V1: str | None = None
@@ -105,10 +108,19 @@ class Settings(BaseSettings):
             "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
             "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
             "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+            "RATE_LIMIT_CONCURRENCY_TTL_SECONDS",
+            "RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS",
+            "RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS",
         ):
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"{name} must be a positive integer when set")
+
+        if self.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS >= self.RATE_LIMIT_CONCURRENCY_TTL_SECONDS:
+            raise ValueError(
+                "RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS must be less than "
+                "RATE_LIMIT_CONCURRENCY_TTL_SECONDS"
+            )
 
     def _validate_request_caps(self) -> None:
         if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:

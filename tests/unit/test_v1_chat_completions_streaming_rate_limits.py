@@ -99,7 +99,7 @@ def _usage_chunks() -> list[ProviderStreamChunk]:
     ]
 
 
-def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_error=None):
+def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_error=None, chunk_delay=0):
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as gateway_module
 
@@ -172,6 +172,10 @@ def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_er
             if provider_error is not None:
                 raise provider_error
             for chunk in chunks or _usage_chunks():
+                if chunk_delay:
+                    import asyncio
+
+                    await asyncio.sleep(chunk_delay)
                 yield chunk
 
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
@@ -200,7 +204,7 @@ def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_er
 def _wire_rate_service(monkeypatch, *, error=None):
     import slaif_gateway.services.chat_completion_gateway as gateway_module
 
-    state: dict[str, object] = {"reserve_calls": [], "release_calls": []}
+    state: dict[str, object] = {"reserve_calls": [], "release_calls": [], "heartbeat_calls": []}
 
     class _FakeRateLimitService:
         def __init__(self, redis_client, *, fail_closed=True):
@@ -214,6 +218,10 @@ def _wire_rate_service(monkeypatch, *, error=None):
 
         async def release_concurrency(self, *, gateway_key_id, request_id):
             state["release_calls"].append((gateway_key_id, request_id))
+
+        async def heartbeat_concurrency(self, *, gateway_key_id, request_id, policy):
+            state["heartbeat_calls"].append((gateway_key_id, request_id, policy))
+            return RateLimitResult(allowed=True)
 
     monkeypatch.setattr(gateway_module, "RedisRateLimitService", _FakeRateLimitService)
     return state
@@ -238,6 +246,31 @@ def test_streaming_rate_limit_reserves_before_provider_and_releases_on_success(m
     assert "data: [DONE]" in body
     assert rate_state["reserve_calls"]
     assert state["stream_calls"]
+    assert rate_state["release_calls"] == [
+        (auth.gateway_key_id, rate_state["reserve_calls"][0][1])
+    ]
+
+
+def test_streaming_rate_limit_heartbeats_while_stream_is_open(monkeypatch) -> None:
+    app = create_app(
+        Settings(
+            OPENAI_UPSTREAM_API_KEY="unused",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+            RATE_LIMIT_CONCURRENCY_TTL_SECONDS=3,
+            RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS=1,
+        )
+    )
+    auth = _auth()
+    _wire_streaming_pipeline(monkeypatch, app, auth=auth, chunk_delay=0.55)
+    rate_state = _wire_rate_service(monkeypatch)
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in body
+    assert rate_state["heartbeat_calls"]
     assert rate_state["release_calls"] == [
         (auth.gateway_key_id, rate_state["reserve_calls"][0][1])
     ]
