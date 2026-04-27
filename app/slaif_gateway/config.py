@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     ENABLE_OPENROUTER_PROVIDER: bool = True
     ENABLE_ADMIN_DASHBOARD: bool = True
     ENABLE_METRICS: bool = True
+    METRICS_REQUIRE_AUTH: bool | None = None
+    METRICS_ALLOWED_IPS: str | None = None
+    REQUEST_ID_HEADER: str = "X-Request-ID"
+    LOG_LEVEL: str = "INFO"
+    STRUCTURED_LOGS: bool = True
     GATEWAY_KEY_PREFIX: str = "sk-slaif-"
     GATEWAY_KEY_ACCEPTED_PREFIXES: str | None = None
     DEFAULT_MAX_OUTPUT_TOKENS: int = 1024
@@ -76,6 +81,7 @@ class Settings(BaseSettings):
             self._validate_encryption_key_shape(self.ONE_TIME_SECRET_ENCRYPTION_KEY)
 
         self._validate_request_caps()
+        self._validate_request_id_header()
         return self
 
     def _validate_request_caps(self) -> None:
@@ -87,6 +93,16 @@ class Settings(BaseSettings):
             raise ValueError("HARD_MAX_INPUT_TOKENS must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
+
+    def _validate_request_id_header(self) -> None:
+        header = self.REQUEST_ID_HEADER.strip()
+        if not header:
+            raise ValueError("REQUEST_ID_HEADER cannot be empty")
+        if any(ch.isspace() for ch in header):
+            raise ValueError("REQUEST_ID_HEADER cannot contain whitespace")
+        if any(ord(ch) < 33 or ord(ch) == 127 for ch in header):
+            raise ValueError("REQUEST_ID_HEADER cannot contain control characters")
+        self.REQUEST_ID_HEADER = header
 
     @staticmethod
     def _validate_production_secret(name: str, value: str | None) -> None:
@@ -190,6 +206,18 @@ class Settings(BaseSettings):
         if not secret:
             raise ValueError(f"TOKEN_HMAC_SECRET_V{version} is required for active HMAC version")
         return version, secret
+
+    def metrics_require_auth(self) -> bool:
+        """Return whether /metrics should require explicit exposure controls."""
+        if self.METRICS_REQUIRE_AUTH is not None:
+            return self.METRICS_REQUIRE_AUTH
+        return self.APP_ENV.lower() == "production"
+
+    def get_metrics_allowed_ips(self) -> tuple[str, ...]:
+        """Return normalized IP allowlist entries for /metrics."""
+        if not self.METRICS_ALLOWED_IPS:
+            return ()
+        return tuple(item.strip() for item in self.METRICS_ALLOWED_IPS.split(",") if item.strip())
 
 
 @lru_cache(maxsize=1)

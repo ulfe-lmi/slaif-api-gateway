@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -18,6 +19,10 @@ _SECRET_KEYWORDS = (
     "csrf",
     "cookie",
     "session",
+)
+_SECRET_TEXT_PATTERNS = (
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE),
+    re.compile(r"\bsk-(?:slaif|ulfe|or|proj|test)?-[A-Za-z0-9._-]{8,}"),
 )
 
 
@@ -58,6 +63,14 @@ def redact_authorization_header(value: str | None) -> str:
     return f"{scheme} {redact_secret(token, visible_prefix=4, visible_suffix=4)}"
 
 
+def redact_text(value: str) -> str:
+    """Redact secret-looking substrings from free-form log text."""
+    redacted = value
+    for pattern in _SECRET_TEXT_PATTERNS:
+        redacted = pattern.sub(_REDACTED, redacted)
+    return redacted
+
+
 def redact_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
     """Return a recursively redacted dict for sensitive mappings."""
     redacted: dict[str, Any] = {}
@@ -77,6 +90,8 @@ def redact_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
             redacted[key] = [
                 redact_mapping(item) if isinstance(item, Mapping) else item for item in value
             ]
+        elif isinstance(value, str):
+            redacted[key] = redact_text(value)
         else:
             redacted[key] = value
 

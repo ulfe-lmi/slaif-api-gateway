@@ -20,6 +20,7 @@ Implemented:
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
+- Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client.
 
 Not implemented yet:
@@ -28,7 +29,7 @@ Not implemented yet:
 - Redis-backed rate limiting.
 - Admin dashboard pages.
 - Email sending and Celery workers.
-- Prometheus metrics endpoint and full deployment docs.
+- OpenTelemetry tracing and full deployment docs.
 
 ## OpenAI-Compatible Usage
 
@@ -78,6 +79,14 @@ uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
 
 The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration and reachability when `DATABASE_URL` is set. Redis is not required for readiness until Redis-backed features are implemented.
+
+## Observability
+
+Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Request-ID` is preserved; otherwise the gateway generates one and binds it to structured logs.
+
+Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Prompts and completions are not logged by default.
+
+`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
 
 ## CLI Quickstart
 
@@ -145,4 +154,4 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes streaming/SSE support, Redis rate limiting, admin dashboard routes/templates, email delivery through Celery and one-time secrets, metrics/observability, and fuller public deployment documentation.
+Near-term remaining work includes streaming/SSE support, Redis rate limiting, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.

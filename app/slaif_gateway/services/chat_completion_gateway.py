@@ -25,6 +25,12 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.factory import get_provider_adapter
+from slaif_gateway.metrics import (
+    add_tokens,
+    increment_accounting_failure,
+    increment_quota_rejection,
+    observe_provider_call,
+)
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
@@ -98,7 +104,7 @@ async def handle_chat_completion(
             param="stream",
         )
 
-    request_id = f"gw-{uuid.uuid4()}"
+    request_id = _request_id_from_request(request)
     route, cost_estimate, reservation = await _reserve_chat_completion_quota(
         authenticated_key=authenticated_key,
         effective_model=policy_result.effective_body["model"],
@@ -116,7 +122,11 @@ async def handle_chat_completion(
     )
     try:
         adapter = get_provider_adapter(route, settings)
-        provider_response = await adapter.forward_chat_completion(provider_request)
+        provider_response = await observe_provider_call(
+            provider=route.provider,
+            endpoint="chat.completions",
+            call=lambda: adapter.forward_chat_completion(provider_request),
+        )
     except ProviderError as exc:
         try:
             await _record_provider_failure_and_release(
@@ -130,8 +140,10 @@ async def handle_chat_completion(
                 request=request,
             )
         except AccountingError as accounting_exc:
+            increment_accounting_failure(accounting_exc.error_code)
             raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
         except QuotaError as quota_exc:
+            increment_quota_rejection(quota_exc.error_code)
             raise openai_error_from_quota_error(quota_exc) from quota_exc
         raise openai_error_from_provider_error(exc) from exc
 
@@ -146,9 +158,12 @@ async def handle_chat_completion(
             request_id=request_id,
             request=request,
         )
+        _record_provider_usage_metrics(route=route, provider_response=provider_response)
     except AccountingError as exc:
+        increment_accounting_failure(exc.error_code)
         raise openai_error_from_accounting_error(exc) from exc
     except QuotaError as exc:
+        increment_quota_rejection(exc.error_code)
         raise openai_error_from_quota_error(exc) from exc
 
     return JSONResponse(
@@ -210,6 +225,7 @@ async def _reserve_chat_completion_quota(
                 request_id=request_id,
             )
         except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
             raise openai_error_from_quota_error(exc) from exc
 
         if hasattr(session, "commit"):
@@ -315,4 +331,39 @@ def _database_session_unavailable_error() -> OpenAICompatibleError:
         status_code=500,
         error_type="server_error",
         code="database_session_unavailable",
+    )
+
+
+def _request_id_from_request(request: Request | None) -> str:
+    request_id = getattr(getattr(request, "state", None), "gateway_request_id", None)
+    if isinstance(request_id, str) and request_id:
+        return request_id
+    return f"gw-{uuid.uuid4()}"
+
+
+def _record_provider_usage_metrics(
+    *,
+    route: RouteResolutionResult,
+    provider_response: ProviderResponse,
+) -> None:
+    usage = provider_response.usage
+    if usage is None:
+        return
+    add_tokens(
+        provider=route.provider,
+        model=route.resolved_model,
+        token_type="prompt",
+        count=usage.prompt_tokens,
+    )
+    add_tokens(
+        provider=route.provider,
+        model=route.resolved_model,
+        token_type="completion",
+        count=usage.completion_tokens,
+    )
+    add_tokens(
+        provider=route.provider,
+        model=route.resolved_model,
+        token_type="total",
+        count=usage.total_tokens,
     )

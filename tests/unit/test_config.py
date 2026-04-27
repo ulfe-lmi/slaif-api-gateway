@@ -19,6 +19,12 @@ def _clear_env(monkeypatch) -> None:
         "DEFAULT_MAX_OUTPUT_TOKENS",
         "HARD_MAX_OUTPUT_TOKENS",
         "HARD_MAX_INPUT_TOKENS",
+        "ENABLE_METRICS",
+        "METRICS_REQUIRE_AUTH",
+        "METRICS_ALLOWED_IPS",
+        "REQUEST_ID_HEADER",
+        "LOG_LEVEL",
+        "STRUCTURED_LOGS",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -38,6 +44,49 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.DEFAULT_MAX_OUTPUT_TOKENS == 1024
     assert settings.HARD_MAX_OUTPUT_TOKENS == 4096
     assert settings.HARD_MAX_INPUT_TOKENS == 128000
+    assert settings.ENABLE_METRICS is True
+    assert settings.metrics_require_auth() is False
+    assert settings.REQUEST_ID_HEADER == "X-Request-ID"
+    assert settings.LOG_LEVEL == "INFO"
+    assert settings.STRUCTURED_LOGS is True
+
+
+def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.metrics_require_auth() is True
+
+
+def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    monkeypatch.setenv("METRICS_REQUIRE_AUTH", "false")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.metrics_require_auth() is False
+    assert settings.get_metrics_allowed_ips() == ()
+
+
+def test_metrics_allowed_ips_are_normalized(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("METRICS_ALLOWED_IPS", "127.0.0.1, 10.0.0.5 ")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.get_metrics_allowed_ips() == ("127.0.0.1", "10.0.0.5")
 
 
 def test_default_output_tokens_must_not_exceed_hard_max(monkeypatch) -> None:
