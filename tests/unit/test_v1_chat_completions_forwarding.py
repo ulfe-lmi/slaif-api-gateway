@@ -217,7 +217,7 @@ def test_openai_nonstreaming_happy_path_uses_adapter_and_finalizes(
     assert upstream_body["model"] == "gpt-4.1-mini"
     assert upstream_body["max_tokens"] == 20
     assert state["provider_responses"][0].usage.total_tokens == 12
-    assert state["session"].commit_calls == 1
+    assert state["session"].commit_calls == 2
 
 
 def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) -> None:
