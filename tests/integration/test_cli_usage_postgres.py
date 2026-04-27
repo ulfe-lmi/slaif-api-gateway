@@ -345,3 +345,22 @@ def test_usage_summarize_and_export_against_postgres(
     )
     assert existing_result.exit_code == 1
     assert "already exists" in existing_result.stderr
+
+    force_result = runner.invoke(
+        app,
+        [
+            "usage",
+            "export",
+            "--format",
+            "csv",
+            "--key-id",
+            str(context.key_id),
+            "--output",
+            str(output_path),
+            "--force",
+        ],
+    )
+    assert force_result.exit_code == 0, force_result.output
+    forced_rows = list(csv.DictReader(output_path.read_text(encoding="utf-8").splitlines()))
+    assert len(forced_rows) == 2
+    _assert_safe_output(output_path.read_text(encoding="utf-8"))
