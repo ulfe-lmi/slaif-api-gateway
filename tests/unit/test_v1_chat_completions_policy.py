@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
+from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 
@@ -128,6 +128,30 @@ def _wire_successful_forwarding(monkeypatch, response_body: dict[str, object] | 
                 status_code=200,
                 json_body=response_body or {"id": "chatcmpl_test", "object": "chat.completion"},
                 usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        async def stream_chat_completion(self, request):
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data='{"id":"chatcmpl_stream","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+                raw_sse_event=(
+                    'data: {"id":"chatcmpl_stream","choices":[],"usage":'
+                    '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                ),
+                json_body={
+                    "id": "chatcmpl_stream",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data="[DONE]",
+                raw_sse_event="data: [DONE]\n\n",
+                is_done=True,
             )
 
     async def _fake_finalize_successful_response(self, *args, **kwargs):
@@ -312,7 +336,7 @@ def test_valid_request_with_route_returns_provider_response(monkeypatch) -> None
     assert response.json() == {"id": "chatcmpl_ok", "choices": []}
 
 
-def test_stream_true_returns_501_without_route_resolution_or_forwarding(monkeypatch) -> None:
+def test_stream_true_reaches_route_resolution_and_streams(monkeypatch) -> None:
     import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
@@ -329,14 +353,16 @@ def test_stream_true_returns_501_without_route_resolution_or_forwarding(monkeypa
     _wire_successful_forwarding(monkeypatch)
 
     client = TestClient(app)
-    response = client.post(
+    with client.stream(
+        "POST",
         "/v1/chat/completions",
         json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-    )
+    ) as response:
+        body = "".join(response.iter_text())
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "streaming_not_implemented"
-    assert route_calls == []
+    assert response.status_code == 200
+    assert "data: [DONE]" in body
+    assert route_calls == ["gpt-4.1-mini"]
 
 
 def test_chat_completions_module_safety_constraints() -> None:

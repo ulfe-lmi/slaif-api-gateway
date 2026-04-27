@@ -48,3 +48,38 @@ class ProviderResponse:
     usage: ProviderUsage | None = None
     raw_cost_native: Decimal | None = None
     native_currency: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderStreamChunk:
+    """Safe provider streaming chunk envelope.
+
+    The raw event/data values are provider response data only. This schema
+    intentionally excludes gateway keys, provider keys, token hashes, and
+    request/response persistence details.
+    """
+
+    provider: str
+    upstream_model: str
+    data: str
+    raw_sse_event: str
+    json_body: Mapping[str, Any] | None = None
+    is_done: bool = False
+    usage: ProviderUsage | None = None
+    upstream_request_id: str | None = None
+    raw_cost_native: Decimal | None = None
+    native_currency: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderStreamSummary:
+    """Safe summary of an upstream streaming response for accounting."""
+
+    provider: str
+    upstream_model: str
+    upstream_request_id: str | None = None
+    usage: ProviderUsage | None = None
+    completed: bool = False
+    interrupted: bool = False
+    raw_cost_native: Decimal | None = None
+    native_currency: str | None = None

@@ -181,6 +181,7 @@ class AccountingService:
         provider_response: ProviderResponse,
         request_id: str,
         endpoint: str = "chat.completions",
+        streaming: bool = False,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> FinalizedAccountingResult:
@@ -237,6 +238,7 @@ class AccountingService:
             usage=usage,
             pricing_estimate=pricing_estimate,
             actual_cost=actual_cost,
+            streaming=streaming,
             started_at=started,
             finished_at=finished,
         )
@@ -267,6 +269,7 @@ class AccountingService:
         error_type: str,
         error_code: str | None = None,
         status_code: int | None = None,
+        streaming: bool = False,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> ProviderFailureAccountingResult:
@@ -311,6 +314,7 @@ class AccountingService:
             error_type=error_type,
             error_code=error_code,
             status_code=status_code,
+            streaming=streaming,
             started_at=started,
             finished_at=finished,
         )
@@ -355,6 +359,7 @@ class AccountingService:
         usage: ActualUsage,
         pricing_estimate: ChatCostEstimate,
         actual_cost: ActualCost,
+        streaming: bool,
         started_at: datetime,
         finished_at: datetime,
     ):
@@ -370,7 +375,7 @@ class AccountingService:
                 requested_model=route.requested_model,
                 resolved_model=route.resolved_model,
                 upstream_request_id=provider_response.upstream_request_id,
-                streaming=False,
+                streaming=streaming,
                 http_status=provider_response.status_code,
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
@@ -404,6 +409,7 @@ class AccountingService:
         error_type: str,
         error_code: str | None,
         status_code: int | None,
+        streaming: bool,
         started_at: datetime,
         finished_at: datetime,
     ):
@@ -418,7 +424,7 @@ class AccountingService:
                 provider=route.provider,
                 requested_model=route.requested_model,
                 resolved_model=route.resolved_model,
-                streaming=False,
+                streaming=streaming,
                 http_status=status_code,
                 error_type=_safe_short_string(error_type),
                 error_message=_safe_short_string(error_code),

@@ -100,6 +100,18 @@ async def observe_provider_call(
     return response
 
 
+def record_provider_call_result(
+    *,
+    provider: str,
+    endpoint: str,
+    status: str,
+    duration_seconds: float,
+) -> None:
+    """Record a provider call whose execution is managed by the caller."""
+    PROVIDER_REQUESTS.labels(provider=provider, endpoint=endpoint, status=status).inc()
+    PROVIDER_REQUEST_DURATION.labels(provider=provider, endpoint=endpoint).observe(duration_seconds)
+
+
 def increment_auth_failure(error_code: str | None) -> None:
     """Record an auth failure with a low-cardinality error code."""
     AUTH_FAILURES.labels(error_code=error_code or "unknown").inc()

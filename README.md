@@ -16,17 +16,16 @@ Implemented:
 
 - `GET /healthz` and `GET /readyz`.
 - Authenticated `GET /v1/models` backed by local provider and route metadata.
-- Non-streaming `POST /v1/chat/completions` with request policy checks, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
+- Non-streaming and SSE streaming `POST /v1/chat/completions` with request policy checks, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
-- Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client.
+- Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
-- Streaming/SSE forwarding.
 - Redis-backed rate limiting.
 - Admin dashboard pages.
 - Email sending and Celery workers.
@@ -52,6 +51,19 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(response.choices[0].message.content)
+```
+
+Streaming chat completions use OpenAI-compatible Server-Sent Events and work with the official client:
+
+```python
+stream = client.chat.completions.create(
+    model="gpt-test-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+    stream=True,
+)
+for chunk in stream:
+    if chunk.choices:
+        print(chunk.choices[0].delta.content or "", end="")
 ```
 
 `sk-slaif-` is the default generated gateway key prefix. New key generation uses `GATEWAY_KEY_PREFIX`, and authentication accepts only prefixes configured in `GATEWAY_KEY_ACCEPTED_PREFIXES`, which must include the active generation prefix.
@@ -145,6 +157,7 @@ TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/integration
 ```
 
 The OpenAI/OpenRouter E2E tests use the official `openai` Python package with `OpenAI()` reading `OPENAI_API_KEY` and `OPENAI_BASE_URL`, but upstream HTTP is mocked with RESPX. Normal tests require no real OpenAI or OpenRouter keys and make no real upstream calls.
+Streaming E2E tests also use mocked upstream SSE responses. Successful streaming finalization requires provider final usage metadata; if a stream completes without final usage, the gateway releases the reservation and records a failed/incomplete ledger event with zero actual cost.
 
 ## Security Notes
 
@@ -164,4 +177,6 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes streaming/SSE support, Redis rate limiting, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes Redis rate limiting, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
+
+For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
