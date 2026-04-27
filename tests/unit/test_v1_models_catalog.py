@@ -52,7 +52,7 @@ def test_unauthenticated_request_returns_openai_shaped_401() -> None:
 def test_authenticated_request_returns_empty_catalog_without_provider_calls(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     app = create_app()
 
@@ -81,7 +81,7 @@ def test_authenticated_request_returns_empty_catalog_without_provider_calls(monk
 def test_authenticated_request_returns_openai_model_objects(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     app = create_app()
 
@@ -119,7 +119,7 @@ def test_authenticated_request_returns_openai_model_objects(monkeypatch) -> None
 
 
 def test_v1_models_route_module_safety_constraints() -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     source = inspect.getsource(main_module).lower()
 

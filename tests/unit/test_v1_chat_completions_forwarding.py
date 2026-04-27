@@ -92,7 +92,7 @@ def _wire_pipeline(
     resolved_model: str = "gpt-4.1-mini",
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     state: dict[str, object] = {
         "session": FakeSession(),
