@@ -143,6 +143,19 @@ class QuotaReservationsRepository:
         await self._session.flush()
         return reservation
 
+    async def mark_pending_reservation_expired(
+        self,
+        reservation: QuotaReservation,
+        *,
+        released_at: datetime,
+    ) -> QuotaReservation:
+        """Mark an already locked pending reservation expired and released."""
+        reservation.status = "expired"
+        reservation.released_at = released_at
+        reservation.finalized_at = None
+        await self._session.flush()
+        return reservation
+
     async def list_expired_pending_reservations(
         self,
         *,
@@ -153,7 +166,7 @@ class QuotaReservationsRepository:
             select(QuotaReservation)
             .where(
                 QuotaReservation.status == "pending",
-                QuotaReservation.expires_at < now,
+                QuotaReservation.expires_at <= now,
             )
             .order_by(QuotaReservation.expires_at.asc())
             .limit(limit)
