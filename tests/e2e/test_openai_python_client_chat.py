@@ -290,7 +290,7 @@ def _run_uvicorn_server(app, port: int) -> Iterator[None]:
         host="127.0.0.1",
         port=port,
         log_level="error",
-        lifespan="off",
+        lifespan="on",
         timeout_keep_alive=1,
     )
     server = uvicorn.Server(config)

@@ -261,6 +261,8 @@ def test_usage_summarize_and_export_against_postgres(
             "openai",
             "--model",
             "gpt-test-mini",
+            "--key-id",
+            str(context.key_id),
             "--group-by",
             "provider_model",
             "--json",
@@ -309,7 +311,18 @@ def test_usage_summarize_and_export_against_postgres(
 
     json_export = runner.invoke(
         app,
-        ["usage", "export", "--format", "json", "--provider", "openai", "--model", "gpt-test-mini"],
+        [
+            "usage",
+            "export",
+            "--format",
+            "json",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-test-mini",
+            "--key-id",
+            str(context.key_id),
+        ],
     )
     assert json_export.exit_code == 0, json_export.output
     _assert_safe_output(json_export.stdout)
