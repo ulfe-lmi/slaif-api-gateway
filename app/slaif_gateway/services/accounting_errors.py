@@ -46,6 +46,24 @@ class LedgerWriteError(AccountingError):
     message = "Usage ledger record could not be written"
 
 
+class ProviderCompletionRecordError(AccountingError):
+    status_code = 500
+    error_code = "provider_completion_record_error"
+    message = "Provider completion recovery record could not be written"
+
+
+class AccountingFinalizationRecoveryError(AccountingError):
+    status_code = 500
+    error_code = "accounting_finalization_recovery_error"
+    message = "Accounting finalization recovery state could not be recorded"
+
+
+class FinalizationRecoveryNotSupportedError(AccountingError):
+    status_code = 500
+    error_code = "finalization_recovery_not_supported"
+    message = "Accounting finalization recovery is not supported for this reservation"
+
+
 class ActualCostExceededReservationError(ReservationFinalizationError):
     error_code = "actual_cost_exceeded_reservation"
     message = "Actual usage exceeded the quota reservation"

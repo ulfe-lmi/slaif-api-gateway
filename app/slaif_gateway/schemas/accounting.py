@@ -61,3 +61,36 @@ class ProviderFailureAccountingResult:
     accounting_status: str
     error_type: str | None = None
     error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCompletedAccountingRecord:
+    """Durable recovery marker for provider-completed requests awaiting finalization."""
+
+    usage_ledger_id: uuid.UUID
+    reservation_id: uuid.UUID
+    gateway_key_id: uuid.UUID
+    request_id: str
+    provider: str
+    requested_model: str | None
+    resolved_model: str | None
+    endpoint: str
+    upstream_request_id: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_eur: Decimal
+    computed_actual_cost_eur: Decimal | None
+    accounting_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizationRecoveryResult:
+    """Safe result for marking provider-completed accounting as recoverable."""
+
+    usage_ledger_id: uuid.UUID
+    reservation_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    needs_reconciliation: bool
+    safe_message: str

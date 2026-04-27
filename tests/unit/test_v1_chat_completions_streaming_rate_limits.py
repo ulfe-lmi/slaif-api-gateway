@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -106,7 +107,9 @@ def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_er
         "route_calls": [],
         "reserve_calls": [],
         "stream_calls": [],
+        "provider_completed_calls": [],
         "finalize_calls": [],
+        "recovery_failure_calls": [],
         "failure_calls": [],
     }
 
@@ -147,6 +150,17 @@ def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_er
         state["finalize_calls"].append(kwargs)
         return object()
 
+    async def _fake_provider_completed(self, *args, **kwargs):
+        _ = (self, args)
+        usage_ledger_id = uuid.uuid4()
+        state["provider_completed_calls"].append({"usage_ledger_id": usage_ledger_id, **kwargs})
+        return SimpleNamespace(usage_ledger_id=usage_ledger_id)
+
+    async def _fake_mark_finalization_failed(self, *args, **kwargs):
+        _ = (self, args)
+        state["recovery_failure_calls"].append(kwargs)
+        return object()
+
     async def _fake_failure(self, *args, **kwargs):
         _ = (self, args)
         state["failure_calls"].append(kwargs)
@@ -167,7 +181,17 @@ def _wire_streaming_pipeline(monkeypatch, app, *, auth, chunks=None, provider_er
     monkeypatch.setattr(gateway_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
     monkeypatch.setattr(gateway_module.PricingService, "estimate_chat_completion_cost", _fake_estimate)
     monkeypatch.setattr(gateway_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(
+        gateway_module.AccountingService,
+        "record_provider_completed_before_finalization",
+        _fake_provider_completed,
+    )
     monkeypatch.setattr(gateway_module.AccountingService, "finalize_successful_response", _fake_finalize)
+    monkeypatch.setattr(
+        gateway_module.AccountingService,
+        "mark_provider_completed_finalization_failed",
+        _fake_mark_finalization_failed,
+    )
     monkeypatch.setattr(gateway_module.AccountingService, "record_provider_failure_and_release", _fake_failure)
     monkeypatch.setattr(gateway_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
     return state

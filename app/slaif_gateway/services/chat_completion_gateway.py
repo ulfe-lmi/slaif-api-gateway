@@ -265,17 +265,46 @@ def _streaming_chat_completion_response(
                     chunk=usage_chunk,
                     upstream_request_id=upstream_request_id,
                 )
-                await _finalize_successful_chat_completion(
+                provider_completed_record = await _record_provider_completed_before_finalization(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
                     route=route,
-                    policy_result=policy_result,
                     cost_estimate=cost_estimate,
                     provider_response=provider_response,
                     request_id=request_id,
                     request=request,
-                    streaming=True,
                 )
+                try:
+                    await _finalize_successful_chat_completion(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        provider_response=provider_response,
+                        request_id=request_id,
+                        request=request,
+                        streaming=True,
+                        provider_completed_usage_ledger_id=(
+                            provider_completed_record.usage_ledger_id
+                        ),
+                    )
+                except AccountingError as exc:
+                    await _mark_provider_completed_finalization_failed(
+                        usage_ledger_id=provider_completed_record.usage_ledger_id,
+                        reservation_id=reservation.reservation_id,
+                        error=exc,
+                        request=request,
+                    )
+                    raise
+                except QuotaError as exc:
+                    await _mark_provider_completed_finalization_failed(
+                        usage_ledger_id=provider_completed_record.usage_ledger_id,
+                        reservation_id=reservation.reservation_id,
+                        error=exc,
+                        request=request,
+                    )
+                    raise
                 _record_provider_usage_metrics(route=route, provider_response=provider_response)
                 provider_status = "success"
                 if done_event is not None:
@@ -590,6 +619,7 @@ async def _finalize_successful_chat_completion(
     request_id: str,
     request: Request | None,
     streaming: bool = False,
+    provider_completed_usage_ledger_id: uuid.UUID | None = None,
 ) -> None:
     session_iterator = _db_session_iterator(request)
     try:
@@ -609,6 +639,8 @@ async def _finalize_successful_chat_completion(
         }
         if streaming:
             kwargs["streaming"] = True
+        if provider_completed_usage_ledger_id is not None:
+            kwargs["provider_completed_usage_ledger_id"] = provider_completed_usage_ledger_id
         await accounting_service.finalize_successful_response(
             reservation.reservation_id,
             authenticated_key,
@@ -621,6 +653,75 @@ async def _finalize_successful_chat_completion(
         if hasattr(session, "commit"):
             await session.commit()
         return
+    finally:
+        await session_iterator.aclose()
+
+
+async def _record_provider_completed_before_finalization(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    cost_estimate: ChatCostEstimate,
+    provider_response: ProviderResponse,
+    request_id: str,
+    request: Request | None,
+):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        result = await accounting_service.record_provider_completed_before_finalization(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            provider_response,
+            request_id=request_id,
+            endpoint="chat.completions",
+            streaming=True,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
+
+
+async def _mark_provider_completed_finalization_failed(
+    *,
+    usage_ledger_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+    error: Exception,
+    request: Request | None,
+) -> None:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        await accounting_service.mark_provider_completed_finalization_failed(
+            usage_ledger_id,
+            reservation_id,
+            error,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
     finally:
         await session_iterator.aclose()
 
