@@ -78,7 +78,7 @@ alembic upgrade head
 uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
 
-The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration and reachability when `DATABASE_URL` is set. Redis is not required for readiness until Redis-backed features are implemented.
+The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness until Redis-backed features are implemented.
 
 ## Observability
 
@@ -150,7 +150,7 @@ The OpenAI/OpenRouter E2E tests use the official `openai` Python package with `O
 
 `docs/database-schema.md` is the authoritative schema source. Schema changes must update that document, SQLAlchemy models, Alembic migrations, and tests together.
 
-Migrations are explicit operator actions and are not run during application startup. Fresh `alembic upgrade head` runs create the project schema and version table from the committed migration chain.
+Migrations are explicit operator actions and are not run during application startup or `/readyz`. Fresh `alembic upgrade head` runs create the project schema and version table from the committed migration chain.
 
 ## Roadmap
 
