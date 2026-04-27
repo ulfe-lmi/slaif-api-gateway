@@ -43,7 +43,7 @@ def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
 def _wire_auth_and_db(monkeypatch, app) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
         return _fake_authenticated_gateway_key()
@@ -104,7 +104,7 @@ def _route_result(requested_model: str = "gpt-4.1-mini") -> RouteResolutionResul
 
 
 def _wire_successful_pricing(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
         _ = (self, route, policy, endpoint, at)
@@ -118,7 +118,7 @@ def _wire_successful_pricing(monkeypatch) -> None:
 
 
 def _wire_successful_forwarding(monkeypatch, response_body: dict[str, object] | None = None) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     class _FakeAdapter:
         async def forward_chat_completion(self, request):
@@ -235,7 +235,7 @@ def test_excessive_estimated_input_returns_openai_shaped_invalid_request_error(m
 
 
 def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
     from slaif_gateway.services.routing_errors import ModelNotFoundError
 
     app = create_app()
@@ -258,7 +258,7 @@ def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> Non
 
 
 def test_valid_request_with_no_output_limit_reaches_route_resolution_then_forwards(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     resolver_calls: list[str] = []
@@ -285,7 +285,7 @@ def test_valid_request_with_no_output_limit_reaches_route_resolution_then_forwar
 
 
 def test_valid_request_with_route_returns_provider_response(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -313,7 +313,7 @@ def test_valid_request_with_route_returns_provider_response(monkeypatch) -> None
 
 
 def test_stream_true_returns_501_without_route_resolution_or_forwarding(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -340,7 +340,7 @@ def test_stream_true_returns_501_without_route_resolution_or_forwarding(monkeypa
 
 
 def test_chat_completions_module_safety_constraints() -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     source = inspect.getsource(main_module).lower()
 

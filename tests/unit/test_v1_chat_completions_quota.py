@@ -80,7 +80,7 @@ def _chat_request(model: str = "classroom-cheap") -> dict[str, object]:
 
 def _wire_auth_and_db(monkeypatch, app, authenticated_key: AuthenticatedGatewayKey | None = None) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     key = authenticated_key or _fake_authenticated_gateway_key()
 
@@ -96,7 +96,7 @@ def _wire_auth_and_db(monkeypatch, app, authenticated_key: AuthenticatedGatewayK
 
 
 def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tuple[list[str], list[str]]:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     reserve_calls: list[str] = []
     release_calls: list[str] = []
@@ -158,7 +158,7 @@ def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tu
 
 
 def _wire_successful_forwarding(monkeypatch) -> list[str]:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     finalize_calls: list[str] = []
 
@@ -242,7 +242,7 @@ def test_quota_exceeded_returns_openai_error_before_501(monkeypatch) -> None:
 
 
 def test_pricing_failure_happens_before_quota_reservation(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -276,7 +276,7 @@ def test_pricing_failure_happens_before_quota_reservation(monkeypatch) -> None:
 
 
 def test_unsupported_model_happens_before_pricing_or_quota(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -312,7 +312,7 @@ def test_unsupported_model_happens_before_pricing_or_quota(monkeypatch) -> None:
 
 
 def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)

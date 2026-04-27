@@ -175,7 +175,7 @@ def test_configured_legacy_prefix_reaches_service_layer(monkeypatch) -> None:
 
 def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependency_module
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     app = create_app()
     client = TestClient(app)
@@ -220,7 +220,7 @@ def test_optional_mocked_service_auth_success_without_postgres(monkeypatch) -> N
 def test_auth_dependency_override_supports_authenticated_test_path(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependency_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     app = create_app()
 

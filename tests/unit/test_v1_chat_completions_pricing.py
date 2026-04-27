@@ -62,7 +62,7 @@ def _route_result(requested_model: str = "classroom-cheap") -> RouteResolutionRe
 
 def _wire_auth_and_db(monkeypatch, app) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
         return _fake_authenticated_gateway_key()
@@ -119,7 +119,7 @@ def _chat_request(model: str = "classroom-cheap") -> dict[str, object]:
 
 
 def _wire_successful_forwarding(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     class _FakeAdapter:
         async def forward_chat_completion(self, request):
@@ -144,7 +144,7 @@ def _wire_successful_forwarding(monkeypatch) -> None:
 
 
 def test_valid_route_and_pricing_reaches_provider_forwarding(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -198,7 +198,7 @@ def test_invalid_fx_data_returns_openai_error_before_501(monkeypatch) -> None:
 
 
 def _assert_pricing_error(monkeypatch, pricing_error, expected_status: int, expected_code: str) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -263,7 +263,7 @@ def test_excessive_max_tokens_returns_policy_error_before_route_or_pricing(monke
 
 
 def test_unsupported_model_returns_route_error_before_pricing(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
@@ -297,7 +297,7 @@ def test_missing_pricing_for_supported_route_returns_pricing_error_before_501(mo
 
 
 def _wire_counting_route_and_pricing(monkeypatch) -> tuple[list[str], list[str]]:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     route_calls: list[str] = []
     pricing_calls: list[str] = []
@@ -322,7 +322,7 @@ def _wire_counting_route_and_pricing(monkeypatch) -> tuple[list[str], list[str]]
 
 
 def test_chat_completions_pricing_path_safety_constraints() -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     source = inspect.getsource(main_module).lower()
 

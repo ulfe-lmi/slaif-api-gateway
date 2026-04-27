@@ -97,7 +97,7 @@ def _wire_pipeline(
     quota_error=None,
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     state: dict[str, object] = {
         "route_calls": [],
@@ -174,7 +174,7 @@ def _wire_pipeline(
 
 
 def _wire_provider_error(monkeypatch, provider_error) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     class _FakeAdapter:
         async def forward_chat_completion(self, request):
@@ -228,7 +228,7 @@ def test_provider_non_2xx_timeout_and_parse_errors_are_openai_shaped(monkeypatch
 
 
 def test_provider_success_missing_usage_returns_accounting_error(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
     state = _wire_pipeline(monkeypatch, app)
@@ -259,7 +259,7 @@ def test_provider_success_missing_usage_returns_accounting_error(monkeypatch) ->
 
 
 def test_accounting_finalization_error_does_not_return_provider_json(monkeypatch) -> None:
-    import slaif_gateway.main as main_module
+    import slaif_gateway.services.chat_completion_gateway as main_module
 
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
     _wire_pipeline(monkeypatch, app)

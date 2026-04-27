@@ -61,7 +61,7 @@ def test_v1_models_requires_authentication_by_default() -> None:
 def test_v1_models_returns_empty_list_for_overridden_authenticated_dependency(monkeypatch) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
     from slaif_gateway.api.dependencies import get_authenticated_gateway_key
-    import slaif_gateway.main as main_module
+    import slaif_gateway.api.openai_compat as main_module
 
     app = create_app()
 
