@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from slaif_gateway.services.reconciliation_errors import (
+    ProviderCompletedRecoveryAlreadyReconciledError,
+    ProviderCompletedRecoveryInvariantError,
+    ProviderCompletedRecoveryMetadataMissingError,
+    ProviderCompletedRecoveryNotFoundError,
+    ProviderCompletedRecoveryNotRepairableError,
     ReconciliationInvariantError,
     ReservationNotExpiredError,
     ReservationNotPendingError,
@@ -14,6 +19,11 @@ def test_reconciliation_errors_expose_safe_metadata() -> None:
         ReservationNotPendingError(),
         ReservationNotExpiredError(),
         ReconciliationInvariantError(param="cost_reserved_eur"),
+        ProviderCompletedRecoveryNotFoundError(),
+        ProviderCompletedRecoveryNotRepairableError(),
+        ProviderCompletedRecoveryMetadataMissingError(),
+        ProviderCompletedRecoveryInvariantError(param="actual_cost_eur"),
+        ProviderCompletedRecoveryAlreadyReconciledError(),
     ]
 
     for error in errors:
