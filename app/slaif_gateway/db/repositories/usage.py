@@ -189,18 +189,63 @@ class UsageLedgerRepository:
         self,
         *,
         limit: int = 100,
+        gateway_key_id: uuid.UUID | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        older_than: datetime | None = None,
     ) -> list[UsageLedger]:
-        statement: Select[tuple[UsageLedger]] = (
-            select(UsageLedger)
-            .where(
-                UsageLedger.accounting_status == "failed",
-                UsageLedger.response_metadata["needs_reconciliation"].as_boolean().is_(True),
+        statement: Select[tuple[UsageLedger]] = _provider_completed_recovery_statement()
+        if gateway_key_id is not None:
+            statement = statement.where(UsageLedger.gateway_key_id == gateway_key_id)
+        if provider is not None:
+            statement = statement.where(UsageLedger.provider == provider)
+        if model is not None:
+            statement = statement.where(
+                or_(
+                    UsageLedger.requested_model == model,
+                    UsageLedger.resolved_model == model,
+                )
             )
-            .order_by(UsageLedger.created_at.asc())
-            .limit(limit)
-        )
+        if older_than is not None:
+            statement = statement.where(UsageLedger.created_at <= older_than)
+        statement = statement.order_by(UsageLedger.created_at.asc()).limit(limit)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def get_provider_completed_recovery_record_for_update(
+        self,
+        *,
+        usage_ledger_id: uuid.UUID | None = None,
+        reservation_id: uuid.UUID | None = None,
+    ) -> UsageLedger | None:
+        statement: Select[tuple[UsageLedger]] = _provider_completed_recovery_statement().with_for_update()
+        if usage_ledger_id is not None:
+            statement = statement.where(UsageLedger.id == usage_ledger_id)
+        if reservation_id is not None:
+            statement = statement.where(UsageLedger.quota_reservation_id == reservation_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def mark_provider_completed_reconciled(
+        self,
+        usage_ledger_id: uuid.UUID,
+        *,
+        response_metadata: dict[str, object],
+        finished_at: datetime,
+    ) -> UsageLedger:
+        """Mark an existing provider-completed recovery row finalized by repair."""
+        row = await self.get_usage_record_by_id(usage_ledger_id)
+        if row is None:
+            raise LookupError("Usage ledger row was not found")
+
+        row.success = True
+        row.accounting_status = "finalized"
+        row.error_type = None
+        row.error_message = None
+        row.response_metadata = sanitize_metadata_mapping(response_metadata, drop_content_keys=True)
+        row.finished_at = finished_at
+        await self._session.flush()
+        return row
 
     async def get_usage_record_by_id(self, usage_id: uuid.UUID) -> UsageLedger | None:
         return await self._session.get(UsageLedger, usage_id)
@@ -345,3 +390,12 @@ class UsageLedgerRepository:
             "output_tokens": int(row.output_tokens),
             "actual_cost_eur": Decimal(row.actual_cost_eur),
         }
+
+
+def _provider_completed_recovery_statement() -> Select[tuple[UsageLedger]]:
+    return select(UsageLedger).where(
+        UsageLedger.accounting_status == "failed",
+        UsageLedger.response_metadata["needs_reconciliation"].as_boolean().is_(True),
+        UsageLedger.response_metadata["recovery_state"].as_string()
+        == "provider_completed_finalization_failed",
+    )

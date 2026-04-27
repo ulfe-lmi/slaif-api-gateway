@@ -181,8 +181,16 @@ slaif-gateway quota reconcile-expired-reservations --dry-run
 slaif-gateway quota reconcile-expired-reservations --execute --reason "crash recovery"
 ```
 
+Inspect and repair streaming provider-completed rows whose accounting finalization failed:
+
+```bash
+slaif-gateway quota list-provider-completed-recovery
+slaif-gateway quota reconcile-provider-completed --dry-run
+slaif-gateway quota reconcile-provider-completed --execute --reason "finalization repair"
+```
+
 Provider, route, pricing, FX, and usage CLI commands operate on local metadata only. They do not call upstream providers, fetch live pricing, or fetch live FX rates.
-Quota reconciliation is manual/operator tooling for expired pending reservations; it defaults to dry-run and does not implement background or Celery cleanup.
+Quota reconciliation is manual/operator tooling for expired pending reservations and provider-completed finalization failures; it defaults to dry-run and does not implement background or Celery cleanup. Provider-completed repair uses the stored usage/cost metadata, does not call providers, and does not treat a provider-completed success as a zero-cost failure.
 
 ## Testing
 
