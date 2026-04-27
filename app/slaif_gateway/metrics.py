@@ -54,6 +54,11 @@ ACCOUNTING_FAILURES = Counter(
     "Accounting failures by error code.",
     ("error_code",),
 )
+RATE_LIMIT_REJECTIONS = Counter(
+    "gateway_rate_limit_rejections_total",
+    "Redis-backed operational rate-limit rejections.",
+    ("error_code",),
+)
 
 
 def prometheus_response_body() -> bytes:
@@ -125,6 +130,11 @@ def increment_quota_rejection(error_code: str | None) -> None:
 def increment_accounting_failure(error_code: str | None) -> None:
     """Record an accounting failure with a low-cardinality error code."""
     ACCOUNTING_FAILURES.labels(error_code=error_code or "unknown").inc()
+
+
+def increment_rate_limit_rejection(error_code: str | None) -> None:
+    """Record an operational rate-limit rejection with a low-cardinality error code."""
+    RATE_LIMIT_REJECTIONS.labels(error_code=error_code or "unknown").inc()
 
 
 def add_tokens(*, provider: str, model: str, token_type: str, count: int | None) -> None:

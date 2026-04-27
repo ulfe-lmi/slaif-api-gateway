@@ -21,13 +21,12 @@ Implemented:
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
-- Redis client/readiness foundation and a standalone Redis-backed rate-limit service for request, token, and concurrency limits.
+- Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
-- Wiring Redis-backed rate limiting into `/v1` request handling.
 - Admin dashboard pages.
 - Email sending and Celery workers.
 - OpenTelemetry tracing and full deployment docs.
@@ -93,6 +92,18 @@ uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
 
 The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping.
+
+Redis rate limiting is optional and controls temporary operational throttles only:
+
+```bash
+export ENABLE_REDIS_RATE_LIMITS=true
+export REDIS_URL="redis://localhost:6379/0"
+export DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=60
+export DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE=120000
+export DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS=5
+```
+
+When enabled, `/v1/chat/completions` checks Redis after request policy token estimation and before route resolution, pricing, PostgreSQL hard quota reservation, and provider forwarding. Rate-limit failures return OpenAI-shaped errors. PostgreSQL remains authoritative for durable hard quota and accounting.
 
 ## Observability
 
@@ -181,6 +192,6 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes wiring Redis rate limits into `/v1`, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
