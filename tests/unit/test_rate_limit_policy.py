@@ -38,6 +38,7 @@ def test_key_rate_limit_policy_overrides_global_defaults() -> None:
                 "requests_per_minute": 3,
                 "tokens_per_minute": 30,
                 "max_concurrent_requests": 2,
+                "window_seconds": 30,
             }
         ),
         settings=Settings(
@@ -50,6 +51,7 @@ def test_key_rate_limit_policy_overrides_global_defaults() -> None:
     assert policy.requests_per_minute == 3
     assert policy.tokens_per_minute == 30
     assert policy.concurrent_requests == 2
+    assert policy.window_seconds == 30
 
 
 def test_global_defaults_apply_when_key_policy_is_unset() -> None:
@@ -86,3 +88,17 @@ def test_concurrent_requests_alias_is_supported() -> None:
     )
 
     assert policy.concurrent_requests == 4
+
+
+def test_cleared_key_fields_fall_back_to_global_defaults() -> None:
+    policy = build_rate_limit_policy(
+        authenticated_key=_auth({"requests_per_minute": None, "tokens_per_minute": None}),
+        settings=Settings(
+            DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=20,
+            DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE=200,
+        ),
+    )
+
+    assert policy.requests_per_minute == 20
+    assert policy.tokens_per_minute == 200
+    assert policy.window_seconds == 60

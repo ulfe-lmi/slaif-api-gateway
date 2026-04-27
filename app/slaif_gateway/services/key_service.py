@@ -23,6 +23,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
 from slaif_gateway.services.key_errors import (
@@ -73,7 +74,7 @@ class KeyService:
             secret=active_hmac_secret,
         )
 
-        rate_limit_policy = payload.rate_limit_policy or {}
+        rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
             key_prefix=active_prefix,
@@ -92,6 +93,7 @@ class KeyService:
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
+            metadata_json=self._metadata_with_rate_limit_window({}, rate_limit_policy),
             created_by_admin_user_id=payload.created_by_admin_id,
             hmac_key_version=int(active_hmac_version),
         )
@@ -140,6 +142,7 @@ class KeyService:
                 "cost_limit_eur": str(payload.cost_limit_eur) if payload.cost_limit_eur else None,
                 "token_limit_total": payload.token_limit_total,
                 "request_limit_total": payload.request_limit_total,
+                "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
 
@@ -152,6 +155,7 @@ class KeyService:
             one_time_secret_id=one_time_secret.id,
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
+            rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
         )
 
     async def suspend_gateway_key(self, payload: SuspendGatewayKeyInput) -> GatewayKeyManagementResult:
@@ -329,6 +333,45 @@ class KeyService:
         )
         return self._management_result(gateway_key, updated_at=now)
 
+    async def update_gateway_key_rate_limits(
+        self,
+        payload: UpdateGatewayKeyRateLimitsInput,
+    ) -> GatewayKeyManagementResult:
+        """Update Redis-backed operational rate-limit policy for a key."""
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
+
+        old_values = self._rate_limit_audit_values(gateway_key)
+        now = self._now()
+        updated = await self._gateway_keys_repository.update_gateway_key_rate_limit_policy(
+            gateway_key.id,
+            requests_per_minute=rate_limit_policy.get("requests_per_minute"),
+            tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
+            max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
+            window_seconds=rate_limit_policy.get("window_seconds"),
+        )
+        if not updated:
+            raise GatewayKeyNotFoundError()
+
+        gateway_key.rate_limit_requests_per_minute = rate_limit_policy.get("requests_per_minute")
+        gateway_key.rate_limit_tokens_per_minute = rate_limit_policy.get("tokens_per_minute")
+        gateway_key.max_concurrent_requests = rate_limit_policy.get("max_concurrent_requests")
+        gateway_key.metadata_json = self._metadata_with_rate_limit_window(
+            gateway_key.metadata_json,
+            rate_limit_policy,
+        )
+        self._set_updated_at(gateway_key, now)
+
+        await self._audit_gateway_key_change(
+            action="update_key_rate_limits",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=payload.reason,
+            old_values=old_values,
+            new_values=self._rate_limit_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
     async def reset_gateway_key_usage(
         self,
         payload: ResetGatewayKeyUsageInput,
@@ -408,6 +451,14 @@ class KeyService:
             ),
             max_concurrent_requests=(
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
+            ),
+            metadata_json=(
+                self._metadata_with_rate_limit_window(
+                    {},
+                    self._rate_limit_policy_from_key(old_key) or {},
+                )
+                if payload.preserve_rate_limit_policy
+                else {}
             ),
             created_by_admin_user_id=payload.actor_admin_id,
             hmac_key_version=int(active_hmac_version),
@@ -569,6 +620,58 @@ class KeyService:
         if value <= 0:
             raise InvalidGatewayKeyLimitsError(f"{param} must be positive or None", param=param)
 
+    def _validate_rate_limit_policy(
+        self,
+        policy: dict[str, int | None] | None,
+    ) -> dict[str, int | None]:
+        if not policy:
+            return {}
+
+        allowed_keys = {
+            "requests_per_minute",
+            "tokens_per_minute",
+            "max_concurrent_requests",
+            "concurrent_requests",
+            "window_seconds",
+        }
+        unknown = sorted(set(policy) - allowed_keys)
+        if unknown:
+            raise InvalidGatewayKeyLimitsError(
+                f"Unknown rate-limit policy field: {unknown[0]}",
+                param=unknown[0],
+            )
+
+        normalized: dict[str, int | None] = {}
+        for key in ("requests_per_minute", "tokens_per_minute", "max_concurrent_requests", "window_seconds"):
+            value = policy.get(key)
+            if key == "max_concurrent_requests" and value is None:
+                value = policy.get("concurrent_requests")
+            if value is None:
+                continue
+            self._validate_optional_positive_int(value, param=key)
+            normalized[key] = value
+        return normalized
+
+    @staticmethod
+    def _metadata_with_rate_limit_window(
+        metadata_json: dict[str, object] | None,
+        policy: dict[str, int | None],
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        existing_rate_policy = metadata.get("rate_limit_policy")
+        rate_policy = dict(existing_rate_policy) if isinstance(existing_rate_policy, dict) else {}
+        window_seconds = policy.get("window_seconds")
+        if window_seconds is None:
+            rate_policy.pop("window_seconds", None)
+        else:
+            rate_policy["window_seconds"] = window_seconds
+
+        if rate_policy:
+            metadata["rate_limit_policy"] = rate_policy
+        else:
+            metadata.pop("rate_limit_policy", None)
+        return metadata
+
     async def _audit_gateway_key_change(
         self,
         *,
@@ -620,6 +723,14 @@ class KeyService:
             "request_limit_total": gateway_key.request_limit_total,
         }
 
+    @classmethod
+    def _rate_limit_audit_values(cls, gateway_key: GatewayKey) -> dict[str, object]:
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "rate_limit_policy": cls._rate_limit_policy_from_key(gateway_key),
+        }
+
     @staticmethod
     def _usage_audit_values(gateway_key: GatewayKey) -> dict[str, object]:
         return {
@@ -639,8 +750,9 @@ class KeyService:
             "quota_reset_count": gateway_key.quota_reset_count,
         }
 
-    @staticmethod
+    @classmethod
     def _management_result(
+        cls,
         gateway_key: GatewayKey,
         *,
         updated_at: datetime,
@@ -663,4 +775,29 @@ class KeyService:
             requests_reserved_total=gateway_key.requests_reserved_total,
             last_quota_reset_at=gateway_key.last_quota_reset_at,
             quota_reset_count=gateway_key.quota_reset_count,
+            rate_limit_policy=cls._rate_limit_policy_from_key(gateway_key),
         )
+
+    @staticmethod
+    def _rate_limit_policy_from_key(gateway_key: GatewayKey) -> dict[str, int] | None:
+        policy: dict[str, int] = {}
+        requests_per_minute = getattr(gateway_key, "rate_limit_requests_per_minute", None)
+        tokens_per_minute = getattr(gateway_key, "rate_limit_tokens_per_minute", None)
+        max_concurrent_requests = getattr(gateway_key, "max_concurrent_requests", None)
+        if requests_per_minute is not None:
+            policy["requests_per_minute"] = requests_per_minute
+        if tokens_per_minute is not None:
+            policy["tokens_per_minute"] = tokens_per_minute
+        if max_concurrent_requests is not None:
+            policy["max_concurrent_requests"] = max_concurrent_requests
+
+        metadata_policy = None
+        metadata_json = getattr(gateway_key, "metadata_json", None)
+        if isinstance(metadata_json, dict):
+            metadata_policy = metadata_json.get("rate_limit_policy")
+        if isinstance(metadata_policy, dict):
+            window_seconds = metadata_policy.get("window_seconds")
+            if isinstance(window_seconds, int) and not isinstance(window_seconds, bool):
+                policy["window_seconds"] = window_seconds
+
+        return policy or None

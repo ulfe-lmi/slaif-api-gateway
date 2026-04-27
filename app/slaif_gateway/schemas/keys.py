@@ -22,7 +22,7 @@ class CreateGatewayKeyInput:
     request_limit_total: int | None = None
     allowed_models: list[str] = field(default_factory=list)
     allowed_endpoints: list[str] = field(default_factory=list)
-    rate_limit_policy: dict[str, int] | None = None
+    rate_limit_policy: dict[str, int | None] | None = None
     note: str | None = None
 
 
@@ -38,6 +38,7 @@ class CreatedGatewayKey:
     one_time_secret_id: uuid.UUID
     valid_from: datetime
     valid_until: datetime
+    rate_limit_policy: dict[str, int | None] | None = None
 
 
 @dataclass(slots=True)
@@ -91,6 +92,16 @@ class UpdateGatewayKeyLimitsInput:
 
 
 @dataclass(slots=True)
+class UpdateGatewayKeyRateLimitsInput:
+    """Input payload for changing Redis-backed operational rate limits."""
+
+    gateway_key_id: uuid.UUID
+    rate_limit_policy: dict[str, int | None] | None = None
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
+@dataclass(slots=True)
 class ResetGatewayKeyUsageInput:
     """Input payload for administrative usage-counter repair/reset."""
 
@@ -138,6 +149,7 @@ class GatewayKeyManagementResult:
     requests_reserved_total: int | None = None
     last_quota_reset_at: datetime | None = None
     quota_reset_count: int | None = None
+    rate_limit_policy: dict[str, int | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

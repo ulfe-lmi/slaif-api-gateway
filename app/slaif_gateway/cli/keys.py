@@ -31,6 +31,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
 from slaif_gateway.services.key_errors import GatewayKeyNotFoundError, KeyManagementError
@@ -108,6 +109,43 @@ def _parse_decimal(value: str | None, *, field_name: str) -> Decimal | None:
     return parsed
 
 
+def _validate_positive_int(value: int | None, *, option_name: str) -> int | None:
+    if value is not None and value <= 0:
+        raise typer.BadParameter(f"{option_name} must be positive")
+    return value
+
+
+def _rate_limit_policy_from_options(
+    *,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
+    concurrent_requests: int | None = None,
+    window_seconds: int | None = None,
+) -> dict[str, int] | None:
+    policy: dict[str, int] = {}
+    if requests_per_minute is not None:
+        policy["requests_per_minute"] = _validate_positive_int(
+            requests_per_minute,
+            option_name="--rate-limit-requests-per-minute",
+        ) or requests_per_minute
+    if tokens_per_minute is not None:
+        policy["tokens_per_minute"] = _validate_positive_int(
+            tokens_per_minute,
+            option_name="--rate-limit-tokens-per-minute",
+        ) or tokens_per_minute
+    if concurrent_requests is not None:
+        policy["max_concurrent_requests"] = _validate_positive_int(
+            concurrent_requests,
+            option_name="--rate-limit-concurrent-requests",
+        ) or concurrent_requests
+    if window_seconds is not None:
+        policy["window_seconds"] = _validate_positive_int(
+            window_seconds,
+            option_name="--rate-limit-window-seconds",
+        ) or window_seconds
+    return policy or None
+
+
 def _valid_until_from_options(
     *,
     valid_from: datetime | None,
@@ -168,7 +206,30 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "updated_at": gateway_key.updated_at,
         "revoked_at": gateway_key.revoked_at,
         "revoked_reason": gateway_key.revoked_reason,
+        "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
     }
+
+
+def _rate_limit_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, int] | None:
+    policy: dict[str, int] = {}
+    requests_per_minute = getattr(gateway_key, "rate_limit_requests_per_minute", None)
+    tokens_per_minute = getattr(gateway_key, "rate_limit_tokens_per_minute", None)
+    max_concurrent_requests = getattr(gateway_key, "max_concurrent_requests", None)
+    if requests_per_minute is not None:
+        policy["requests_per_minute"] = requests_per_minute
+    if tokens_per_minute is not None:
+        policy["tokens_per_minute"] = tokens_per_minute
+    if max_concurrent_requests is not None:
+        policy["max_concurrent_requests"] = max_concurrent_requests
+    metadata_policy = None
+    metadata_json = getattr(gateway_key, "metadata_json", None)
+    if isinstance(metadata_json, dict):
+        metadata_policy = metadata_json.get("rate_limit_policy")
+    if isinstance(metadata_policy, dict):
+        window_seconds = metadata_policy.get("window_seconds")
+        if isinstance(window_seconds, int) and not isinstance(window_seconds, bool):
+            policy["window_seconds"] = window_seconds
+    return policy or None
 
 
 def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, object]:
@@ -190,6 +251,7 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "requests_reserved_total": result.requests_reserved_total,
         "last_quota_reset_at": result.last_quota_reset_at,
         "quota_reset_count": result.quota_reset_count,
+        "rate_limit_policy": result.rate_limit_policy,
     }
 
 
@@ -203,6 +265,7 @@ def _created_key_dict(result: CreatedGatewayKey) -> dict[str, object]:
         "one_time_secret_id": result.one_time_secret_id,
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
+        "rate_limit_policy": result.rate_limit_policy,
     }
 
 
@@ -345,6 +408,61 @@ async def _update_limits(
         return await service.update_gateway_key_limits(payload)
 
 
+async def _update_rate_limits(
+    *,
+    gateway_key_id: uuid.UUID,
+    requests_per_minute: int | None,
+    tokens_per_minute: int | None,
+    concurrent_requests: int | None,
+    window_seconds: int | None,
+    clear_requests: bool,
+    clear_tokens: bool,
+    clear_concurrency: bool,
+    clear_window: bool,
+    clear_all: bool,
+    actor_admin_id: uuid.UUID | None,
+    reason: str | None,
+) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, keys_repository, service):
+        gateway_key = await keys_repository.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            raise GatewayKeyNotFoundError()
+
+        existing_policy = _rate_limit_policy_from_gateway_key(gateway_key) or {}
+        if clear_all:
+            rate_limit_policy: dict[str, int | None] = {}
+        else:
+            rate_limit_policy = dict(existing_policy)
+            if clear_requests:
+                rate_limit_policy.pop("requests_per_minute", None)
+            elif requests_per_minute is not None:
+                rate_limit_policy["requests_per_minute"] = requests_per_minute
+
+            if clear_tokens:
+                rate_limit_policy.pop("tokens_per_minute", None)
+            elif tokens_per_minute is not None:
+                rate_limit_policy["tokens_per_minute"] = tokens_per_minute
+
+            if clear_concurrency:
+                rate_limit_policy.pop("max_concurrent_requests", None)
+            elif concurrent_requests is not None:
+                rate_limit_policy["max_concurrent_requests"] = concurrent_requests
+
+            if clear_window:
+                rate_limit_policy.pop("window_seconds", None)
+            elif window_seconds is not None:
+                rate_limit_policy["window_seconds"] = window_seconds
+
+        return await service.update_gateway_key_rate_limits(
+            UpdateGatewayKeyRateLimitsInput(
+                gateway_key_id=gateway_key_id,
+                rate_limit_policy=rate_limit_policy or None,
+                actor_admin_id=actor_admin_id,
+                reason=reason,
+            )
+        )
+
+
 async def _reset_usage(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
     async with _key_runtime() as (_, _, service):
         return await service.reset_gateway_key_usage(payload)
@@ -396,6 +514,34 @@ def create(
         list[str] | None,
         typer.Option("--allowed-endpoint", help="Allowed endpoint; repeatable"),
     ] = None,
+    rate_limit_requests_per_minute: Annotated[
+        int | None,
+        typer.Option(
+            "--rate-limit-requests-per-minute",
+            help="Redis operational request limit per key per window",
+        ),
+    ] = None,
+    rate_limit_tokens_per_minute: Annotated[
+        int | None,
+        typer.Option(
+            "--rate-limit-tokens-per-minute",
+            help="Redis operational estimated-token limit per key per window",
+        ),
+    ] = None,
+    rate_limit_concurrent_requests: Annotated[
+        int | None,
+        typer.Option(
+            "--rate-limit-concurrent-requests",
+            help="Redis operational concurrent request limit per key",
+        ),
+    ] = None,
+    rate_limit_window_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--rate-limit-window-seconds",
+            help="Redis operational rate-limit window in seconds",
+        ),
+    ] = None,
     actor_admin_id: Annotated[
         str | None,
         typer.Option("--actor-admin-id", help="Acting admin UUID"),
@@ -419,6 +565,12 @@ def create(
         request_limit_total=request_limit_total,
         allowed_models=list(allowed_models or []),
         allowed_endpoints=list(allowed_endpoints or []),
+        rate_limit_policy=_rate_limit_policy_from_options(
+            requests_per_minute=rate_limit_requests_per_minute,
+            tokens_per_minute=rate_limit_tokens_per_minute,
+            concurrent_requests=rate_limit_concurrent_requests,
+            window_seconds=rate_limit_window_seconds,
+        ),
         created_by_admin_id=(
             _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
         ),
@@ -696,6 +848,124 @@ def set_limits(
                 clear_cost_limit=clear_cost_limit,
                 clear_token_limit=clear_token_limit,
                 clear_request_limit=clear_request_limit,
+                actor_admin_id=_parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                if actor_admin_id
+                else None,
+                reason=reason,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    safe_result = _management_result_dict(result)
+    if json_output:
+        _emit_json(safe_result)
+        return
+    _echo_kv(safe_result)
+
+
+@app.command("set-rate-limits")
+def set_rate_limits(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    requests_per_minute: Annotated[
+        int | None,
+        typer.Option("--requests-per-minute", help="Redis request limit per key per window"),
+    ] = None,
+    tokens_per_minute: Annotated[
+        int | None,
+        typer.Option("--tokens-per-minute", help="Redis estimated-token limit per key per window"),
+    ] = None,
+    concurrent_requests: Annotated[
+        int | None,
+        typer.Option("--concurrent-requests", help="Redis concurrent request limit per key"),
+    ] = None,
+    window_seconds: Annotated[
+        int | None,
+        typer.Option("--window-seconds", help="Redis rate-limit window in seconds"),
+    ] = None,
+    clear_requests: Annotated[
+        bool,
+        typer.Option("--clear-requests", help="Clear per-key request rate limit"),
+    ] = False,
+    clear_tokens: Annotated[
+        bool,
+        typer.Option("--clear-tokens", help="Clear per-key estimated-token rate limit"),
+    ] = False,
+    clear_concurrency: Annotated[
+        bool,
+        typer.Option("--clear-concurrency", help="Clear per-key concurrency limit"),
+    ] = False,
+    clear_window: Annotated[
+        bool,
+        typer.Option("--clear-window", help="Clear per-key rate-limit window override"),
+    ] = False,
+    clear_all: Annotated[
+        bool,
+        typer.Option("--clear-all", help="Clear all per-key Redis rate-limit settings"),
+    ] = False,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Audit reason")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Set or clear Redis-backed operational rate limits for a gateway key."""
+    if clear_all and any(
+        (
+            requests_per_minute is not None,
+            tokens_per_minute is not None,
+            concurrent_requests is not None,
+            window_seconds is not None,
+            clear_requests,
+            clear_tokens,
+            clear_concurrency,
+            clear_window,
+        )
+    ):
+        raise typer.BadParameter("--clear-all cannot be combined with other rate-limit options")
+    if clear_requests and requests_per_minute is not None:
+        raise typer.BadParameter("Use either --requests-per-minute or --clear-requests")
+    if clear_tokens and tokens_per_minute is not None:
+        raise typer.BadParameter("Use either --tokens-per-minute or --clear-tokens")
+    if clear_concurrency and concurrent_requests is not None:
+        raise typer.BadParameter("Use either --concurrent-requests or --clear-concurrency")
+    if clear_window and window_seconds is not None:
+        raise typer.BadParameter("Use either --window-seconds or --clear-window")
+    if not any(
+        (
+            requests_per_minute is not None,
+            tokens_per_minute is not None,
+            concurrent_requests is not None,
+            window_seconds is not None,
+            clear_requests,
+            clear_tokens,
+            clear_concurrency,
+            clear_window,
+            clear_all,
+        )
+    ):
+        raise typer.BadParameter("Provide at least one rate-limit option")
+
+    _validate_positive_int(requests_per_minute, option_name="--requests-per-minute")
+    _validate_positive_int(tokens_per_minute, option_name="--tokens-per-minute")
+    _validate_positive_int(concurrent_requests, option_name="--concurrent-requests")
+    _validate_positive_int(window_seconds, option_name="--window-seconds")
+
+    try:
+        result = _run_async(
+            _update_rate_limits(
+                gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
+                requests_per_minute=requests_per_minute,
+                tokens_per_minute=tokens_per_minute,
+                concurrent_requests=concurrent_requests,
+                window_seconds=window_seconds,
+                clear_requests=clear_requests,
+                clear_tokens=clear_tokens,
+                clear_concurrency=clear_concurrency,
+                clear_window=clear_window,
+                clear_all=clear_all,
                 actor_admin_id=_parse_uuid(actor_admin_id, field_name="actor_admin_id")
                 if actor_admin_id
                 else None,

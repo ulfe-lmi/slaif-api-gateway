@@ -139,6 +139,7 @@ def _create_key_via_cli(
     database_url: str,
     *,
     json_output: bool = False,
+    rate_limit_args: list[str] | None = None,
 ) -> CreatedCliKey:
     context = _run(_create_owner_context(database_url))
     args = [
@@ -163,6 +164,8 @@ def _create_key_via_cli(
         "--reason",
         "integration create",
     ]
+    if rate_limit_args:
+        args.extend(rate_limit_args)
     if json_output:
         args.append("--json")
 
@@ -443,6 +446,144 @@ def test_keys_list_and_show_emit_safe_metadata(
     for output in (list_result.stdout, show_result.stdout):
         _assert_safe_output(output)
         assert created.plaintext_key not in output
+
+
+def test_keys_create_show_list_and_set_rate_limits_persist_policy(
+    runner: CliRunner,
+    cli_env: str,
+) -> None:
+    created = _create_key_via_cli(
+        runner,
+        cli_env,
+        json_output=True,
+        rate_limit_args=[
+            "--rate-limit-requests-per-minute",
+            "60",
+            "--rate-limit-tokens-per-minute",
+            "100000",
+            "--rate-limit-concurrent-requests",
+            "3",
+            "--rate-limit-window-seconds",
+            "60",
+        ],
+    )
+
+    gateway_key = _run(_get_key(cli_env, created.gateway_key_id))
+    assert gateway_key.rate_limit_requests_per_minute == 60
+    assert gateway_key.rate_limit_tokens_per_minute == 100_000
+    assert gateway_key.max_concurrent_requests == 3
+    assert gateway_key.metadata_json["rate_limit_policy"]["window_seconds"] == 60
+
+    show_result = runner.invoke(app, ["keys", "show", str(created.gateway_key_id), "--json"])
+    assert show_result.exit_code == 0, show_result.output
+    show_payload = json.loads(show_result.stdout)
+    assert show_payload["rate_limit_policy"] == {
+        "requests_per_minute": 60,
+        "tokens_per_minute": 100_000,
+        "max_concurrent_requests": 3,
+        "window_seconds": 60,
+    }
+
+    list_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "list",
+            "--owner-id",
+            str(created.owner_id),
+            "--cohort-id",
+            str(created.cohort_id),
+            "--json",
+        ],
+    )
+    assert list_result.exit_code == 0, list_result.output
+    list_payload = json.loads(list_result.stdout)
+    assert list_payload["keys"][0]["rate_limit_policy"]["tokens_per_minute"] == 100_000
+
+    update_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "set-rate-limits",
+            str(created.gateway_key_id),
+            "--requests-per-minute",
+            "30",
+            "--tokens-per-minute",
+            "50000",
+            "--concurrent-requests",
+            "2",
+            "--window-seconds",
+            "120",
+            "--reason",
+            "integration rate limit update",
+            "--json",
+        ],
+    )
+    assert update_result.exit_code == 0, update_result.output
+    update_payload = json.loads(update_result.stdout)
+    assert update_payload["rate_limit_policy"] == {
+        "requests_per_minute": 30,
+        "tokens_per_minute": 50_000,
+        "max_concurrent_requests": 2,
+        "window_seconds": 120,
+    }
+    updated_key = _run(_get_key(cli_env, created.gateway_key_id))
+    assert updated_key.rate_limit_requests_per_minute == 30
+    assert updated_key.rate_limit_tokens_per_minute == 50_000
+    assert updated_key.max_concurrent_requests == 2
+    assert updated_key.metadata_json["rate_limit_policy"]["window_seconds"] == 120
+    assert (
+        _run(
+            _audit_count(
+                cli_env,
+                gateway_key_id=created.gateway_key_id,
+                action="update_key_rate_limits",
+            )
+        )
+        == 1
+    )
+
+    clear_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "set-rate-limits",
+            str(created.gateway_key_id),
+            "--clear-all",
+            "--reason",
+            "integration clear rate limits",
+            "--json",
+        ],
+    )
+    assert clear_result.exit_code == 0, clear_result.output
+    clear_payload = json.loads(clear_result.stdout)
+    assert clear_payload["rate_limit_policy"] is None
+    cleared_key = _run(_get_key(cli_env, created.gateway_key_id))
+    assert cleared_key.rate_limit_requests_per_minute is None
+    assert cleared_key.rate_limit_tokens_per_minute is None
+    assert cleared_key.max_concurrent_requests is None
+    assert "rate_limit_policy" not in cleared_key.metadata_json
+
+    for output in (
+        created.output,
+        show_result.stdout,
+        list_result.stdout,
+        update_result.stdout,
+        clear_result.stdout,
+    ):
+        if output == created.output:
+            _assert_safe_output(output, created.plaintext_key)
+        else:
+            _assert_safe_output(output)
+            assert created.plaintext_key not in output
+        assert "fake-openrouter-upstream-key" not in output
+        assert "fake-openai-upstream-key" not in output
+
+    audit_payload = _run(_audit_payload_text(cli_env, created.gateway_key_id))
+    assert created.plaintext_key not in audit_payload
+    assert "token_hash" not in audit_payload
+    assert "encrypted_payload" not in audit_payload
+    assert "nonce" not in audit_payload
 
 
 def test_keys_status_transitions_mutate_database_and_write_audit(
