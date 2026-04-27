@@ -12,7 +12,11 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.routing import RouteResolutionResult
-from slaif_gateway.services.quota_errors import InvalidQuotaEstimateError, QuotaLimitExceededError
+from slaif_gateway.services.quota_errors import (
+    InvalidQuotaEstimateError,
+    QuotaCounterInvariantError,
+    QuotaLimitExceededError,
+)
 from slaif_gateway.services.quota_service import QuotaService
 
 
@@ -79,9 +83,15 @@ class FakeGatewayKeysRepository:
         tokens_reserved_total,
         requests_reserved_total,
     ):
-        gateway_key.cost_reserved_eur = max(Decimal("0"), gateway_key.cost_reserved_eur - cost_reserved_eur)
-        gateway_key.tokens_reserved_total = max(0, gateway_key.tokens_reserved_total - tokens_reserved_total)
-        gateway_key.requests_reserved_total = max(0, gateway_key.requests_reserved_total - requests_reserved_total)
+        if gateway_key.cost_reserved_eur < cost_reserved_eur:
+            raise QuotaCounterInvariantError(param="cost_reserved_eur")
+        if gateway_key.tokens_reserved_total < tokens_reserved_total:
+            raise QuotaCounterInvariantError(param="tokens_reserved_total")
+        if gateway_key.requests_reserved_total < requests_reserved_total:
+            raise QuotaCounterInvariantError(param="requests_reserved_total")
+        gateway_key.cost_reserved_eur -= cost_reserved_eur
+        gateway_key.tokens_reserved_total -= tokens_reserved_total
+        gateway_key.requests_reserved_total -= requests_reserved_total
         return gateway_key
 
 
@@ -254,6 +264,37 @@ async def test_release_is_idempotent_after_first_release() -> None:
     assert second.status == "released"
     assert quota_repo.release_calls == 1
     assert key.cost_reserved_eur == Decimal("2")
+
+
+@pytest.mark.asyncio
+async def test_release_raises_if_reserved_counters_would_underflow() -> None:
+    key = FakeGatewayKeyRow(
+        id=uuid.uuid4(),
+        cost_reserved_eur=Decimal("0"),
+        tokens_reserved_total=0,
+        requests_reserved_total=0,
+    )
+    service, _, quota_repo = _service(key)
+    reservation = FakeReservationRow(
+        id=uuid.uuid4(),
+        gateway_key_id=key.id,
+        request_id="req_1",
+        endpoint="/v1/chat/completions",
+        requested_model="classroom-cheap",
+        reserved_cost_eur=Decimal("0.123"),
+        reserved_tokens=70,
+        reserved_requests=1,
+        status="pending",
+        expires_at=datetime(2026, 4, 25, 0, 15, tzinfo=UTC),
+    )
+    quota_repo.rows[reservation.id] = reservation
+
+    with pytest.raises(QuotaCounterInvariantError) as excinfo:
+        await service.release_reservation(reservation.id)
+
+    assert excinfo.value.param == "cost_reserved_eur"
+    assert reservation.status == "pending"
+    assert quota_repo.release_calls == 0
 
 
 @pytest.mark.asyncio

@@ -131,6 +131,8 @@ async def handle_chat_completion(
             )
         except AccountingError as accounting_exc:
             raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
+        except QuotaError as quota_exc:
+            raise openai_error_from_quota_error(quota_exc) from quota_exc
         raise openai_error_from_provider_error(exc) from exc
 
     try:
@@ -146,6 +148,8 @@ async def handle_chat_completion(
         )
     except AccountingError as exc:
         raise openai_error_from_accounting_error(exc) from exc
+    except QuotaError as exc:
+        raise openai_error_from_quota_error(exc) from exc
 
     return JSONResponse(
         status_code=provider_response.status_code,
