@@ -64,3 +64,42 @@ def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     assert sent_body["model"] == "anthropic/claude-test"
     assert body["model"] == "client-model"
     assert body["stream_options"]["include_usage"] is False
+
+
+def test_openrouter_streaming_injects_usage_options_when_client_omits_them() -> None:
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    body = {
+        "model": "client-model",
+        "stream": True,
+        "messages": [],
+        "temperature": 0.2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+    }
+    request = ProviderRequest(
+        provider="openrouter",
+        upstream_model="anthropic/claude-test",
+        endpoint="chat.completions",
+        body=body,
+        request_id="gw-123",
+        extra_headers={"Authorization": "Bearer gateway-key"},
+    )
+
+    async def _collect_request_body():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://openrouter.ai/api/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=b"data: [DONE]\n\n")
+            )
+            _ = [chunk async for chunk in adapter.stream_chat_completion(request)]
+            return json.loads(upstream.calls[0].request.content)
+
+    sent_body = asyncio.run(_collect_request_body())
+
+    assert sent_body["stream"] is True
+    assert sent_body["stream_options"] == {"include_usage": True}
+    assert sent_body["temperature"] == 0.2
+    assert sent_body["tools"] == body["tools"]
+    assert sent_body["tool_choice"] == "auto"
+    assert sent_body["response_format"] == {"type": "json_object"}
+    assert "stream_options" not in body

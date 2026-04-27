@@ -80,3 +80,34 @@ def test_openai_streaming_missing_key_is_safe() -> None:
         asyncio.run(_collect())
 
     assert "openai-upstream-key" not in str(exc_info.value)
+
+
+def test_openai_streaming_injects_usage_options_when_client_omits_them() -> None:
+    original_body = {
+        "model": "client-model",
+        "stream": True,
+        "messages": [],
+        "temperature": 0.2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+    }
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+
+    async def _collect_request_body():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=b"data: [DONE]\n\n")
+            )
+            _ = [chunk async for chunk in adapter.stream_chat_completion(_request(original_body))]
+            return json.loads(upstream.calls[0].request.content)
+
+    sent_body = asyncio.run(_collect_request_body())
+
+    assert sent_body["stream"] is True
+    assert sent_body["stream_options"] == {"include_usage": True}
+    assert sent_body["temperature"] == 0.2
+    assert sent_body["tools"] == original_body["tools"]
+    assert sent_body["tool_choice"] == "auto"
+    assert sent_body["response_format"] == {"type": "json_object"}
+    assert "stream_options" not in original_body
