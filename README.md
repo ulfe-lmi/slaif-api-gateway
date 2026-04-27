@@ -66,6 +66,13 @@ for chunk in stream:
         print(chunk.choices[0].delta.content or "", end="")
 ```
 
+Common Chat Completions parameters such as `temperature`, `top_p`, `tools`,
+`tool_choice`, `response_format`, `seed`, `user`, `logprobs`, `metadata`, and
+service-tier options are passed through to the selected upstream provider unless
+the gateway explicitly rejects them. For streaming requests, the gateway forwards
+`stream_options.include_usage=true` so final provider usage can be captured for
+accounting.
+
 `sk-slaif-` is the default generated gateway key prefix. New key generation uses `GATEWAY_KEY_PREFIX`, and authentication accepts only prefixes configured in `GATEWAY_KEY_ACCEPTED_PREFIXES`, which must include the active generation prefix.
 
 ## Quick Local Setup

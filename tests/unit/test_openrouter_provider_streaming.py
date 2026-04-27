@@ -14,7 +14,12 @@ from slaif_gateway.schemas.providers import ProviderRequest
 
 def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
-    body = {"model": "client-model", "stream": True, "messages": []}
+    body = {
+        "model": "client-model",
+        "stream": True,
+        "messages": [],
+        "stream_options": {"include_usage": False},
+    }
     request = ProviderRequest(
         provider="openrouter",
         upstream_model="anthropic/claude-test",
@@ -52,7 +57,10 @@ def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     sent = upstream.calls[0].request
     assert sent.headers["authorization"] == "Bearer openrouter-upstream-key"
     assert sent.headers["authorization"] != "Bearer gateway-key"
+    assert sent.headers["accept"] == "text/event-stream"
     sent_body = json.loads(sent.content)
     assert sent_body["stream"] is True
+    assert sent_body["stream_options"] == {"include_usage": True}
     assert sent_body["model"] == "anthropic/claude-test"
     assert body["model"] == "client-model"
+    assert body["stream_options"]["include_usage"] is False

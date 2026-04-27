@@ -55,6 +55,7 @@ def _chat_request() -> dict[str, object]:
         "model": "classroom-cheap",
         "messages": [{"role": "user", "content": "hello"}],
         "stream": True,
+        "stream_options": {"include_usage": False, "other": "preserved"},
         "max_tokens": 20,
     }
 
@@ -181,6 +182,10 @@ def test_streaming_chat_completion_forwards_chunks_and_finalizes_after_usage(mon
     assert state["pricing_calls"] == ["priced"]
     assert state["reserve_calls"]
     assert state["stream_calls"]
+    assert state["stream_calls"][0].body["stream_options"] == {
+        "include_usage": True,
+        "other": "preserved",
+    }
     assert state["finalize_calls"]
     assert state["finalize_calls"][0]["streaming"] is True
     assert state["failure_calls"] == []

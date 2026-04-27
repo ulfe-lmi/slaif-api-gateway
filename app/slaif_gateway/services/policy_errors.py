@@ -34,3 +34,7 @@ class AmbiguousOutputTokenLimitError(RequestPolicyError):
 
 class InvalidChatMessagesError(RequestPolicyError):
     error_code = "invalid_messages"
+
+
+class InvalidStreamOptionsError(RequestPolicyError):
+    error_code = "invalid_stream_options"

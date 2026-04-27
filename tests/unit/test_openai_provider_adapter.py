@@ -64,6 +64,7 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     sent_body = json.loads(sent_request.content)
     assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
     assert "client-key" not in sent_request.headers["authorization"]
+    assert sent_request.headers["accept"] == "application/json"
     assert "cookie" not in sent_request.headers
     assert sent_request.headers["x-request-id"] == "gw-req"
     assert sent_body["model"] == "gpt-4.1-mini"
