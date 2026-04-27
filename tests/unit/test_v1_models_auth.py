@@ -43,7 +43,8 @@ def test_health_and_readiness_routes_remain_unauthenticated() -> None:
     readiness = client.get("/readyz")
 
     assert health.status_code == 200
-    assert readiness.status_code == 200
+    assert readiness.status_code == 503
+    assert readiness.json()["database"] == "not_configured"
 
 
 def test_v1_models_requires_authentication_by_default() -> None:

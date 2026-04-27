@@ -14,8 +14,9 @@ def test_healthz() -> None:
 
 def test_readyz() -> None:
     response = client.get("/readyz")
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["database"] == "not_configured"
 
 
 def test_v1_models_requires_authentication() -> None:

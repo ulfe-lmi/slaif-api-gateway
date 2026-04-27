@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi.responses import JSONResponse
+from starlette.requests import Request
 
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.accounting_errors import openai_error_from_accounting_error
@@ -42,7 +43,8 @@ from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 
-_get_db_session_after_auth_header_check = dependencies_module._get_db_session_after_auth_header_check
+get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
+_get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
 
 
 async def handle_chat_completion(
@@ -50,6 +52,7 @@ async def handle_chat_completion(
     payload: ChatCompletionRequest,
     authenticated_key: AuthenticatedGatewayKey,
     settings: Settings,
+    request: Request | None = None,
 ):
     body = payload.model_dump(mode="python", exclude_none=True)
 
@@ -101,6 +104,7 @@ async def handle_chat_completion(
         effective_model=policy_result.effective_body["model"],
         policy_result=policy_result,
         request_id=request_id,
+        request=request,
     )
 
     provider_request = ProviderRequest(
@@ -123,6 +127,7 @@ async def handle_chat_completion(
                 cost_estimate=cost_estimate,
                 request_id=request_id,
                 provider_error=exc,
+                request=request,
             )
         except AccountingError as accounting_exc:
             raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
@@ -137,6 +142,7 @@ async def handle_chat_completion(
             cost_estimate=cost_estimate,
             provider_response=provider_response,
             request_id=request_id,
+            request=request,
         )
     except AccountingError as exc:
         raise openai_error_from_accounting_error(exc) from exc
@@ -153,17 +159,13 @@ async def _reserve_chat_completion_quota(
     effective_model: str,
     policy_result: ChatCompletionPolicyResult,
     request_id: str,
+    request: Request | None,
 ) -> tuple[RouteResolutionResult, ChatCostEstimate, QuotaReservationResult]:
-    session_iterator = _get_db_session_after_auth_header_check()
+    session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
     except StopAsyncIteration as exc:
-        raise OpenAICompatibleError(
-            "Provider forwarding is not implemented yet.",
-            status_code=501,
-            error_type="server_error",
-            code="provider_forwarding_not_implemented",
-        ) from exc
+        raise _database_session_unavailable_error() from exc
 
     try:
         service = RouteResolutionService(
@@ -222,17 +224,13 @@ async def _record_provider_failure_and_release(
     cost_estimate: ChatCostEstimate,
     request_id: str,
     provider_error: ProviderError,
+    request: Request | None,
 ) -> None:
-    session_iterator = _get_db_session_after_auth_header_check()
+    session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
     except StopAsyncIteration as exc:
-        raise OpenAICompatibleError(
-            "Provider forwarding is not implemented yet.",
-            status_code=501,
-            error_type="server_error",
-            code="provider_forwarding_not_implemented",
-        ) from exc
+        raise _database_session_unavailable_error() from exc
 
     try:
         accounting_service = AccountingService(
@@ -267,17 +265,13 @@ async def _finalize_successful_chat_completion(
     cost_estimate: ChatCostEstimate,
     provider_response: ProviderResponse,
     request_id: str,
+    request: Request | None,
 ) -> None:
-    session_iterator = _get_db_session_after_auth_header_check()
+    session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
     except StopAsyncIteration as exc:
-        raise OpenAICompatibleError(
-            "Provider forwarding is not implemented yet.",
-            status_code=501,
-            error_type="server_error",
-            code="provider_forwarding_not_implemented",
-        ) from exc
+        raise _database_session_unavailable_error() from exc
 
     try:
         accounting_service = AccountingService(
@@ -300,3 +294,21 @@ async def _finalize_successful_chat_completion(
         return
     finally:
         await session_iterator.aclose()
+
+
+def _db_session_iterator(request: Request | None):
+    try:
+        if request is None:
+            return _get_db_session_after_auth_header_check()
+        return _get_db_session_after_auth_header_check(request)
+    except TypeError:
+        return _get_db_session_after_auth_header_check()
+
+
+def _database_session_unavailable_error() -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "Database session could not be created.",
+        status_code=500,
+        error_type="server_error",
+        code="database_session_unavailable",
+    )

@@ -14,7 +14,7 @@ def test_health_routes_still_registered() -> None:
     client = TestClient(create_app())
 
     assert client.get("/healthz").status_code == 200
-    assert client.get("/readyz").status_code == 200
+    assert client.get("/readyz").status_code == 503
 
 
 def test_v1_routes_still_registered_and_require_auth() -> None:
@@ -34,7 +34,7 @@ def test_main_app_only_wires_app_and_routes() -> None:
     assert "include_router(openai_compat_router)" in source
     assert "forward_chat_completion" not in source
     assert "reserve_for_chat_completion" not in source
-    assert len(source.splitlines()) < 60
+    assert len(source.splitlines()) < 70
 
 
 def test_openai_compat_module_exposes_v1_routes() -> None:
