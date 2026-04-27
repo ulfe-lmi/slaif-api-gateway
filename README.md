@@ -214,3 +214,24 @@ Migrations are explicit operator actions and are not run during application star
 Near-term remaining work includes admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
+
+## Maintainer
+
+Janez Perš  
+Faculty of Electrical Engineering, University of Ljubljana  
+Laboratory for Machine Intelligence (LMI)  
+Email: janez.pers@fe.uni-lj.si  
+
+- Profile: https://lmi.fe.uni-lj.si/en/janez-pers-2/
+- Laboratory: https://lmi.fe.uni-lj.si/en
+
+## Security Contact
+
+For responsible disclosure of vulnerabilities, please contact:  
+janez.pers@fe.uni-lj.si
+
+## Acknowledgement
+
+We acknowledge the support of the EC/EuroHPC JU and the Slovenian Ministry of HESI via the project SLAIF (grant number 101254461).
+
+Project website: https://www.slaif.si
