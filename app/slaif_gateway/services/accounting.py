@@ -442,6 +442,7 @@ class AccountingService:
         error_type: str,
         error_code: str | None = None,
         status_code: int | None = None,
+        provider_diagnostic: Mapping[str, object] | None = None,
         streaming: bool = False,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -487,6 +488,7 @@ class AccountingService:
             error_type=error_type,
             error_code=error_code,
             status_code=status_code,
+            provider_diagnostic=provider_diagnostic,
             streaming=streaming,
             started_at=started,
             finished_at=finished,
@@ -606,6 +608,7 @@ class AccountingService:
         error_type: str,
         error_code: str | None,
         status_code: int | None,
+        provider_diagnostic: Mapping[str, object] | None,
         streaming: bool,
         started_at: datetime,
         finished_at: datetime,
@@ -630,7 +633,7 @@ class AccountingService:
                 actual_cost_native=Decimal("0"),
                 native_currency=_normalize_currency(pricing_estimate.native_currency),
                 usage_raw={},
-                response_metadata={},
+                response_metadata=_failure_response_metadata(provider_diagnostic),
                 started_at=started_at,
                 finished_at=finished_at,
                 latency_ms=_latency_ms(started_at, finished_at),
@@ -761,6 +764,12 @@ def _response_metadata(provider_response: ProviderResponse, actual_cost: ActualC
     if actual_cost.provider_reported_currency is not None:
         metadata["provider_reported_currency"] = actual_cost.provider_reported_currency
     return _safe_json_mapping(metadata)
+
+
+def _failure_response_metadata(provider_diagnostic: Mapping[str, object] | None) -> dict[str, object]:
+    if provider_diagnostic is None:
+        return {}
+    return _safe_json_mapping({"provider_diagnostic": dict(provider_diagnostic)})
 
 
 def _safe_short_string(value: str | None) -> str | None:

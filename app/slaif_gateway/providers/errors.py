@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slaif_gateway.schemas.providers import ProviderErrorDiagnostic
+
 
 class ProviderError(Exception):
     """Base provider adapter error.
@@ -24,10 +26,12 @@ class ProviderError(Exception):
         status_code: int | None = None,
         error_type: str | None = None,
         error_code: str | None = None,
+        diagnostic: ProviderErrorDiagnostic | None = None,
     ) -> None:
         self.safe_message = safe_message or self.message
         self.provider = provider
         self.upstream_status_code = upstream_status_code
+        self.diagnostic = diagnostic
         self.status_code = status_code if status_code is not None else self.__class__.status_code
         self.error_type = error_type or self.__class__.error_type
         self.error_code = error_code or self.__class__.error_code

@@ -125,7 +125,18 @@ async def test_openai_non_2xx_raises_safe_http_error(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
             429,
-            json={"error": {"message": "raw provider message with possible sensitive content"}},
+            json={
+                "error": {
+                    "message": "raw provider message with sk-proj-secret",
+                    "type": "rate_limit_error",
+                    "code": "rate_limited",
+                    "metadata": {
+                        "messages": [{"role": "user", "content": "user prompt body"}],
+                        "authorization": "Bearer sk-proj-secret",
+                    },
+                }
+            },
+            headers={"openai-request-id": "req-openai-error"},
         )
     )
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
@@ -137,6 +148,13 @@ async def test_openai_non_2xx_raises_safe_http_error(respx_mock) -> None:
     assert exc_info.value.upstream_status_code == 429
     assert "raw provider message" not in exc_info.value.safe_message
     assert "openai-upstream-key" not in exc_info.value.safe_message
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.upstream_error_type == "rate_limit_error"
+    assert exc_info.value.diagnostic.upstream_error_code == "rate_limited"
+    assert exc_info.value.diagnostic.upstream_request_id == "req-openai-error"
+    diagnostic_text = str(exc_info.value.diagnostic.to_safe_dict())
+    assert "user prompt body" not in diagnostic_text
+    assert "sk-proj-secret" not in diagnostic_text
     assert route.called
 
 

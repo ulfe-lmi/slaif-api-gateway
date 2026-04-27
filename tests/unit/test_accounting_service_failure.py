@@ -202,6 +202,39 @@ async def test_provider_failure_releases_reservation_and_writes_failure_ledger()
 
 
 @pytest.mark.asyncio
+async def test_provider_failure_stores_sanitized_diagnostic_metadata() -> None:
+    service, key, reservation, usage_repo = _service()
+
+    await service.record_provider_failure_and_release(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        request_id="req_1",
+        error_type="provider_http_error",
+        error_code="upstream_500",
+        status_code=500,
+        provider_diagnostic={
+            "provider": "openai",
+            "upstream_status_code": 500,
+            "upstream_error_code": "server_error",
+            "sanitized_body_preview": '{"error":{"message":"safe"}}',
+            "authorization": "Bearer sk-secret",
+            "token_hash": "hash-secret",
+        },
+    )
+
+    metadata = usage_repo.failure_calls[0]["response_metadata"]
+    metadata_text = str(metadata)
+    assert metadata["provider_diagnostic"]["provider"] == "openai"
+    assert metadata["provider_diagnostic"]["upstream_error_code"] == "server_error"
+    assert "Bearer sk-secret" not in metadata_text
+    assert "hash-secret" not in metadata_text
+    assert "prompt" not in metadata_text
+
+
+@pytest.mark.asyncio
 async def test_provider_failure_release_is_idempotent_without_second_counter_subtract() -> None:
     service, key, reservation, usage_repo = _service()
 
