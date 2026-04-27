@@ -21,12 +21,13 @@ Implemented:
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
+- Redis client/readiness foundation and a standalone Redis-backed rate-limit service for request, token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
-- Redis-backed rate limiting.
+- Wiring Redis-backed rate limiting into `/v1` request handling.
 - Admin dashboard pages.
 - Email sending and Celery workers.
 - OpenTelemetry tracing and full deployment docs.
@@ -91,7 +92,7 @@ alembic upgrade head
 uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
 
-The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness until Redis-backed features are implemented.
+The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping.
 
 ## Observability
 
@@ -159,6 +160,8 @@ TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/integration
 The OpenAI/OpenRouter E2E tests use the official `openai` Python package with `OpenAI()` reading `OPENAI_API_KEY` and `OPENAI_BASE_URL`, but upstream HTTP is mocked with RESPX. Normal tests require no real OpenAI or OpenRouter keys and make no real upstream calls.
 Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRouter. Successful streaming finalization requires provider final usage metadata; if a stream completes without final usage, the gateway releases the reservation and records a failed/incomplete ledger event with zero actual cost. Client-disconnect timing under a real ASGI server is a future hardening test.
 
+Redis rate-limit integration tests use `TEST_REDIS_URL` when set. If it is not set and `redis-server` is available locally, tests start a temporary user-owned Redis instance on a free localhost port.
+
 ## Security Notes
 
 - Plaintext gateway keys are shown only once at creation or rotation.
@@ -168,6 +171,7 @@ Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRo
 - Usage ledger rows do not store prompts or completions by default.
 - Unknown pricing or required FX conversion data fails closed for cost-limited requests.
 - Hard quota reservation uses PostgreSQL row locking and reserved counters, not Redis.
+- Redis rate limiting is temporary operational throttling only; PostgreSQL remains the hard quota source of truth.
 
 ## Schema And Migrations
 
@@ -177,6 +181,6 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes Redis rate limiting, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes wiring Redis rate limits into `/v1`, admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
