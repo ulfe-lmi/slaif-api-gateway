@@ -26,6 +26,9 @@ uvicorn --app-dir app slaif_gateway.main:app --reload
 
 - `DATABASE_URL` is optional for unit tests.
 - PostgreSQL is required for future integration tests and actual DB operations.
+- The FastAPI app creates its async SQLAlchemy engine and sessionmaker once during application lifespan and disposes the engine on shutdown.
+- `/readyz` now checks database configuration and reachability. If `DATABASE_URL` is missing or unreachable, readiness reports not ready; Redis is not required for readiness until Redis-backed features are implemented.
+- Migrations are still explicit operator actions and are not run during application startup.
 - Example local URL:
 
 ```bash
