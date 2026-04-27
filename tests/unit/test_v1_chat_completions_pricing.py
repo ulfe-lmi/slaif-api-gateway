@@ -331,7 +331,6 @@ def test_chat_completions_pricing_path_safety_constraints() -> None:
         "openai_upstream",
         "openrouter_api_key",
         "rate_limit",
-        "streamingresponse",
         "celery",
         "aiosmtplib",
     ):

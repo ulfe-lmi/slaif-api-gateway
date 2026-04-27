@@ -181,6 +181,11 @@ def _wire_provider_error(monkeypatch, provider_error) -> None:
             _ = request
             raise provider_error
 
+        async def stream_chat_completion(self, request):
+            _ = request
+            raise provider_error
+            yield  # pragma: no cover
+
     monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _FakeAdapter())
 
 
@@ -288,18 +293,19 @@ def test_accounting_finalization_error_does_not_return_provider_json(monkeypatch
     assert response.json().get("id") != "must_not_return"
 
 
-def test_stream_true_fails_before_quota_or_provider(monkeypatch) -> None:
+def test_stream_true_provider_error_releases_reservation(monkeypatch) -> None:
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
     state = _wire_pipeline(monkeypatch, app)
     _wire_provider_error(monkeypatch, ProviderTimeoutError(provider="openai"))
 
-    response = TestClient(app).post("/v1/chat/completions", json=_chat_request(stream=True))
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request(stream=True)) as response:
+        body = "".join(response.iter_text())
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "streaming_not_implemented"
-    assert state["route_calls"] == []
-    assert state["reserve_calls"] == []
-    assert state["failure_accounting_calls"] == []
+    assert response.status_code == 200
+    assert "provider_timeout" in body
+    assert state["route_calls"] == ["classroom-cheap"]
+    assert state["reserve_calls"]
+    assert state["failure_accounting_calls"]
 
 
 def test_error_order_before_provider(monkeypatch) -> None:

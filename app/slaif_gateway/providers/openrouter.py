@@ -1,8 +1,9 @@
-"""Non-streaming OpenRouter provider adapter."""
+"""OpenRouter provider adapter."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
@@ -19,14 +20,15 @@ from slaif_gateway.providers.errors import (
     UnsupportedProviderEndpointError,
 )
 from slaif_gateway.providers.headers import build_provider_headers, safe_response_headers
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse
+from slaif_gateway.providers.streaming import parse_sse_lines
+from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _UPSTREAM_REQUEST_ID_HEADERS = ("x-request-id", "x-openrouter-request-id")
 
 
 class OpenRouterProviderAdapter(ProviderAdapter):
-    """Forward non-streaming OpenAI-compatible requests to OpenRouter."""
+    """Forward OpenAI-compatible requests to OpenRouter."""
 
     def __init__(
         self,
@@ -68,6 +70,30 @@ class OpenRouterProviderAdapter(ProviderAdapter):
         response = await self._post_json(_CHAT_COMPLETIONS_PATH, json=body, headers=headers)
         return self._provider_response(request, response)
 
+    async def stream_chat_completion(
+        self,
+        request: ProviderRequest,
+    ) -> AsyncIterator[ProviderStreamChunk]:
+        if request.endpoint not in {"/v1/chat/completions", "chat.completions"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENROUTER_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        body = dict(request.body)
+        body["model"] = request.upstream_model
+        body["stream"] = True
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+        )
+
+        async for chunk in self._stream_sse(_CHAT_COMPLETIONS_PATH, json=body, headers=headers):
+            yield self._provider_stream_chunk(request, chunk)
+
     async def _post_json(
         self,
         path: str,
@@ -92,6 +118,56 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             await asyncio.sleep(0)
 
         raise ProviderRequestError(provider=self.provider_name)
+
+    async def _stream_sse(
+        self,
+        path: str,
+        *,
+        json: Mapping[str, Any],
+        headers: Mapping[str, str],
+    ):
+        url = f"{self._base_url}{path}"
+        timeout = self._timeout_seconds
+        try:
+            if self._http_client is not None:
+                async with self._http_client.stream(
+                    "POST",
+                    url,
+                    json=json,
+                    headers=headers,
+                    timeout=timeout,
+                ) as response:
+                    async for event in self._stream_response_events(response):
+                        yield event
+                return
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=json, headers=headers) as response:
+                    async for event in self._stream_response_events(response):
+                        yield event
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(provider=self.provider_name) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderRequestError(provider=self.provider_name) from exc
+
+    async def _stream_response_events(self, response: httpx.Response):
+        if response.status_code < 200 or response.status_code >= 300:
+            raise ProviderHTTPError(
+                provider=self.provider_name,
+                upstream_status_code=response.status_code,
+            )
+
+        pending_lines: list[str] = []
+        async for line in response.aiter_lines():
+            pending_lines.append(line)
+            if line == "":
+                for event in parse_sse_lines(pending_lines):
+                    yield response, event
+                pending_lines = []
+
+        if pending_lines:
+            for event in parse_sse_lines(pending_lines):
+                yield response, event
 
     def _provider_response(
         self,
@@ -121,6 +197,23 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             headers=safe_response_headers(response.headers),
             upstream_request_id=_upstream_request_id(response.headers, payload),
             usage=self.parse_usage(payload),
+            raw_cost_native=raw_cost_native,
+            native_currency=native_currency,
+        )
+
+    def _provider_stream_chunk(self, request: ProviderRequest, chunk) -> ProviderStreamChunk:
+        response, event = chunk
+        payload = event.json_body
+        raw_cost_native, native_currency = _extract_openrouter_cost(payload or {})
+        return ProviderStreamChunk(
+            provider=self.provider_name,
+            upstream_model=request.upstream_model,
+            data=event.data,
+            raw_sse_event=event.raw_event,
+            json_body=payload,
+            is_done=event.is_done,
+            usage=self.parse_usage(payload) if payload is not None else None,
+            upstream_request_id=_upstream_request_id(response.headers, payload or {}),
             raw_cost_native=raw_cost_native,
             native_currency=native_currency,
         )

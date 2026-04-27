@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any, Mapping
 
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderUsage
+from slaif_gateway.providers.errors import UnsupportedProviderEndpointError
+from slaif_gateway.schemas.providers import (
+    ProviderRequest,
+    ProviderResponse,
+    ProviderStreamChunk,
+    ProviderUsage,
+)
 
 
 class ProviderAdapter(ABC):
@@ -19,6 +26,16 @@ class ProviderAdapter(ABC):
     @abstractmethod
     async def forward_chat_completion(self, request: ProviderRequest) -> ProviderResponse:
         """Forward a non-streaming Chat Completions request."""
+
+    async def stream_chat_completion(
+        self,
+        request: ProviderRequest,
+    ) -> AsyncIterator[ProviderStreamChunk]:
+        """Stream a Chat Completions request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
 
     def parse_usage(self, payload: Mapping[str, Any]) -> ProviderUsage | None:
         """Parse optional usage metadata from an upstream JSON response."""

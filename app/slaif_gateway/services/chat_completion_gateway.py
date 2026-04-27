@@ -1,11 +1,14 @@
-"""Orchestration for non-streaming OpenAI-compatible chat completions."""
+"""Orchestration for OpenAI-compatible chat completions."""
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.accounting_errors import openai_error_from_accounting_error
@@ -30,12 +33,13 @@ from slaif_gateway.metrics import (
     increment_accounting_failure,
     increment_quota_rejection,
     observe_provider_call,
+    record_provider_call_result,
 )
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse
+from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
@@ -48,6 +52,7 @@ from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.providers.streaming import format_openai_error_event
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -95,15 +100,6 @@ async def handle_chat_completion(
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
-    if policy_result.effective_body.get("stream") is True:
-        raise OpenAICompatibleError(
-            "Streaming chat completions are not implemented yet.",
-            status_code=501,
-            error_type="server_error",
-            code="streaming_not_implemented",
-            param="stream",
-        )
-
     request_id = _request_id_from_request(request)
     route, cost_estimate, reservation = await _reserve_chat_completion_quota(
         authenticated_key=authenticated_key,
@@ -112,6 +108,18 @@ async def handle_chat_completion(
         request_id=request_id,
         request=request,
     )
+
+    if policy_result.effective_body.get("stream") is True:
+        return _streaming_chat_completion_response(
+            authenticated_key=authenticated_key,
+            route=route,
+            policy_result=policy_result,
+            cost_estimate=cost_estimate,
+            reservation=reservation,
+            request_id=request_id,
+            settings=settings,
+            request=request,
+        )
 
     provider_request = ProviderRequest(
         provider=route.provider,
@@ -169,6 +177,150 @@ async def handle_chat_completion(
     return JSONResponse(
         status_code=provider_response.status_code,
         content=dict(provider_response.json_body),
+    )
+
+
+def _streaming_chat_completion_response(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ChatCompletionPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    reservation: QuotaReservationResult,
+    request_id: str,
+    settings: Settings,
+    request: Request | None,
+) -> StreamingResponse:
+    adapter = get_provider_adapter(route, settings)
+    provider_request = ProviderRequest(
+        provider=route.provider,
+        upstream_model=route.resolved_model,
+        endpoint="chat.completions",
+        body=dict(policy_result.effective_body),
+        request_id=request_id,
+    )
+
+    async def _events():
+        start = time.perf_counter()
+        usage_chunk: ProviderStreamChunk | None = None
+        upstream_request_id: str | None = None
+        done_event: str | None = None
+        completed = False
+        provider_status = "error"
+        try:
+            async for chunk in adapter.stream_chat_completion(provider_request):
+                if chunk.upstream_request_id:
+                    upstream_request_id = chunk.upstream_request_id
+                if chunk.usage is not None:
+                    usage_chunk = chunk
+                if chunk.is_done:
+                    completed = True
+                    done_event = chunk.raw_sse_event
+                    continue
+                yield chunk.raw_sse_event
+
+            if completed and usage_chunk is not None:
+                provider_response = _provider_response_from_stream(
+                    route=route,
+                    chunk=usage_chunk,
+                    upstream_request_id=upstream_request_id,
+                )
+                await _finalize_successful_chat_completion(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    provider_response=provider_response,
+                    request_id=request_id,
+                    request=request,
+                    streaming=True,
+                )
+                _record_provider_usage_metrics(route=route, provider_response=provider_response)
+                provider_status = "success"
+                if done_event is not None:
+                    yield done_event
+            else:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=ProviderError(
+                        "Provider stream completed without final usage.",
+                        provider=route.provider,
+                        upstream_status_code=200 if completed else None,
+                        error_code="stream_usage_missing",
+                    ),
+                    request=request,
+                    streaming=True,
+                )
+                provider_status = "incomplete"
+                if done_event is not None:
+                    yield done_event
+        except asyncio.CancelledError:
+            await _release_streaming_reservation_after_error(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                provider_error=ProviderError(
+                    "Client disconnected during streaming response.",
+                    provider=route.provider,
+                    error_code="client_disconnected",
+                ),
+                request=request,
+            )
+            raise
+        except ProviderError as exc:
+            await _release_streaming_reservation_after_error(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                provider_error=exc,
+                request=request,
+            )
+            yield format_openai_error_event(
+                message=exc.safe_message,
+                error_type=exc.error_type,
+                code=exc.error_code,
+            )
+        except AccountingError as exc:
+            increment_accounting_failure(exc.error_code)
+            yield format_openai_error_event(
+                message=exc.safe_message,
+                error_type=exc.error_type,
+                code=exc.error_code,
+            )
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            yield format_openai_error_event(
+                message=exc.safe_message,
+                error_type=exc.error_type,
+                code=exc.error_code,
+            )
+        finally:
+            record_provider_call_result(
+                provider=route.provider,
+                endpoint="chat.completions",
+                status=provider_status,
+                duration_seconds=time.perf_counter() - start,
+            )
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -245,6 +397,7 @@ async def _record_provider_failure_and_release(
     request_id: str,
     provider_error: ProviderError,
     request: Request | None,
+    streaming: bool = False,
 ) -> None:
     session_iterator = _db_session_iterator(request)
     try:
@@ -258,22 +411,58 @@ async def _record_provider_failure_and_release(
             quota_reservations_repository=QuotaReservationsRepository(session),
             usage_ledger_repository=UsageLedgerRepository(session),
         )
+        kwargs = {
+            "request_id": request_id,
+            "error_type": provider_error.error_code,
+            "error_code": provider_error.error_code,
+            "status_code": provider_error.upstream_status_code,
+        }
+        if streaming:
+            kwargs["streaming"] = True
         await accounting_service.record_provider_failure_and_release(
             reservation.reservation_id,
             authenticated_key,
             route,
             policy_result,
             cost_estimate,
-            request_id=request_id,
-            error_type=provider_error.error_code,
-            error_code=provider_error.error_code,
-            status_code=provider_error.upstream_status_code,
+            **kwargs,
         )
         if hasattr(session, "commit"):
             await session.commit()
         return
     finally:
         await session_iterator.aclose()
+
+
+async def _release_streaming_reservation_after_error(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ChatCompletionPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    request_id: str,
+    provider_error: ProviderError,
+    request: Request | None,
+) -> None:
+    try:
+        await _record_provider_failure_and_release(
+            reservation=reservation,
+            authenticated_key=authenticated_key,
+            route=route,
+            policy_result=policy_result,
+            cost_estimate=cost_estimate,
+            request_id=request_id,
+            provider_error=provider_error,
+            request=request,
+            streaming=True,
+        )
+    except AccountingError as accounting_exc:
+        increment_accounting_failure(accounting_exc.error_code)
+        raise
+    except QuotaError as quota_exc:
+        increment_quota_rejection(quota_exc.error_code)
+        raise
 
 
 async def _finalize_successful_chat_completion(
@@ -286,6 +475,7 @@ async def _finalize_successful_chat_completion(
     provider_response: ProviderResponse,
     request_id: str,
     request: Request | None,
+    streaming: bool = False,
 ) -> None:
     session_iterator = _db_session_iterator(request)
     try:
@@ -299,6 +489,12 @@ async def _finalize_successful_chat_completion(
             quota_reservations_repository=QuotaReservationsRepository(session),
             usage_ledger_repository=UsageLedgerRepository(session),
         )
+        kwargs = {
+            "request_id": request_id,
+            "endpoint": "chat.completions",
+        }
+        if streaming:
+            kwargs["streaming"] = True
         await accounting_service.finalize_successful_response(
             reservation.reservation_id,
             authenticated_key,
@@ -306,14 +502,32 @@ async def _finalize_successful_chat_completion(
             policy_result,
             cost_estimate,
             provider_response,
-            request_id=request_id,
-            endpoint="chat.completions",
+            **kwargs,
         )
         if hasattr(session, "commit"):
             await session.commit()
         return
     finally:
         await session_iterator.aclose()
+
+
+def _provider_response_from_stream(
+    *,
+    route: RouteResolutionResult,
+    chunk: ProviderStreamChunk,
+    upstream_request_id: str | None,
+) -> ProviderResponse:
+    return ProviderResponse(
+        provider=chunk.provider,
+        upstream_model=chunk.upstream_model,
+        status_code=200,
+        json_body=dict(chunk.json_body or {}),
+        upstream_request_id=upstream_request_id or chunk.upstream_request_id,
+        usage=chunk.usage,
+        raw_cost_native=chunk.raw_cost_native,
+        native_currency=chunk.native_currency,
+        headers={},
+    )
 
 
 def _db_session_iterator(request: Request | None):
