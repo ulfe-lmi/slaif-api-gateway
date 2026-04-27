@@ -53,6 +53,7 @@ class CreatedCliKey:
     public_key_id: str
     plaintext_key: str
     output: str
+    stderr: str
 
 
 @pytest.fixture(scope="session")
@@ -167,7 +168,7 @@ def _create_key_via_cli(
     if rate_limit_args:
         args.extend(rate_limit_args)
     if json_output:
-        args.append("--json")
+        args.extend(["--json", "--show-plaintext"])
 
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
@@ -179,6 +180,7 @@ def _create_key_via_cli(
         public_key_id=payload["public_key_id"],
         plaintext_key=payload["plaintext_key"],
         output=result.stdout,
+        stderr=result.stderr,
     )
 
 
@@ -233,6 +235,17 @@ async def _get_key(database_url: str, gateway_key_id: uuid.UUID) -> GatewayKey:
             gateway_key = await session.get(GatewayKey, gateway_key_id)
             assert gateway_key is not None
             return gateway_key
+    finally:
+        await engine.dispose()
+
+
+async def _key_count_for_owner(database_url: str, owner_id: uuid.UUID) -> int:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            statement = select(func.count()).select_from(GatewayKey).where(GatewayKey.owner_id == owner_id)
+            return int((await session.execute(statement)).scalar_one())
     finally:
         await engine.dispose()
 
@@ -373,7 +386,7 @@ def test_keys_create_persists_hmac_one_time_secret_and_audit(
 
     assert created.plaintext_key.startswith("sk-slaif-")
     assert created.output.count(created.plaintext_key) == 1
-    assert "shown once" in created.output
+    assert "shown once" in created.stderr
     _assert_safe_output(created.output, created.plaintext_key)
 
     public_key_id = parse_gateway_key_public_id(created.plaintext_key, ("sk-slaif-",))
@@ -402,7 +415,30 @@ def test_keys_create_persists_hmac_one_time_secret_and_audit(
     assert one_time_secret.nonce not in audit_payload
 
 
-def test_keys_create_json_outputs_plaintext_once_and_safe_metadata(
+def test_keys_create_json_requires_explicit_secret_output_and_creates_no_row(
+    runner: CliRunner,
+    cli_env: str,
+) -> None:
+    context = _run(_create_owner_context(cli_env))
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(context.owner_id),
+            "--valid-days",
+            "30",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "plaintext_key" not in result.stdout
+    assert _run(_key_count_for_owner(cli_env, context.owner_id)) == 0
+
+
+def test_keys_create_json_show_plaintext_outputs_key_once_and_safe_metadata(
     runner: CliRunner,
     cli_env: str,
 ) -> None:
@@ -413,6 +449,43 @@ def test_keys_create_json_outputs_plaintext_once_and_safe_metadata(
     assert created.output.count(created.plaintext_key) == 1
     assert payload["public_key_id"] == created.public_key_id
     _assert_safe_output(created.output, created.plaintext_key)
+
+
+def test_keys_create_json_secret_output_file_excludes_plaintext_stdout(
+    runner: CliRunner,
+    cli_env: str,
+    tmp_path,
+) -> None:
+    context = _run(_create_owner_context(cli_env))
+    secret_path = tmp_path / "created-gateway-key.txt"
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(context.owner_id),
+            "--valid-days",
+            "30",
+            "--json",
+            "--secret-output-file",
+            str(secret_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert "plaintext_key" not in payload
+    assert "plaintext_key" not in result.stdout
+    plaintext_key = secret_path.read_text(encoding="utf-8").strip()
+    assert plaintext_key.startswith("sk-slaif-")
+    assert plaintext_key not in result.stdout
+    assert secret_path.stat().st_mode & 0o777 == 0o600
+
+    gateway_key = _run(_get_key(cli_env, uuid.UUID(payload["gateway_key_id"])))
+    assert gateway_key.token_hash
+    assert plaintext_key not in gateway_key.token_hash
+    _assert_safe_output(result.stdout)
 
 
 def test_keys_list_and_show_emit_safe_metadata(
@@ -704,8 +777,27 @@ def test_keys_extend_set_limits_and_reset_usage_persist_changes(
             "integration reset reserved",
         ],
     )
+    assert reset_reserved_result.exit_code != 0
+    assert "admin repair action" in reset_reserved_result.stderr
+    still_reserved_key = _run(_get_key(cli_env, created.gateway_key_id))
+    assert still_reserved_key.cost_reserved_eur == Decimal("1.000000000")
+    assert still_reserved_key.tokens_reserved_total == 22
+    assert still_reserved_key.requests_reserved_total == 2
+
+    reset_reserved_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "reset-usage",
+            str(created.gateway_key_id),
+            "--reset-reserved",
+            "--confirm-reset-reserved",
+            "--reason",
+            "integration reset reserved",
+        ],
+    )
     assert reset_reserved_result.exit_code == 0, reset_reserved_result.output
-    assert "admin repair action" in reset_reserved_result.stdout
+    assert "admin repair action" in reset_reserved_result.stderr
     reset_reserved_key = _run(_get_key(cli_env, created.gateway_key_id))
     assert reset_reserved_key.cost_reserved_eur == Decimal("0E-9")
     assert reset_reserved_key.tokens_reserved_total == 0
@@ -738,7 +830,7 @@ def test_keys_rotate_revokes_old_key_and_stores_replacement_safely(
     )
 
     assert rotate_result.exit_code == 0, rotate_result.output
-    assert "shown once" in rotate_result.stdout
+    assert "shown once" in rotate_result.stderr
     rotated = _parse_rotate_output(rotate_result.stdout)
     replacement_key = rotated["new_plaintext_key"]
     replacement_key_id = uuid.UUID(rotated["new_gateway_key_id"])
@@ -775,6 +867,56 @@ def test_keys_rotate_revokes_old_key_and_stores_replacement_safely(
     )
 
 
+def test_keys_rotate_json_requires_explicit_secret_output_and_does_not_rotate(
+    runner: CliRunner,
+    cli_env: str,
+) -> None:
+    created = _create_key_via_cli(runner, cli_env)
+
+    rotate_result = runner.invoke(app, ["keys", "rotate", str(created.gateway_key_id), "--json"])
+
+    assert rotate_result.exit_code != 0
+    assert "new_plaintext_key" not in rotate_result.stdout
+    assert _run(_get_key(cli_env, created.gateway_key_id)).status == "active"
+    assert _run(_audit_count(cli_env, gateway_key_id=created.gateway_key_id, action="rotate_key")) == 0
+
+
+def test_keys_rotate_json_secret_output_file_excludes_plaintext_stdout(
+    runner: CliRunner,
+    cli_env: str,
+    tmp_path,
+) -> None:
+    created = _create_key_via_cli(runner, cli_env)
+    secret_path = tmp_path / "replacement-gateway-key.txt"
+
+    rotate_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "rotate",
+            str(created.gateway_key_id),
+            "--reason",
+            "integration rotate secret file",
+            "--json",
+            "--secret-output-file",
+            str(secret_path),
+        ],
+    )
+
+    assert rotate_result.exit_code == 0, rotate_result.output
+    rotated = json.loads(rotate_result.stdout)
+    assert "new_plaintext_key" not in rotated
+    replacement_key = secret_path.read_text(encoding="utf-8").strip()
+    assert replacement_key.startswith("sk-slaif-")
+    assert replacement_key not in rotate_result.stdout
+    assert secret_path.stat().st_mode & 0o777 == 0o600
+    replacement_key_id = uuid.UUID(rotated["new_gateway_key_id"])
+    new_key = _run(_get_key(cli_env, replacement_key_id))
+    assert new_key.token_hash
+    assert replacement_key not in new_key.token_hash
+    _assert_safe_output(rotate_result.stdout)
+
+
 def test_keys_rotate_keep_old_active_preserves_old_status(
     runner: CliRunner,
     cli_env: str,
@@ -791,6 +933,7 @@ def test_keys_rotate_keep_old_active_preserves_old_status(
             "--reason",
             "integration keep old",
             "--json",
+            "--show-plaintext",
         ],
     )
 

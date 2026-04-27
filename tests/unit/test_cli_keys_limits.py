@@ -124,11 +124,12 @@ def test_set_limits_rejects_negative_values() -> None:
     assert result.exit_code != 0
 
 
-def test_reset_usage_warns_for_reserved_admin_repair(monkeypatch) -> None:
-    seen: dict[str, ResetGatewayKeyUsageInput] = {}
+def test_reset_usage_requires_confirmation_for_reserved_admin_repair(monkeypatch) -> None:
+    called = False
 
     async def fake_reset(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
-        seen["payload"] = payload
+        nonlocal called
+        called = True
         return _management_result()
 
     monkeypatch.setattr(keys_cli, "_reset_usage", fake_reset)
@@ -147,8 +148,38 @@ def test_reset_usage_warns_for_reserved_admin_repair(monkeypatch) -> None:
         ],
     )
 
+    assert result.exit_code != 0
+    assert called is False
+    assert "admin repair action" in result.stderr
+    assert "confirm-reset-reserved" in result.stderr
+
+
+def test_reset_usage_warns_for_confirmed_reserved_admin_repair(monkeypatch) -> None:
+    seen: dict[str, ResetGatewayKeyUsageInput] = {}
+
+    async def fake_reset(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
+        seen["payload"] = payload
+        return _management_result()
+
+    monkeypatch.setattr(keys_cli, "_reset_usage", fake_reset)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "reset-usage",
+            str(GATEWAY_KEY_ID),
+            "--reset-reserved",
+            "--confirm-reset-reserved",
+            "--actor-admin-id",
+            str(ADMIN_ID),
+            "--reason",
+            "repair",
+        ],
+    )
+
     assert result.exit_code == 0
-    assert "admin repair action" in result.stdout
+    assert "admin repair action" in result.stderr
     payload = seen["payload"]
     assert payload.reset_used_counters is True
     assert payload.reset_reserved_counters is True
@@ -156,3 +187,26 @@ def test_reset_usage_warns_for_reserved_admin_repair(monkeypatch) -> None:
     assert payload.reason == "repair"
     assert "usage_ledger" not in result.stdout
     assert "token_hash" not in result.stdout
+
+
+def test_reset_usage_reserved_warning_appears_in_json_mode(monkeypatch) -> None:
+    async def fake_reset(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
+        return _management_result()
+
+    monkeypatch.setattr(keys_cli, "_reset_usage", fake_reset)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "reset-usage",
+            str(GATEWAY_KEY_ID),
+            "--reset-reserved",
+            "--confirm-reset-reserved",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "admin repair action" in result.stderr
+    assert result.stdout.startswith("{")

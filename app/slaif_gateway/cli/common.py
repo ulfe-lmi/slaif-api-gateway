@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -28,6 +30,10 @@ class CliError(Exception):
 
 class CliDatabaseConfigError(CliError):
     """Raised when CLI database settings are missing or invalid."""
+
+
+class CliSecretFileError(CliError):
+    """Raised when a CLI secret output file cannot be written safely."""
 
 
 @asynccontextmanager
@@ -113,6 +119,22 @@ def json_default(value: object) -> object:
 def emit_json(payload: dict[str, object]) -> None:
     """Emit a JSON object."""
     typer.echo(json.dumps(payload, default=json_default, sort_keys=True))
+
+
+def write_secret_file(path: Path, secret: str) -> None:
+    """Write a one-time secret to a new 0600 file without echoing it."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise CliSecretFileError(f"Secret output file already exists: {path}") from exc
+    except OSError as exc:
+        raise CliSecretFileError(f"Could not create secret output file: {path}") from exc
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(f"{secret}\n")
+    except OSError as exc:
+        raise CliSecretFileError(f"Could not write secret output file: {path}") from exc
 
 
 def echo_kv(payload: dict[str, object]) -> None:

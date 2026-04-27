@@ -588,6 +588,7 @@ def test_bootstrap_cli_records_can_issue_gateway_key(
             "--reason",
             "bootstrap integration key",
             "--json",
+            "--show-plaintext",
         ],
     )
 
