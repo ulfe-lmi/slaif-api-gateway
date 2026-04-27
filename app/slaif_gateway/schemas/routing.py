@@ -19,4 +19,6 @@ class RouteResolutionResult:
     priority: int
     provider_base_url: str | None = None
     provider_api_key_env_var: str | None = None
+    provider_timeout_seconds: int | None = None
+    provider_max_retries: int | None = None
     visible_model_id: str | None = None

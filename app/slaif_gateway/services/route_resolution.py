@@ -148,5 +148,7 @@ class RouteResolutionService:
             priority=best.route.priority,
             provider_base_url=best.provider_config.base_url,
             provider_api_key_env_var=best.provider_config.api_key_env_var,
+            provider_timeout_seconds=getattr(best.provider_config, "timeout_seconds", None),
+            provider_max_retries=getattr(best.provider_config, "max_retries", None),
             visible_model_id=best.route.requested_model,
         )

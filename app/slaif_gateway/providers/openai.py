@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 
 import httpx
@@ -31,10 +32,16 @@ class OpenAIProviderAdapter(ProviderAdapter):
         settings: Settings,
         *,
         base_url: str = "https://api.openai.com/v1",
+        api_key: str | None = None,
+        timeout_seconds: int | None = None,
+        max_retries: int = 0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._settings = settings
         self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout_seconds = timeout_seconds
+        self._max_retries = max(0, max_retries)
         self._http_client = http_client
 
     @property
@@ -45,7 +52,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/chat/completions", "chat.completions"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -68,15 +75,22 @@ class OpenAIProviderAdapter(ProviderAdapter):
         headers: Mapping[str, str],
     ) -> httpx.Response:
         url = f"{self._base_url}{path}"
-        try:
-            if self._http_client is not None:
-                return await self._http_client.post(url, json=json, headers=headers)
-            async with httpx.AsyncClient() as client:
-                return await client.post(url, json=json, headers=headers)
-        except httpx.TimeoutException as exc:
-            raise ProviderTimeoutError(provider=self.provider_name) from exc
-        except httpx.HTTPError as exc:
-            raise ProviderRequestError(provider=self.provider_name) from exc
+        timeout = self._timeout_seconds
+        for attempt in range(self._max_retries + 1):
+            try:
+                if self._http_client is not None:
+                    return await self._http_client.post(url, json=json, headers=headers, timeout=timeout)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    return await client.post(url, json=json, headers=headers)
+            except httpx.TimeoutException as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderTimeoutError(provider=self.provider_name) from exc
+            except httpx.HTTPError as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderRequestError(provider=self.provider_name) from exc
+            await asyncio.sleep(0)
+
+        raise ProviderRequestError(provider=self.provider_name)
 
     def _provider_response(
         self,
