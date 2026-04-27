@@ -10,10 +10,12 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
+from slaif_gateway.cli.common import CliError, write_secret_file
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -255,25 +257,28 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
     }
 
 
-def _created_key_dict(result: CreatedGatewayKey) -> dict[str, object]:
-    return {
+def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = True) -> dict[str, object]:
+    payload: dict[str, object] = {
         "gateway_key_id": result.gateway_key_id,
         "owner_id": result.owner_id,
         "public_key_id": result.public_key_id,
         "display_prefix": result.display_prefix,
-        "plaintext_key": result.plaintext_key,
         "one_time_secret_id": result.one_time_secret_id,
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
         "rate_limit_policy": result.rate_limit_policy,
     }
+    if include_plaintext:
+        payload["plaintext_key"] = result.plaintext_key
+    return payload
 
 
-def _rotated_key_dict(result: RotatedGatewayKeyResult) -> dict[str, object]:
-    return {
+def _rotated_key_dict(
+    result: RotatedGatewayKeyResult, *, include_plaintext: bool = True
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         "old_gateway_key_id": result.old_gateway_key_id,
         "new_gateway_key_id": result.new_gateway_key_id,
-        "new_plaintext_key": result.new_plaintext_key,
         "new_public_key_id": result.new_public_key_id,
         "one_time_secret_id": result.one_time_secret_id,
         "old_status": result.old_status,
@@ -281,6 +286,9 @@ def _rotated_key_dict(result: RotatedGatewayKeyResult) -> dict[str, object]:
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
     }
+    if include_plaintext:
+        payload["new_plaintext_key"] = result.new_plaintext_key
+    return payload
 
 
 def _echo_kv(payload: dict[str, object]) -> None:
@@ -303,6 +311,12 @@ def _handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     elif isinstance(exc, CliDatabaseConfigError):
         message = str(exc)
         code = "database_not_configured"
+    elif isinstance(exc, CliError | CliKeyError):
+        message = str(exc)
+        code = "cli_error"
+    elif isinstance(exc, typer.BadParameter):
+        message = str(exc)
+        code = "invalid_parameter"
     else:
         message = "Command failed"
         code = "command_failed"
@@ -312,6 +326,48 @@ def _handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     else:
         typer.secho(f"Error: {message}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=1)
+
+
+def _validate_secret_output_options(
+    *,
+    json_output: bool,
+    show_plaintext: bool,
+    secret_output_file: Path | None,
+) -> None:
+    if show_plaintext and secret_output_file is not None:
+        raise typer.BadParameter("Use either --show-plaintext or --secret-output-file, not both")
+    if json_output and not show_plaintext and secret_output_file is None:
+        raise typer.BadParameter(
+            "JSON output does not include plaintext keys by default; use --show-plaintext "
+            "or --secret-output-file PATH"
+        )
+    if secret_output_file is not None and secret_output_file.exists():
+        raise typer.BadParameter(f"Secret output file already exists: {secret_output_file}")
+
+
+def _warn_plaintext_display() -> None:
+    typer.secho(
+        "Warning: plaintext key is shown once. Store it now; it cannot be recovered later.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+
+
+def _warn_secret_file(path: Path) -> None:
+    typer.secho(
+        f"Warning: plaintext key written once to {path} with 0600 permissions. "
+        "Store it securely; it cannot be recovered later.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+
+
+def _warn_reserved_counter_reset() -> None:
+    typer.secho(
+        "Warning: resetting reserved counters is an admin repair action and does not delete ledger rows.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
 
 
 async def _create_gateway_key(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
@@ -548,8 +604,26 @@ def create(
     ] = None,
     reason: Annotated[str | None, typer.Option("--reason", help="Audit note")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+    show_plaintext: Annotated[
+        bool,
+        typer.Option("--show-plaintext", help="Include the one-time plaintext key in JSON output"),
+    ] = False,
+    secret_output_file: Annotated[
+        Path | None,
+        typer.Option("--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"),
+    ] = None,
 ) -> None:
     """Create a gateway key and print the plaintext key once."""
+    try:
+        _validate_secret_output_options(
+            json_output=json_output,
+            show_plaintext=show_plaintext,
+            secret_output_file=secret_output_file,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
     parsed_valid_from = _parse_datetime(valid_from, field_name="valid_from") or datetime.now(UTC)
     payload = CreateGatewayKeyInput(
         owner_id=_parse_uuid(owner_id, field_name="owner_id"),
@@ -582,12 +656,22 @@ def create(
         _handle_cli_error(exc, json_output=json_output)
         return
 
-    payload_dict = _created_key_dict(result)
+    if secret_output_file is not None:
+        try:
+            write_secret_file(secret_output_file, result.plaintext_key)
+        except Exception as exc:  # noqa: BLE001
+            _handle_cli_error(exc, json_output=json_output)
+            return
+        _warn_secret_file(secret_output_file)
+    elif show_plaintext or not json_output:
+        _warn_plaintext_display()
+
+    include_plaintext = secret_output_file is None and (show_plaintext or not json_output)
+    payload_dict = _created_key_dict(result, include_plaintext=include_plaintext)
     if json_output:
         _emit_json(payload_dict)
         return
 
-    typer.secho("Plaintext key, shown once. Store it now.", fg=typer.colors.YELLOW)
     _echo_kv(payload_dict)
 
 
@@ -994,6 +1078,13 @@ def reset_usage(
         bool,
         typer.Option("--reset-reserved", help="Reset reserved counters as an admin repair"),
     ] = False,
+    confirm_reset_reserved: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-reset-reserved",
+            help="Confirm reserved-counter repair reset",
+        ),
+    ] = False,
     actor_admin_id: Annotated[
         str | None,
         typer.Option("--actor-admin-id", help="Acting admin UUID"),
@@ -1002,11 +1093,14 @@ def reset_usage(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """Reset gateway key usage counters without deleting usage ledger rows."""
-    if reset_reserved and not json_output:
-        typer.secho(
-            "Warning: resetting reserved counters is an admin repair action.",
-            fg=typer.colors.YELLOW,
-        )
+    if reset_reserved:
+        _warn_reserved_counter_reset()
+        if not confirm_reset_reserved:
+            _handle_cli_error(
+                CliKeyError("Use --confirm-reset-reserved with --reset-reserved"),
+                json_output=json_output,
+            )
+            return
     payload = ResetGatewayKeyUsageInput(
         gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
         reset_used_counters=reset_used,
@@ -1050,8 +1144,29 @@ def rotate(
         typer.Option("--valid-days", help="Replacement valid-until as now plus days"),
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+    show_plaintext: Annotated[
+        bool,
+        typer.Option("--show-plaintext", help="Include the replacement plaintext key in JSON output"),
+    ] = False,
+    secret_output_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--secret-output-file",
+            help="Write the replacement plaintext key to a new 0600 file",
+        ),
+    ] = None,
 ) -> None:
     """Rotate a gateway key and print the replacement plaintext key once."""
+    try:
+        _validate_secret_output_options(
+            json_output=json_output,
+            show_plaintext=show_plaintext,
+            secret_output_file=secret_output_file,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
     new_valid_until = (
         _valid_until_from_options(valid_from=None, valid_until=valid_until, valid_days=valid_days)
         if valid_until is not None or valid_days is not None
@@ -1072,12 +1187,22 @@ def rotate(
         _handle_cli_error(exc, json_output=json_output)
         return
 
-    payload_dict = _rotated_key_dict(result)
+    if secret_output_file is not None:
+        try:
+            write_secret_file(secret_output_file, result.new_plaintext_key)
+        except Exception as exc:  # noqa: BLE001
+            _handle_cli_error(exc, json_output=json_output)
+            return
+        _warn_secret_file(secret_output_file)
+    elif show_plaintext or not json_output:
+        _warn_plaintext_display()
+
+    include_plaintext = secret_output_file is None and (show_plaintext or not json_output)
+    payload_dict = _rotated_key_dict(result, include_plaintext=include_plaintext)
     if json_output:
         _emit_json(payload_dict)
         return
 
-    typer.secho("Replacement plaintext key, shown once. Store it now.", fg=typer.colors.YELLOW)
     _echo_kv(payload_dict)
 
 

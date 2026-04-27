@@ -155,6 +155,8 @@ slaif-gateway keys create --owner-id <owner-id> --valid-days 30
 slaif-gateway keys set-rate-limits <key-id> --requests-per-minute 60 --tokens-per-minute 100000 --concurrent-requests 3
 ```
 
+Text-mode `keys create` and `keys rotate` show the plaintext gateway key once for the operator workflow. JSON mode is secret-safe by default: use `--show-plaintext` only when intentionally capturing the one-time key in JSON, or use `--secret-output-file PATH` to write it to a new `0600` file without printing it to stdout. Lost keys cannot be resent; rotate them. Reserved-counter repair requires `keys reset-usage --reset-reserved --confirm-reset-reserved`.
+
 Configure local provider, route, pricing, and FX metadata:
 
 ```bash

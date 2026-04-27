@@ -59,7 +59,7 @@ def test_rotate_prints_replacement_plaintext_once(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.stdout.count(NEW_PLAINTEXT_KEY) == 1
-    assert "shown once" in result.stdout
+    assert "shown once" in result.stderr
     assert "token_hash" not in result.stdout
     assert "encrypted_payload" not in result.stdout
     assert "nonce" not in result.stdout
@@ -72,21 +72,72 @@ def test_rotate_prints_replacement_plaintext_once(monkeypatch) -> None:
     assert payload.new_valid_until == datetime(2026, 3, 1, tzinfo=UTC)
 
 
-def test_rotate_json_includes_new_plaintext_key_only_for_rotation(monkeypatch) -> None:
+def test_rotate_json_requires_explicit_secret_output(monkeypatch) -> None:
+    called = False
+
     async def fake_rotate(payload: RotateGatewayKeyInput) -> RotatedGatewayKeyResult:
+        nonlocal called
+        called = True
         return _rotation_result()
 
     monkeypatch.setattr(keys_cli, "_rotate_gateway_key", fake_rotate)
 
     result = runner.invoke(app, ["keys", "rotate", str(OLD_GATEWAY_KEY_ID), "--json"])
 
+    assert result.exit_code != 0
+    assert called is False
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "invalid_parameter"
+    assert NEW_PLAINTEXT_KEY not in result.stdout
+
+
+def test_rotate_json_show_plaintext_includes_key_and_warns(monkeypatch) -> None:
+    async def fake_rotate(payload: RotateGatewayKeyInput) -> RotatedGatewayKeyResult:
+        return _rotation_result()
+
+    monkeypatch.setattr(keys_cli, "_rotate_gateway_key", fake_rotate)
+
+    result = runner.invoke(
+        app,
+        ["keys", "rotate", str(OLD_GATEWAY_KEY_ID), "--json", "--show-plaintext"],
+    )
+
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["new_plaintext_key"] == NEW_PLAINTEXT_KEY
     assert result.stdout.count(NEW_PLAINTEXT_KEY) == 1
+    assert "shown once" in result.stderr
     assert "token_hash" not in result.stdout
     assert "encrypted_payload" not in result.stdout
     assert "nonce" not in result.stdout
+
+
+def test_rotate_json_secret_output_file_excludes_stdout_secret(monkeypatch, tmp_path) -> None:
+    async def fake_rotate(payload: RotateGatewayKeyInput) -> RotatedGatewayKeyResult:
+        return _rotation_result()
+
+    monkeypatch.setattr(keys_cli, "_rotate_gateway_key", fake_rotate)
+    secret_path = tmp_path / "replacement-key.txt"
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "rotate",
+            str(OLD_GATEWAY_KEY_ID),
+            "--json",
+            "--secret-output-file",
+            str(secret_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert "new_plaintext_key" not in payload
+    assert NEW_PLAINTEXT_KEY not in result.stdout
+    assert secret_path.read_text(encoding="utf-8") == f"{NEW_PLAINTEXT_KEY}\n"
+    assert secret_path.stat().st_mode & 0o777 == 0o600
+    assert "written once" in result.stderr
 
 
 def test_rotate_keep_old_active_maps_to_revoke_old_false(monkeypatch) -> None:
@@ -100,7 +151,14 @@ def test_rotate_keep_old_active_maps_to_revoke_old_false(monkeypatch) -> None:
 
     result = runner.invoke(
         app,
-        ["keys", "rotate", str(OLD_GATEWAY_KEY_ID), "--keep-old-active", "--json"],
+        [
+            "keys",
+            "rotate",
+            str(OLD_GATEWAY_KEY_ID),
+            "--keep-old-active",
+            "--json",
+            "--show-plaintext",
+        ],
     )
 
     assert result.exit_code == 0

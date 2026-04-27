@@ -91,6 +91,7 @@ def test_keys_create_accepts_rate_limit_flags(monkeypatch) -> None:
             "--rate-limit-window-seconds",
             "60",
             "--json",
+            "--show-plaintext",
         ],
     )
 
