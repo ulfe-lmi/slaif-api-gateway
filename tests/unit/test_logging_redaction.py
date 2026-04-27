@@ -51,3 +51,27 @@ def test_structlog_redaction_processor_redacts_event_dict() -> None:
     assert "sk-slaif-public.secretvalue" not in str(event)
     assert "provider-secret" not in str(event)
     assert event["model"] == "gpt-test-mini"
+
+
+def test_structlog_redaction_processor_redacts_custom_prefix_and_nested_fields() -> None:
+    event = _redact_event(
+        None,
+        "info",
+        {
+            "event": "forwarding sk-acme-prod-public123.secretsecretsecret",
+            "request_id": "req_123",
+            "provider": "openrouter",
+            "nested": {
+                "providerApiKey": "sk-or-providersecret123",
+                "sessionCookie": "session-secret",
+            },
+        },
+        accepted_gateway_key_prefixes=("sk-acme-prod-",),
+    )
+    serialized = str(event)
+
+    assert "secretsecretsecret" not in serialized
+    assert "providersecret" not in serialized
+    assert "session-secret" not in serialized
+    assert event["request_id"] == "req_123"
+    assert event["provider"] == "openrouter"

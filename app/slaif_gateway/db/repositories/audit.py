@@ -8,6 +8,8 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AuditLog
+from slaif_gateway.utils.redaction import redact_text
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
 class AuditRepository:
@@ -35,12 +37,12 @@ class AuditRepository:
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
-            old_values=old_values,
-            new_values=new_values,
+            old_values=_sanitize_optional_metadata(old_values),
+            new_values=_sanitize_optional_metadata(new_values),
             ip_address=ip_address,
             user_agent=user_agent,
             request_id=request_id,
-            note=note,
+            note=redact_text(note) if note is not None else None,
         )
         self._session.add(row)
         await self._session.flush()
@@ -66,3 +68,9 @@ class AuditRepository:
         statement = statement.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+
+def _sanitize_optional_metadata(values: dict[str, object] | None) -> dict[str, object] | None:
+    if values is None:
+        return None
+    return sanitize_metadata_mapping(values, drop_content_keys=True)

@@ -21,7 +21,7 @@ def configure_logging(settings: Settings) -> None:
 
     processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
-        _redact_event,
+        _make_redact_event(settings),
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
     ]
@@ -40,10 +40,33 @@ def configure_logging(settings: Settings) -> None:
     )
 
 
-def _redact_event(logger: object, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+def _make_redact_event(settings: Settings):
+    prefixes = settings.get_gateway_key_accepted_prefixes()
+
+    def _processor(logger: object, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+        return _redact_event(
+            logger,
+            method_name,
+            event_dict,
+            accepted_gateway_key_prefixes=prefixes,
+        )
+
+    return _processor
+
+
+def _redact_event(
+    logger: object,
+    method_name: str,
+    event_dict: dict[str, Any],
+    *,
+    accepted_gateway_key_prefixes: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     """Structlog processor that redacts sensitive values."""
     _ = (logger, method_name)
-    return redact_mapping(event_dict)
+    return redact_mapping(
+        event_dict,
+        accepted_gateway_key_prefixes=accepted_gateway_key_prefixes,
+    )
 
 
 def bind_request_id(request_id: str | None) -> None:

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from slaif_gateway.providers.headers import build_provider_headers, safe_response_headers
+from slaif_gateway.providers.headers import (
+    build_provider_headers,
+    redact_headers_for_logging,
+    safe_response_headers,
+)
 
 
 def test_provider_headers_inject_provider_authorization_and_safe_headers() -> None:
@@ -80,3 +84,19 @@ def test_safe_response_headers_drop_sensitive_values() -> None:
     assert "Set-Cookie" not in headers
     assert "Authorization" not in headers
     assert "X-Secret" not in headers
+
+
+def test_provider_headers_redact_for_logging() -> None:
+    headers = redact_headers_for_logging(
+        {
+            "Authorization": "Bearer sk-proj-providersecret123456",
+            "X-Request-ID": "req_123",
+            "Cookie": "session=secret",
+            "X-Provider-Api-Key": "sk-or-providersecret123",
+        }
+    )
+    serialized = str(headers)
+
+    assert "providersecret" not in serialized
+    assert "session=secret" not in serialized
+    assert headers["X-Request-ID"] == "req_123"

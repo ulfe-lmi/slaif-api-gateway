@@ -60,4 +60,30 @@ def test_redacted_key_hides_full_secret_for_custom_prefix() -> None:
 
     secret = generated.plaintext_key.split(".", 1)[1]
     assert secret not in redacted
+    assert secret[:4] not in redacted
+    assert secret[-4:] not in redacted
+    assert redacted.endswith(".***")
     assert redacted.startswith(f"sk-custom-{generated.public_key_id}.")
+
+
+def test_redacted_key_uses_generic_fallback_for_unknown_prefix() -> None:
+    generated = generate_gateway_key(prefix="sk-acme-prod-")
+    redacted = redact_gateway_key(generated.plaintext_key)
+    secret = generated.plaintext_key.split(".", 1)[1]
+
+    assert redacted == f"sk-acme-prod-{generated.public_key_id}.***"
+    assert secret not in redacted
+    assert secret[:4] not in redacted
+    assert secret[-4:] not in redacted
+
+
+def test_redacted_key_accepts_legacy_prefix_when_configured() -> None:
+    generated = generate_gateway_key(prefix="sk-ulfe-")
+    redacted = redact_gateway_key(
+        generated.plaintext_key,
+        accepted_prefixes=("sk-slaif-", "sk-ulfe-"),
+    )
+    secret = generated.plaintext_key.split(".", 1)[1]
+
+    assert redacted == f"sk-ulfe-{generated.public_key_id}.***"
+    assert secret not in redacted

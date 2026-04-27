@@ -10,6 +10,7 @@ from sqlalchemy import Select, or_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import UsageLedger
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
 class UsageLedgerRepository:
@@ -100,8 +101,8 @@ class UsageLedgerRepository:
             actual_cost_eur=actual_cost_eur,
             actual_cost_native=actual_cost_native,
             native_currency=native_currency,
-            usage_raw=usage_raw or {},
-            response_metadata=response_metadata or {},
+            usage_raw=sanitize_metadata_mapping(usage_raw, drop_content_keys=True),
+            response_metadata=sanitize_metadata_mapping(response_metadata, drop_content_keys=True),
             started_at=started_at,
             finished_at=finished_at,
             latency_ms=latency_ms,
@@ -153,7 +154,7 @@ class UsageLedgerRepository:
         row.http_status = http_status
         row.error_type = None
         row.error_message = None
-        row.response_metadata = response_metadata
+        row.response_metadata = sanitize_metadata_mapping(response_metadata, drop_content_keys=True)
         row.finished_at = finished_at
         row.latency_ms = latency_ms
         await self._session.flush()
@@ -178,7 +179,7 @@ class UsageLedgerRepository:
         row.accounting_status = "failed"
         row.error_type = error_type
         row.error_message = error_message
-        row.response_metadata = response_metadata
+        row.response_metadata = sanitize_metadata_mapping(response_metadata, drop_content_keys=True)
         row.finished_at = finished_at
         row.latency_ms = latency_ms
         await self._session.flush()

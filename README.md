@@ -138,7 +138,7 @@ Per-key Redis limits are stored with key metadata and are operational throttles 
 
 Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Request-ID` is preserved; otherwise the gateway generates one and binds it to structured logs.
 
-Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Prompts and completions are not logged by default.
+Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
 
 `GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
 
