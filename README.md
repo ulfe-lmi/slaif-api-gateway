@@ -97,10 +97,14 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
   - `slaif-gateway fx add --base-currency USD --quote-currency EUR --rate 0.920000000`
 - The provider, route, pricing, and FX commands configure local database metadata only. They do not call upstream providers, fetch live pricing, or fetch live FX rates.
 - `slaif-gateway pricing import --file pricing.json --dry-run` validates a local JSON or CSV file before writing. JSON imports use a list of objects with fields such as `provider`, `model`, `endpoint`, `currency`, `input_price_per_1m`, `output_price_per_1m`, `valid_from`, and `enabled`.
+- Typer CLI commands now expose safe usage ledger reporting:
+  - `slaif-gateway usage summarize --group-by provider_model`
+  - `slaif-gateway usage export --format csv --output usage.csv`
+- Usage summaries and exports include safe metadata, token counts, and costs. They do not include prompts, completions, request bodies, response bodies, token hashes, provider keys, or other secrets.
 - `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
 - Admin password commands never print plaintext passwords or password hashes. Institution, cohort, and owner commands print safe metadata only.
-- Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
-- PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior, admin/institution/cohort/owner bootstrap commands, and provider/routing/pricing/FX metadata commands. They require `TEST_DATABASE_URL` and a migrated test database, and verify password hashing, safe command output, HMAC-only key storage, encrypted one-time delivery material, audit rows, persisted model visibility for `/v1/models`, route resolution, pricing lookup, and FX conversion. Normal unit tests still do not require PostgreSQL or real upstream provider keys.
+- Dashboard pages, dashboard usage reports, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
+- PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior, admin/institution/cohort/owner bootstrap commands, provider/routing/pricing/FX metadata commands, and usage summarize/export commands. They require `TEST_DATABASE_URL` and a migrated test database, and verify password hashing, safe command output, HMAC-only key storage, encrypted one-time delivery material, audit rows, persisted model visibility for `/v1/models`, route resolution, pricing lookup, FX conversion, and usage report output safety. Normal unit tests still do not require PostgreSQL or real upstream provider keys.
 
 ## Service-layer authentication status
 

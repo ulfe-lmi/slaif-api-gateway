@@ -13,6 +13,7 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
+from slaif_gateway.schemas.usage import UsageExportRow, UsageReportFilters, UsageSummaryRow
 
 __all__ = [
     "ActivateGatewayKeyInput",
@@ -26,4 +27,7 @@ __all__ = [
     "SuspendGatewayKeyInput",
     "UpdateGatewayKeyLimitsInput",
     "UpdateGatewayKeyValidityInput",
+    "UsageExportRow",
+    "UsageReportFilters",
+    "UsageSummaryRow",
 ]

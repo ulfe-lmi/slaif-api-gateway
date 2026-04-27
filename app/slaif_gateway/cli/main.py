@@ -13,6 +13,7 @@ from slaif_gateway.cli.owners import app as owners_app
 from slaif_gateway.cli.pricing import app as pricing_app
 from slaif_gateway.cli.providers import app as providers_app
 from slaif_gateway.cli.routes import app as routes_app
+from slaif_gateway.cli.usage import app as usage_app
 
 app = typer.Typer(help="SLAIF API Gateway CLI")
 app.add_typer(admin_app, name="admin")
@@ -25,6 +26,7 @@ app.add_typer(providers_app, name="providers")
 app.add_typer(routes_app, name="routes")
 app.add_typer(pricing_app, name="pricing")
 app.add_typer(fx_app, name="fx")
+app.add_typer(usage_app, name="usage")
 
 
 @app.callback()
