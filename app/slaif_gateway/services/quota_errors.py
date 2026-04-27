@@ -62,6 +62,15 @@ class QuotaConcurrencyError(QuotaError):
     message = "Quota reservation could not be completed due to a concurrent update"
 
 
+class QuotaCounterInvariantError(QuotaError):
+    """Raised when quota counter mutation would violate persisted invariants."""
+
+    status_code = 500
+    error_type = "server_error"
+    error_code = "quota_counter_invariant_error"
+    message = "Quota counter invariant violation"
+
+
 class KeyNotReservableError(QuotaError):
     """Raised when the current key row state cannot accept reservations."""
 
@@ -69,4 +78,3 @@ class KeyNotReservableError(QuotaError):
     error_type = "permission_error"
     error_code = "key_not_reservable"
     message = "Gateway key cannot reserve quota"
-

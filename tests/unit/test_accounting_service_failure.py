@@ -13,6 +13,7 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
+from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
 
 
 @dataclass
@@ -55,9 +56,15 @@ class FakeGatewayKeysRepository:
         tokens_reserved_total,
         requests_reserved_total,
     ):
-        gateway_key.cost_reserved_eur = max(Decimal("0"), gateway_key.cost_reserved_eur - cost_reserved_eur)
-        gateway_key.tokens_reserved_total = max(0, gateway_key.tokens_reserved_total - tokens_reserved_total)
-        gateway_key.requests_reserved_total = max(0, gateway_key.requests_reserved_total - requests_reserved_total)
+        if gateway_key.cost_reserved_eur < cost_reserved_eur:
+            raise QuotaCounterInvariantError(param="cost_reserved_eur")
+        if gateway_key.tokens_reserved_total < tokens_reserved_total:
+            raise QuotaCounterInvariantError(param="tokens_reserved_total")
+        if gateway_key.requests_reserved_total < requests_reserved_total:
+            raise QuotaCounterInvariantError(param="requests_reserved_total")
+        gateway_key.cost_reserved_eur -= cost_reserved_eur
+        gateway_key.tokens_reserved_total -= tokens_reserved_total
+        gateway_key.requests_reserved_total -= requests_reserved_total
         return gateway_key
 
 
@@ -192,3 +199,55 @@ async def test_provider_failure_releases_reservation_and_writes_failure_ledger()
     assert usage_repo.failure_calls[0]["error_message"] == "upstream_500"
     assert usage_repo.failure_calls[0]["usage_raw"] == {}
     assert "raw provider body with secret" not in str(usage_repo.failure_calls[0])
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_release_is_idempotent_without_second_counter_subtract() -> None:
+    service, key, reservation, usage_repo = _service()
+
+    first = await service.record_provider_failure_and_release(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        request_id="req_1",
+        error_type="provider_http_error",
+    )
+    second = await service.record_provider_failure_and_release(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        request_id="req_2",
+        error_type="provider_http_error",
+    )
+
+    assert first.released is True
+    assert second.released is False
+    assert key.cost_reserved_eur == Decimal("0")
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert len(usage_repo.failure_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_release_raises_if_reserved_counters_would_underflow() -> None:
+    service, key, reservation, usage_repo = _service()
+    key.cost_reserved_eur = Decimal("0")
+
+    with pytest.raises(QuotaCounterInvariantError) as excinfo:
+        await service.record_provider_failure_and_release(
+            reservation.id,
+            _auth(key.id),
+            _route(),
+            _policy(),
+            _estimate(),
+            request_id="req_1",
+            error_type="provider_http_error",
+        )
+
+    assert excinfo.value.param == "cost_reserved_eur"
+    assert reservation.status == "pending"
+    assert usage_repo.failure_calls == []

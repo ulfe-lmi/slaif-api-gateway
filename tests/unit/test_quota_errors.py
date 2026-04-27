@@ -4,6 +4,7 @@ from slaif_gateway.api.quota_errors import openai_error_from_quota_error
 from slaif_gateway.services.quota_errors import (
     InvalidQuotaEstimateError,
     QuotaConcurrencyError,
+    QuotaCounterInvariantError,
     QuotaLimitExceededError,
     QuotaReservationNotFoundError,
 )
@@ -44,3 +45,17 @@ def test_missing_reservation_is_internal_server_error() -> None:
     assert error.error_type == "server_error"
     assert error.code == "quota_reservation_not_found"
 
+
+def test_counter_invariant_error_is_safe_server_error() -> None:
+    error = openai_error_from_quota_error(
+        QuotaCounterInvariantError(
+            "Reserved request counter is lower than the requested decrement",
+            param="requests_reserved_total",
+        )
+    )
+
+    assert error.status_code == 500
+    assert error.error_type == "server_error"
+    assert error.code == "quota_counter_invariant_error"
+    assert error.param == "requests_reserved_total"
+    assert "secret" not in error.message.lower()

@@ -16,7 +16,11 @@ from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services import accounting
 from slaif_gateway.services.accounting import AccountingService
-from slaif_gateway.services.accounting_errors import ActualCostExceededReservationError
+from slaif_gateway.services.accounting_errors import (
+    ActualCostExceededReservationError,
+    ReservationAlreadyFinalizedError,
+)
+from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
 
 
 @dataclass
@@ -69,9 +73,15 @@ class FakeGatewayKeysRepository:
         actual_requests_total,
         last_used_at,
     ):
-        gateway_key.cost_reserved_eur = max(Decimal("0"), gateway_key.cost_reserved_eur - reserved_cost_eur)
-        gateway_key.tokens_reserved_total = max(0, gateway_key.tokens_reserved_total - reserved_tokens_total)
-        gateway_key.requests_reserved_total = max(0, gateway_key.requests_reserved_total - reserved_requests_total)
+        if gateway_key.cost_reserved_eur < reserved_cost_eur:
+            raise QuotaCounterInvariantError(param="cost_reserved_eur")
+        if gateway_key.tokens_reserved_total < reserved_tokens_total:
+            raise QuotaCounterInvariantError(param="tokens_reserved_total")
+        if gateway_key.requests_reserved_total < reserved_requests_total:
+            raise QuotaCounterInvariantError(param="requests_reserved_total")
+        gateway_key.cost_reserved_eur -= reserved_cost_eur
+        gateway_key.tokens_reserved_total -= reserved_tokens_total
+        gateway_key.requests_reserved_total -= reserved_requests_total
         gateway_key.cost_used_eur += actual_cost_eur
         gateway_key.tokens_used_total += actual_tokens_total
         gateway_key.requests_used_total += actual_requests_total
@@ -252,6 +262,62 @@ async def test_finalize_rejects_actual_usage_beyond_reservation() -> None:
             _response(),
             request_id="req_1",
         )
+
+
+@pytest.mark.asyncio
+async def test_double_finalization_fails_before_counter_mutation() -> None:
+    service, key, reservation, *_ = _service()
+
+    await service.finalize_successful_response(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+    )
+
+    with pytest.raises(ReservationAlreadyFinalizedError):
+        await service.finalize_successful_response(
+            reservation.id,
+            _auth(key.id),
+            _route(),
+            _policy(),
+            _estimate(),
+            _response(),
+            request_id="req_2",
+        )
+
+    assert key.cost_reserved_eur == Decimal("0")
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert key.cost_used_eur == Decimal("0.1000000000")
+    assert key.tokens_used_total == 75
+    assert key.requests_used_total == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_raises_if_reserved_counters_would_underflow() -> None:
+    service, key, reservation, *_ = _service()
+    key.cost_reserved_eur = Decimal("0")
+
+    with pytest.raises(QuotaCounterInvariantError) as excinfo:
+        await service.finalize_successful_response(
+            reservation.id,
+            _auth(key.id),
+            _route(),
+            _policy(),
+            _estimate(),
+            _response(),
+            request_id="req_1",
+        )
+
+    assert excinfo.value.param == "cost_reserved_eur"
+    assert reservation.status == "pending"
+    assert key.cost_used_eur == Decimal("0")
+    assert key.tokens_used_total == 0
+    assert key.requests_used_total == 0
 
 
 def test_accounting_service_has_no_provider_or_runtime_side_effect_imports() -> None:

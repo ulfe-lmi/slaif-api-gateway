@@ -10,6 +10,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import GatewayKey
+from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
 
 
 class GatewayKeysRepository:
@@ -225,13 +226,20 @@ class GatewayKeysRepository:
         tokens_reserved_total: int,
         requests_reserved_total: int,
     ) -> GatewayKey:
-        """Decrement reserved counters on an already locked row without going below zero."""
-        gateway_key.cost_reserved_eur = max(Decimal("0"), gateway_key.cost_reserved_eur - cost_reserved_eur)
-        gateway_key.tokens_reserved_total = max(0, gateway_key.tokens_reserved_total - tokens_reserved_total)
-        gateway_key.requests_reserved_total = max(
-            0,
-            gateway_key.requests_reserved_total - requests_reserved_total,
+        """Decrement reserved counters on an already locked row.
+
+        Underflow means reservation lifecycle state has drifted from key
+        counters, so fail explicitly instead of hiding it with zero clamping.
+        """
+        _ensure_reserved_counters_can_decrement(
+            gateway_key,
+            cost_reserved_eur=cost_reserved_eur,
+            tokens_reserved_total=tokens_reserved_total,
+            requests_reserved_total=requests_reserved_total,
         )
+        gateway_key.cost_reserved_eur -= cost_reserved_eur
+        gateway_key.tokens_reserved_total -= tokens_reserved_total
+        gateway_key.requests_reserved_total -= requests_reserved_total
         await self._session.flush()
         return gateway_key
 
@@ -248,21 +256,42 @@ class GatewayKeysRepository:
         last_used_at: datetime,
     ) -> GatewayKey:
         """Move reserved counters into used counters on an already locked key row."""
-        gateway_key.cost_reserved_eur = max(
-            Decimal("0"),
-            gateway_key.cost_reserved_eur - reserved_cost_eur,
+        _ensure_reserved_counters_can_decrement(
+            gateway_key,
+            cost_reserved_eur=reserved_cost_eur,
+            tokens_reserved_total=reserved_tokens_total,
+            requests_reserved_total=reserved_requests_total,
         )
-        gateway_key.tokens_reserved_total = max(
-            0,
-            gateway_key.tokens_reserved_total - reserved_tokens_total,
-        )
-        gateway_key.requests_reserved_total = max(
-            0,
-            gateway_key.requests_reserved_total - reserved_requests_total,
-        )
+        gateway_key.cost_reserved_eur -= reserved_cost_eur
+        gateway_key.tokens_reserved_total -= reserved_tokens_total
+        gateway_key.requests_reserved_total -= reserved_requests_total
         gateway_key.cost_used_eur += actual_cost_eur
         gateway_key.tokens_used_total += actual_tokens_total
         gateway_key.requests_used_total += actual_requests_total
         gateway_key.last_used_at = last_used_at
         await self._session.flush()
         return gateway_key
+
+
+def _ensure_reserved_counters_can_decrement(
+    gateway_key: GatewayKey,
+    *,
+    cost_reserved_eur: Decimal,
+    tokens_reserved_total: int,
+    requests_reserved_total: int,
+) -> None:
+    if gateway_key.cost_reserved_eur < cost_reserved_eur:
+        raise QuotaCounterInvariantError(
+            "Reserved cost counter is lower than the requested decrement",
+            param="cost_reserved_eur",
+        )
+    if gateway_key.tokens_reserved_total < tokens_reserved_total:
+        raise QuotaCounterInvariantError(
+            "Reserved token counter is lower than the requested decrement",
+            param="tokens_reserved_total",
+        )
+    if gateway_key.requests_reserved_total < requests_reserved_total:
+        raise QuotaCounterInvariantError(
+            "Reserved request counter is lower than the requested decrement",
+            param="requests_reserved_total",
+        )
