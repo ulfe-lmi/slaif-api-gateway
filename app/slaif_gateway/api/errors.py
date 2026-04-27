@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slaif_gateway.metrics import increment_auth_failure
 from slaif_gateway.schemas.errors import OpenAIErrorDetail, OpenAIErrorResponse
 
 _DEFAULT_ERROR_TYPES_BY_STATUS = {
@@ -69,6 +70,8 @@ async def openai_compatible_error_handler(
     request: Request,
     exc: OpenAICompatibleError,
 ) -> JSONResponse:
+    if exc.status_code == 401 or exc.error_type == "authentication_error":
+        increment_auth_failure(exc.code)
     return openai_error_response(
         message=exc.message,
         status_code=exc.status_code,
