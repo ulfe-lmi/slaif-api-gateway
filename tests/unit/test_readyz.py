@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from slaif_gateway.config import Settings
+from slaif_gateway.db.schema_status import SchemaStatus
 from slaif_gateway.db import session as db_session_module
 from slaif_gateway.main import create_app
 
@@ -60,12 +61,22 @@ def test_readyz_without_database_url_reports_not_configured() -> None:
 
 def test_readyz_with_successful_database_check_reports_ready(monkeypatch) -> None:
     engine = _FakeEngine()
+    async def schema_ok(connection) -> SchemaStatus:
+        _ = connection
+        return SchemaStatus(
+            status="ok",
+            current_revision="0005_fix_gateway_key_prefix_default",
+            head_revision="0005_fix_gateway_key_prefix_default",
+            message="current",
+        )
+
     monkeypatch.setattr(db_session_module, "create_engine_from_settings", lambda settings: engine)
     monkeypatch.setattr(
         db_session_module,
         "create_sessionmaker_from_engine",
         lambda received_engine: ("sessionmaker", received_engine),
     )
+    monkeypatch.setattr("slaif_gateway.api.health.check_schema_current", schema_ok)
     app = create_app(
         Settings(DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/slaif_test")
     )
@@ -77,6 +88,9 @@ def test_readyz_with_successful_database_check_reports_ready(monkeypatch) -> Non
     assert response.json() == {
         "status": "ok",
         "database": "ok",
+        "schema": "ok",
+        "alembic_current": "0005_fix_gateway_key_prefix_default",
+        "alembic_head": "0005_fix_gateway_key_prefix_default",
         "redis": "not_required",
     }
     assert engine.connect_calls == 1
