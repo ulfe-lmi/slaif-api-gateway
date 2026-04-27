@@ -20,6 +20,7 @@ Implemented:
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
+- Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client.
 
@@ -116,7 +117,16 @@ slaif-gateway usage summarize --group-by provider_model
 slaif-gateway usage export --format csv --output usage.csv
 ```
 
+Inspect and repair expired pending quota reservations:
+
+```bash
+slaif-gateway quota list-expired-reservations
+slaif-gateway quota reconcile-expired-reservations --dry-run
+slaif-gateway quota reconcile-expired-reservations --execute --reason "crash recovery"
+```
+
 Provider, route, pricing, FX, and usage CLI commands operate on local metadata only. They do not call upstream providers, fetch live pricing, or fetch live FX rates.
+Quota reconciliation is manual/operator tooling for expired pending reservations; it defaults to dry-run and does not implement background or Celery cleanup.
 
 ## Testing
 

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.session import get_sessionmaker
+from slaif_gateway.services.reconciliation_errors import ReconciliationError
 from slaif_gateway.services.record_errors import RecordServiceError
 
 
@@ -133,9 +134,15 @@ def handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     if isinstance(exc, RecordServiceError):
         message = exc.safe_message
         code = exc.error_code
+    elif isinstance(exc, ReconciliationError):
+        message = exc.safe_message
+        code = exc.error_code
     elif isinstance(exc, CliDatabaseConfigError):
         message = str(exc)
         code = "database_not_configured"
+    elif isinstance(exc, CliError):
+        message = str(exc)
+        code = "cli_error"
     elif isinstance(exc, IntegrityError):
         message = "Duplicate or invalid record"
         code = "record_integrity_error"
