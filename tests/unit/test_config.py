@@ -14,6 +14,14 @@ def _clear_env(monkeypatch) -> None:
         "TOKEN_HMAC_SECRET",
         "ADMIN_SESSION_SECRET",
         "ONE_TIME_SECRET_ENCRYPTION_KEY",
+        "REDIS_URL",
+        "ENABLE_REDIS_RATE_LIMITS",
+        "REDIS_CONNECT_TIMEOUT_SECONDS",
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+        "RATE_LIMIT_FAIL_CLOSED",
         "GATEWAY_KEY_PREFIX",
         "GATEWAY_KEY_ACCEPTED_PREFIXES",
         "DEFAULT_MAX_OUTPUT_TOKENS",
@@ -49,6 +57,14 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.REQUEST_ID_HEADER == "X-Request-ID"
     assert settings.LOG_LEVEL == "INFO"
     assert settings.STRUCTURED_LOGS is True
+    assert settings.ENABLE_REDIS_RATE_LIMITS is False
+    assert settings.REDIS_URL is None
+    assert settings.REDIS_CONNECT_TIMEOUT_SECONDS == 2
+    assert settings.REDIS_SOCKET_TIMEOUT_SECONDS == 2
+    assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE is None
+    assert settings.DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE is None
+    assert settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS is None
+    assert settings.rate_limit_fail_closed() is False
 
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
@@ -62,6 +78,60 @@ def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
     settings = get_settings()
 
     assert settings.metrics_require_auth() is True
+    assert settings.rate_limit_fail_closed() is True
+
+
+def test_redis_rate_limits_require_redis_url_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_REDIS_RATE_LIMITS", "true")
+    get_settings.cache_clear()
+
+    try:
+        get_settings()
+        assert False, "Expected settings creation to fail"
+    except ValidationError as exc:
+        assert "REDIS_URL is required" in str(exc)
+
+
+def test_redis_rate_limit_settings_are_validated(monkeypatch) -> None:
+    invalid_cases = (
+        ("REDIS_CONNECT_TIMEOUT_SECONDS", "0"),
+        ("REDIS_SOCKET_TIMEOUT_SECONDS", "-1"),
+        ("DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "0"),
+        ("DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE", "-5"),
+        ("DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS", "0"),
+    )
+
+    for name, value in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        try:
+            get_settings()
+            assert False, f"Expected settings creation to fail for {name}={value}"
+        except ValidationError as exc:
+            assert "positive" in str(exc)
+
+
+def test_redis_rate_limit_settings_load_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_REDIS_RATE_LIMITS", "true")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/2")
+    monkeypatch.setenv("DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "30")
+    monkeypatch.setenv("DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE", "12000")
+    monkeypatch.setenv("DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS", "4")
+    monkeypatch.setenv("RATE_LIMIT_FAIL_CLOSED", "true")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.ENABLE_REDIS_RATE_LIMITS is True
+    assert settings.REDIS_URL == "redis://localhost:6379/2"
+    assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE == 30
+    assert settings.DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE == 12000
+    assert settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS == 4
+    assert settings.rate_limit_fail_closed() is True
 
 
 def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:

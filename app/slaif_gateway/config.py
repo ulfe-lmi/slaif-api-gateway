@@ -24,6 +24,13 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str | None = None
     REDIS_URL: str | None = None
+    ENABLE_REDIS_RATE_LIMITS: bool = False
+    REDIS_CONNECT_TIMEOUT_SECONDS: float = 2
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 2
+    DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE: int | None = None
+    DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE: int | None = None
+    DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS: int | None = None
+    RATE_LIMIT_FAIL_CLOSED: bool | None = None
 
     ACTIVE_HMAC_KEY_VERSION: str = "1"
     TOKEN_HMAC_SECRET_V1: str | None = None
@@ -82,7 +89,26 @@ class Settings(BaseSettings):
 
         self._validate_request_caps()
         self._validate_request_id_header()
+        self._validate_redis_rate_limit_settings()
         return self
+
+    def _validate_redis_rate_limit_settings(self) -> None:
+        if self.ENABLE_REDIS_RATE_LIMITS and not self.REDIS_URL:
+            raise ValueError("REDIS_URL is required when ENABLE_REDIS_RATE_LIMITS=true")
+
+        if self.REDIS_CONNECT_TIMEOUT_SECONDS <= 0:
+            raise ValueError("REDIS_CONNECT_TIMEOUT_SECONDS must be a positive number")
+        if self.REDIS_SOCKET_TIMEOUT_SECONDS <= 0:
+            raise ValueError("REDIS_SOCKET_TIMEOUT_SECONDS must be a positive number")
+
+        for name in (
+            "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
+            "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
+            "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be a positive integer when set")
 
     def _validate_request_caps(self) -> None:
         if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:
@@ -218,6 +244,12 @@ class Settings(BaseSettings):
         if not self.METRICS_ALLOWED_IPS:
             return ()
         return tuple(item.strip() for item in self.METRICS_ALLOWED_IPS.split(",") if item.strip())
+
+    def rate_limit_fail_closed(self) -> bool:
+        """Return Redis rate-limit failure policy for the current environment."""
+        if self.RATE_LIMIT_FAIL_CLOSED is not None:
+            return self.RATE_LIMIT_FAIL_CLOSED
+        return self.APP_ENV.lower() == "production"
 
 
 @lru_cache(maxsize=1)

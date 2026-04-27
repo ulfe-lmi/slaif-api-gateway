@@ -37,6 +37,21 @@ class _FakeEngine:
         return None
 
 
+class _FakeRedis:
+    def __init__(self, *, fail: bool = False) -> None:
+        self._fail = fail
+        self.ping_calls = 0
+
+    async def ping(self) -> bool:
+        self.ping_calls += 1
+        if self._fail:
+            raise RuntimeError("redis unavailable")
+        return True
+
+    async def aclose(self) -> None:
+        return None
+
+
 def test_healthz_remains_public_and_ok() -> None:
     client = TestClient(create_app(Settings(DATABASE_URL=None)))
 
@@ -117,3 +132,84 @@ def test_readyz_with_database_failure_reports_not_ready(monkeypatch) -> None:
         "database": "error",
         "redis": "not_required",
     }
+
+
+def test_readyz_reports_redis_ok_when_rate_limits_enabled(monkeypatch) -> None:
+    engine = _FakeEngine()
+    redis_client = _FakeRedis()
+
+    async def schema_ok(connection) -> SchemaStatus:
+        _ = connection
+        return SchemaStatus(
+            status="ok",
+            current_revision="head",
+            head_revision="head",
+            message="current",
+        )
+
+    monkeypatch.setattr(db_session_module, "create_engine_from_settings", lambda settings: engine)
+    monkeypatch.setattr(
+        db_session_module,
+        "create_sessionmaker_from_engine",
+        lambda received_engine: ("sessionmaker", received_engine),
+    )
+    monkeypatch.setattr("slaif_gateway.api.health.check_schema_current", schema_ok)
+    monkeypatch.setattr(
+        "slaif_gateway.cache.redis.create_redis_client_from_settings",
+        lambda settings: redis_client,
+    )
+    app = create_app(
+        Settings(
+            DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/slaif_test",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.json()["redis"] == "ok"
+    assert redis_client.ping_calls == 1
+
+
+def test_readyz_returns_not_ready_when_enabled_redis_fails(monkeypatch) -> None:
+    engine = _FakeEngine()
+    redis_client = _FakeRedis(fail=True)
+
+    async def schema_ok(connection) -> SchemaStatus:
+        _ = connection
+        return SchemaStatus(
+            status="ok",
+            current_revision="head",
+            head_revision="head",
+            message="current",
+        )
+
+    monkeypatch.setattr(db_session_module, "create_engine_from_settings", lambda settings: engine)
+    monkeypatch.setattr(
+        db_session_module,
+        "create_sessionmaker_from_engine",
+        lambda received_engine: ("sessionmaker", received_engine),
+    )
+    monkeypatch.setattr("slaif_gateway.api.health.check_schema_current", schema_ok)
+    monkeypatch.setattr(
+        "slaif_gateway.cache.redis.create_redis_client_from_settings",
+        lambda settings: redis_client,
+    )
+    app = create_app(
+        Settings(
+            DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/slaif_test",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["database"] == "ok"
+    assert response.json()["schema"] == "ok"
+    assert response.json()["redis"] == "error"
