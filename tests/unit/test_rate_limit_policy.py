@@ -52,6 +52,8 @@ def test_key_rate_limit_policy_overrides_global_defaults() -> None:
     assert policy.tokens_per_minute == 30
     assert policy.concurrent_requests == 2
     assert policy.window_seconds == 30
+    assert policy.concurrency_ttl_seconds == 300
+    assert policy.concurrency_heartbeat_seconds == 30
 
 
 def test_global_defaults_apply_when_key_policy_is_unset() -> None:
@@ -102,3 +104,18 @@ def test_cleared_key_fields_fall_back_to_global_defaults() -> None:
     assert policy.requests_per_minute == 20
     assert policy.tokens_per_minute == 200
     assert policy.window_seconds == 60
+
+
+def test_concurrency_timing_comes_from_settings() -> None:
+    policy = build_rate_limit_policy(
+        authenticated_key=_auth({"max_concurrent_requests": 1}),
+        settings=Settings(
+            RATE_LIMIT_CONCURRENCY_TTL_SECONDS=120,
+            RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS=10,
+            RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS=20,
+        ),
+    )
+
+    assert policy.concurrency_ttl_seconds == 120
+    assert policy.concurrency_heartbeat_seconds == 10
+    assert policy.concurrency_ttl_grace_seconds == 20

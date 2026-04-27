@@ -108,9 +108,13 @@ export REDIS_URL="redis://localhost:6379/0"
 export DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=60
 export DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE=120000
 export DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS=5
+export RATE_LIMIT_CONCURRENCY_TTL_SECONDS=300
+export RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS=30
 ```
 
 When enabled, `/v1/chat/completions` checks Redis after request policy token estimation and before route resolution, pricing, PostgreSQL hard quota reservation, and provider forwarding. Rate-limit failures return OpenAI-shaped errors. PostgreSQL remains authoritative for durable hard quota and accounting.
+
+Request and estimated-token limits are per-window operational throttles. Concurrency limits track active request IDs separately from that window: streaming responses refresh their Redis active slot while open, release removes the specific request ID, and the concurrency TTL is a conservative crash-cleanup fallback rather than the normal lifetime of a long stream.
 
 Global defaults apply when a key does not define an override. Operators can set per-key Redis rate-limit policy at creation or later:
 

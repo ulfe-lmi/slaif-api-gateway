@@ -59,6 +59,16 @@ RATE_LIMIT_REJECTIONS = Counter(
     "Redis-backed operational rate-limit rejections.",
     ("error_code",),
 )
+RATE_LIMIT_RELEASE_FAILURES = Counter(
+    "gateway_rate_limit_release_failures_total",
+    "Redis-backed concurrency release failures.",
+    ("error_code",),
+)
+RATE_LIMIT_HEARTBEAT_FAILURES = Counter(
+    "gateway_rate_limit_heartbeat_failures_total",
+    "Redis-backed concurrency heartbeat failures.",
+    ("error_code",),
+)
 
 
 def prometheus_response_body() -> bytes:
@@ -135,6 +145,16 @@ def increment_accounting_failure(error_code: str | None) -> None:
 def increment_rate_limit_rejection(error_code: str | None) -> None:
     """Record an operational rate-limit rejection with a low-cardinality error code."""
     RATE_LIMIT_REJECTIONS.labels(error_code=error_code or "unknown").inc()
+
+
+def increment_rate_limit_release_failure(error_code: str | None) -> None:
+    """Record a concurrency release failure with a low-cardinality error code."""
+    RATE_LIMIT_RELEASE_FAILURES.labels(error_code=error_code or "unknown").inc()
+
+
+def increment_rate_limit_heartbeat_failure(error_code: str | None) -> None:
+    """Record a concurrency heartbeat failure with a low-cardinality error code."""
+    RATE_LIMIT_HEARTBEAT_FAILURES.labels(error_code=error_code or "unknown").inc()
 
 
 def add_tokens(*, provider: str, model: str, token_type: str, count: int | None) -> None:

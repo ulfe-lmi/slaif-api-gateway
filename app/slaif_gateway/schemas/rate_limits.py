@@ -15,6 +15,9 @@ class RateLimitPolicy(BaseModel):
     tokens_per_minute: int | None = None
     concurrent_requests: int | None = None
     window_seconds: int = 60
+    concurrency_ttl_seconds: int | None = None
+    concurrency_heartbeat_seconds: int | None = None
+    concurrency_ttl_grace_seconds: int | None = None
 
     @field_validator(
         "requests_per_minute",
@@ -32,6 +35,17 @@ class RateLimitPolicy(BaseModel):
     def _window_positive(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("window_seconds must be positive")
+        return value
+
+    @field_validator(
+        "concurrency_ttl_seconds",
+        "concurrency_heartbeat_seconds",
+        "concurrency_ttl_grace_seconds",
+    )
+    @classmethod
+    def _optional_concurrency_positive(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("concurrency timing values must be positive when set")
         return value
 
     def has_limits(self) -> bool:
@@ -66,5 +80,6 @@ class RateLimitResult(BaseModel):
     remaining_tokens: int | None = None
     concurrent_in_use: int | None = None
     reset_at: datetime | None = None
+    concurrency_slot_expires_at: datetime | None = None
     retry_after_seconds: int | None = None
     degraded: bool = False

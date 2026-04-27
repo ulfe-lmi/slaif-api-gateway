@@ -173,3 +173,103 @@ async def test_redis_rate_limit_service_with_real_redis(redis_client: Redis) -> 
     redis_keys = " ".join(await redis_client.keys("rate:*"))
     assert "sk-slaif-" not in redis_keys
     assert "student@example.com" not in redis_keys
+
+
+@pytest.mark.asyncio
+async def test_real_redis_active_concurrency_uses_separate_ttl(redis_client: Redis) -> None:
+    service = RedisRateLimitService(redis_client)
+    key_id = uuid.uuid4()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        window_seconds=1,
+        concurrency_ttl_seconds=10,
+        concurrency_heartbeat_seconds=2,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="active-a",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    await asyncio.sleep(1.2)
+    with pytest.raises(ConcurrencyRateLimitExceededError):
+        await service.check_and_reserve(
+            gateway_key_id=key_id,
+            request_id="active-b",
+            estimated_tokens=1,
+            policy=policy,
+        )
+
+    await service.heartbeat_concurrency(
+        gateway_key_id=key_id,
+        request_id="active-a",
+        policy=policy,
+    )
+    await asyncio.sleep(1.2)
+    with pytest.raises(ConcurrencyRateLimitExceededError):
+        await service.check_and_reserve(
+            gateway_key_id=key_id,
+            request_id="active-b",
+            estimated_tokens=1,
+            policy=policy,
+        )
+
+    await service.release_concurrency(gateway_key_id=key_id, request_id="active-a")
+    result = await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="active-b",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_real_redis_expired_concurrency_slot_is_cleaned(redis_client: Redis) -> None:
+    service = RedisRateLimitService(redis_client)
+    key_id = uuid.uuid4()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=2,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="stale-a",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    await asyncio.sleep(2.2)
+    result = await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="fresh-b",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_real_redis_release_is_idempotent(redis_client: Redis) -> None:
+    service = RedisRateLimitService(redis_client)
+    key_id = uuid.uuid4()
+    policy = RateLimitPolicy(concurrent_requests=1)
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="release-a",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    await service.release_concurrency(gateway_key_id=key_id, request_id="release-a")
+    await service.release_concurrency(gateway_key_id=key_id, request_id="release-a")
+
+    result = await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="release-b",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    assert result.allowed is True
