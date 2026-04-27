@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from dataclasses import dataclass
 
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
+from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.accounting_errors import openai_error_from_accounting_error
 from slaif_gateway.api.errors import OpenAICompatibleError
@@ -17,6 +19,7 @@ from slaif_gateway.api.policy_errors import openai_error_from_request_policy_err
 from slaif_gateway.api.pricing_errors import openai_error_from_pricing_error
 from slaif_gateway.api.provider_errors import openai_error_from_provider_error
 from slaif_gateway.api.quota_errors import openai_error_from_quota_error
+from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_error
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.config import Settings
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
@@ -32,6 +35,7 @@ from slaif_gateway.metrics import (
     add_tokens,
     increment_accounting_failure,
     increment_quota_rejection,
+    increment_rate_limit_rejection,
     observe_provider_call,
     record_provider_call_result,
 )
@@ -41,6 +45,7 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 from slaif_gateway.schemas.quota import QuotaReservationResult
+from slaif_gateway.schemas.rate_limits import RateLimitPolicy
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import AccountingError
@@ -49,6 +54,10 @@ from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
 from slaif_gateway.services.quota_errors import QuotaError
 from slaif_gateway.services.quota_service import QuotaService
+from slaif_gateway.services.rate_limit_errors import RateLimitError
+from slaif_gateway.services.rate_limit_errors import RedisRateLimitUnavailableError
+from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
+from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
@@ -56,6 +65,15 @@ from slaif_gateway.providers.streaming import format_openai_error_event
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
+
+
+@dataclass(slots=True)
+class _RateLimitReservation:
+    service: RedisRateLimitService
+    policy: RateLimitPolicy
+    gateway_key_id: uuid.UUID
+    request_id: str
+    concurrency_reserved: bool
 
 
 async def handle_chat_completion(
@@ -101,83 +119,104 @@ async def handle_chat_completion(
         raise openai_error_from_request_policy_error(exc) from exc
 
     request_id = _request_id_from_request(request)
-    route, cost_estimate, reservation = await _reserve_chat_completion_quota(
+    rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
-        effective_model=policy_result.effective_body["model"],
         policy_result=policy_result,
         request_id=request_id,
+        settings=settings,
         request=request,
     )
-
-    if policy_result.effective_body.get("stream") is True:
-        return _streaming_chat_completion_response(
+    try:
+        route, cost_estimate, reservation = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
-            route=route,
+            effective_model=policy_result.effective_body["model"],
             policy_result=policy_result,
-            cost_estimate=cost_estimate,
-            reservation=reservation,
             request_id=request_id,
-            settings=settings,
             request=request,
         )
 
-    provider_request = ProviderRequest(
-        provider=route.provider,
-        upstream_model=route.resolved_model,
-        endpoint="chat.completions",
-        body=dict(policy_result.effective_body),
-        request_id=request_id,
-    )
-    try:
-        adapter = get_provider_adapter(route, settings)
-        provider_response = await observe_provider_call(
+        if policy_result.effective_body.get("stream") is True:
+            try:
+                response = _streaming_chat_completion_response(
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    reservation=reservation,
+                    request_id=request_id,
+                    settings=settings,
+                    request=request,
+                    rate_limit_reservation=rate_limit_reservation,
+                )
+                rate_limit_reservation = None
+                return response
+            except Exception:
+                await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+                raise
+
+        provider_request = ProviderRequest(
             provider=route.provider,
+            upstream_model=route.resolved_model,
             endpoint="chat.completions",
-            call=lambda: adapter.forward_chat_completion(provider_request),
+            body=dict(policy_result.effective_body),
+            request_id=request_id,
         )
-    except ProviderError as exc:
         try:
-            await _record_provider_failure_and_release(
+            adapter = get_provider_adapter(route, settings)
+            provider_response = await observe_provider_call(
+                provider=route.provider,
+                endpoint="chat.completions",
+                call=lambda: adapter.forward_chat_completion(provider_request),
+            )
+        except ProviderError as exc:
+            try:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=exc,
+                    request=request,
+                )
+            except AccountingError as accounting_exc:
+                increment_accounting_failure(accounting_exc.error_code)
+                raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
+            except QuotaError as quota_exc:
+                increment_quota_rejection(quota_exc.error_code)
+                raise openai_error_from_quota_error(quota_exc) from quota_exc
+            raise openai_error_from_provider_error(exc) from exc
+
+        try:
+            await _finalize_successful_chat_completion(
                 reservation=reservation,
                 authenticated_key=authenticated_key,
                 route=route,
                 policy_result=policy_result,
                 cost_estimate=cost_estimate,
+                provider_response=provider_response,
                 request_id=request_id,
-                provider_error=exc,
                 request=request,
             )
-        except AccountingError as accounting_exc:
-            increment_accounting_failure(accounting_exc.error_code)
-            raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
-        except QuotaError as quota_exc:
-            increment_quota_rejection(quota_exc.error_code)
-            raise openai_error_from_quota_error(quota_exc) from quota_exc
-        raise openai_error_from_provider_error(exc) from exc
+            _record_provider_usage_metrics(route=route, provider_response=provider_response)
+        except AccountingError as exc:
+            increment_accounting_failure(exc.error_code)
+            raise openai_error_from_accounting_error(exc) from exc
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            raise openai_error_from_quota_error(exc) from exc
 
-    try:
-        await _finalize_successful_chat_completion(
-            reservation=reservation,
-            authenticated_key=authenticated_key,
-            route=route,
-            policy_result=policy_result,
-            cost_estimate=cost_estimate,
-            provider_response=provider_response,
-            request_id=request_id,
-            request=request,
+        response = JSONResponse(
+            status_code=provider_response.status_code,
+            content=dict(provider_response.json_body),
         )
-        _record_provider_usage_metrics(route=route, provider_response=provider_response)
-    except AccountingError as exc:
-        increment_accounting_failure(exc.error_code)
-        raise openai_error_from_accounting_error(exc) from exc
-    except QuotaError as exc:
-        increment_quota_rejection(exc.error_code)
-        raise openai_error_from_quota_error(exc) from exc
+    except Exception:
+        await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+        raise
 
-    return JSONResponse(
-        status_code=provider_response.status_code,
-        content=dict(provider_response.json_body),
-    )
+    await _release_rate_limit_concurrency(rate_limit_reservation, suppress=False)
+    return response
 
 
 def _streaming_chat_completion_response(
@@ -190,6 +229,7 @@ def _streaming_chat_completion_response(
     request_id: str,
     settings: Settings,
     request: Request | None,
+    rate_limit_reservation: _RateLimitReservation | None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -307,6 +347,7 @@ def _streaming_chat_completion_response(
                 code=exc.error_code,
             )
         finally:
+            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
             record_provider_call_result(
                 provider=route.provider,
                 endpoint="chat.completions",
@@ -322,6 +363,79 @@ def _streaming_chat_completion_response(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _reserve_redis_rate_limit(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    policy_result: ChatCompletionPolicyResult,
+    request_id: str,
+    settings: Settings,
+    request: Request | None,
+) -> _RateLimitReservation | None:
+    if not settings.ENABLE_REDIS_RATE_LIMITS:
+        return None
+
+    policy = build_rate_limit_policy(authenticated_key=authenticated_key, settings=settings)
+    if not policy.has_limits():
+        return None
+
+    if request is None:
+        exc = OpenAICompatibleError(
+            "Rate limit service is unavailable.",
+            status_code=503,
+            error_type="server_error",
+            code="redis_rate_limit_unavailable",
+        )
+        raise exc
+
+    try:
+        redis_client = get_redis_client_from_app(request)
+    except RuntimeError as exc:
+        rate_limit_exc = RedisRateLimitUnavailableError()
+        increment_rate_limit_rejection(rate_limit_exc.error_code)
+        raise openai_error_from_rate_limit_error(rate_limit_exc) from exc
+    service = RedisRateLimitService(
+        redis_client,
+        fail_closed=settings.rate_limit_fail_closed(),
+    )
+    estimated_tokens = policy_result.estimated_input_tokens + policy_result.effective_output_tokens
+    try:
+        await service.check_and_reserve(
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_tokens=estimated_tokens,
+            policy=policy,
+        )
+    except RateLimitError as exc:
+        increment_rate_limit_rejection(exc.error_code)
+        raise openai_error_from_rate_limit_error(exc) from exc
+
+    return _RateLimitReservation(
+        service=service,
+        policy=policy,
+        gateway_key_id=authenticated_key.gateway_key_id,
+        request_id=request_id,
+        concurrency_reserved=policy.concurrent_requests is not None,
+    )
+
+
+async def _release_rate_limit_concurrency(
+    reservation: _RateLimitReservation | None,
+    *,
+    suppress: bool,
+) -> None:
+    if reservation is None or not reservation.concurrency_reserved:
+        return
+    try:
+        await reservation.service.release_concurrency(
+            gateway_key_id=reservation.gateway_key_id,
+            request_id=reservation.request_id,
+        )
+    except RateLimitError as exc:
+        increment_rate_limit_rejection(exc.error_code)
+        if not suppress:
+            raise openai_error_from_rate_limit_error(exc) from exc
 
 
 async def _reserve_chat_completion_quota(
