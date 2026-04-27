@@ -100,7 +100,7 @@ export GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-,sk-legacy-"
 - `keys create` and `keys rotate` print plaintext keys exactly once; list/show/status/limit/reset commands show safe metadata only.
 - Admin password commands never print plaintext passwords or password hashes. Institution, cohort, and owner commands print safe metadata only.
 - Dashboard pages, admin routes, email sending, and Celery wiring are intentionally not implemented in this slice yet.
-- PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior and admin/institution/cohort/owner bootstrap commands. They require `TEST_DATABASE_URL` and a migrated test database, and verify password hashing, safe command output, HMAC-only key storage, encrypted one-time delivery material, audit rows, and end-to-end CLI setup into key creation. Normal unit tests still do not require PostgreSQL.
+- PostgreSQL-backed CLI integration tests now cover key create/list/show/status/validity/limit/reset/rotation behavior, admin/institution/cohort/owner bootstrap commands, and provider/routing/pricing/FX metadata commands. They require `TEST_DATABASE_URL` and a migrated test database, and verify password hashing, safe command output, HMAC-only key storage, encrypted one-time delivery material, audit rows, persisted model visibility for `/v1/models`, route resolution, pricing lookup, and FX conversion. Normal unit tests still do not require PostgreSQL or real upstream provider keys.
 
 ## Service-layer authentication status
 
