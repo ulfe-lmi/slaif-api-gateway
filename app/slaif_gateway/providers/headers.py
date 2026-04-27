@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from slaif_gateway.utils.redaction import redact_mapping
+
 _SAFE_EXTRA_HEADERS = {
     "accept": "Accept",
     "content-type": "Content-Type",
@@ -73,6 +75,11 @@ def safe_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
         if normalized_name in {"x-request-id", "openai-request-id", "x-openrouter-request-id"}:
             safe[raw_name] = value
     return safe
+
+
+def redact_headers_for_logging(headers: Mapping[str, str]) -> dict[str, str]:
+    """Return provider headers with credentials redacted for logs/tests."""
+    return redact_mapping(headers)
 
 
 def _is_forbidden_header(normalized_name: str) -> bool:

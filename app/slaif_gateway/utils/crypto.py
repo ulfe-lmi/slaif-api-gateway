@@ -15,6 +15,11 @@ _PUBLIC_ID_LENGTH = 16
 _SECRET_BYTES = 32
 _SECRET_TOKEN_BYTES = 43
 _PUBLIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_GENERIC_GATEWAY_KEY_PATTERN = re.compile(
+    r"\b(?P<prefix>sk-[a-z0-9-]+-)(?P<public_id>[A-Za-z0-9_-]{4,64})\."
+    r"(?P<secret>[A-Za-z0-9._~+/=-]{8,})\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,17 +92,17 @@ def redact_gateway_key(key: str, accepted_prefixes: Iterable[str] | None = None)
         return "<redacted>"
 
     prefixes = tuple(accepted_prefixes) if accepted_prefixes is not None else (_DEFAULT_GATEWAY_KEY_PREFIX,)
-    if not is_plausible_gateway_key(key, prefixes):
-        return "<redacted>"
+    if is_plausible_gateway_key(key, prefixes):
+        public_key_id = parse_gateway_key_public_id(key, prefixes)
+        prefix = _best_matching_prefix(key, prefixes)
+        if prefix is not None:
+            return f"{prefix}{public_key_id}.***"
 
-    public_key_id = parse_gateway_key_public_id(key, prefixes)
-    prefix = _best_matching_prefix(key, prefixes)
-    if prefix is None:
-        return "<redacted>"
-    payload = key[len(prefix) :]
-    _, secret = payload.split(".", 1)
-    secret_hint = f"{secret[:4]}...{secret[-4:]}"
-    return f"{prefix}{public_key_id}.{secret_hint}"
+    generic_match = _GENERIC_GATEWAY_KEY_PATTERN.search(key)
+    if generic_match is not None and generic_match.group(0) == key:
+        return f"{generic_match.group('prefix')}{generic_match.group('public_id')}.***"
+
+    return "<redacted>"
 
 
 def hmac_sha256_token(token: str, secret: str | bytes) -> str:

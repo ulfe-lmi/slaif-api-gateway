@@ -38,26 +38,14 @@ from slaif_gateway.services.accounting_errors import (
     UnsupportedProviderCostError,
     UsageMissingError,
 )
+from slaif_gateway.utils.redaction import redact_text
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 _EUR = "EUR"
 _PROVIDER_COMPLETED_PENDING = "provider_completed_finalization_pending"
 _PROVIDER_COMPLETED_FAILED = "provider_completed_finalization_failed"
 _ACCOUNTING_FINALIZATION_FAILED = "accounting_finalization_failed"
-_FORBIDDEN_METADATA_KEYS = {
-    "authorization",
-    "api_key",
-    "provider_api_key",
-    "plaintext_key",
-    "token_hash",
-    "messages",
-    "choices",
-    "content",
-    "prompt",
-    "completion",
-    "request_body",
-    "response_body",
-}
 
 
 class AccountingService:
@@ -407,7 +395,7 @@ class AccountingService:
             raise AccountingFinalizationRecoveryError("Provider completion record mismatch")
 
         previous_status = row.accounting_status
-        metadata = dict(row.response_metadata or {})
+        metadata = _safe_json_mapping(row.response_metadata or {})
         error_code = getattr(error, "error_code", _ACCOUNTING_FINALIZATION_FAILED)
         safe_message = getattr(
             error,
@@ -772,35 +760,14 @@ def _response_metadata(provider_response: ProviderResponse, actual_cost: ActualC
         metadata["provider_reported_cost_native"] = str(actual_cost.provider_reported_cost_native)
     if actual_cost.provider_reported_currency is not None:
         metadata["provider_reported_currency"] = actual_cost.provider_reported_currency
-    return metadata
+    return _safe_json_mapping(metadata)
 
 
 def _safe_short_string(value: str | None) -> str | None:
     if value is None:
         return None
-    return value.strip()[:128]
+    return redact_text(value.strip())[:128]
 
 
 def _safe_json_mapping(value: Mapping[str, Any]) -> dict[str, object]:
-    safe: dict[str, object] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            continue
-        if key.strip().lower() in _FORBIDDEN_METADATA_KEYS:
-            continue
-        safe[key] = _safe_json_value(item)
-    return safe
-
-
-def _safe_json_value(value: Any) -> object:
-    if value is None or isinstance(value, str | int | bool):
-        return value
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    if isinstance(value, Mapping):
-        return _safe_json_mapping(value)
-    if isinstance(value, list | tuple):
-        return [_safe_json_value(item) for item in value]
-    return str(value)
+    return sanitize_metadata_mapping(value, drop_content_keys=True)
