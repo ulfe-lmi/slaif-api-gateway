@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, or_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import UsageLedger
@@ -199,6 +199,54 @@ class UsageLedgerRepository:
             statement = statement.where(UsageLedger.resolved_model == resolved_model)
 
         statement = statement.order_by(UsageLedger.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_usage_records(
+        self,
+        *,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        owner_id: uuid.UUID | None = None,
+        cohort_id: uuid.UUID | None = None,
+        gateway_key_id: uuid.UUID | None = None,
+        limit: int | None = None,
+        ascending: bool = False,
+    ) -> list[UsageLedger]:
+        """List safe usage ledger records for reporting/export.
+
+        This helper returns ORM rows but never commits or creates sessions. The
+        schema has no prompt/completion body columns, so callers can project
+        safe reporting fields without exposing request content.
+        """
+        statement: Select[tuple[UsageLedger]] = select(UsageLedger)
+        if start_at is not None:
+            statement = statement.where(UsageLedger.created_at >= start_at)
+        if end_at is not None:
+            statement = statement.where(UsageLedger.created_at <= end_at)
+        if provider is not None:
+            statement = statement.where(UsageLedger.provider == provider)
+        if model is not None:
+            statement = statement.where(
+                or_(
+                    UsageLedger.requested_model == model,
+                    UsageLedger.resolved_model == model,
+                )
+            )
+        if owner_id is not None:
+            statement = statement.where(UsageLedger.owner_id == owner_id)
+        if cohort_id is not None:
+            statement = statement.where(UsageLedger.cohort_id == cohort_id)
+        if gateway_key_id is not None:
+            statement = statement.where(UsageLedger.gateway_key_id == gateway_key_id)
+
+        ordering = UsageLedger.created_at.asc() if ascending else UsageLedger.created_at.desc()
+        statement = statement.order_by(ordering)
+        if limit is not None:
+            statement = statement.limit(limit)
+
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
