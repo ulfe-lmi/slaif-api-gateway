@@ -56,7 +56,15 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     )
     settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
     adapter = OpenAIProviderAdapter(settings)
-    caller_body = {"model": "client-model", "messages": [{"role": "user", "content": "hi"}]}
+    caller_body = {
+        "model": "client-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+        "x_unknown_json_compatible": {"preserved": True},
+    }
 
     response = await adapter.forward_chat_completion(_request(caller_body))
 
@@ -68,6 +76,11 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     assert "cookie" not in sent_request.headers
     assert sent_request.headers["x-request-id"] == "gw-req"
     assert sent_body["model"] == "gpt-4.1-mini"
+    assert sent_body["temperature"] == 0.2
+    assert sent_body["tools"] == caller_body["tools"]
+    assert sent_body["tool_choice"] == "auto"
+    assert sent_body["response_format"] == {"type": "json_object"}
+    assert sent_body["x_unknown_json_compatible"] == {"preserved": True}
     assert caller_body["model"] == "client-model"
     assert response.provider == "openai"
     assert response.status_code == 200

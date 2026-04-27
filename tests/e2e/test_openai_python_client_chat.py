@@ -357,6 +357,18 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
             response = client.chat.completions.create(
                 model=TEST_MODEL,
                 messages=[{"role": "user", "content": PROMPT_TEXT}],
+                temperature=0.2,
+                top_p=0.9,
+                stop=["STOP"],
+                user="student-1",
+                seed=123,
+                tools=[{"type": "function", "function": {"name": "lookup"}}],
+                tool_choice="auto",
+                response_format={"type": "json_object"},
+                extra_body={
+                    "metadata": {"course": "week-1"},
+                    "x_unknown_json_compatible": {"preserved": True},
+                },
             )
 
     assert response.choices[0].message.content == COMPLETION_TEXT
@@ -368,6 +380,16 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
     upstream_body = json.loads(upstream_request.content)
     assert upstream_body["model"] == TEST_MODEL
     assert upstream_body["max_completion_tokens"] == get_settings().DEFAULT_MAX_OUTPUT_TOKENS
+    assert upstream_body["temperature"] == 0.2
+    assert upstream_body["top_p"] == 0.9
+    assert upstream_body["stop"] == ["STOP"]
+    assert upstream_body["user"] == "student-1"
+    assert upstream_body["seed"] == 123
+    assert upstream_body["tools"][0]["function"]["name"] == "lookup"
+    assert upstream_body["tool_choice"] == "auto"
+    assert upstream_body["response_format"] == {"type": "json_object"}
+    assert upstream_body["metadata"] == {"course": "week-1"}
+    assert upstream_body["x_unknown_json_compatible"] == {"preserved": True}
     assert PROMPT_TEXT in json.dumps(upstream_body)
 
     state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
