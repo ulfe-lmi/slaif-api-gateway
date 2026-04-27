@@ -19,7 +19,7 @@ The project must be designed so normal users can use the standard OpenAI Python 
 - Docker image name: `slaif-api-gateway`
 - Preferred license: Apache License 2.0
 - Public production-style base URL: `https://api.ulfe.slaif.si/v1`
-- Default gateway API key prefix: `sk-slaif-` (active generation prefix is configurable via `GATEWAY_KEY_PREFIX`; accepted parsing/auth prefixes are configured via `GATEWAY_KEY_ACCEPTED_PREFIXES`)
+- Default gateway API key prefix: `sk-slaif-`, configurable through `GATEWAY_KEY_PREFIX`; accepted prefixes are configured through `GATEWAY_KEY_ACCEPTED_PREFIXES`
 
 ### 1.2 Distribution model
 
@@ -240,13 +240,14 @@ Real upstream smoke tests are allowed only under a clearly disabled-by-default t
 ```bash
 RUN_UPSTREAM_TESTS=1 OPENAI_UPSTREAM_API_KEY=sk-... OPENROUTER_API_KEY=sk-or-... pytest tests/upstream_optional/
 ```
-Database integration tests have three allowed modes:
+Database integration tests have these allowed modes:
 
-1. Testcontainers, when Docker is available.
-2. TEST_DATABASE_URL, when the maintainer provides an existing test database.
-3. Explicit Codex/local PostgreSQL harness, only when the prompt specifically requests it.
+1. `TEST_DATABASE_URL`, when the maintainer or local environment provides an existing test database.
+2. Testcontainers, when Docker is available.
+3. A user-owned temporary PostgreSQL instance for local/Codex verification, when it can be started without destructive setup against `DATABASE_URL`.
+4. The explicit apt/sudo Codex PostgreSQL harness, only when the prompt specifically requests it and sudo works non-interactively.
 
-Unit tests must remain independent of all three modes.
+Unit tests must remain independent of all database integration modes.
 
 ### 2.12 Deployment
 
@@ -338,7 +339,7 @@ Recommended/default key format:
 
 ```text
 <GATEWAY_KEY_PREFIX><public_key_id>.<secret>
-````
+```
 
 Default:
 
@@ -408,33 +409,13 @@ Key status behavior:
 - Expiration is derived from the validity window.
 - The dashboard may show a computed display state of `expired`.
 
-Do not store `expired` as a status. Expiration is derived from `valid_until`. The dashboard may show a computed display state of `expired`.
+Required key owner/profile behavior:
 
-Required key owner/profile concepts:
-
-- owner first name
-- owner surname
-- owner institution
-- owner email
-- optional cohort/workshop
-- key public ID
-- key display prefix/hint
-- start time / valid from
-- end time / valid until
-- per-key cost limit in EUR
-- per-key token limit
-- optional request limit
-- used cost/tokens/requests
-- reserved cost/tokens/requests
-- allowed endpoints
-- allowed models or model groups
-- allowed providers if restricted
-- rate-limit policy
-- created by admin
-- created at
-- updated at
-- revoked at
-- revocation reason
+- Keys must be associated with enough owner, institution, and optional cohort
+  metadata to support administration, reporting, and auditability.
+- Key validity, lifecycle status, quota limits, usage counters, endpoint/model
+  policies, and audit metadata must follow `docs/database-schema.md`.
+- AGENTS.md must not define alternate key columns or table names.
 
 Required key management operations:
 
@@ -891,7 +872,7 @@ Prometheus metrics:
 Health endpoints:
 
 - `/healthz`: process is alive
-- `/readyz`: database/Redis/basic dependencies are reachable and DB schema is current
+- `/readyz`: database configuration/reachability and schema readiness; Redis should not be required until Redis-backed behavior is implemented
 - `/metrics`: Prometheus metrics
 
 Production rule:
@@ -1035,16 +1016,13 @@ slaif-api-gateway/
 │       ├── api/
 │       │   ├── __init__.py
 │       │   ├── openai_compat.py    # /v1/chat/completions, /v1/models, etc.
-│       │   ├── admin.py            # /admin routes
-│       │   ├── health.py           # /healthz, /readyz, /metrics
+│       │   ├── health.py           # /healthz, /readyz
+│       │   ├── dependencies.py     # FastAPI auth/session dependencies
 │       │   └── errors.py           # OpenAI-style error responses
 │       │
 │       ├── auth/
 │       │   ├── __init__.py
-│       │   ├── gateway_keys.py     # HMAC validation of issued keys
-│       │   ├── admin_auth.py       # admin sessions/passwords
-│       │   ├── csrf.py
-│       │   └── permissions.py
+│       │   └── ...                 # future auth-specific helpers as needed
 │       │
 │       ├── db/
 │       │   ├── __init__.py
@@ -1074,18 +1052,22 @@ slaif-api-gateway/
 │       │   ├── quota_service.py    # reserve/finalize quota
 │       │   ├── accounting.py       # token/cost accounting
 │       │   ├── pricing.py          # pricing lookup and cost calculation
-│       │   ├── routing.py          # model -> provider decision
-│       │   ├── email_service.py
-│       │   ├── audit_service.py
-│       │   ├── secret_service.py   # one_time_secrets encryption/consumption
-│       │   └── export_service.py
+│       │   ├── route_resolution.py # model -> provider decision
+│       │   ├── model_catalog.py    # /v1/models metadata
+│       │   ├── chat_completion_gateway.py
+│       │   ├── provider_config_service.py
+│       │   ├── model_route_service.py
+│       │   ├── pricing_rule_service.py
+│       │   ├── fx_rate_service.py
+│       │   └── usage_report_service.py
 │       │
 │       ├── providers/
 │       │   ├── __init__.py
 │       │   ├── base.py             # provider adapter interface
+│       │   ├── factory.py          # provider config -> adapter construction
+│       │   ├── headers.py          # safe outbound header allowlists
 │       │   ├── openai.py           # OpenAI upstream adapter
-│       │   ├── openrouter.py       # OpenRouter upstream adapter
-│       │   └── streaming.py        # SSE pass-through helpers
+│       │   └── openrouter.py       # OpenRouter upstream adapter
 │       │
 │       ├── schemas/
 │       │   ├── __init__.py
@@ -1099,52 +1081,29 @@ slaif-api-gateway/
 │       ├── cli/
 │       │   ├── __init__.py
 │       │   ├── main.py             # Typer root
-│       │   ├── keys.py
 │       │   ├── admin.py
-│       │   ├── usage.py
+│       │   ├── cohorts.py
+│       │   ├── common.py
+│       │   ├── db.py
+│       │   ├── fx.py
+│       │   ├── institutions.py
+│       │   ├── keys.py
+│       │   ├── owners.py
 │       │   ├── pricing.py
-│       │   ├── routing.py
-│       │   ├── email.py
-│       │   └── db.py
+│       │   ├── providers.py
+│       │   ├── routes.py
+│       │   └── usage.py
 │       │
 │       ├── workers/
-│       │   ├── __init__.py
-│       │   ├── celery_app.py
-│       │   ├── tasks_email.py
-│       │   ├── tasks_exports.py
-│       │   ├── tasks_cleanup.py
-│       │   └── tasks_scheduled.py
+│       │   └── __init__.py         # Celery workers are future work
 │       │
 │       ├── web/
 │       │   ├── templates/
-│       │   │   ├── base.html
-│       │   │   ├── login.html
-│       │   │   ├── dashboard.html
-│       │   │   ├── keys/
-│       │   │   │   ├── list.html
-│       │   │   │   ├── detail.html
-│       │   │   │   ├── create.html
-│       │   │   │   └── _row.html
-│       │   │   ├── owners/
-│       │   │   │   ├── list.html
-│       │   │   │   └── detail.html
-│       │   │   ├── usage/
-│       │   │   │   ├── list.html
-│       │   │   │   └── report.html
-│       │   │   ├── pricing/
-│       │   │   │   └── list.html
-│       │   │   ├── routing/
-│       │   │   │   └── list.html
-│       │   │   └── audit/
-│       │   │       └── list.html
+│       │   │   └── .gitkeep        # dashboard templates are future work
 │       │   └── static/
-│       │       ├── src/
-│       │       │   └── input.css   # Tailwind source
-│       │       ├── dist/
-│       │       │   └── styles.css  # compiled CSS
-│       │       ├── js/
-│       │       │   └── htmx.min.js # vendored/locally served HTMX
-│       │       └── img/
+│       │       ├── css/.gitkeep
+│       │       ├── img/.gitkeep
+│       │       └── js/.gitkeep
 │       │
 │       └── utils/
 │           ├── __init__.py
@@ -1161,21 +1120,23 @@ slaif-api-gateway/
 ├── tests/
 │   ├── conftest.py
 │   ├── unit/
-│   │   ├── test_key_hashing.py
-│   │   ├── test_quota_accounting.py
-│   │   ├── test_pricing.py
-│   │   ├── test_routing.py
-│   │   └── test_error_format.py
+│   │   ├── test_auth_service.py
+│   │   ├── test_quota_service.py
+│   │   ├── test_pricing_service.py
+│   │   ├── test_route_resolution_service.py
+│   │   ├── test_v1_chat_completions_forwarding.py
+│   │   └── test_v1_error_shape.py
 │   ├── integration/
-│   │   ├── test_db_migrations.py
-│   │   ├── test_postgres_repositories.py
-│   │   ├── test_redis_rate_limits.py
-│   │   ├── test_openai_proxy_mocked.py
-│   │   ├── test_openrouter_proxy_mocked.py
-│   │   └── test_streaming_sse.py
+│   │   ├── test_migrations_postgres.py
+│   │   ├── test_repositories_foundation_postgres.py
+│   │   ├── test_quota_reservation_postgres.py
+│   │   ├── test_quota_reservation_concurrency_postgres.py
+│   │   ├── test_cli_routing_pricing_postgres.py
+│   │   ├── test_cli_usage_postgres.py
+│   │   └── test_readyz_postgres.py
 │   ├── e2e/
-│   │   ├── test_openai_python_client.py
-│   │   └── test_admin_dashboard.py
+│   │   ├── test_openai_python_client_chat.py
+│   │   └── test_openrouter_python_client_chat.py
 │   └── upstream_optional/
 │       ├── test_real_openai_smoke.py
 │       └── test_real_openrouter_smoke.py
@@ -1382,11 +1343,13 @@ Use for:
 Default integration-test strategy:
 
 - Unit tests must not require PostgreSQL, Redis, Docker, or real upstream provider keys.
+- Normal integration tests may use `TEST_DATABASE_URL` when explicitly provided.
 - Normal integration tests may use Testcontainers when Docker is available.
-- Normal integration tests may also use TEST_DATABASE_URL when explicitly provided.
-- If neither Docker/Testcontainers nor TEST_DATABASE_URL is available, database
-  integration tests must skip cleanly.
+- Local/Codex verification may use a user-owned temporary PostgreSQL instance when available.
+- If neither `TEST_DATABASE_URL`, Docker/Testcontainers, nor a user-owned temporary PostgreSQL instance is available, database integration tests must skip cleanly.
 - Integration tests must never use DATABASE_URL for destructive setup by default.
+- Destructive test setup, migration resets, and seed scripts must target `TEST_DATABASE_URL` only.
+- Do not stop merely because `sudo -n true` fails; try the non-sudo allowed modes before reporting a PostgreSQL blocker.
 
 Integration tests should cover:
 
@@ -1394,8 +1357,8 @@ Integration tests should cover:
 - repositories
 - quota reservation transactions
 - concurrent quota reservation races
-- Redis rate limiting
-- Celery task integration if feasible
+- Redis rate limiting once Redis/rate-limit behavior is implemented
+- Celery task integration once Celery workers are implemented
 - one-time secret lifecycle
 - seeded demo/test data workflows
 
@@ -1412,10 +1375,15 @@ Trigger phrases include:
 Use the Codex container PostgreSQL test harness.
 Run the local PostgreSQL install test harness.
 Install PostgreSQL in the Codex container and run DB integration tests.
-````
+```
 
 If the prompt does not explicitly request this, Codex must not run apt-based  
 PostgreSQL installation.
+
+This apt/sudo harness is separate from the user-owned local PostgreSQL fallback.
+Failure of `sudo -n true` is not by itself a reason to skip PostgreSQL coverage
+when `TEST_DATABASE_URL`, Testcontainers, or an already-running local PostgreSQL
+instance is available.
 
 When explicitly requested, Codex may:
 
@@ -1482,7 +1450,7 @@ The repository must include a deterministic seed script:
 
 ```text
 scripts/seed_test_data.py
-````
+```
 
 Purpose:
 
@@ -1535,14 +1503,13 @@ Use respx to intercept `httpx.AsyncClient` calls.
 Test:
 
 - OpenAI non-streaming forwarding
-- OpenAI streaming forwarding
 - OpenRouter non-streaming forwarding
-- OpenRouter streaming forwarding
 - provider errors
 - outbound header allowlist behavior
 - usage parsing
 - cost accounting
-- interrupted streaming accounting behavior
+
+Streaming provider tests should be added only when streaming support is implemented.
 
 ### 9.4 E2E tests
 
@@ -1837,32 +1804,36 @@ Do not store prompts or completions as a workaround for reporting.
 
 ---
 
-## 13. Implementation sequencing
+## 13. Implementation status and sequencing
 
-Recommended build order:
+AGENTS.md is future-oriented guidance, but it should not send Codex back to
+completed foundation work. The current implemented core includes:
 
-1. Project skeleton, pyproject, package layout, Dockerfile, Docker Compose.
-2. FastAPI app with `/healthz`, `/readyz`, `/v1/models` stub.
-3. Add `docs/database-schema.md` and implement PostgreSQL models/Alembic migrations from it.
-4. Add optional database integration-test harness scripts, including TEST_DATABASE_URL support and scripts/seed_test_data.py. Keep this separate from normal unit tests and do not require apt-installed PostgreSQL by default.
-5. Gateway key generation and HMAC validation with key versioning.
-6. Admin user creation CLI.
-7. Basic `/v1/chat/completions` non-streaming proxy with mocked tests.
-8. Provider routing table and adapters for OpenAI/OpenRouter.
-9. Quota reservation and usage ledger.
-10. Gateway output-token/default cap policy.
-11. Streaming proxy with SSE tests.
-12. Pricing table, FX conversion, and cost accounting.
-13. Admin dashboard login and key list/create/revoke/suspend/activate.
-14. One-time secret encryption and email delivery via Celery/Mailpit.
-15. Usage reports and CSV export.
-16. Redis rate limiting.
-17. Prometheus metrics and structured logging.
-18. Nginx deployment example.
-19. Full docs and compatibility matrix.
-20. Optional upstream smoke tests.
-21. Optional Playwright dashboard tests.
-22. Optional OpenTelemetry tracing.
+1. Python package skeleton, FastAPI app factory, `/healthz`, `/readyz`, and
+   OpenAI-compatible `/v1` routing modules.
+2. SQLAlchemy models, Alembic migrations, repository modules, and
+   TEST_DATABASE_URL-aware integration-test helpers for the schema currently in
+   `docs/database-schema.md`.
+3. Gateway key generation, HMAC validation, authentication, endpoint allow-list
+   checks, request policy checks, and configurable key prefixes.
+4. Admin/key/institution/cohort/owner CLI commands, provider/routing/pricing/FX
+   CLI commands, and safe usage summarize/export CLI commands.
+5. Non-streaming `/v1/chat/completions` forwarding through OpenAI/OpenRouter
+   adapters with provider-config-driven adapter construction, route resolution,
+   pricing/FX lookup, PostgreSQL quota reservation, accounting finalization, and
+   mocked OpenAI/OpenRouter E2E coverage.
+6. FastAPI lifespan-managed database engine/sessionmaker setup and realistic DB
+   readiness checks.
+
+Remaining major milestones include:
+
+1. Streaming proxy support with SSE tests and interrupted-stream accounting.
+2. Redis-backed rate limiting.
+3. Admin dashboard routes/templates with CSRF-protected state changes.
+4. Email delivery through one-time secrets and Celery/Mailpit.
+5. Prometheus metrics, structured logging expansion, and deployment hardening.
+6. Full public docs and compatibility matrix.
+7. Optional upstream smoke tests, Playwright dashboard tests, and OpenTelemetry tracing.
 
 At every stage, keep OpenAI-compatible client usage working.
 
@@ -1887,7 +1858,6 @@ At every stage, keep OpenAI-compatible client usage working.
 - Do not silently allow unknown model pricing for cost-limited keys.
 - Do not break streaming by buffering full provider responses.
 - Do not return custom gateway-shaped errors from `/v1` routes; use OpenAI-style errors.
-- Do not store `expired` as a key status; compute it from `valid_until`.
 - Do not implement a command or dashboard action that resends an old plaintext key.
 - Do not create schema fields/tables that conflict with `docs/database-schema.md`.
 - Do not run apt-based PostgreSQL installation unless the maintainer explicitly requests the Codex container PostgreSQL test harness.
