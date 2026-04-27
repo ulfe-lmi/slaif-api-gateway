@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.config import Settings
 from slaif_gateway.main import create_app
+from slaif_gateway.metrics import prometheus_response_body
+from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
@@ -173,7 +175,20 @@ def _wire_pipeline(
         )
         state["finalize_calls"].append(request_id)
         state["provider_responses"].append(provider_response)
-        return object()
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+            actual_cost_eur=Decimal("0.001234000"),
+            actual_cost_native=Decimal("0.001234000"),
+            native_currency=pricing_estimate.native_currency,
+            prompt_tokens=5,
+            completion_tokens=7,
+            total_tokens=12,
+            accounting_status="finalized",
+        )
 
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
@@ -233,6 +248,8 @@ def test_openai_nonstreaming_happy_path_uses_adapter_and_finalizes(
     assert upstream_body["max_tokens"] == 20
     assert state["provider_responses"][0].usage.total_tokens == 12
     assert state["session"].commit_calls == 2
+    metrics = prometheus_response_body().decode()
+    assert 'gateway_cost_eur_total{model="gpt-4.1-mini",provider="openai"}' in metrics
 
 
 def test_nonstreaming_request_preserves_openai_sdk_fields_to_upstream(

@@ -39,6 +39,16 @@ PROVIDER_REQUEST_DURATION = Histogram(
     "Upstream provider request duration in seconds.",
     ("provider", "endpoint"),
 )
+PROVIDER_HTTP_ERRORS = Counter(
+    "gateway_provider_http_errors_total",
+    "Upstream provider HTTP errors.",
+    ("provider", "endpoint", "status_class"),
+)
+PROVIDER_DIAGNOSTICS_GENERATED = Counter(
+    "gateway_provider_diagnostics_generated_total",
+    "Sanitized provider diagnostics generated.",
+    ("provider", "endpoint"),
+)
 TOKENS_TOTAL = Counter(
     "gateway_tokens_total",
     "Provider-reported token totals.",
@@ -127,6 +137,25 @@ def record_provider_call_result(
     PROVIDER_REQUEST_DURATION.labels(provider=provider, endpoint=endpoint).observe(duration_seconds)
 
 
+def increment_provider_http_error(
+    *,
+    provider: str,
+    endpoint: str,
+    upstream_status_code: int | None,
+) -> None:
+    """Record an upstream HTTP error with low-cardinality status class."""
+    PROVIDER_HTTP_ERRORS.labels(
+        provider=provider,
+        endpoint=endpoint,
+        status_class=_status_class(upstream_status_code),
+    ).inc()
+
+
+def increment_provider_diagnostic_generated(*, provider: str, endpoint: str) -> None:
+    """Record generation of sanitized provider diagnostics."""
+    PROVIDER_DIAGNOSTICS_GENERATED.labels(provider=provider, endpoint=endpoint).inc()
+
+
 def increment_auth_failure(error_code: str | None) -> None:
     """Record an auth failure with a low-cardinality error code."""
     AUTH_FAILURES.labels(error_code=error_code or "unknown").inc()
@@ -169,3 +198,11 @@ def add_cost_eur(*, provider: str, model: str, cost_eur: Decimal | None) -> None
     if cost_eur is None or cost_eur <= 0:
         return
     COST_EUR_TOTAL.labels(provider=provider, model=model).inc(float(cost_eur))
+
+
+def _status_class(status_code: int | None) -> str:
+    if status_code is None:
+        return "unknown"
+    if status_code < 100 or status_code > 599:
+        return "unknown"
+    return f"{status_code // 100}xx"

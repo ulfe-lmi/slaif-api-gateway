@@ -11,6 +11,10 @@ import httpx
 
 from slaif_gateway.config import Settings
 from slaif_gateway.providers.base import ProviderAdapter
+from slaif_gateway.providers.diagnostics import (
+    build_provider_error_diagnostic,
+    build_provider_error_diagnostic_from_response,
+)
 from slaif_gateway.providers.errors import (
     MissingProviderApiKeyError,
     ProviderHTTPError,
@@ -153,9 +157,14 @@ class OpenRouterProviderAdapter(ProviderAdapter):
 
     async def _stream_response_events(self, response: httpx.Response):
         if response.status_code < 200 or response.status_code >= 300:
+            diagnostic = await build_provider_error_diagnostic_from_response(
+                provider=self.provider_name,
+                response=response,
+            )
             raise ProviderHTTPError(
                 provider=self.provider_name,
                 upstream_status_code=response.status_code,
+                diagnostic=diagnostic,
             )
 
         pending_lines: list[str] = []
@@ -163,11 +172,13 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             pending_lines.append(line)
             if line == "":
                 for event in parse_sse_lines(pending_lines):
+                    self._raise_for_stream_error_event(response, event.json_body)
                     yield response, event
                 pending_lines = []
 
         if pending_lines:
             for event in parse_sse_lines(pending_lines):
+                self._raise_for_stream_error_event(response, event.json_body)
                 yield response, event
 
     def _provider_response(
@@ -179,6 +190,12 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             raise ProviderHTTPError(
                 provider=self.provider_name,
                 upstream_status_code=response.status_code,
+                diagnostic=build_provider_error_diagnostic(
+                    provider=self.provider_name,
+                    upstream_status_code=response.status_code,
+                    body=_json_or_none(response),
+                    headers=response.headers,
+                ),
             )
 
         try:
@@ -200,6 +217,24 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             usage=self.parse_usage(payload),
             raw_cost_native=raw_cost_native,
             native_currency=native_currency,
+        )
+
+    def _raise_for_stream_error_event(
+        self,
+        response: httpx.Response,
+        payload: Mapping[str, Any] | None,
+    ) -> None:
+        if not isinstance(payload, Mapping) or "error" not in payload:
+            return
+        raise ProviderHTTPError(
+            provider=self.provider_name,
+            upstream_status_code=response.status_code,
+            diagnostic=build_provider_error_diagnostic(
+                provider=self.provider_name,
+                upstream_status_code=response.status_code,
+                body=payload,
+                headers=response.headers,
+            ),
         )
 
     def _provider_stream_chunk(self, request: ProviderRequest, chunk) -> ProviderStreamChunk:
@@ -249,3 +284,10 @@ def _extract_openrouter_cost(payload: Mapping[str, Any]) -> tuple[Decimal | None
     if not isinstance(currency, str) or not currency:
         currency = "USD" if "cost_usd" in usage or "cost" in usage else None
     return cost, currency
+
+
+def _json_or_none(response: httpx.Response) -> object | None:
+    try:
+        return response.json()
+    except ValueError:
+        return None

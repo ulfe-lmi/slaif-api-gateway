@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from slaif_gateway.config import Settings
-from slaif_gateway.providers.errors import MissingProviderApiKeyError
+from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderHTTPError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
 from slaif_gateway.schemas.providers import ProviderRequest
 
@@ -111,3 +111,36 @@ def test_openai_streaming_injects_usage_options_when_client_omits_them() -> None
     assert sent_body["tool_choice"] == "auto"
     assert sent_body["response_format"] == {"type": "json_object"}
     assert "stream_options" not in original_body
+
+
+def test_openai_streaming_error_event_raises_safe_diagnostic() -> None:
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    sse = (
+        'data: {"error":{"message":"provider rejected sk-proj-secret",'
+        '"type":"invalid_request_error","code":"bad_request",'
+        '"metadata":{"messages":[{"content":"user prompt body"}],'
+        '"response_body":"assistant completion body"}}}\n\n'
+    )
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-request-id": "openai-stream-error"},
+                )
+            )
+            return [chunk async for chunk in adapter.stream_chat_completion(_request())]
+
+    with pytest.raises(ProviderHTTPError) as exc_info:
+        asyncio.run(_collect())
+
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.upstream_error_type == "invalid_request_error"
+    assert exc_info.value.diagnostic.upstream_error_code == "bad_request"
+    assert exc_info.value.diagnostic.upstream_request_id == "openai-stream-error"
+    diagnostic_text = str(exc_info.value.diagnostic.to_safe_dict())
+    assert "user prompt body" not in diagnostic_text
+    assert "assistant completion body" not in diagnostic_text
+    assert "sk-proj-secret" not in diagnostic_text

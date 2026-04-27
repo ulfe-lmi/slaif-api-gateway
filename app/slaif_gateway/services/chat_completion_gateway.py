@@ -30,10 +30,14 @@ from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.providers.errors import ProviderError
+from slaif_gateway.providers.errors import ProviderHTTPError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.metrics import (
+    add_cost_eur,
     add_tokens,
     increment_accounting_failure,
+    increment_provider_diagnostic_generated,
+    increment_provider_http_error,
     increment_quota_rejection,
     increment_rate_limit_heartbeat_failure,
     increment_rate_limit_rejection,
@@ -42,6 +46,7 @@ from slaif_gateway.metrics import (
     record_provider_call_result,
 )
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.openai import ChatCompletionRequest
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
@@ -191,7 +196,7 @@ async def handle_chat_completion(
             raise openai_error_from_provider_error(exc) from exc
 
         try:
-            await _finalize_successful_chat_completion(
+            accounting_result = await _finalize_successful_chat_completion(
                 reservation=reservation,
                 authenticated_key=authenticated_key,
                 route=route,
@@ -201,7 +206,11 @@ async def handle_chat_completion(
                 request_id=request_id,
                 request=request,
             )
-            _record_provider_usage_metrics(route=route, provider_response=provider_response)
+            _record_provider_success_metrics(
+                route=route,
+                provider_response=provider_response,
+                accounting_result=accounting_result,
+            )
         except AccountingError as exc:
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc
@@ -282,7 +291,7 @@ def _streaming_chat_completion_response(
                     request=request,
                 )
                 try:
-                    await _finalize_successful_chat_completion(
+                    accounting_result = await _finalize_successful_chat_completion(
                         reservation=reservation,
                         authenticated_key=authenticated_key,
                         route=route,
@@ -312,7 +321,11 @@ def _streaming_chat_completion_response(
                         request=request,
                     )
                     raise
-                _record_provider_usage_metrics(route=route, provider_response=provider_response)
+                _record_provider_success_metrics(
+                    route=route,
+                    provider_response=provider_response,
+                    accounting_result=accounting_result,
+                )
                 provider_status = "success"
                 if done_event is not None:
                     yield done_event
@@ -612,8 +625,11 @@ async def _record_provider_failure_and_release(
             "error_code": provider_error.error_code,
             "status_code": provider_error.upstream_status_code,
         }
+        if provider_error.diagnostic is not None:
+            kwargs["provider_diagnostic"] = provider_error.diagnostic.to_safe_dict()
         if streaming:
             kwargs["streaming"] = True
+        _record_provider_error_metrics(route=route, provider_error=provider_error)
         await accounting_service.record_provider_failure_and_release(
             reservation.reservation_id,
             authenticated_key,
@@ -672,7 +688,7 @@ async def _finalize_successful_chat_completion(
     request: Request | None,
     streaming: bool = False,
     provider_completed_usage_ledger_id: uuid.UUID | None = None,
-) -> None:
+) -> FinalizedAccountingResult:
     session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
@@ -693,7 +709,7 @@ async def _finalize_successful_chat_completion(
             kwargs["streaming"] = True
         if provider_completed_usage_ledger_id is not None:
             kwargs["provider_completed_usage_ledger_id"] = provider_completed_usage_ledger_id
-        await accounting_service.finalize_successful_response(
+        result = await accounting_service.finalize_successful_response(
             reservation.reservation_id,
             authenticated_key,
             route,
@@ -704,7 +720,7 @@ async def _finalize_successful_chat_completion(
         )
         if hasattr(session, "commit"):
             await session.commit()
-        return
+        return result
     finally:
         await session_iterator.aclose()
 
@@ -822,29 +838,52 @@ def _request_id_from_request(request: Request | None) -> str:
     return f"gw-{uuid.uuid4()}"
 
 
-def _record_provider_usage_metrics(
+def _record_provider_success_metrics(
     *,
     route: RouteResolutionResult,
     provider_response: ProviderResponse,
+    accounting_result: FinalizedAccountingResult,
 ) -> None:
     usage = provider_response.usage
-    if usage is None:
-        return
-    add_tokens(
+    if usage is not None:
+        add_tokens(
+            provider=route.provider,
+            model=route.resolved_model,
+            token_type="prompt",
+            count=usage.prompt_tokens,
+        )
+        add_tokens(
+            provider=route.provider,
+            model=route.resolved_model,
+            token_type="completion",
+            count=usage.completion_tokens,
+        )
+        add_tokens(
+            provider=route.provider,
+            model=route.resolved_model,
+            token_type="total",
+            count=usage.total_tokens,
+        )
+    add_cost_eur(
         provider=route.provider,
         model=route.resolved_model,
-        token_type="prompt",
-        count=usage.prompt_tokens,
+        cost_eur=getattr(accounting_result, "actual_cost_eur", None),
     )
-    add_tokens(
-        provider=route.provider,
-        model=route.resolved_model,
-        token_type="completion",
-        count=usage.completion_tokens,
-    )
-    add_tokens(
-        provider=route.provider,
-        model=route.resolved_model,
-        token_type="total",
-        count=usage.total_tokens,
-    )
+
+
+def _record_provider_error_metrics(
+    *,
+    route: RouteResolutionResult,
+    provider_error: ProviderError,
+) -> None:
+    if isinstance(provider_error, ProviderHTTPError):
+        increment_provider_http_error(
+            provider=route.provider,
+            endpoint="chat.completions",
+            upstream_status_code=provider_error.upstream_status_code,
+        )
+    if provider_error.diagnostic is not None:
+        increment_provider_diagnostic_generated(
+            provider=route.provider,
+            endpoint="chat.completions",
+        )

@@ -5,9 +5,11 @@ import json
 from decimal import Decimal
 
 import httpx
+import pytest
 import respx
 
 from slaif_gateway.config import Settings
+from slaif_gateway.providers.errors import ProviderHTTPError
 from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 from slaif_gateway.schemas.providers import ProviderRequest
 
@@ -103,3 +105,42 @@ def test_openrouter_streaming_injects_usage_options_when_client_omits_them() -> 
     assert sent_body["tool_choice"] == "auto"
     assert sent_body["response_format"] == {"type": "json_object"}
     assert "stream_options" not in body
+
+
+def test_openrouter_streaming_error_event_raises_safe_diagnostic() -> None:
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    request = ProviderRequest(
+        provider="openrouter",
+        upstream_model="anthropic/claude-test",
+        endpoint="chat.completions",
+        body={"model": "client-model", "stream": True, "messages": []},
+        request_id="gw-123",
+        extra_headers={"Authorization": "Bearer gateway-key"},
+    )
+    sse = (
+        'data: {"error":{"message":"provider rejected sk-or-secret",'
+        '"code":"bad_request","metadata":{"prompt":"user prompt body",'
+        '"response_body":"assistant completion body"}}}\n\n'
+    )
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.post("https://openrouter.ai/api/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-openrouter-request-id": "or-stream-error"},
+                )
+            )
+            return [chunk async for chunk in adapter.stream_chat_completion(request)]
+
+    with pytest.raises(ProviderHTTPError) as exc_info:
+        asyncio.run(_collect())
+
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.upstream_error_code == "bad_request"
+    assert exc_info.value.diagnostic.upstream_request_id == "or-stream-error"
+    diagnostic_text = str(exc_info.value.diagnostic.to_safe_dict())
+    assert "user prompt body" not in diagnostic_text
+    assert "assistant completion body" not in diagnostic_text
+    assert "sk-or-secret" not in diagnostic_text

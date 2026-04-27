@@ -128,7 +128,18 @@ async def test_openrouter_non_2xx_raises_safe_http_error(respx_mock) -> None:
     route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(
             401,
-            json={"error": {"message": "raw provider message with possible sensitive content"}},
+            json={
+                "error": {
+                    "message": "raw provider message with sk-or-secret",
+                    "code": "rate_limited",
+                    "metadata": {
+                        "request_body": "user prompt body",
+                        "response_body": "assistant completion body",
+                        "apiKey": "sk-or-secret",
+                    },
+                }
+            },
+            headers={"x-openrouter-request-id": "or-error-req"},
         )
     )
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
@@ -140,6 +151,35 @@ async def test_openrouter_non_2xx_raises_safe_http_error(respx_mock) -> None:
     assert exc_info.value.upstream_status_code == 401
     assert "raw provider message" not in exc_info.value.safe_message
     assert "openrouter-upstream-key" not in exc_info.value.safe_message
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.upstream_error_code == "rate_limited"
+    assert exc_info.value.diagnostic.upstream_request_id == "or-error-req"
+    diagnostic_text = str(exc_info.value.diagnostic.to_safe_dict())
+    assert "user prompt body" not in diagnostic_text
+    assert "assistant completion body" not in diagnostic_text
+    assert "sk-or-secret" not in diagnostic_text
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_non_2xx_text_body_does_not_store_raw_preview(respx_mock) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            503,
+            text="temporary outage with sk-or-secret and user prompt body",
+            headers={"x-openrouter-request-id": "or-text-req"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+
+    with pytest.raises(ProviderHTTPError) as exc_info:
+        await adapter.forward_chat_completion(_request({"model": "client-model", "messages": []}))
+
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.upstream_request_id == "or-text-req"
+    assert exc_info.value.diagnostic.sanitized_body_preview is None
+    assert "temporary outage" not in str(exc_info.value.diagnostic.to_safe_dict())
+    assert "sk-or-secret" not in str(exc_info.value.diagnostic.to_safe_dict())
     assert route.called
 
 

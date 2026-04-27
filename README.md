@@ -22,7 +22,7 @@ Implemented:
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
-- Observability foundation with request IDs, structured log redaction, basic Prometheus HTTP/provider metrics, and controlled `/metrics` exposure.
+- Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
@@ -141,6 +141,13 @@ Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Reques
 Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
 
 `GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
+
+Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
+failure ledger metadata for operator troubleshooting. Raw provider response
+bodies are not returned to clients or stored. Diagnostic metadata redacts
+provider keys, gateway keys, token hashes, Authorization headers, cookies, and
+session data, and drops prompt/completion/request/response body fields. Successful
+accounting finalization records finalized EUR cost in Prometheus metrics.
 
 ## CLI Quickstart
 
