@@ -157,7 +157,7 @@ TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/integration
 ```
 
 The OpenAI/OpenRouter E2E tests use the official `openai` Python package with `OpenAI()` reading `OPENAI_API_KEY` and `OPENAI_BASE_URL`, but upstream HTTP is mocked with RESPX. Normal tests require no real OpenAI or OpenRouter keys and make no real upstream calls.
-Streaming E2E tests also use mocked upstream SSE responses. Successful streaming finalization requires provider final usage metadata; if a stream completes without final usage, the gateway releases the reservation and records a failed/incomplete ledger event with zero actual cost.
+Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRouter. Successful streaming finalization requires provider final usage metadata; if a stream completes without final usage, the gateway releases the reservation and records a failed/incomplete ledger event with zero actual cost. Client-disconnect timing under a real ASGI server is a future hardening test.
 
 ## Security Notes
 
