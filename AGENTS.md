@@ -243,9 +243,10 @@ RUN_UPSTREAM_TESTS=1 OPENAI_UPSTREAM_API_KEY=sk-... OPENROUTER_API_KEY=sk-or-...
 Database integration tests have these allowed modes:
 
 1. `TEST_DATABASE_URL`, when the maintainer or local environment provides an existing test database.
-2. Testcontainers, when Docker is available.
+2. A safe disposable local PostgreSQL database created through the narrow postgres sudo commands, when available.
 3. A user-owned temporary PostgreSQL instance for local/Codex verification, when it can be started without destructive setup against `DATABASE_URL`.
-4. The explicit apt/sudo Codex PostgreSQL harness, only when the prompt specifically requests it and sudo works non-interactively.
+4. Testcontainers, when Docker is available and appropriate.
+5. The explicit apt/sudo Codex PostgreSQL install harness, only when the prompt specifically requests package installation and sudo works non-interactively for the required package/service commands.
 
 Unit tests must remain independent of all database integration modes.
 
@@ -1344,12 +1345,75 @@ Default integration-test strategy:
 
 - Unit tests must not require PostgreSQL, Redis, Docker, or real upstream provider keys.
 - Normal integration tests may use `TEST_DATABASE_URL` when explicitly provided.
-- Normal integration tests may use Testcontainers when Docker is available.
+- Local/Codex verification may create a safe disposable PostgreSQL database through narrow postgres sudo commands when available.
 - Local/Codex verification may use a user-owned temporary PostgreSQL instance when available.
-- If neither `TEST_DATABASE_URL`, Docker/Testcontainers, nor a user-owned temporary PostgreSQL instance is available, database integration tests must skip cleanly.
+- Normal integration tests may use Testcontainers when Docker is available and appropriate.
+- If no allowed PostgreSQL setup mode is available, database integration tests must skip cleanly.
 - Integration tests must never use DATABASE_URL for destructive setup by default.
 - Destructive test setup, migration resets, and seed scripts must target `TEST_DATABASE_URL` only.
-- Do not stop merely because `sudo -n true` fails; try the non-sudo allowed modes before reporting a PostgreSQL blocker.
+- Do not stop merely because `sudo -n true` fails; test the specific allowed postgres commands and the non-sudo allowed modes before reporting a PostgreSQL blocker.
+
+### 9.2.1 PostgreSQL-backed integration verification requirement
+
+Codex must run relevant PostgreSQL-backed integration tests before opening a PR
+when either condition is true:
+
+- the task adds or modifies PostgreSQL integration-test coverage
+- the prompt explicitly requests database verification
+
+Codex must not report PostgreSQL-backed tests as "passed" when they skipped
+because `TEST_DATABASE_URL` was missing or PostgreSQL was unavailable. If DB
+tests skip, Codex must report them as "skipped" and explain the exact reason.
+
+Skipping PostgreSQL-backed tests is acceptable only when:
+
+- the prompt did not request DB verification and the task does not add or modify
+  integration tests; or
+- Codex made explicit, documented attempts to obtain a safe `TEST_DATABASE_URL`
+  through every allowed setup method below and all methods failed.
+
+When PostgreSQL-backed verification is needed, Codex must try setup methods in
+this order:
+
+1. If `TEST_DATABASE_URL` is already set, use it.
+2. Else, if a safe disposable local PostgreSQL database can be created with the
+   narrow sudo-enabled postgres commands, create one and export
+   `TEST_DATABASE_URL`.
+3. Else, if user-owned PostgreSQL binaries are available, start a user-owned
+   temporary PostgreSQL instance and export `TEST_DATABASE_URL`.
+4. Else, if Docker/Testcontainers is available and appropriate for the tests,
+   use Testcontainers.
+5. Else, skip cleanly and report the exact blockers.
+
+The narrow sudo-enabled local PostgreSQL path is not the apt/sudo installation
+harness. It uses only explicitly allowed postgres commands. Codex must not use
+`sudo -n true` as a hard prerequisite, because sudoers may allow only specific
+commands. Prefer checking the actual commands needed, for example:
+
+```bash
+sudo -n -u postgres /usr/bin/psql -d postgres -Atc "select current_user"
+sudo -n -u postgres /usr/bin/createuser --help >/dev/null
+sudo -n -u postgres /usr/bin/createdb --help >/dev/null
+sudo -n -u postgres /usr/bin/dropdb --help >/dev/null
+```
+
+For disposable local database verification, use `TEST_DATABASE_URL` only:
+
+```bash
+sudo -n -u postgres /usr/bin/createuser ubuntu --createdb || true
+sudo -n -u postgres /usr/bin/dropdb --if-exists slaif_gateway_test_codex
+sudo -n -u postgres /usr/bin/createdb -O ubuntu slaif_gateway_test_codex
+export TEST_DATABASE_URL="postgresql+asyncpg:///slaif_gateway_test_codex?host=/var/run/postgresql"
+```
+
+After the requested tests finish, remove the disposable database:
+
+```bash
+sudo -n -u postgres /usr/bin/dropdb --if-exists slaif_gateway_test_codex
+```
+
+Codex must never use `DATABASE_URL` for destructive test setup, schema reset,
+seed data, or disposable integration testing.
 
 Integration tests should cover:
 
@@ -1362,7 +1426,7 @@ Integration tests should cover:
 - one-time secret lifecycle
 - seeded demo/test data workflows
 
-### 9.2.1 Explicit Codex container PostgreSQL test harness
+### 9.2.2 Explicit Codex container PostgreSQL test harness
 
 This is not the default test strategy.
 
@@ -1380,10 +1444,11 @@ Install PostgreSQL in the Codex container and run DB integration tests.
 If the prompt does not explicitly request this, Codex must not run apt-based  
 PostgreSQL installation.
 
-This apt/sudo harness is separate from the user-owned local PostgreSQL fallback.
+This apt/sudo harness is separate from the narrow sudo-enabled local PostgreSQL
+path and from the user-owned local PostgreSQL fallback.
 Failure of `sudo -n true` is not by itself a reason to skip PostgreSQL coverage
-when `TEST_DATABASE_URL`, Testcontainers, or an already-running local PostgreSQL
-instance is available.
+when `TEST_DATABASE_URL`, the narrow sudo-enabled postgres commands,
+Testcontainers, or an already-running local PostgreSQL instance is available.
 
 When explicitly requested, Codex may:
 
@@ -1444,7 +1509,7 @@ Safety rules for the Codex PostgreSQL harness:
     *   be generated through the same safe service path and printed once for developer use, or
     *   use fake non-usable HMAC digests clearly marked as test/demo data.
 
-### 9.2.2 Seed data script requirements
+### 9.2.3 Seed data script requirements
 
 The repository must include a deterministic seed script:
 
