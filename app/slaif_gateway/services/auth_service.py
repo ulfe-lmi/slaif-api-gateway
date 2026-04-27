@@ -121,10 +121,18 @@ class GatewayAuthService:
         self._validate_time_window(gateway_key=gateway_key, now=check_now)
 
         allowed_providers = None
+        rate_limit_metadata: dict[str, object] = {}
         if isinstance(gateway_key.metadata_json, dict):
             providers = gateway_key.metadata_json.get("allowed_providers")
             if isinstance(providers, list):
                 allowed_providers = tuple(str(item) for item in providers)
+            raw_rate_limit_metadata = gateway_key.metadata_json.get("rate_limit_policy")
+            if isinstance(raw_rate_limit_metadata, dict):
+                rate_limit_metadata = raw_rate_limit_metadata
+
+        window_seconds = rate_limit_metadata.get("window_seconds")
+        if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
+            window_seconds = None
 
         return AuthenticatedGatewayKey(
             gateway_key_id=gateway_key.id,
@@ -146,6 +154,7 @@ class GatewayAuthService:
                 "requests_per_minute": gateway_key.rate_limit_requests_per_minute,
                 "tokens_per_minute": gateway_key.rate_limit_tokens_per_minute,
                 "max_concurrent_requests": gateway_key.max_concurrent_requests,
+                "window_seconds": window_seconds,
             },
         )
 

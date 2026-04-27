@@ -18,6 +18,10 @@ from slaif_gateway.utils.secrets import EncryptedSecret, decrypt_secret, generat
 @dataclass
 class _FakeGatewayKeyRow:
     id: uuid.UUID
+    rate_limit_requests_per_minute: int | None = None
+    rate_limit_tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
+    metadata_json: dict[str, object] | None = None
 
 
 @dataclass
@@ -31,7 +35,13 @@ class _FakeGatewayKeysRepository:
 
     async def create_gateway_key_record(self, **kwargs: object) -> _FakeGatewayKeyRow:
         self.calls.append(kwargs)
-        return _FakeGatewayKeyRow(id=uuid.uuid4())
+        return _FakeGatewayKeyRow(
+            id=uuid.uuid4(),
+            rate_limit_requests_per_minute=kwargs.get("rate_limit_requests_per_minute"),
+            rate_limit_tokens_per_minute=kwargs.get("rate_limit_tokens_per_minute"),
+            max_concurrent_requests=kwargs.get("max_concurrent_requests"),
+            metadata_json=kwargs.get("metadata_json"),
+        )
 
 
 class _FakeOneTimeSecretsRepository:
@@ -82,7 +92,11 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
         request_limit_total=1_000,
         allowed_models=["gpt-4.1-mini"],
         allowed_endpoints=["/v1/chat/completions"],
-        rate_limit_policy={"requests_per_minute": 60, "tokens_per_minute": 12000},
+        rate_limit_policy={
+            "requests_per_minute": 60,
+            "tokens_per_minute": 12000,
+            "window_seconds": 30,
+        },
         note="initial creation",
     )
 
@@ -97,6 +111,14 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
     assert len(str(key_call["token_hash"])) == 64
     assert key_call["token_hash"] == hmac_sha256_token(result.plaintext_key, "h" * 48)
     assert "plaintext_key" not in key_call
+    assert key_call["rate_limit_requests_per_minute"] == 60
+    assert key_call["rate_limit_tokens_per_minute"] == 12000
+    assert key_call["metadata_json"] == {"rate_limit_policy": {"window_seconds": 30}}
+    assert result.rate_limit_policy == {
+        "requests_per_minute": 60,
+        "tokens_per_minute": 12000,
+        "window_seconds": 30,
+    }
 
     one_time_call = one_time_repo.calls[0]
     assert one_time_call["encrypted_payload"]

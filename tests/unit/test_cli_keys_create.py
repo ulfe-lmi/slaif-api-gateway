@@ -47,6 +47,7 @@ def test_keys_help_registers_commands() -> None:
         "revoke",
         "extend",
         "set-limits",
+        "set-rate-limits",
         "reset-usage",
         "rotate",
     ):

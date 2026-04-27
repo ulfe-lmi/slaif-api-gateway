@@ -105,6 +105,24 @@ export DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS=5
 
 When enabled, `/v1/chat/completions` checks Redis after request policy token estimation and before route resolution, pricing, PostgreSQL hard quota reservation, and provider forwarding. Rate-limit failures return OpenAI-shaped errors. PostgreSQL remains authoritative for durable hard quota and accounting.
 
+Global defaults apply when a key does not define an override. Operators can set per-key Redis rate-limit policy at creation or later:
+
+```bash
+slaif-gateway keys create --owner-id <owner-id> --valid-days 30 \
+  --rate-limit-requests-per-minute 60 \
+  --rate-limit-tokens-per-minute 100000 \
+  --rate-limit-concurrent-requests 3
+
+slaif-gateway keys set-rate-limits <key-id> \
+  --requests-per-minute 60 \
+  --tokens-per-minute 100000 \
+  --concurrent-requests 3
+
+slaif-gateway keys set-rate-limits <key-id> --clear-all
+```
+
+Per-key Redis limits are stored with key metadata and are operational throttles only. Clearing a per-key field lets the configured global default apply; clearing all per-key Redis limits does not change PostgreSQL hard quota limits or usage counters. Redis rate limiting is enforced only when `ENABLE_REDIS_RATE_LIMITS=true`.
+
 ## Observability
 
 Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Request-ID` is preserved; otherwise the gateway generates one and binds it to structured logs.
@@ -123,6 +141,7 @@ slaif-gateway institutions create --name "SLAIF Test Institute" --country SI
 slaif-gateway cohorts create --name "SLAIF Workshop 2026"
 slaif-gateway owners create --name Ada --surname Lovelace --email ada@example.org --institution-id <institution-id>
 slaif-gateway keys create --owner-id <owner-id> --valid-days 30
+slaif-gateway keys set-rate-limits <key-id> --requests-per-minute 60 --tokens-per-minute 100000 --concurrent-requests 3
 ```
 
 Configure local provider, route, pricing, and FX metadata:

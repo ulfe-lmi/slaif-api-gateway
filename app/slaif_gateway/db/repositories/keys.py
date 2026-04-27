@@ -44,6 +44,7 @@ class GatewayKeysRepository:
         rate_limit_requests_per_minute: int | None = None,
         rate_limit_tokens_per_minute: int | None = None,
         max_concurrent_requests: int | None = None,
+        metadata_json: dict[str, object] | None = None,
     ) -> GatewayKey:
         gateway_key = GatewayKey(
             public_key_id=public_key_id,
@@ -68,6 +69,7 @@ class GatewayKeysRepository:
             rate_limit_requests_per_minute=rate_limit_requests_per_minute,
             rate_limit_tokens_per_minute=rate_limit_tokens_per_minute,
             max_concurrent_requests=max_concurrent_requests,
+            metadata_json=metadata_json or {},
         )
         self._session.add(gateway_key)
         await self._session.flush()
@@ -149,6 +151,40 @@ class GatewayKeysRepository:
         gateway_key.cost_limit_eur = cost_limit_eur
         gateway_key.token_limit_total = token_limit_total
         gateway_key.request_limit_total = request_limit_total
+        await self._session.flush()
+        return True
+
+    async def update_gateway_key_rate_limit_policy(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        requests_per_minute: int | None = None,
+        tokens_per_minute: int | None = None,
+        max_concurrent_requests: int | None = None,
+        window_seconds: int | None = None,
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        gateway_key.rate_limit_requests_per_minute = requests_per_minute
+        gateway_key.rate_limit_tokens_per_minute = tokens_per_minute
+        gateway_key.max_concurrent_requests = max_concurrent_requests
+
+        metadata = dict(gateway_key.metadata_json or {})
+        existing_rate_policy = metadata.get("rate_limit_policy")
+        rate_policy = dict(existing_rate_policy) if isinstance(existing_rate_policy, dict) else {}
+        if window_seconds is None:
+            rate_policy.pop("window_seconds", None)
+        else:
+            rate_policy["window_seconds"] = window_seconds
+
+        if rate_policy:
+            metadata["rate_limit_policy"] = rate_policy
+        else:
+            metadata.pop("rate_limit_policy", None)
+        gateway_key.metadata_json = metadata
+
         await self._session.flush()
         return True
 

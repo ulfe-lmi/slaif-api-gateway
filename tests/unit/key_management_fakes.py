@@ -36,6 +36,7 @@ class FakeGatewayKeyRow:
     rate_limit_requests_per_minute: int | None = 60
     rate_limit_tokens_per_minute: int | None = 12_000
     max_concurrent_requests: int | None = 2
+    metadata_json: dict[str, object] = field(default_factory=dict)
     allow_all_models: bool = False
     allowed_models: list[str] = field(default_factory=lambda: ["gpt-test-mini"])
     allow_all_endpoints: bool = False
@@ -63,6 +64,7 @@ class FakeGatewayKeysRepository:
         self.created_calls: list[dict[str, object]] = []
         self.status_calls: list[dict[str, object]] = []
         self.limit_calls: list[dict[str, object]] = []
+        self.rate_limit_calls: list[dict[str, object]] = []
         self.validity_calls: list[dict[str, object]] = []
         self.reset_calls: list[dict[str, object]] = []
         self.commit_called = False
@@ -96,6 +98,7 @@ class FakeGatewayKeysRepository:
             rate_limit_requests_per_minute=kwargs.get("rate_limit_requests_per_minute"),
             rate_limit_tokens_per_minute=kwargs.get("rate_limit_tokens_per_minute"),
             max_concurrent_requests=kwargs.get("max_concurrent_requests"),
+            metadata_json=dict(kwargs.get("metadata_json") or {}),
             created_by_admin_user_id=kwargs.get("created_by_admin_user_id"),
         )
         self.rows[row.id] = row
@@ -123,6 +126,38 @@ class FakeGatewayKeysRepository:
         row.status = status
         row.revoked_at = revoked_at
         row.revoked_reason = revoked_reason
+        return True
+
+    async def update_gateway_key_rate_limit_policy(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        requests_per_minute: int | None = None,
+        tokens_per_minute: int | None = None,
+        max_concurrent_requests: int | None = None,
+        window_seconds: int | None = None,
+    ) -> bool:
+        self.rate_limit_calls.append(
+            {
+                "gateway_key_id": gateway_key_id,
+                "requests_per_minute": requests_per_minute,
+                "tokens_per_minute": tokens_per_minute,
+                "max_concurrent_requests": max_concurrent_requests,
+                "window_seconds": window_seconds,
+            }
+        )
+        row = self.rows.get(gateway_key_id)
+        if row is None:
+            return False
+        row.rate_limit_requests_per_minute = requests_per_minute
+        row.rate_limit_tokens_per_minute = tokens_per_minute
+        row.max_concurrent_requests = max_concurrent_requests
+        metadata = dict(row.metadata_json or {})
+        if window_seconds is None:
+            metadata.pop("rate_limit_policy", None)
+        else:
+            metadata["rate_limit_policy"] = {"window_seconds": window_seconds}
+        row.metadata_json = metadata
         return True
 
     async def update_gateway_key_limits(

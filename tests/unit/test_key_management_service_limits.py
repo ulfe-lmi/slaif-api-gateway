@@ -5,7 +5,11 @@ from decimal import Decimal
 
 import pytest
 
-from slaif_gateway.schemas.keys import ResetGatewayKeyUsageInput, UpdateGatewayKeyLimitsInput
+from slaif_gateway.schemas.keys import (
+    ResetGatewayKeyUsageInput,
+    UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyRateLimitsInput,
+)
 from slaif_gateway.services.key_errors import (
     InvalidGatewayKeyLimitsError,
     InvalidGatewayKeyUsageResetError,
@@ -80,6 +84,89 @@ async def test_limits_may_be_cleared_to_none() -> None:
     assert result.cost_limit_eur is None
     assert result.token_limit_total is None
     assert result.request_limit_total is None
+
+
+async def test_rate_limit_policy_can_be_updated_and_audited() -> None:
+    row = FakeGatewayKeyRow(
+        rate_limit_requests_per_minute=10,
+        rate_limit_tokens_per_minute=1000,
+        max_concurrent_requests=2,
+        metadata_json={"rate_limit_policy": {"window_seconds": 30}},
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_rate_limits(
+        UpdateGatewayKeyRateLimitsInput(
+            gateway_key_id=row.id,
+            rate_limit_policy={
+                "requests_per_minute": 60,
+                "tokens_per_minute": 100_000,
+                "max_concurrent_requests": 3,
+                "window_seconds": 60,
+            },
+            reason="operator throttle",
+        )
+    )
+
+    assert result.rate_limit_policy == {
+        "requests_per_minute": 60,
+        "tokens_per_minute": 100_000,
+        "max_concurrent_requests": 3,
+        "window_seconds": 60,
+    }
+    assert keys_repo.rate_limit_calls[0]["requests_per_minute"] == 60
+    assert keys_repo.rate_limit_calls[0]["tokens_per_minute"] == 100_000
+    assert keys_repo.rate_limit_calls[0]["max_concurrent_requests"] == 3
+    assert keys_repo.rate_limit_calls[0]["window_seconds"] == 60
+    assert audit_repo.calls[0]["action"] == "update_key_rate_limits"
+    assert audit_repo.calls[0]["old_values"]["rate_limit_policy"]["requests_per_minute"] == 10
+    assert audit_repo.calls[0]["new_values"]["rate_limit_policy"]["window_seconds"] == 60
+    assert row.cost_limit_eur == Decimal("25.000000000")
+    assert row.tokens_used_total == 100
+    assert row.tokens_reserved_total == 50
+
+
+async def test_rate_limit_policy_can_be_cleared() -> None:
+    row = FakeGatewayKeyRow(
+        rate_limit_requests_per_minute=10,
+        rate_limit_tokens_per_minute=1000,
+        max_concurrent_requests=2,
+        metadata_json={"rate_limit_policy": {"window_seconds": 30}},
+    )
+    service, _, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_rate_limits(
+        UpdateGatewayKeyRateLimitsInput(gateway_key_id=row.id, rate_limit_policy=None)
+    )
+
+    assert result.rate_limit_policy is None
+    assert row.rate_limit_requests_per_minute is None
+    assert row.rate_limit_tokens_per_minute is None
+    assert row.max_concurrent_requests is None
+    assert row.metadata_json == {}
+    assert audit_repo.calls[0]["new_values"]["rate_limit_policy"] is None
+
+
+async def test_rate_limit_policy_rejects_zero_or_negative_values() -> None:
+    row = FakeGatewayKeyRow()
+    service, _, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(InvalidGatewayKeyLimitsError):
+        await service.update_gateway_key_rate_limits(
+            UpdateGatewayKeyRateLimitsInput(
+                gateway_key_id=row.id,
+                rate_limit_policy={"requests_per_minute": 0},
+            )
+        )
+    with pytest.raises(InvalidGatewayKeyLimitsError):
+        await service.update_gateway_key_rate_limits(
+            UpdateGatewayKeyRateLimitsInput(
+                gateway_key_id=row.id,
+                rate_limit_policy={"window_seconds": -1},
+            )
+        )
+
+    assert audit_repo.calls == []
 
 
 async def test_reset_usage_resets_used_counters_but_not_reserved_by_default() -> None:
