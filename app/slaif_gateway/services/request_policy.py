@@ -14,6 +14,7 @@ from slaif_gateway.services.policy_errors import (
     InputTokenLimitExceededError,
     InvalidChatMessagesError,
     InvalidOutputTokenLimitError,
+    InvalidStreamOptionsError,
     OutputTokenLimitExceededError,
 )
 
@@ -31,6 +32,7 @@ class ChatCompletionRequestPolicy:
         requested_output_tokens, effective_output_tokens, injected_default = (
             self._resolve_output_token_limit(effective_body)
         )
+        self._force_streaming_usage_metadata(effective_body)
 
         estimated_input_tokens = self._estimate_input_tokens(messages)
         if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
@@ -76,6 +78,26 @@ class ChatCompletionRequestPolicy:
         default_limit = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
         body["max_completion_tokens"] = default_limit
         return default_limit, default_limit, True
+
+    def _force_streaming_usage_metadata(self, body: dict[str, Any]) -> None:
+        if body.get("stream") is not True:
+            return
+
+        stream_options = body.get("stream_options")
+        if stream_options is None:
+            body["stream_options"] = {"include_usage": True}
+            return
+
+        if not isinstance(stream_options, Mapping):
+            raise InvalidStreamOptionsError(
+                "The 'stream_options' field must be an object when streaming is enabled.",
+                param="stream_options",
+            )
+
+        body["stream_options"] = {
+            **dict(stream_options),
+            "include_usage": True,
+        }
 
     def _validate_output_token_value(self, value: Any, *, param: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class OpenAIModel(BaseModel):
@@ -20,6 +20,8 @@ class OpenAIModelList(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: list[dict[str, Any]]
     stream: bool | None = False

@@ -235,6 +235,64 @@ def test_openai_nonstreaming_happy_path_uses_adapter_and_finalizes(
     assert state["session"].commit_calls == 2
 
 
+def test_nonstreaming_request_preserves_openai_sdk_fields_to_upstream(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    _wire_pipeline(monkeypatch, app, provider="openai", resolved_model="gpt-4.1-mini")
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_openai",
+                "object": "chat.completion",
+                "model": "gpt-4.1-mini",
+                "choices": [],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            },
+        )
+    )
+    body = {
+        **_chat_request(),
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+        "seed": 123,
+        "user": "student-1",
+        "logprobs": True,
+        "top_logprobs": 2,
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.2,
+        "n": 1,
+        "stream_options": {"include_usage": False},
+        "reasoning_effort": "low",
+        "modalities": ["text"],
+        "parallel_tool_calls": True,
+        "metadata": {"course": "week-1"},
+        "store": False,
+        "prediction": {"type": "content", "content": "hello"},
+        "service_tier": "auto",
+    }
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(route.calls[0].request.content)
+    assert upstream_body["model"] == "gpt-4.1-mini"
+    for key, value in body.items():
+        if key == "model":
+            continue
+        assert upstream_body[key] == value
+
+
 def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) -> None:
     settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
     app = create_app(settings)

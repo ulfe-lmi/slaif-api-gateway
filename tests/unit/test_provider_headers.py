@@ -51,6 +51,17 @@ def test_secret_like_headers_are_not_forwarded_even_when_not_exact_matches() -> 
     }
 
 
+def test_provider_headers_use_explicit_accept_over_client_header() -> None:
+    headers = build_provider_headers(
+        "upstream-secret",
+        provider="openai",
+        accept="text/event-stream",
+        extra_headers={"Accept": "application/json"},
+    )
+
+    assert headers["Accept"] == "text/event-stream"
+
+
 def test_safe_response_headers_drop_sensitive_values() -> None:
     headers = safe_response_headers(
         {

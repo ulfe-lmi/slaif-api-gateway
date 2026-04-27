@@ -31,13 +31,14 @@ def build_provider_headers(
     provider: str,
     request_id: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    accept: str = "application/json",
 ) -> dict[str, str]:
     """Build safe outbound headers for an upstream provider request."""
     _ = provider
     headers: dict[str, str] = {
         "Authorization": f"Bearer {provider_api_key}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": accept,
     }
 
     if extra_headers:
@@ -49,6 +50,8 @@ def build_provider_headers(
             if canonical_name is None:
                 continue
             headers[canonical_name] = value
+
+    headers["Accept"] = accept
 
     if request_id:
         headers["X-Request-ID"] = request_id

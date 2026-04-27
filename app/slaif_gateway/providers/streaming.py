@@ -64,6 +64,21 @@ def format_openai_error_event(*, message: str, error_type: str, code: str | None
     return format_sse_data(json.dumps(payload, separators=(",", ":")))
 
 
+def with_streaming_usage_options(body: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a streaming upstream body that requests provider final usage metadata."""
+    upstream_body = dict(body)
+    upstream_body["stream"] = True
+    stream_options = upstream_body.get("stream_options")
+    if isinstance(stream_options, Mapping):
+        upstream_body["stream_options"] = {
+            **dict(stream_options),
+            "include_usage": True,
+        }
+    else:
+        upstream_body["stream_options"] = {"include_usage": True}
+    return upstream_body
+
+
 def _event_from_data_lines(data_lines: list[str]) -> ParsedSSEEvent:
     data = "\n".join(data_lines)
     json_body: Mapping[str, Any] | None = None

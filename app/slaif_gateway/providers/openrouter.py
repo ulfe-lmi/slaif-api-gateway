@@ -20,7 +20,7 @@ from slaif_gateway.providers.errors import (
     UnsupportedProviderEndpointError,
 )
 from slaif_gateway.providers.headers import build_provider_headers, safe_response_headers
-from slaif_gateway.providers.streaming import parse_sse_lines
+from slaif_gateway.providers.streaming import parse_sse_lines, with_streaming_usage_options
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
@@ -66,6 +66,7 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             provider=self.provider_name,
             request_id=request.request_id,
             extra_headers=request.extra_headers,
+            accept="application/json",
         )
         response = await self._post_json(_CHAT_COMPLETIONS_PATH, json=body, headers=headers)
         return self._provider_response(request, response)
@@ -81,14 +82,14 @@ class OpenRouterProviderAdapter(ProviderAdapter):
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
-        body = dict(request.body)
+        body = with_streaming_usage_options(request.body)
         body["model"] = request.upstream_model
-        body["stream"] = True
         headers = build_provider_headers(
             provider_api_key,
             provider=self.provider_name,
             request_id=request.request_id,
             extra_headers=request.extra_headers,
+            accept="text/event-stream",
         )
 
         async for chunk in self._stream_sse(_CHAT_COMPLETIONS_PATH, json=body, headers=headers):

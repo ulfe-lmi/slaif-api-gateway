@@ -25,7 +25,12 @@ def _request(body: dict[str, object] | None = None) -> ProviderRequest:
 
 
 def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
-    original_body = {"model": "client-model", "stream": True, "messages": []}
+    original_body = {
+        "model": "client-model",
+        "stream": True,
+        "messages": [],
+        "stream_options": {"include_usage": False, "other": "preserved"},
+    }
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
     sse = (
         'data: {"id":"chunk-1","object":"chat.completion.chunk","choices":[]}\n\n'
@@ -56,10 +61,13 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     sent = upstream.calls[0].request
     assert sent.headers["authorization"] == "Bearer openai-upstream-key"
     assert sent.headers["authorization"] != "Bearer gateway-key"
+    assert sent.headers["accept"] == "text/event-stream"
     sent_body = json.loads(sent.content)
     assert sent_body["stream"] is True
+    assert sent_body["stream_options"] == {"include_usage": True, "other": "preserved"}
     assert sent_body["model"] == "gpt-test-mini"
     assert original_body["model"] == "client-model"
+    assert original_body["stream_options"]["include_usage"] is False
 
 
 def test_openai_streaming_missing_key_is_safe() -> None:
