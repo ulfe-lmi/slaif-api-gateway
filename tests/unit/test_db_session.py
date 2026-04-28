@@ -37,6 +37,36 @@ def test_get_sessionmaker_constructs_without_connecting(
     assert sessionmaker.kw["bind"].url.drivername == "postgresql+asyncpg"
 
 
+def test_get_sessionmaker_uses_explicit_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/slaif")
+    engine = object()
+    captured: dict[str, object] = {}
+
+    def fake_create_engine_from_settings(received_settings):
+        captured["settings"] = received_settings
+        return engine
+
+    def fake_create_sessionmaker_from_engine(received_engine):
+        captured["engine"] = received_engine
+        return ("sessionmaker", received_engine)
+
+    monkeypatch.setattr(
+        db_session_module,
+        "create_engine_from_settings",
+        fake_create_engine_from_settings,
+    )
+    monkeypatch.setattr(
+        db_session_module,
+        "create_sessionmaker_from_engine",
+        fake_create_sessionmaker_from_engine,
+    )
+
+    sessionmaker = db_session_module.get_sessionmaker(settings)
+
+    assert sessionmaker == ("sessionmaker", engine)
+    assert captured == {"settings": settings, "engine": engine}
+
+
 def test_create_engine_from_settings_passes_pool_and_timeout_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
