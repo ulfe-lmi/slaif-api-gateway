@@ -7,6 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+import anyio
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
@@ -347,23 +348,31 @@ def _streaming_chat_completion_response(
                     streaming=True,
                 )
                 provider_status = "incomplete"
-                if done_event is not None:
-                    yield done_event
+                yield format_openai_error_event(
+                    message=(
+                        "Provider stream completed without final usage metadata; "
+                        "accounting could not finalize successfully."
+                    ),
+                    error_type="provider_error",
+                    code="stream_usage_missing",
+                    request_id=request_id,
+                )
         except asyncio.CancelledError:
-            await _release_streaming_reservation_after_error(
-                reservation=reservation,
-                authenticated_key=authenticated_key,
-                route=route,
-                policy_result=policy_result,
-                cost_estimate=cost_estimate,
-                request_id=request_id,
-                provider_error=ProviderError(
-                    "Client disconnected during streaming response.",
-                    provider=route.provider,
-                    error_code="client_disconnected",
-                ),
-                request=request,
-            )
+            with anyio.CancelScope(shield=True):
+                await _release_streaming_reservation_after_error(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=ProviderError(
+                        "Client disconnected during streaming response.",
+                        provider=route.provider,
+                        error_code="client_disconnected",
+                    ),
+                    request=request,
+                )
             raise
         except ProviderError as exc:
             await _release_streaming_reservation_after_error(
@@ -396,20 +405,21 @@ def _streaming_chat_completion_response(
                 code=exc.error_code,
             )
         finally:
-            heartbeat_stop.set()
-            if heartbeat_task is not None:
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
-            record_provider_call_result(
-                provider=route.provider,
-                endpoint="chat.completions",
-                status=provider_status,
-                duration_seconds=time.perf_counter() - start,
-            )
+            with anyio.CancelScope(shield=True):
+                heartbeat_stop.set()
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+                await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+                record_provider_call_result(
+                    provider=route.provider,
+                    endpoint="chat.completions",
+                    status=provider_status,
+                    duration_seconds=time.perf_counter() - start,
+                )
 
     return StreamingResponse(
         _events(),
