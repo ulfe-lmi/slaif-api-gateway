@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import OneTimeSecret
@@ -45,6 +45,11 @@ class OneTimeSecretsRepository:
 
     async def get_one_time_secret_by_id(self, one_time_secret_id: uuid.UUID) -> OneTimeSecret | None:
         return await self._session.get(OneTimeSecret, one_time_secret_id)
+
+    async def get_one_time_secret_for_update(self, one_time_secret_id: uuid.UUID) -> OneTimeSecret | None:
+        statement = select(OneTimeSecret).where(OneTimeSecret.id == one_time_secret_id).with_for_update()
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
 
     async def mark_one_time_secret_consumed(
         self,

@@ -16,6 +16,8 @@ def _clear_env(monkeypatch) -> None:
         "ADMIN_SESSION_SECRET",
         "ONE_TIME_SECRET_ENCRYPTION_KEY",
         "REDIS_URL",
+        "CELERY_BROKER_URL",
+        "CELERY_RESULT_BACKEND",
         "ENABLE_REDIS_RATE_LIMITS",
         "REDIS_CONNECT_TIMEOUT_SECONDS",
         "REDIS_SOCKET_TIMEOUT_SECONDS",
@@ -32,6 +34,16 @@ def _clear_env(monkeypatch) -> None:
         "HARD_MAX_OUTPUT_TOKENS",
         "HARD_MAX_INPUT_TOKENS",
         "ENABLE_METRICS",
+        "ENABLE_EMAIL_DELIVERY",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_USERNAME",
+        "SMTP_PASSWORD",
+        "SMTP_FROM",
+        "SMTP_USE_TLS",
+        "SMTP_STARTTLS",
+        "SMTP_TIMEOUT_SECONDS",
+        "EMAIL_KEY_SECRET_MAX_AGE_SECONDS",
         "METRICS_REQUIRE_AUTH",
         "METRICS_ALLOWED_IPS",
         "REQUEST_ID_HEADER",
@@ -80,6 +92,9 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.STRUCTURED_LOGS is True
     assert settings.ENABLE_REDIS_RATE_LIMITS is False
     assert settings.REDIS_URL is None
+    assert settings.CELERY_BROKER_URL is None
+    assert settings.CELERY_RESULT_BACKEND is None
+    assert settings.get_celery_broker_url() is None
     assert settings.REDIS_CONNECT_TIMEOUT_SECONDS == 2
     assert settings.REDIS_SOCKET_TIMEOUT_SECONDS == 2
     assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE is None
@@ -89,6 +104,14 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS == 30
     assert settings.RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS == 30
     assert settings.rate_limit_fail_closed() is False
+    assert settings.ENABLE_EMAIL_DELIVERY is False
+    assert settings.SMTP_HOST is None
+    assert settings.SMTP_PORT == 1025
+    assert settings.SMTP_FROM is None
+    assert settings.SMTP_USE_TLS is False
+    assert settings.SMTP_STARTTLS is False
+    assert settings.SMTP_TIMEOUT_SECONDS == 10
+    assert settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS == 86400
 
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
@@ -166,6 +189,98 @@ def test_redis_rate_limit_settings_load_when_enabled(monkeypatch) -> None:
     assert settings.RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS == 15
     assert settings.RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS == 45
     assert settings.rate_limit_fail_closed() is True
+
+
+def test_celery_broker_defaults_to_redis_url(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/3")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.get_celery_broker_url() == "redis://localhost:6379/3"
+
+
+def test_celery_broker_can_be_overridden(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/3")
+    monkeypatch.setenv("CELERY_BROKER_URL", "redis://localhost:6379/4")
+    monkeypatch.setenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/5")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.get_celery_broker_url() == "redis://localhost:6379/4"
+    assert settings.CELERY_RESULT_BACKEND == "redis://localhost:6379/5"
+
+
+def test_email_delivery_requires_smtp_host_and_from_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_EMAIL_DELIVERY", "true")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    assert "SMTP_HOST is required" in str(exc.value)
+
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_EMAIL_DELIVERY", "true")
+    monkeypatch.setenv("SMTP_HOST", "localhost")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    assert "SMTP_FROM is required" in str(exc.value)
+
+
+def test_email_settings_load_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_EMAIL_DELIVERY", "true")
+    monkeypatch.setenv("SMTP_HOST", "localhost")
+    monkeypatch.setenv("SMTP_PORT", "1026")
+    monkeypatch.setenv("SMTP_USERNAME", "mailer")
+    monkeypatch.setenv("SMTP_PASSWORD", "smtp-secret")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.org")
+    monkeypatch.setenv("SMTP_STARTTLS", "true")
+    monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("EMAIL_KEY_SECRET_MAX_AGE_SECONDS", "3600")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.ENABLE_EMAIL_DELIVERY is True
+    assert settings.SMTP_HOST == "localhost"
+    assert settings.SMTP_PORT == 1026
+    assert settings.SMTP_USERNAME == "mailer"
+    assert settings.SMTP_PASSWORD == "smtp-secret"
+    assert settings.SMTP_FROM == "noreply@example.org"
+    assert settings.SMTP_STARTTLS is True
+    assert settings.SMTP_TIMEOUT_SECONDS == 3.5
+    assert settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS == 3600
+
+
+def test_email_settings_validate_positive_numbers(monkeypatch) -> None:
+    invalid_cases = (
+        ("SMTP_PORT", "0", "SMTP_PORT must be a positive integer"),
+        ("SMTP_TIMEOUT_SECONDS", "0", "SMTP_TIMEOUT_SECONDS must be a positive number"),
+        (
+            "EMAIL_KEY_SECRET_MAX_AGE_SECONDS",
+            "0",
+            "EMAIL_KEY_SECRET_MAX_AGE_SECONDS must be a positive integer",
+        ),
+    )
+
+    for name, value, message in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError) as exc:
+            get_settings()
+
+        assert message in str(exc.value)
 
 
 def test_redis_rate_limit_heartbeat_must_be_less_than_ttl(monkeypatch) -> None:

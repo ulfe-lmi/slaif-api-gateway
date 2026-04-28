@@ -6,6 +6,7 @@ from slaif_gateway import __version__
 from slaif_gateway.cli.admin import app as admin_app
 from slaif_gateway.cli.cohorts import app as cohorts_app
 from slaif_gateway.cli.db import app as db_app
+from slaif_gateway.cli.email import app as email_app
 from slaif_gateway.cli.fx import app as fx_app
 from slaif_gateway.cli.institutions import app as institutions_app
 from slaif_gateway.cli.keys import app as keys_app
@@ -22,6 +23,7 @@ app.add_typer(institutions_app, name="institutions")
 app.add_typer(cohorts_app, name="cohorts")
 app.add_typer(owners_app, name="owners")
 app.add_typer(db_app, name="db")
+app.add_typer(email_app, name="email")
 app.add_typer(keys_app, name="keys")
 app.add_typer(providers_app, name="providers")
 app.add_typer(routes_app, name="routes")

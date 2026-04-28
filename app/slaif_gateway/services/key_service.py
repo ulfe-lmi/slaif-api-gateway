@@ -112,7 +112,9 @@ class KeyService:
             plaintext=one_time_plaintext,
             master_key=self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
         )
-        expires_at = datetime.now(UTC) + timedelta(hours=24)
+        expires_at = datetime.now(UTC) + timedelta(
+            seconds=self._settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS
+        )
         one_time_secret = await self._one_time_secrets_repository.create_one_time_secret(
             purpose="gateway_key_email",
             encrypted_payload=encrypted.ciphertext,
@@ -479,7 +481,7 @@ class KeyService:
             plaintext=one_time_plaintext,
             master_key=self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
         )
-        expires_at = self._now() + timedelta(hours=24)
+        expires_at = self._now() + timedelta(seconds=self._settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS)
         one_time_secret = await self._one_time_secrets_repository.create_one_time_secret(
             purpose="gateway_key_rotation_email",
             encrypted_payload=encrypted.ciphertext,
