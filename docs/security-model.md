@@ -124,9 +124,14 @@ state, quotas, counters, allowed policy summaries, and rate-limit policy.
 Owner, institution, and cohort pages display safe record metadata and key count
 summaries. Catalog pages display safe local provider, route, pricing, and FX
 metadata. Provider config pages may display `api_key_env_var` names, but never
-provider secret values. These pages do not display plaintext gateway keys, token
-hashes, encrypted one-time-secret payloads, nonces, provider key values,
-password hashes, admin session tokens, or prompt/completion content.
+provider secret values. Read-only usage, audit, and email delivery pages display
+safe activity metadata only. Usage pages do not display prompts, completions, or
+raw request/response bodies. Email delivery pages do not display email bodies
+because key-delivery email bodies may contain plaintext gateway keys. Audit
+metadata is sanitized/redacted before display. These pages do not display
+plaintext gateway keys, token hashes, encrypted one-time-secret payloads,
+nonces, provider key values, password hashes, admin session tokens, or
+prompt/completion content.
 
 Admin passwords are verified with Argon2id password hashes. Successful login
 creates a server-side `admin_sessions` row. PostgreSQL stores HMAC-hashed
@@ -141,8 +146,8 @@ clears the browser cookie.
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. The read-only key, owner, institution, cohort,
-provider, route, pricing, and FX pages use authenticated GET routes and do not
-provide mutation forms.
+provider, route, pricing, FX, usage, audit, and email delivery pages use
+authenticated GET routes and do not provide mutation forms.
 
 ## Current Limitations
 

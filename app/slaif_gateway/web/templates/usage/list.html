@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Usage Ledger{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="usage-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Activity</p>
+      <h1 id="usage-heading">Usage Ledger</h1>
+      <p class="muted">Read-only accounting metadata. Prompts, completions, and raw request or response bodies are not displayed.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/usage">
+    <label>
+      Provider
+      <input name="provider" value="{{ filters.provider }}" autocomplete="off">
+    </label>
+    <label>
+      Model
+      <input name="model" value="{{ filters.model }}" autocomplete="off">
+    </label>
+    <label>
+      Endpoint
+      <input name="endpoint" value="{{ filters.endpoint }}" autocomplete="off">
+    </label>
+    <label>
+      Status
+      <input name="status" value="{{ filters.status }}" autocomplete="off">
+    </label>
+    <label>
+      Request ID
+      <input name="request_id" value="{{ filters.request_id }}" autocomplete="off">
+    </label>
+    <label>
+      Streaming
+      <select name="streaming">
+        <option value="" {% if filters.streaming == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.streaming == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.streaming == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Request</th>
+          <th>Key / Owner</th>
+          <th>Provider / Model</th>
+          <th>Status</th>
+          <th>Tokens</th>
+          <th>Cost</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in usage_rows %}
+        <tr>
+          <td>
+            <a href="/admin/usage/{{ row.id }}">{{ row.request_id }}</a>
+            <div class="muted small">{{ row.endpoint }}</div>
+          </td>
+          <td>
+            <div>{{ row.key_public_id or row.gateway_key_id }}</div>
+            <div class="muted small">{{ row.owner_display_name or "No owner snapshot" }}</div>
+          </td>
+          <td>
+            <div>{{ row.provider }}</div>
+            <div class="muted small">{{ row.resolved_model or row.requested_model or "unknown" }}</div>
+          </td>
+          <td>
+            <span class="status-pill status-{{ 'active' if row.success else 'revoked' if row.success is sameas false else 'suspended' }}">{{ row.accounting_status }}</span>
+            <div class="muted small">HTTP {{ row.http_status or "n/a" }}{% if row.streaming %} / streaming{% endif %}</div>
+          </td>
+          <td>{{ row.total_tokens }} total</td>
+          <td>{{ row.actual_cost_eur or row.estimated_cost_eur or "n/a" }} EUR</td>
+          <td>{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="empty-state">No usage rows found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

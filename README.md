@@ -32,13 +32,13 @@ Implemented:
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
-- Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, read-only key list/detail pages, read-only owner/institution/cohort pages, and read-only provider/route/pricing/FX pages, secure cookie settings, server-side session rows, and CSRF-protected forms.
+- Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, read-only key list/detail pages, read-only owner/institution/cohort pages, read-only provider/route/pricing/FX pages, and read-only usage/audit/email delivery pages, secure cookie settings, server-side session rows, and CSRF-protected forms.
 - Explicit CLI-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, and Celery task payloads that carry IDs only.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
-- State-changing admin dashboard management pages for keys, owners, institutions, cohorts, pricing, routing, providers, usage, and email delivery.
+- State-changing admin dashboard management pages for keys, owners, institutions, cohorts, pricing, routing, providers, usage, audit, and email delivery.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full deployment docs.
 
@@ -175,7 +175,7 @@ When `APP_ENV=production`, startup logs warn if metrics are explicitly made publ
 
 ## Admin Web Foundation
 
-The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/login`, `GET /admin`, `POST /admin/logout`, read-only key pages under `/admin/keys`, read-only owner/institution/cohort pages, and read-only provider/route/pricing/FX pages. Key dashboard pages show safe metadata such as public key ID, key hint, owner, status, validity, quota counters, allowed model/endpoint/provider summaries, and rate-limit policy. Owner, institution, and cohort pages show safe record metadata plus key count summaries. Provider, route, pricing, and FX pages show safe local catalog metadata only. Provider config pages may show `api_key_env_var` names because those are configuration references, but provider key values are never displayed. Plaintext gateway keys are never shown after creation/rotation, and token hashes, one-time secret material, provider key values, password hashes, session tokens, and prompt/completion content are not rendered.
+The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/login`, `GET /admin`, `POST /admin/logout`, read-only key pages under `/admin/keys`, read-only owner/institution/cohort pages, read-only provider/route/pricing/FX pages, and read-only activity pages under `/admin/usage`, `/admin/audit`, and `/admin/email-deliveries`. Key dashboard pages show safe metadata such as public key ID, key hint, owner, status, validity, quota counters, allowed model/endpoint/provider summaries, and rate-limit policy. Owner, institution, and cohort pages show safe record metadata plus key count summaries. Provider, route, pricing, and FX pages show safe local catalog metadata only. Usage, audit, and email delivery pages show safe local metadata only; they do not render prompt/completion content, raw request/response bodies, email bodies, plaintext key material, token hashes, encrypted one-time-secret payloads, nonces, provider key values, password hashes, or session tokens. Provider config pages may show `api_key_env_var` names because those are configuration references, but provider key values are never displayed. Plaintext gateway keys are never shown after creation/rotation.
 
 State-changing dashboard actions such as create, edit, delete, key rotate, revoke, suspend, activate, limit updates, and email delivery are not implemented yet.
 
@@ -301,7 +301,7 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes state-changing admin dashboard management pages, usage/audit/email delivery dashboard pages, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes state-changing admin dashboard management pages, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 

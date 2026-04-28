@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Email Delivery Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="email-delivery-detail-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Email Delivery</p>
+      <h1 id="email-delivery-detail-heading">Email Delivery Detail</h1>
+      <p class="muted">Read-only metadata. The email body is intentionally unavailable here because it may contain a one-time key.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/email-deliveries">Email deliveries</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="detail-panel">
+      <h2>Delivery</h2>
+      <dl>
+        <dt>ID</dt><dd>{{ email_delivery.id }}</dd>
+        <dt>Status</dt><dd>{{ email_delivery.status }}</dd>
+        <dt>Recipient</dt><dd>{{ email_delivery.to_email }}</dd>
+        <dt>Subject</dt><dd>{{ email_delivery.subject }}</dd>
+        <dt>Template</dt><dd>{{ email_delivery.template_name }}</dd>
+        <dt>Provider message ID</dt><dd>{{ email_delivery.provider_message_id or "n/a" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Related Records</h2>
+      <dl>
+        <dt>Owner</dt><dd>{{ email_delivery.owner_email or email_delivery.owner_id or "n/a" }}</dd>
+        <dt>Gateway key</dt><dd>{{ email_delivery.public_key_id or email_delivery.gateway_key_id or "n/a" }}</dd>
+        <dt>One-time secret</dt><dd>{{ email_delivery.one_time_secret_id or "n/a" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Timing</h2>
+      <dl>
+        <dt>Created</dt><dd>{{ email_delivery.created_at }}</dd>
+        <dt>Sent</dt><dd>{{ email_delivery.sent_at or "n/a" }}</dd>
+        <dt>Failed</dt><dd>{{ email_delivery.failed_at or "n/a" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Failure</h2>
+      <dl>
+        <dt>Reason</dt><dd>{{ email_delivery.failure_reason or "n/a" }}</dd>
+      </dl>
+    </section>
+  </div>
+</section>
+{% endblock %}

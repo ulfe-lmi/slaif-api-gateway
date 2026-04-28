@@ -150,14 +150,16 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, read-only key list/detail pages under `/admin/keys`,
 read-only owner, institution, and cohort list/detail pages, and read-only
-provider, route, pricing, and FX list/detail pages. The key pages show safe
-metadata only: public key ID, prefix, hint, owner, status, validity, quota
-counters, policy summaries, and rate-limit policy. Owner, institution, and
-cohort pages show safe record metadata and key count summaries. Catalog pages
-show local provider, route, pricing, and FX metadata. Provider pages may show
-`api_key_env_var` names, but never provider key values. They do not show
-plaintext gateway keys, token hashes, one-time-secret material, provider key
-values, password hashes, session tokens, or prompt/completion content.
+provider, route, pricing, FX, usage, audit, and email delivery list/detail
+pages. The key pages show safe metadata only: public key ID, prefix, hint,
+owner, status, validity, quota counters, policy summaries, and rate-limit
+policy. Owner, institution, and cohort pages show safe record metadata and key
+count summaries. Catalog pages show local provider, route, pricing, and FX
+metadata. Provider pages may show `api_key_env_var` names, but never provider
+key values. Usage, audit, and email delivery pages show safe local metadata
+only; they do not show prompts, completions, raw request/response bodies, email
+bodies, plaintext key material, token hashes, one-time-secret material, provider
+key values, password hashes, or session tokens.
 
 State-changing key, owner, institution, cohort, pricing, routing, provider,
 usage, and email delivery dashboard workflows are not implemented yet. Admin

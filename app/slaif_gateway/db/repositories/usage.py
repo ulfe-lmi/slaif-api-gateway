@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import Select, or_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import UsageLedger
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
@@ -371,6 +372,51 @@ class UsageLedgerRepository:
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_usage_for_admin(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        endpoint: str | None = None,
+        status: str | None = None,
+        gateway_key_id: uuid.UUID | None = None,
+        owner_id: uuid.UUID | None = None,
+        institution_id: uuid.UUID | None = None,
+        cohort_id: uuid.UUID | None = None,
+        request_id: str | None = None,
+        streaming: bool | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[UsageLedger]:
+        """Return usage rows with safe dashboard relationships loaded."""
+        statement = _usage_admin_statement()
+        statement = _apply_usage_admin_filters(
+            statement,
+            provider=provider,
+            model=model,
+            endpoint=endpoint,
+            status=status,
+            gateway_key_id=gateway_key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+            request_id=request_id,
+            streaming=streaming,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        statement = statement.order_by(UsageLedger.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_usage_for_admin_detail(self, usage_ledger_id: uuid.UUID) -> UsageLedger | None:
+        """Return one usage row with safe dashboard relationships loaded."""
+        statement = _usage_admin_statement().where(UsageLedger.id == usage_ledger_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def summarize_usage_for_key(self, gateway_key_id: uuid.UUID) -> dict[str, int | Decimal]:
         statement = select(
             func.coalesce(func.sum(UsageLedger.total_tokens), 0).label("total_tokens"),
@@ -399,3 +445,61 @@ def _provider_completed_recovery_statement() -> Select[tuple[UsageLedger]]:
         UsageLedger.response_metadata["recovery_state"].as_string()
         == "provider_completed_finalization_failed",
     )
+
+
+def _usage_admin_statement() -> Select[tuple[UsageLedger]]:
+    return select(UsageLedger).options(
+        selectinload(UsageLedger.gateway_key),
+        selectinload(UsageLedger.owner),
+        selectinload(UsageLedger.institution),
+        selectinload(UsageLedger.cohort),
+    )
+
+
+def _apply_usage_admin_filters(
+    statement: Select[tuple[UsageLedger]],
+    *,
+    provider: str | None,
+    model: str | None,
+    endpoint: str | None,
+    status: str | None,
+    gateway_key_id: uuid.UUID | None,
+    owner_id: uuid.UUID | None,
+    institution_id: uuid.UUID | None,
+    cohort_id: uuid.UUID | None,
+    request_id: str | None,
+    streaming: bool | None,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> Select[tuple[UsageLedger]]:
+    if provider is not None:
+        statement = statement.where(func.lower(UsageLedger.provider).like(f"%{provider.lower()}%"))
+    if model is not None:
+        normalized_model = f"%{model.lower()}%"
+        statement = statement.where(
+            or_(
+                func.lower(UsageLedger.requested_model).like(normalized_model),
+                func.lower(UsageLedger.resolved_model).like(normalized_model),
+            )
+        )
+    if endpoint is not None:
+        statement = statement.where(func.lower(UsageLedger.endpoint).like(f"%{endpoint.lower()}%"))
+    if status is not None:
+        statement = statement.where(UsageLedger.accounting_status == status)
+    if gateway_key_id is not None:
+        statement = statement.where(UsageLedger.gateway_key_id == gateway_key_id)
+    if owner_id is not None:
+        statement = statement.where(UsageLedger.owner_id == owner_id)
+    if institution_id is not None:
+        statement = statement.where(UsageLedger.institution_id == institution_id)
+    if cohort_id is not None:
+        statement = statement.where(UsageLedger.cohort_id == cohort_id)
+    if request_id is not None:
+        statement = statement.where(func.lower(UsageLedger.request_id).like(f"%{request_id.lower()}%"))
+    if streaming is not None:
+        statement = statement.where(UsageLedger.streaming.is_(streaming))
+    if start_at is not None:
+        statement = statement.where(UsageLedger.created_at >= start_at)
+    if end_at is not None:
+        statement = statement.where(UsageLedger.created_at <= end_at)
+    return statement
