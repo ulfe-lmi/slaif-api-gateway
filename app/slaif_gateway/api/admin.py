@@ -6,7 +6,7 @@ import ipaddress
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode
@@ -47,6 +47,7 @@ from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
+    CreateGatewayKeyInput,
     RevokeGatewayKeyInput,
     ResetGatewayKeyUsageInput,
     RotateGatewayKeyInput,
@@ -59,6 +60,7 @@ router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
 
 _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
+    "key_created": ("success", "Gateway key created."),
     "key_suspended": ("success", "Gateway key suspended."),
     "key_activated": ("success", "Gateway key activated."),
     "key_revoked": ("success", "Gateway key revoked permanently."),
@@ -84,6 +86,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "gateway_key_already_active": ("error", "Gateway key is already active."),
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
     "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
+    "gateway_key_create_failed": ("error", "Gateway key creation failed."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -280,6 +283,152 @@ async def list_admin_keys(
             },
         },
     )
+
+
+@router.get("/keys/create", response_class=HTMLResponse)
+async def create_admin_key_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    options = await _load_key_create_form_options(request)
+    return _render_key_create_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        options=options,
+        form=_default_key_create_form(),
+    )
+
+
+@router.post("/keys/create", response_class=HTMLResponse)
+async def create_admin_key(
+    request: Request,
+    csrf_token: str = Form(""),
+    owner_id: str = Form(""),
+    cohort_id: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    valid_days: str = Form(""),
+    cost_limit_eur: str = Form(""),
+    token_limit_total: str = Form(""),
+    request_limit_total: str = Form(""),
+    allowed_models: str = Form(""),
+    allowed_endpoints: str = Form(""),
+    rate_limit_requests_per_minute: str = Form(""),
+    rate_limit_tokens_per_minute: str = Form(""),
+    rate_limit_concurrent_requests: str = Form(""),
+    rate_limit_window_seconds: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = {
+        "owner_id": owner_id,
+        "cohort_id": cohort_id,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "valid_days": valid_days,
+        "cost_limit_eur": cost_limit_eur,
+        "token_limit_total": token_limit_total,
+        "request_limit_total": request_limit_total,
+        "allowed_models": allowed_models,
+        "allowed_endpoints": allowed_endpoints,
+        "rate_limit_requests_per_minute": rate_limit_requests_per_minute,
+        "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
+        "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
+        "rate_limit_window_seconds": rate_limit_window_seconds,
+        "reason": reason,
+    }
+    options = await _load_key_create_form_options(request)
+
+    try:
+        parsed_input = _parse_key_create_form(
+            form,
+            actor_admin_id=action_context.admin_user.id,
+        )
+    except ValueError as exc:
+        return _render_key_create_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            options=options,
+            form=form,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_key_creation_runtime_scope(request) as (owners_repository, cohorts_repository, service):
+            owner = await owners_repository.get_owner_by_id(parsed_input.owner_id)
+            if owner is None:
+                return _render_key_create_form(
+                    request,
+                    admin=action_context.admin_user,
+                    csrf_token=csrf_token,
+                    options=options,
+                    form=form,
+                    error="Select an existing owner before creating a key.",
+                    status_code=400,
+                )
+            cohort = None
+            if parsed_input.cohort_id is not None:
+                cohort = await cohorts_repository.get_cohort_by_id(parsed_input.cohort_id)
+                if cohort is None:
+                    return _render_key_create_form(
+                        request,
+                        admin=action_context.admin_user,
+                        csrf_token=csrf_token,
+                        options=options,
+                        form=form,
+                        error="Select an existing cohort or leave cohort blank.",
+                        status_code=400,
+                    )
+            created = await service.create_gateway_key(parsed_input)
+    except (KeyManagementError, ValueError):
+        return _render_key_create_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            options=options,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
+            status_code=400,
+        )
+
+    response = templates.TemplateResponse(
+        request,
+        "keys/create_result.html",
+        {
+            "admin": action_context.admin_user,
+            "created": created,
+            "owner": owner,
+            "cohort": cohort,
+            "limits": {
+                "cost_limit_eur": parsed_input.cost_limit_eur,
+                "token_limit_total": parsed_input.token_limit_total,
+                "request_limit_total": parsed_input.request_limit_total,
+            },
+            "policy": {
+                "allowed_models": parsed_input.allowed_models,
+                "allowed_endpoints": parsed_input.allowed_endpoints,
+                "rate_limit_policy": parsed_input.rate_limit_policy,
+            },
+        },
+    )
+    _set_no_store_headers(response)
+    return response
 
 
 @router.get("/keys/{gateway_key_id}", response_class=HTMLResponse)
@@ -1634,6 +1783,25 @@ async def _admin_key_management_runtime_scope(
 
 
 @asynccontextmanager
+async def _admin_key_creation_runtime_scope(
+    request: Request,
+) -> AsyncIterator[tuple[OwnersRepository, CohortsRepository, KeyService]]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield (
+                OwnersRepository(session),
+                CohortsRepository(session),
+                KeyService(
+                    settings=_settings(request),
+                    gateway_keys_repository=GatewayKeysRepository(session),
+                    one_time_secrets_repository=OneTimeSecretsRepository(session),
+                    audit_repository=AuditRepository(session),
+                ),
+            )
+
+
+@asynccontextmanager
 async def _admin_records_dashboard_service_scope(request: Request) -> AsyncIterator[AdminRecordsDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -1745,6 +1913,168 @@ def _redirect_to_admin_key(gateway_key_id: uuid.UUID, *, message: str) -> Redire
 def _set_no_store_headers(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
+
+
+async def _load_key_create_form_options(request: Request) -> dict[str, object]:
+    async with _admin_records_dashboard_service_scope(request) as service:
+        owners = await service.list_owners(limit=200)
+        cohorts = await service.list_cohorts(limit=200)
+    return {"owners": owners, "cohorts": cohorts}
+
+
+def _render_key_create_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    options: dict[str, object],
+    form: dict[str, str],
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "keys/create.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "owners": options["owners"],
+            "cohorts": options["cohorts"],
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _default_key_create_form() -> dict[str, str]:
+    return {
+        "owner_id": "",
+        "cohort_id": "",
+        "valid_from": "",
+        "valid_until": "",
+        "valid_days": "",
+        "cost_limit_eur": "",
+        "token_limit_total": "",
+        "request_limit_total": "",
+        "allowed_models": "",
+        "allowed_endpoints": "",
+        "rate_limit_requests_per_minute": "",
+        "rate_limit_tokens_per_minute": "",
+        "rate_limit_concurrent_requests": "",
+        "rate_limit_window_seconds": "",
+        "reason": "",
+    }
+
+
+def _parse_key_create_form(
+    form: dict[str, str],
+    *,
+    actor_admin_id: uuid.UUID,
+) -> CreateGatewayKeyInput:
+    owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
+    cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    cleaned_reason = _clean_admin_reason(form.get("reason"))
+    if cleaned_reason is None:
+        raise ValueError("Enter an audit reason before creating a key.")
+
+    try:
+        valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
+        valid_until = _parse_create_valid_until(
+            valid_from=valid_from,
+            valid_until=form.get("valid_until"),
+            valid_days=form.get("valid_days"),
+        )
+    except ValueError as exc:
+        raise ValueError("Enter a valid key validity window.") from exc
+    if valid_until <= valid_from:
+        raise ValueError("Enter a valid key validity window.")
+
+    try:
+        _, cost_limit_eur = _parse_optional_admin_decimal(form.get("cost_limit_eur"))
+        _, token_limit_total = _parse_optional_admin_int(form.get("token_limit_total"))
+        _, request_limit_total = _parse_optional_admin_int(form.get("request_limit_total"))
+        rate_limit_policy = _parse_admin_rate_limit_policy(form)
+    except ValueError as exc:
+        raise ValueError("Enter valid positive quota and rate-limit values.") from exc
+
+    return CreateGatewayKeyInput(
+        owner_id=owner_id,
+        cohort_id=cohort_id,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        created_by_admin_id=actor_admin_id,
+        cost_limit_eur=cost_limit_eur,
+        token_limit_total=token_limit_total,
+        request_limit_total=request_limit_total,
+        allowed_models=_parse_admin_text_list(form.get("allowed_models")),
+        allowed_endpoints=_parse_admin_text_list(form.get("allowed_endpoints")),
+        rate_limit_policy=rate_limit_policy,
+        note=cleaned_reason,
+    )
+
+
+def _parse_create_valid_until(
+    *,
+    valid_from: datetime,
+    valid_until: str | None,
+    valid_days: str | None,
+) -> datetime:
+    has_valid_until = bool((valid_until or "").strip())
+    has_valid_days = bool((valid_days or "").strip())
+    if has_valid_until and has_valid_days:
+        raise ValueError("Use either valid_until or valid_days, not both.")
+    if has_valid_until:
+        parsed_valid_until = _parse_admin_datetime(valid_until)
+        if parsed_valid_until is None:
+            raise ValueError("Enter a valid key validity window.")
+        return parsed_valid_until
+    if has_valid_days:
+        try:
+            days = int(str(valid_days).strip(), 10)
+        except ValueError as exc:
+            raise ValueError("valid_days must be a positive integer.") from exc
+        if days <= 0:
+            raise ValueError("valid_days must be a positive integer.")
+        return valid_from + timedelta(days=days)
+    raise ValueError("Enter valid_until or valid_days before creating a key.")
+
+
+def _parse_admin_rate_limit_policy(form: dict[str, str]) -> dict[str, int] | None:
+    fields = (
+        ("rate_limit_requests_per_minute", "requests_per_minute"),
+        ("rate_limit_tokens_per_minute", "tokens_per_minute"),
+        ("rate_limit_concurrent_requests", "max_concurrent_requests"),
+        ("rate_limit_window_seconds", "window_seconds"),
+    )
+    policy: dict[str, int] = {}
+    for form_name, policy_name in fields:
+        provided, value = _parse_optional_admin_int(form.get(form_name))
+        if provided and value is not None:
+            policy[policy_name] = value
+    return policy or None
+
+
+def _parse_admin_text_list(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    normalized = value.replace(",", "\n")
+    return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+def _parse_required_admin_uuid(value: str | None, *, field_name: str) -> uuid.UUID:
+    if value is None or not value.strip():
+        raise ValueError(f"{field_name} is required.")
+    return _parse_optional_admin_uuid(value, field_name=field_name)
+
+
+def _parse_optional_admin_uuid(value: str | None, *, field_name: str) -> uuid.UUID | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return uuid.UUID(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid UUID.") from exc
 
 
 def _key_management_error_response(exc: KeyManagementError, *, gateway_key_id: uuid.UUID) -> Response:

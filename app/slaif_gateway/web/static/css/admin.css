@@ -108,6 +108,16 @@ input {
   font: inherit;
 }
 
+textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font: inherit;
+}
+
 select {
   width: 100%;
   min-height: 42px;
@@ -354,6 +364,18 @@ td a {
   gap: 14px;
 }
 
+.create-form {
+  display: grid;
+  gap: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
 .action-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -431,7 +453,8 @@ dd {
   .filter-bar.compact,
   .detail-grid,
   .action-grid,
-  .management-grid {
+  .management-grid,
+  .form-grid {
     grid-template-columns: 1fr;
   }
 

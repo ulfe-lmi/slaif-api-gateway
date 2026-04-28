@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}Create Gateway Key{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="create-key-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="create-key-heading">Create Gateway Key</h1>
+      <p class="muted">Create one key for an existing owner. The plaintext key is shown once after creation.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/keys/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="create-owner-heading">
+      <h2 id="create-owner-heading">Owner</h2>
+      <p class="muted">Select existing records only. Owner, institution, and cohort creation is not part of this workflow.</p>
+      <div class="form-grid">
+        <label>
+          Owner
+          <select name="owner_id" required>
+            <option value="">Select owner</option>
+            {% for owner in owners %}
+            <option value="{{ owner.id }}" {% if form.owner_id == owner.id|string %}selected{% endif %}>
+              {{ owner.display_name }} / {{ owner.email }}{% if owner.institution_name %} / {{ owner.institution_name }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Cohort
+          <select name="cohort_id">
+            <option value="">No cohort</option>
+            {% for cohort in cohorts %}
+            <option value="{{ cohort.id }}" {% if form.cohort_id == cohort.id|string %}selected{% endif %}>
+              {{ cohort.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-validity-heading">
+      <h2 id="create-validity-heading">Validity</h2>
+      <p class="muted">Use either an absolute valid-until datetime or a positive valid-days value. Blank valid-from starts now.</p>
+      <div class="form-grid">
+        <label>
+          Valid from
+          <input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" placeholder="2026-05-01T09:00:00+00:00">
+        </label>
+        <label>
+          Valid until
+          <input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" placeholder="2026-06-01T09:00:00+00:00">
+        </label>
+        <label>
+          Valid days
+          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30">
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-limits-heading">
+      <h2 id="create-limits-heading">Hard Quota Limits</h2>
+      <p class="muted">These are PostgreSQL-backed lifetime limits. Leave fields blank for no limit.</p>
+      <div class="form-grid">
+        <label>
+          Cost limit EUR
+          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off">
+        </label>
+        <label>
+          Token limit
+          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off">
+        </label>
+        <label>
+          Request limit
+          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-policy-heading">
+      <h2 id="create-policy-heading">Request Policy</h2>
+      <p class="muted">Use comma-separated or newline-separated values. Blank lists mean no explicit allowlist values are added.</p>
+      <div class="form-grid">
+        <label>
+          Allowed models
+          <textarea name="allowed_models" rows="4" autocomplete="off">{{ form.allowed_models }}</textarea>
+        </label>
+        <label>
+          Allowed endpoints
+          <textarea name="allowed_endpoints" rows="4" autocomplete="off">{{ form.allowed_endpoints }}</textarea>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-rate-limit-heading">
+      <h2 id="create-rate-limit-heading">Redis Operational Rate Limits</h2>
+      <p class="muted">These optional Redis counters are separate from PostgreSQL hard quota limits. Leave fields blank for default behavior.</p>
+      <div class="form-grid">
+        <label>
+          Requests per minute
+          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off">
+        </label>
+        <label>
+          Tokens per minute
+          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off">
+        </label>
+        <label>
+          Concurrent requests
+          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off">
+        </label>
+        <label>
+          Window seconds
+          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-submit-heading">
+      <h2 id="create-submit-heading">Create Key</h2>
+      <p class="warning-text">The next page shows the plaintext gateway key once on a no-cache response. This dashboard workflow does not email the key or enqueue Celery tasks. Provider keys are never involved.</p>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <button type="submit">Create key</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

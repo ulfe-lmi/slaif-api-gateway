@@ -152,7 +152,10 @@ The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 institution, and cohort list/detail pages, and read-only provider, route,
 pricing, FX, usage, audit, and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
-quota counters, policy summaries, and rate-limit policy. Key detail pages
+quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
+creates one key for an existing owner/cohort and renders a no-cache result page
+that shows the plaintext gateway key exactly once; it does not send email or
+enqueue Celery tasks. Key detail pages
 include CSRF-protected POST actions to suspend, activate, and permanently revoke
 keys, update validity windows, update PostgreSQL-backed hard quota limits, reset
 usage counters, and rotate keys through the existing key service and audit
@@ -169,7 +172,7 @@ completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
-Admin dashboard key create and email workflows are not implemented yet. Owner,
+Admin dashboard key email workflows are not implemented yet. Owner,
 institution, cohort, pricing, routing, provider, usage, and email delivery
 dashboard mutation workflows are not
 implemented yet. Admin sessions are stored server-side in PostgreSQL with only

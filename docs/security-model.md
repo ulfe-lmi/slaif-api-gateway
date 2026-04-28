@@ -149,18 +149,22 @@ Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
 pricing, FX, usage, audit, and email delivery pages use authenticated GET
-routes. Key suspend, activate, revoke, validity-window update, hard quota limit
-update, usage-counter reset, and rotation forms require a valid authenticated
-session plus the per-session CSRF token. Revoke and rotation also require an
+routes. Key creation, suspend, activate, revoke, validity-window update, hard
+quota limit update, usage-counter reset, and rotation forms require a valid
+authenticated session plus the per-session CSRF token. Dashboard key creation
+only selects existing owners/cohorts, calls the existing key service, writes the
+service audit row, and renders a no-cache result page that shows the newly
+generated plaintext key exactly once. It does not send email, create an email
+delivery row, or enqueue Celery tasks. Revoke and rotation also require an
 explicit confirmation field and dashboard-side audit reason before the key
 service is called. Validity, hard quota, usage-counter, and rotation changes call
 the existing key service and write audit rows through the same service-layer
 behavior as the CLI. Dashboard rotation renders a no-cache result page that
 shows the replacement plaintext key exactly once; it never displays or resends
-the old plaintext key, and lost replacement keys must be rotated again. The
-replacement plaintext key is not stored in PostgreSQL, audit rows, cookies,
-server-side sessions, URLs, email delivery rows, or Celery payloads. The service
-stores the new key HMAC and encrypted one-time-secret material only. Hard quota
+the old plaintext key, and lost replacement keys must be rotated again. Dashboard
+creation and rotation plaintext keys are not stored in PostgreSQL, audit rows,
+cookies, server-side sessions, URLs, email delivery rows, or Celery payloads. The
+service stores the key HMAC and encrypted one-time-secret material only. Hard quota
 limit updates affect PostgreSQL-backed lifetime cost, token, and request limits;
 they do not reset used/reserved counters and are distinct from Redis operational
 rate-limit policy. Usage-counter reset does not delete usage ledger rows, and
@@ -170,7 +174,7 @@ never recover or send old plaintext keys.
 
 ## Current Limitations
 
-- Admin dashboard key create and email workflows are not implemented yet. Owner,
+- Admin dashboard key email workflows are not implemented yet. Owner,
   institution, cohort, provider,
   routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
   implemented yet.
