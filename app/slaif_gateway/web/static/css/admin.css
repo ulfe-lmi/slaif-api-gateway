@@ -370,6 +370,19 @@ td a {
   font-weight: 700;
 }
 
+.secret-display {
+  overflow-wrap: anywhere;
+  border: 1px solid #a5d6c7;
+  border-radius: 6px;
+  background: #eaf7f2;
+  padding: 14px;
+  font-size: 1rem;
+}
+
+.secret-display code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .checkbox-row {
   display: flex;
   align-items: flex-start;

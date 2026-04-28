@@ -53,6 +53,7 @@ def _detail(
     can_suspend: bool = True,
     can_activate: bool = False,
     can_revoke: bool = True,
+    can_rotate: bool = True,
 ) -> AdminKeyDetail:
     row = AdminKeyListRow(
         id=uuid.uuid4(),
@@ -71,6 +72,7 @@ def _detail(
         can_suspend=can_suspend,
         can_activate=can_activate,
         can_revoke=can_revoke,
+        can_rotate=can_rotate,
         valid_from=datetime.now(UTC) - timedelta(days=1),
         valid_until=datetime.now(UTC) + timedelta(days=1),
         cost_limit_eur=Decimal("5.000000000"),
@@ -219,6 +221,23 @@ def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:
     assert str(key.requests_reserved_total) in html
 
 
+def test_key_detail_renders_rotation_form(monkeypatch) -> None:
+    key = _detail()
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert f'action="/admin/keys/{key.id}/rotate"' in html
+    assert 'name="csrf_token" value="rendered-csrf-token"' in html
+    assert 'name="confirm_rotate" value="true"' in html
+    assert 'name="keep_old_active" value="true"' in html
+    assert "replacement plaintext key is shown once" in html
+    assert "lost keys cannot be resent" in html
+    assert "No email is sent by this dashboard action." in html
+    assert "Rotate key" in html
+
+
 def test_suspended_key_detail_renders_activation_form(monkeypatch) -> None:
     key = _detail(status="suspended", display_status="suspended", can_suspend=False, can_activate=True)
     client = TestClient(_app())
@@ -239,6 +258,7 @@ def test_revoked_key_detail_disables_lifecycle_forms(monkeypatch) -> None:
             can_suspend=False,
             can_activate=False,
             can_revoke=False,
+            can_rotate=False,
         ),
         revoked_at=datetime.now(UTC),
         revoked_reason="course ended",
@@ -251,6 +271,7 @@ def test_revoked_key_detail_disables_lifecycle_forms(monkeypatch) -> None:
     assert f"/admin/keys/{key.id}/suspend" not in html
     assert f"/admin/keys/{key.id}/activate" not in html
     assert f"/admin/keys/{key.id}/revoke" not in html
+    assert f"/admin/keys/{key.id}/rotate" not in html
     assert "disabled" in html
 
 
@@ -273,3 +294,4 @@ def test_key_detail_action_panel_does_not_render_sensitive_values(monkeypatch) -
     assert "session-token-must-not-render" not in html
     assert "session_hash_must_not_render" not in html
     assert "resend" not in html.lower()
+    assert "email action" not in html.lower()

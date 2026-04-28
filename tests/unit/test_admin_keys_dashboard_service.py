@@ -133,6 +133,7 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert row.can_suspend is True
     assert row.can_activate is False
     assert row.can_revoke is True
+    assert row.can_rotate is True
     assert row.valid_from == repo.row.valid_from
     assert row.valid_until == repo.row.valid_until
     assert row.cost_limit_eur == Decimal("10.000000000")
@@ -184,6 +185,7 @@ async def test_lifecycle_action_flags_follow_stored_status() -> None:
     assert active_detail.can_suspend is True
     assert active_detail.can_activate is False
     assert active_detail.can_revoke is True
+    assert active_detail.can_rotate is True
 
     suspended = _row()
     suspended.status = "suspended"
@@ -193,6 +195,7 @@ async def test_lifecycle_action_flags_follow_stored_status() -> None:
     assert suspended_detail.can_suspend is False
     assert suspended_detail.can_activate is True
     assert suspended_detail.can_revoke is True
+    assert suspended_detail.can_rotate is True
 
     revoked = _row()
     revoked.status = "revoked"
@@ -200,3 +203,4 @@ async def test_lifecycle_action_flags_follow_stored_status() -> None:
     assert revoked_detail.can_suspend is False
     assert revoked_detail.can_activate is False
     assert revoked_detail.can_revoke is False
+    assert revoked_detail.can_rotate is False

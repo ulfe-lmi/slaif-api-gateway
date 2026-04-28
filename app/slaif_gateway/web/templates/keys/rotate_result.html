@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Gateway Key Rotated{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="rotation-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Rotation</p>
+      <h1 id="rotation-heading">Replacement Key Created</h1>
+      <p class="muted">This page is the only dashboard display of the replacement plaintext key.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ rotation.new_gateway_key_id }}">New key detail</a>
+      <a class="button-link secondary" href="/admin/keys/{{ rotation.old_gateway_key_id }}">Old key detail</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="replacement-key-heading">
+    <h2 id="replacement-key-heading">Plaintext Replacement Key</h2>
+    <p class="warning-text">Copy this key now. It will not be shown again. If it is lost, rotate the key again.</p>
+    <div class="secret-display" aria-label="Plaintext replacement gateway key">
+      <code>{{ rotation.new_plaintext_key }}</code>
+    </div>
+  </section>
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Replacement Metadata</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ rotation.new_gateway_key_id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ rotation.new_public_key_id }}</dd>
+        <dt>Status</dt>
+        <dd>{{ rotation.new_status }}</dd>
+        <dt>Valid from</dt>
+        <dd>{{ rotation.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt>
+        <dd>{{ rotation.valid_until.isoformat() }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Old Key</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ rotation.old_gateway_key_id }}</dd>
+        <dt>Status after rotation</dt>
+        <dd>{{ rotation.old_status }}</dd>
+        <dt>Old key revoked</dt>
+        <dd>{{ "Yes" if old_key_revoked else "No" }}</dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="action-panel" aria-labelledby="rotation-safety-heading">
+    <h2 id="rotation-safety-heading">Safety Notes</h2>
+    <p class="muted">The old plaintext key is not displayed or resent. This dashboard action does not send email. PostgreSQL stores the replacement key HMAC and encrypted one-time-secret material only.</p>
+  </section>
+</section>
+{% endblock %}

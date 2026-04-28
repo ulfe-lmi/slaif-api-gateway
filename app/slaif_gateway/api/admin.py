@@ -49,6 +49,7 @@ from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     RevokeGatewayKeyInput,
     ResetGatewayKeyUsageInput,
+    RotateGatewayKeyInput,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyValidityInput,
@@ -64,6 +65,8 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
+    "rotation_confirmation_required": ("error", "Confirm key rotation before continuing."),
+    "rotation_reason_required": ("error", "Enter an audit reason before rotating this key."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
     "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
     "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
@@ -80,6 +83,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "gateway_key_no_limit_change": ("error", "Change or clear at least one hard quota limit before submitting."),
     "gateway_key_already_active": ("error", "Gateway key is already active."),
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
+    "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -608,6 +612,61 @@ async def reset_admin_key_usage(
         return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_usage_reset")
+
+
+@router.post("/keys/{gateway_key_id}/rotate", response_class=HTMLResponse)
+async def rotate_admin_key(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    confirm_rotate: str = Form(""),
+    reason: str = Form(""),
+    keep_old_active: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if not _is_checked(confirm_rotate):
+        return _redirect_to_admin_key(parsed_key_id, message="rotation_confirmation_required")
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(parsed_key_id, message="rotation_reason_required")
+
+    revoke_old_key = not _is_checked(keep_old_active)
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            rotation = await service.rotate_gateway_key(
+                RotateGatewayKeyInput(
+                    gateway_key_id=parsed_key_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                    revoke_old_key=revoke_old_key,
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    response = templates.TemplateResponse(
+        request,
+        "keys/rotate_result.html",
+        {
+            "admin": action_context.admin_user,
+            "rotation": rotation,
+            "old_key_revoked": revoke_old_key,
+        },
+    )
+    _set_no_store_headers(response)
+    return response
 
 
 @router.get("/owners", response_class=HTMLResponse)
@@ -1681,6 +1740,11 @@ def _admin_status_message(request: Request) -> dict[str, str] | None:
 def _redirect_to_admin_key(gateway_key_id: uuid.UUID, *, message: str) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/keys/{gateway_key_id}?{query}", status_code=303)
+
+
+def _set_no_store_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
 
 
 def _key_management_error_response(exc: KeyManagementError, *, gateway_key_id: uuid.UUID) -> Response:
