@@ -57,26 +57,28 @@ async def readyz(request: Request) -> JSONResponse:
     if not schema_status.is_current or redis_status == "error":
         return JSONResponse(
             status_code=503,
-            content={
-                "status": "not_ready",
-                "database": "ok",
-                "schema": schema_status.status,
-                "alembic_current": schema_status.current_revision,
-                "alembic_head": schema_status.head_revision,
-                "redis": redis_status,
-            },
+            content=_readyz_database_content(
+                status="not_ready",
+                database="ok",
+                schema=schema_status.status,
+                redis=redis_status,
+                settings=settings,
+                current_revision=schema_status.current_revision,
+                head_revision=schema_status.head_revision,
+            ),
         )
 
     return JSONResponse(
         status_code=200,
-        content={
-            "status": "ok",
-            "database": "ok",
-            "schema": "ok",
-            "alembic_current": schema_status.current_revision,
-            "alembic_head": schema_status.head_revision,
-            "redis": redis_status,
-        },
+        content=_readyz_database_content(
+            status="ok",
+            database="ok",
+            schema="ok",
+            redis=redis_status,
+            settings=settings,
+            current_revision=schema_status.current_revision,
+            head_revision=schema_status.head_revision,
+        ),
     )
 
 
@@ -93,3 +95,25 @@ async def _redis_status(request: Request, settings: Settings | None) -> str:
     except Exception:  # noqa: BLE001
         return "error"
     return "ok"
+
+
+def _readyz_database_content(
+    *,
+    status: str,
+    database: str,
+    schema: str,
+    redis: str,
+    settings: Settings | None,
+    current_revision: str | None,
+    head_revision: str | None,
+) -> dict[str, str | None]:
+    content: dict[str, str | None] = {
+        "status": status,
+        "database": database,
+        "schema": schema,
+        "redis": redis,
+    }
+    if settings is not None and settings.readyz_include_details():
+        content["alembic_current"] = current_revision
+        content["alembic_head"] = head_revision
+    return content

@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     PUBLIC_BASE_URL: str = "http://localhost:8000/v1"
 
     DATABASE_URL: str | None = None
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
+    DATABASE_POOL_TIMEOUT_SECONDS: float = 30
+    DATABASE_POOL_RECYCLE_SECONDS: int = 1800
+    DATABASE_POOL_PRE_PING: bool = True
+    DATABASE_CONNECT_TIMEOUT_SECONDS: float = 10
+    DATABASE_STATEMENT_TIMEOUT_MS: int | None = None
     REDIS_URL: str | None = None
     ENABLE_REDIS_RATE_LIMITS: bool = False
     REDIS_CONNECT_TIMEOUT_SECONDS: float = 2
@@ -51,7 +58,9 @@ class Settings(BaseSettings):
     ENABLE_ADMIN_DASHBOARD: bool = True
     ENABLE_METRICS: bool = True
     METRICS_REQUIRE_AUTH: bool | None = None
+    METRICS_PUBLIC_IN_PRODUCTION: bool = False
     METRICS_ALLOWED_IPS: str | None = None
+    READYZ_INCLUDE_DETAILS: bool | None = None
     REQUEST_ID_HEADER: str = "X-Request-ID"
     LOG_LEVEL: str = "INFO"
     STRUCTURED_LOGS: bool = True
@@ -92,8 +101,23 @@ class Settings(BaseSettings):
 
         self._validate_request_caps()
         self._validate_request_id_header()
+        self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
         return self
+
+    def _validate_database_settings(self) -> None:
+        if self.DATABASE_POOL_SIZE <= 0:
+            raise ValueError("DATABASE_POOL_SIZE must be a positive integer")
+        if self.DATABASE_MAX_OVERFLOW < 0:
+            raise ValueError("DATABASE_MAX_OVERFLOW must be greater than or equal to 0")
+        if self.DATABASE_POOL_TIMEOUT_SECONDS <= 0:
+            raise ValueError("DATABASE_POOL_TIMEOUT_SECONDS must be a positive number")
+        if self.DATABASE_POOL_RECYCLE_SECONDS <= 0:
+            raise ValueError("DATABASE_POOL_RECYCLE_SECONDS must be a positive integer")
+        if self.DATABASE_CONNECT_TIMEOUT_SECONDS <= 0:
+            raise ValueError("DATABASE_CONNECT_TIMEOUT_SECONDS must be a positive number")
+        if self.DATABASE_STATEMENT_TIMEOUT_MS is not None and self.DATABASE_STATEMENT_TIMEOUT_MS <= 0:
+            raise ValueError("DATABASE_STATEMENT_TIMEOUT_MS must be a positive integer when set")
 
     def _validate_redis_rate_limit_settings(self) -> None:
         if self.ENABLE_REDIS_RATE_LIMITS and not self.REDIS_URL:
@@ -249,7 +273,15 @@ class Settings(BaseSettings):
         """Return whether /metrics should require explicit exposure controls."""
         if self.METRICS_REQUIRE_AUTH is not None:
             return self.METRICS_REQUIRE_AUTH
-        return self.APP_ENV.lower() == "production"
+        if self.APP_ENV.lower() == "production":
+            return not self.METRICS_PUBLIC_IN_PRODUCTION
+        return False
+
+    def readyz_include_details(self) -> bool:
+        """Return whether /readyz should expose detailed revision information."""
+        if self.READYZ_INCLUDE_DETAILS is not None:
+            return self.READYZ_INCLUDE_DETAILS
+        return self.APP_ENV.lower() != "production"
 
     def get_metrics_allowed_ips(self) -> tuple[str, ...]:
         """Return normalized IP allowlist entries for /metrics."""

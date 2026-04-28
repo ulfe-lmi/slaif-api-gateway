@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from slaif_gateway.config import Settings
 from slaif_gateway.main import create_app
+from slaif_gateway.utils.secrets import generate_secret_key
 from tests.integration.db_test_utils import run_alembic_upgrade_head
 
 pytestmark = pytest.mark.skipif(
@@ -30,6 +31,55 @@ def test_readyz_reports_database_ok_without_redis(migrated_postgres_url: str) ->
     assert response.json()["schema"] == "ok"
     assert response.json()["alembic_current"] == response.json()["alembic_head"]
     assert response.json()["redis"] == "not_required"
+
+
+def test_readyz_production_hides_schema_revisions_by_default(migrated_postgres_url: str) -> None:
+    app = create_app(
+        Settings(
+            APP_ENV="production",
+            DATABASE_URL=migrated_postgres_url,
+            TOKEN_HMAC_SECRET_V1="h" * 32,
+            ADMIN_SESSION_SECRET="a" * 32,
+            ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "status": "ok",
+        "database": "ok",
+        "schema": "ok",
+        "redis": "not_required",
+    }
+    assert "alembic_current" not in body
+    assert "alembic_head" not in body
+    assert "postgresql://" not in response.text
+
+
+def test_readyz_production_can_include_schema_revisions(migrated_postgres_url: str) -> None:
+    app = create_app(
+        Settings(
+            APP_ENV="production",
+            DATABASE_URL=migrated_postgres_url,
+            TOKEN_HMAC_SECRET_V1="h" * 32,
+            ADMIN_SESSION_SECRET="a" * 32,
+            ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+            READYZ_INCLUDE_DETAILS=True,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema"] == "ok"
+    assert body["alembic_current"] == body["alembic_head"]
+    assert "postgresql://" not in response.text
 
 
 async def _reset_public_schema(database_url: str) -> None:

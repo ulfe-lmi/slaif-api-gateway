@@ -45,6 +45,15 @@ def test_metrics_not_public_in_production_by_default() -> None:
     assert response.status_code == 403
 
 
+def test_metrics_public_in_production_requires_explicit_setting() -> None:
+    app = create_app(_production_settings(METRICS_PUBLIC_IN_PRODUCTION=True))
+
+    response = TestClient(app).get("/metrics")
+
+    assert response.status_code == 200
+    assert "gateway_http_requests_total" in response.text
+
+
 def test_metrics_allows_configured_ip_when_auth_required() -> None:
     app = create_app(_production_settings(METRICS_ALLOWED_IPS="testclient"))
 
