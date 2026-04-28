@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Cohorts{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="cohorts-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Cohort Management</p>
+      <h1 id="cohorts-heading">Cohorts</h1>
+      <p class="muted">Read-only metadata. Management actions are not implemented in this dashboard slice.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/cohorts">
+    <label>
+      Name
+      <input name="name" value="{{ filters.name }}" autocomplete="off">
+    </label>
+    <label>
+      Active
+      <select name="active">
+        <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Cohort</th>
+          <th>Window</th>
+          <th>Owners</th>
+          <th>Keys</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cohort in cohorts %}
+        <tr>
+          <td>
+            <a href="/admin/cohorts/{{ cohort.id }}">{{ cohort.name }}</a>
+            {% if cohort.description %}<div class="muted small">{{ cohort.description }}</div>{% endif %}
+          </td>
+          <td>
+            <div>{{ cohort.starts_at.isoformat() if cohort.starts_at else "No start" }}</div>
+            <div class="muted small">until {{ cohort.ends_at.isoformat() if cohort.ends_at else "No end" }}</div>
+          </td>
+          <td>{{ cohort.owner_count }}</td>
+          <td>
+            <div>{{ cohort.key_count }} total</div>
+            <div class="muted small">{{ cohort.active_key_count }} active</div>
+          </td>
+          <td>{{ cohort.created_at.isoformat() }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">No cohorts found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

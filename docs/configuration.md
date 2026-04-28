@@ -148,11 +148,13 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 - `ADMIN_CSRF_TTL_SECONDS` controls login CSRF token lifetime.
 
 The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
-`/admin` dashboard, and read-only key list/detail pages under `/admin/keys`.
-The key pages show safe metadata only: public key ID, prefix, hint, owner,
-status, validity, quota counters, policy summaries, and rate-limit policy.
-They do not show plaintext gateway keys, token hashes, one-time-secret
-material, provider keys, password hashes, or session tokens.
+`/admin` dashboard, read-only key list/detail pages under `/admin/keys`, and
+read-only owner, institution, and cohort list/detail pages. The key pages show
+safe metadata only: public key ID, prefix, hint, owner, status, validity, quota
+counters, policy summaries, and rate-limit policy. Owner, institution, and
+cohort pages show safe record metadata and key count summaries. They do not show
+plaintext gateway keys, token hashes, one-time-secret material, provider keys,
+password hashes, session tokens, or prompt/completion content.
 
 State-changing key, owner, institution, cohort, pricing, routing, provider,
 usage, and email delivery dashboard workflows are not implemented yet. Admin

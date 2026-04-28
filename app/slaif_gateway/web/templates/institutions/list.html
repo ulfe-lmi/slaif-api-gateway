@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Institutions{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="institutions-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Institution Management</p>
+      <h1 id="institutions-heading">Institutions</h1>
+      <p class="muted">Read-only metadata. Management actions are not implemented in this dashboard slice.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/institutions">
+    <label>
+      Name
+      <input name="name" value="{{ filters.name }}" autocomplete="off">
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Institution</th>
+          <th>Country</th>
+          <th>Owners</th>
+          <th>Keys</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for institution in institutions %}
+        <tr>
+          <td><a href="/admin/institutions/{{ institution.id }}">{{ institution.name }}</a></td>
+          <td>{{ institution.country or "Not set" }}</td>
+          <td>{{ institution.owner_count }}</td>
+          <td>
+            <div>{{ institution.key_count }} total</div>
+            <div class="muted small">{{ institution.active_key_count }} active</div>
+          </td>
+          <td>{{ institution.created_at.isoformat() }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">No institutions found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

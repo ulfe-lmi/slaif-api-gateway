@@ -6,8 +6,9 @@ import uuid
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from slaif_gateway.db.models import Institution
+from slaif_gateway.db.models import Institution, Owner
 
 
 class InstitutionsRepository:
@@ -47,3 +48,32 @@ class InstitutionsRepository:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_institutions_for_admin(
+        self,
+        *,
+        name: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Institution]:
+        """Return institutions with safe admin-dashboard relationships loaded."""
+        statement: Select[tuple[Institution]] = select(Institution).options(
+            selectinload(Institution.owners).selectinload(Owner.gateway_keys),
+        )
+        if name is not None:
+            normalized_name = name.strip().lower()
+            statement = statement.where(func.lower(Institution.name).like(f"%{normalized_name}%"))
+
+        statement = statement.order_by(Institution.name.asc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_institution_for_admin_detail(self, institution_id: uuid.UUID) -> Institution | None:
+        """Return one institution with safe admin-dashboard relationships loaded."""
+        statement = (
+            select(Institution)
+            .options(selectinload(Institution.owners).selectinload(Owner.gateway_keys))
+            .where(Institution.id == institution_id)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()

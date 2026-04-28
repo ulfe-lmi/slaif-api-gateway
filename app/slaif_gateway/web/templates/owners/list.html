@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Owners{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="owners-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Owner Management</p>
+      <h1 id="owners-heading">Owners</h1>
+      <p class="muted">Read-only metadata. Management actions are not implemented in this dashboard slice.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/owners">
+    <label>
+      Email
+      <input name="email" value="{{ filters.email }}" autocomplete="off">
+    </label>
+    <label>
+      Institution ID
+      <input name="institution_id" value="{{ filters.institution_id }}" autocomplete="off">
+    </label>
+    <label>
+      Cohort ID
+      <input name="cohort_id" value="{{ filters.cohort_id }}" autocomplete="off">
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Owner</th>
+          <th>Institution</th>
+          <th>Status</th>
+          <th>Keys</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for owner in owners %}
+        <tr>
+          <td>
+            <a href="/admin/owners/{{ owner.id }}">{{ owner.display_name }}</a>
+            <div class="muted small">{{ owner.email }}</div>
+          </td>
+          <td>{{ owner.institution_name or "Not set" }}</td>
+          <td><span class="status-pill status-{{ 'active' if owner.is_active else 'suspended' }}">{{ "active" if owner.is_active else "inactive" }}</span></td>
+          <td>
+            <div>{{ owner.key_count }} total</div>
+            <div class="muted small">{{ owner.active_key_count }} active</div>
+          </td>
+          <td>{{ owner.created_at.isoformat() }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">No owners found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
