@@ -73,6 +73,8 @@ def test_readyz_production_hides_revision_details_by_default(monkeypatch) -> Non
         "schema": "ok",
         "redis": "not_required",
     }
+    assert "alembic_current" not in response.json()
+    assert "alembic_head" not in response.json()
     assert "current-secret-looking-revision" not in response.text
     assert "postgresql://" not in response.text
     assert "secret" not in response.text
