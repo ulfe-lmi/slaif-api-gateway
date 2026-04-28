@@ -32,7 +32,7 @@ Implemented:
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
-- Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, read-only key list/detail pages under `/admin/keys`, secure cookie settings, server-side session rows, and CSRF-protected forms.
+- Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, read-only key list/detail pages under `/admin/keys`, and read-only owner/institution/cohort list/detail pages, secure cookie settings, server-side session rows, and CSRF-protected forms.
 - Explicit CLI-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, and Celery task payloads that carry IDs only.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
@@ -175,9 +175,9 @@ When `APP_ENV=production`, startup logs warn if metrics are explicitly made publ
 
 ## Admin Web Foundation
 
-The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/login`, `GET /admin`, `POST /admin/logout`, `GET /admin/keys`, and `GET /admin/keys/{gateway_key_id}` when `ENABLE_ADMIN_DASHBOARD=true`. Key dashboard pages are read-only in this phase and show safe metadata such as public key ID, key hint, owner, status, validity, quota counters, allowed model/endpoint/provider summaries, and rate-limit policy. Plaintext gateway keys are never shown after creation/rotation, and token hashes, one-time secret material, provider keys, password hashes, and session tokens are not rendered.
+The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/login`, `GET /admin`, `POST /admin/logout`, `GET /admin/keys`, `GET /admin/keys/{gateway_key_id}`, `GET /admin/owners`, `GET /admin/owners/{owner_id}`, `GET /admin/institutions`, `GET /admin/institutions/{institution_id}`, `GET /admin/cohorts`, and `GET /admin/cohorts/{cohort_id}` when `ENABLE_ADMIN_DASHBOARD=true`. Key dashboard pages are read-only in this phase and show safe metadata such as public key ID, key hint, owner, status, validity, quota counters, allowed model/endpoint/provider summaries, and rate-limit policy. Owner, institution, and cohort pages are also read-only and show safe record metadata plus key count summaries. Plaintext gateway keys are never shown after creation/rotation, and token hashes, one-time secret material, provider keys, password hashes, session tokens, and prompt/completion content are not rendered.
 
-State-changing key dashboard actions such as create, rotate, revoke, suspend, activate, limit updates, and email delivery are not implemented yet.
+State-changing dashboard actions such as create, edit, delete, key rotate, revoke, suspend, activate, limit updates, and email delivery are not implemented yet.
 
 Admin passwords are verified with the existing Argon2id utilities. Login creates a server-side `admin_sessions` row and stores only HMAC-hashed session and CSRF tokens in PostgreSQL. The browser receives a session cookie named by `ADMIN_SESSION_COOKIE_NAME`; it is `HttpOnly`, `SameSite=Lax` by default, and `Secure` by default in production. State-changing admin forms use CSRF tokens. This foundation uses local Jinja2 templates and static CSS only; it does not use CDN Tailwind or CDN HTMX.
 
@@ -301,7 +301,7 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes state-changing admin dashboard management pages, owner/institution/cohort/pricing/routing/usage dashboard pages, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes state-changing admin dashboard management pages, pricing/routing/usage dashboard pages, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 

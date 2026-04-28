@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Institution Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="institution-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Institution Detail</p>
+      <h1 id="institution-heading">{{ institution.name }}</h1>
+      <p class="muted">Safe read-only metadata. Secrets are not displayed.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/institutions">All institutions</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Identity</h2>
+      <dl>
+        <dt>Institution ID</dt>
+        <dd>{{ institution.id }}</dd>
+        <dt>Name</dt>
+        <dd>{{ institution.name }}</dd>
+        <dt>Country</dt>
+        <dd>{{ institution.country or "Not set" }}</dd>
+        <dt>Notes</dt>
+        <dd>{{ institution.notes or "Not set" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Summary</h2>
+      <dl>
+        <dt>Owners</dt>
+        <dd>{{ institution.owner_count }}</dd>
+        <dt>Keys</dt>
+        <dd>{{ institution.key_count }}</dd>
+        <dt>Active keys</dt>
+        <dd>{{ institution.active_key_count }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Metadata</h2>
+      <dl>
+        <dt>Created</dt>
+        <dd>{{ institution.created_at.isoformat() }}</dd>
+        <dt>Updated</dt>
+        <dd>{{ institution.updated_at.isoformat() }}</dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="detail-section related-section">
+    <h2>Recent Keys</h2>
+    <p class="muted">Only public key IDs, hints, owner email, status, and validity are shown.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Valid until</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for key in institution.recent_keys %}
+          <tr>
+            <td>
+              <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
+              {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
+            </td>
+            <td>{{ key.owner_email or "Unknown" }}</td>
+            <td><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></td>
+            <td>{{ key.valid_until.isoformat() }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4" class="empty-state">No keys found for this institution.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}

@@ -18,9 +18,13 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
+from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
 from slaif_gateway.services.admin_session_service import (
     AdminAuthenticationError,
     AdminSessionContext,
@@ -256,6 +260,227 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
     )
 
 
+@router.get("/owners", response_class=HTMLResponse)
+async def list_admin_owners(
+    request: Request,
+    email: str | None = Query(None),
+    institution_id: str | None = Query(None),
+    cohort_id: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    parsed_institution_id = _parse_optional_uuid(institution_id)
+    parsed_cohort_id = _parse_optional_uuid(cohort_id)
+    if parsed_institution_id is False or parsed_cohort_id is False:
+        return HTMLResponse("Invalid filter.", status_code=400)
+
+    async with _admin_records_dashboard_service_scope(request) as service:
+        rows = await service.list_owners(
+            email=email,
+            institution_id=parsed_institution_id,
+            cohort_id=parsed_cohort_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "owners/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "owners": rows,
+            "filters": {
+                "email": email or "",
+                "institution_id": institution_id or "",
+                "cohort_id": cohort_id or "",
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/owners/{owner_id}", response_class=HTMLResponse)
+async def admin_owner_detail(request: Request, owner_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_owner_id = uuid.UUID(owner_id)
+    except ValueError:
+        return HTMLResponse("Owner not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            owner = await service.get_owner_detail(parsed_owner_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Owner not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "owners/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "owner": owner,
+        },
+    )
+
+
+@router.get("/institutions", response_class=HTMLResponse)
+async def list_admin_institutions(
+    request: Request,
+    name: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_records_dashboard_service_scope(request) as service:
+        rows = await service.list_institutions(name=name, limit=limit, offset=offset)
+
+    return templates.TemplateResponse(
+        request,
+        "institutions/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "institutions": rows,
+            "filters": {
+                "name": name or "",
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/institutions/{institution_id}", response_class=HTMLResponse)
+async def admin_institution_detail(request: Request, institution_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_institution_id = uuid.UUID(institution_id)
+    except ValueError:
+        return HTMLResponse("Institution not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            institution = await service.get_institution_detail(parsed_institution_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Institution not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "institutions/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "institution": institution,
+        },
+    )
+
+
+@router.get("/cohorts", response_class=HTMLResponse)
+async def list_admin_cohorts(
+    request: Request,
+    name: str | None = Query(None),
+    active: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_records_dashboard_service_scope(request) as service:
+        rows = await service.list_cohorts(name=name, active=active, limit=limit, offset=offset)
+
+    return templates.TemplateResponse(
+        request,
+        "cohorts/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "cohorts": rows,
+            "filters": {
+                "name": name or "",
+                "active": "" if active is None else str(active).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/cohorts/{cohort_id}", response_class=HTMLResponse)
+async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_cohort_id = uuid.UUID(cohort_id)
+    except ValueError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            cohort = await service.get_cohort_detail(parsed_cohort_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "cohorts/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "cohort": cohort,
+        },
+    )
+
+
 @router.post("/logout", response_class=HTMLResponse)
 async def logout(request: Request, csrf_token: str = Form("")) -> Response:
     settings = _settings(request)
@@ -329,6 +554,18 @@ async def _admin_key_dashboard_service_scope(request: Request) -> AsyncIterator[
     async with session_factory() as session:
         async with session.begin():
             yield AdminKeyDashboardService(gateway_keys_repository=GatewayKeysRepository(session))
+
+
+@asynccontextmanager
+async def _admin_records_dashboard_service_scope(request: Request) -> AsyncIterator[AdminRecordsDashboardService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield AdminRecordsDashboardService(
+                owners_repository=OwnersRepository(session),
+                institutions_repository=InstitutionsRepository(session),
+                cohorts_repository=CohortsRepository(session),
+            )
 
 
 def _build_admin_session_service(request: Request, session: AsyncSession) -> AdminSessionService:

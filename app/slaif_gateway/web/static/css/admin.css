@@ -180,6 +180,12 @@ button.secondary:hover {
   padding-top: 24px;
 }
 
+.dashboard-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .wide {
   width: min(100%, 1180px);
 }
@@ -197,6 +203,10 @@ button.secondary:hover {
   align-items: end;
   border-top: 1px solid var(--border);
   padding: 24px 28px;
+}
+
+.filter-bar.compact {
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
 }
 
 .table-wrap {
@@ -286,6 +296,10 @@ td a {
   padding: 18px;
 }
 
+.related-section {
+  margin: 0 28px 28px;
+}
+
 dl {
   display: grid;
   grid-template-columns: minmax(120px, 0.35fr) minmax(0, 0.65fr);
@@ -310,6 +324,7 @@ dd {
 
   .header-actions,
   .filter-bar,
+  .filter-bar.compact,
   .detail-grid {
     grid-template-columns: 1fr;
   }
