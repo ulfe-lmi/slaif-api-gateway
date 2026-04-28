@@ -6,10 +6,11 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from slaif_gateway.db.models import GatewayKey
+from slaif_gateway.db.models import GatewayKey, Owner
 from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
 
 
@@ -118,6 +119,60 @@ class GatewayKeysRepository:
         statement = statement.order_by(GatewayKey.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_keys_for_admin(
+        self,
+        *,
+        status: str | None = None,
+        owner_email: str | None = None,
+        public_key_id: str | None = None,
+        institution_id: uuid.UUID | None = None,
+        cohort_id: uuid.UUID | None = None,
+        expired: bool | None = None,
+        now: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[GatewayKey]:
+        """Return gateway keys with safe admin-dashboard relationships loaded."""
+        statement: Select[tuple[GatewayKey]] = select(GatewayKey).options(
+            selectinload(GatewayKey.owner).selectinload(Owner.institution),
+            selectinload(GatewayKey.cohort),
+        )
+        if owner_email is not None or institution_id is not None:
+            statement = statement.join(GatewayKey.owner)
+        if status is not None:
+            statement = statement.where(GatewayKey.status == status)
+        if owner_email is not None:
+            normalized_email = owner_email.strip().lower()
+            statement = statement.where(func.lower(Owner.email).like(f"%{normalized_email}%"))
+        if public_key_id is not None:
+            statement = statement.where(GatewayKey.public_key_id == public_key_id.strip())
+        if institution_id is not None:
+            statement = statement.where(Owner.institution_id == institution_id)
+        if cohort_id is not None:
+            statement = statement.where(GatewayKey.cohort_id == cohort_id)
+        if expired is not None and now is not None:
+            if expired:
+                statement = statement.where(GatewayKey.valid_until <= now)
+            else:
+                statement = statement.where(GatewayKey.valid_until > now)
+
+        statement = statement.order_by(GatewayKey.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_key_for_admin_detail(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
+        """Return one gateway key with safe admin-dashboard relationships loaded."""
+        statement = (
+            select(GatewayKey)
+            .options(
+                selectinload(GatewayKey.owner).selectinload(Owner.institution),
+                selectinload(GatewayKey.cohort),
+            )
+            .where(GatewayKey.id == gateway_key_id)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
 
     async def update_gateway_key_status(
         self,
