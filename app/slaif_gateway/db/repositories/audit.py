@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AuditLog
@@ -68,6 +69,43 @@ class AuditRepository:
         statement = statement.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_audit_logs_for_admin(
+        self,
+        *,
+        actor_admin_id: uuid.UUID | None = None,
+        action: str | None = None,
+        target_type: str | None = None,
+        target_id: uuid.UUID | None = None,
+        request_id: str | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AuditLog]:
+        """Return audit log rows for read-only admin dashboard pages."""
+        statement: Select[tuple[AuditLog]] = select(AuditLog)
+        if actor_admin_id is not None:
+            statement = statement.where(AuditLog.admin_user_id == actor_admin_id)
+        if action is not None:
+            statement = statement.where(func.lower(AuditLog.action).like(f"%{action.lower()}%"))
+        if target_type is not None:
+            statement = statement.where(func.lower(AuditLog.entity_type).like(f"%{target_type.lower()}%"))
+        if target_id is not None:
+            statement = statement.where(AuditLog.entity_id == target_id)
+        if request_id is not None:
+            statement = statement.where(func.lower(AuditLog.request_id).like(f"%{request_id.lower()}%"))
+        if start_at is not None:
+            statement = statement.where(AuditLog.created_at >= start_at)
+        if end_at is not None:
+            statement = statement.where(AuditLog.created_at <= end_at)
+
+        statement = statement.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_audit_log_for_admin_detail(self, audit_log_id: uuid.UUID) -> AuditLog | None:
+        return await self._session.get(AuditLog, audit_log_id)
 
 
 def _sanitize_optional_metadata(values: dict[str, object] | None) -> dict[str, object] | None:

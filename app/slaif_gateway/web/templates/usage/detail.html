@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Usage Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="usage-detail-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Usage Ledger</p>
+      <h1 id="usage-detail-heading">Usage Detail</h1>
+      <p class="muted">Safe accounting metadata only. Prompt and completion content is not stored or rendered here.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/usage">Usage</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="detail-panel">
+      <h2>Request</h2>
+      <dl>
+        <dt>ID</dt><dd>{{ usage.id }}</dd>
+        <dt>Request ID</dt><dd>{{ usage.request_id }}</dd>
+        <dt>Client request ID</dt><dd>{{ usage.client_request_id or "n/a" }}</dd>
+        <dt>Upstream request ID</dt><dd>{{ usage.upstream_request_id or "n/a" }}</dd>
+        <dt>Endpoint</dt><dd>{{ usage.endpoint }}</dd>
+        <dt>Streaming</dt><dd>{{ "yes" if usage.streaming else "no" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Routing</h2>
+      <dl>
+        <dt>Provider</dt><dd>{{ usage.provider }}</dd>
+        <dt>Requested model</dt><dd>{{ usage.requested_model or "n/a" }}</dd>
+        <dt>Resolved model</dt><dd>{{ usage.resolved_model or "n/a" }}</dd>
+        <dt>Gateway key</dt><dd>{{ usage.key_public_id or usage.gateway_key_id }}</dd>
+        <dt>Owner</dt><dd>{{ usage.owner_display_name or "n/a" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Accounting</h2>
+      <dl>
+        <dt>Status</dt><dd>{{ usage.accounting_status }}</dd>
+        <dt>HTTP status</dt><dd>{{ usage.http_status or "n/a" }}</dd>
+        <dt>Prompt tokens</dt><dd>{{ usage.prompt_tokens }}</dd>
+        <dt>Completion tokens</dt><dd>{{ usage.completion_tokens }}</dd>
+        <dt>Total tokens</dt><dd>{{ usage.total_tokens }}</dd>
+        <dt>Cached / reasoning</dt><dd>{{ usage.cached_tokens }} / {{ usage.reasoning_tokens }}</dd>
+        <dt>Cost EUR</dt><dd>{{ usage.actual_cost_eur or usage.estimated_cost_eur or "n/a" }}</dd>
+        <dt>Native currency</dt><dd>{{ usage.native_currency or "n/a" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Timing</h2>
+      <dl>
+        <dt>Created</dt><dd>{{ usage.created_at }}</dd>
+        <dt>Completed</dt><dd>{{ usage.completed_at or "n/a" }}</dd>
+        <dt>Latency</dt><dd>{{ usage.latency_ms or "n/a" }} ms</dd>
+        <dt>Reservation</dt><dd>{{ usage.quota_reservation_id or "n/a" }}</dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="detail-panel">
+    <h2>Safe Metadata</h2>
+    <dl>
+      <dt>Error type</dt><dd>{{ usage.error_type or "n/a" }}</dd>
+      <dt>Error message</dt><dd>{{ usage.error_message or "n/a" }}</dd>
+      <dt>Usage metadata</dt><dd><code>{{ usage.usage_summary }}</code></dd>
+      <dt>Response metadata</dt><dd><code>{{ usage.response_metadata_summary }}</code></dd>
+    </dl>
+  </section>
+</section>
+{% endblock %}

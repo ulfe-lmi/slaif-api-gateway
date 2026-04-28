@@ -6,6 +6,7 @@ import ipaddress
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Query, Request
@@ -19,6 +20,7 @@ from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
@@ -26,7 +28,9 @@ from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.services.admin_activity_dashboard import AdminActivityDashboardService, AdminActivityNotFoundError
 from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
@@ -808,6 +812,305 @@ async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
     )
 
 
+@router.get("/usage", response_class=HTMLResponse)
+async def list_admin_usage(
+    request: Request,
+    provider: str | None = Query(None),
+    model: str | None = Query(None),
+    endpoint: str | None = Query(None),
+    status: str | None = Query(None),
+    gateway_key_id: str | None = Query(None),
+    owner_id: str | None = Query(None),
+    institution_id: str | None = Query(None),
+    cohort_id: str | None = Query(None),
+    request_id: str | None = Query(None),
+    streaming: bool | None = Query(None),
+    start_at: datetime | None = Query(None),
+    end_at: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    parsed_gateway_key_id = _parse_optional_uuid(gateway_key_id)
+    parsed_owner_id = _parse_optional_uuid(owner_id)
+    parsed_institution_id = _parse_optional_uuid(institution_id)
+    parsed_cohort_id = _parse_optional_uuid(cohort_id)
+    if False in {parsed_gateway_key_id, parsed_owner_id, parsed_institution_id, parsed_cohort_id}:
+        return HTMLResponse("Invalid filter.", status_code=400)
+
+    async with _admin_activity_dashboard_service_scope(request) as service:
+        rows = await service.list_usage(
+            provider=provider,
+            model=model,
+            endpoint=endpoint,
+            status=status,
+            gateway_key_id=parsed_gateway_key_id,
+            owner_id=parsed_owner_id,
+            institution_id=parsed_institution_id,
+            cohort_id=parsed_cohort_id,
+            request_id=request_id,
+            streaming=streaming,
+            start_at=start_at,
+            end_at=end_at,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "usage/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "usage_rows": rows,
+            "filters": {
+                "provider": provider or "",
+                "model": model or "",
+                "endpoint": endpoint or "",
+                "status": status or "",
+                "gateway_key_id": gateway_key_id or "",
+                "owner_id": owner_id or "",
+                "institution_id": institution_id or "",
+                "cohort_id": cohort_id or "",
+                "request_id": request_id or "",
+                "streaming": "" if streaming is None else str(streaming).lower(),
+                "start_at": start_at.isoformat() if start_at is not None else "",
+                "end_at": end_at.isoformat() if end_at is not None else "",
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/usage/{usage_ledger_id}", response_class=HTMLResponse)
+async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_usage_ledger_id = uuid.UUID(usage_ledger_id)
+    except ValueError:
+        return HTMLResponse("Usage ledger row not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_activity_dashboard_service_scope(request) as service:
+            usage = await service.get_usage_detail(parsed_usage_ledger_id)
+    except AdminActivityNotFoundError:
+        return HTMLResponse("Usage ledger row not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "usage/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "usage": usage,
+        },
+    )
+
+
+@router.get("/audit", response_class=HTMLResponse)
+async def list_admin_audit_logs(
+    request: Request,
+    actor_admin_id: str | None = Query(None),
+    action: str | None = Query(None),
+    target_type: str | None = Query(None),
+    target_id: str | None = Query(None),
+    request_id: str | None = Query(None),
+    start_at: datetime | None = Query(None),
+    end_at: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    parsed_actor_admin_id = _parse_optional_uuid(actor_admin_id)
+    parsed_target_id = _parse_optional_uuid(target_id)
+    if parsed_actor_admin_id is False or parsed_target_id is False:
+        return HTMLResponse("Invalid filter.", status_code=400)
+
+    async with _admin_activity_dashboard_service_scope(request) as service:
+        rows = await service.list_audit_logs(
+            actor_admin_id=parsed_actor_admin_id,
+            action=action,
+            target_type=target_type,
+            target_id=parsed_target_id,
+            request_id=request_id,
+            start_at=start_at,
+            end_at=end_at,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "audit/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "audit_logs": rows,
+            "filters": {
+                "actor_admin_id": actor_admin_id or "",
+                "action": action or "",
+                "target_type": target_type or "",
+                "target_id": target_id or "",
+                "request_id": request_id or "",
+                "start_at": start_at.isoformat() if start_at is not None else "",
+                "end_at": end_at.isoformat() if end_at is not None else "",
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/audit/{audit_log_id}", response_class=HTMLResponse)
+async def admin_audit_detail(request: Request, audit_log_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_audit_log_id = uuid.UUID(audit_log_id)
+    except ValueError:
+        return HTMLResponse("Audit log row not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_activity_dashboard_service_scope(request) as service:
+            audit_log = await service.get_audit_detail(parsed_audit_log_id)
+    except AdminActivityNotFoundError:
+        return HTMLResponse("Audit log row not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "audit/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "audit_log": audit_log,
+        },
+    )
+
+
+@router.get("/email-deliveries", response_class=HTMLResponse)
+async def list_admin_email_deliveries(
+    request: Request,
+    status: str | None = Query(None),
+    owner_email: str | None = Query(None),
+    gateway_key_id: str | None = Query(None),
+    one_time_secret_id: str | None = Query(None),
+    start_at: datetime | None = Query(None),
+    end_at: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    parsed_gateway_key_id = _parse_optional_uuid(gateway_key_id)
+    parsed_one_time_secret_id = _parse_optional_uuid(one_time_secret_id)
+    if parsed_gateway_key_id is False or parsed_one_time_secret_id is False:
+        return HTMLResponse("Invalid filter.", status_code=400)
+
+    async with _admin_activity_dashboard_service_scope(request) as service:
+        rows = await service.list_email_deliveries(
+            status=status,
+            owner_email=owner_email,
+            gateway_key_id=parsed_gateway_key_id,
+            one_time_secret_id=parsed_one_time_secret_id,
+            start_at=start_at,
+            end_at=end_at,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "email_deliveries/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "email_deliveries": rows,
+            "filters": {
+                "status": status or "",
+                "owner_email": owner_email or "",
+                "gateway_key_id": gateway_key_id or "",
+                "one_time_secret_id": one_time_secret_id or "",
+                "start_at": start_at.isoformat() if start_at is not None else "",
+                "end_at": end_at.isoformat() if end_at is not None else "",
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/email-deliveries/{email_delivery_id}", response_class=HTMLResponse)
+async def admin_email_delivery_detail(request: Request, email_delivery_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_email_delivery_id = uuid.UUID(email_delivery_id)
+    except ValueError:
+        return HTMLResponse("Email delivery row not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_activity_dashboard_service_scope(request) as service:
+            delivery = await service.get_email_delivery_detail(parsed_email_delivery_id)
+    except AdminActivityNotFoundError:
+        return HTMLResponse("Email delivery row not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "email_deliveries/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "email_delivery": delivery,
+        },
+    )
+
+
 @router.post("/logout", response_class=HTMLResponse)
 async def logout(request: Request, csrf_token: str = Form("")) -> Response:
     settings = _settings(request)
@@ -905,6 +1208,18 @@ async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncItera
                 model_routes_repository=ModelRoutesRepository(session),
                 pricing_rules_repository=PricingRulesRepository(session),
                 fx_rates_repository=FxRatesRepository(session),
+            )
+
+
+@asynccontextmanager
+async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield AdminActivityDashboardService(
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+                email_deliveries_repository=EmailDeliveriesRepository(session),
             )
 
 

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="audit-detail-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Audit Log</p>
+      <h1 id="audit-detail-heading">Audit Detail</h1>
+      <p class="muted">Read-only sanitized audit metadata.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/audit">Audit</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="detail-panel">
+      <h2>Event</h2>
+      <dl>
+        <dt>ID</dt><dd>{{ audit_log.id }}</dd>
+        <dt>Action</dt><dd>{{ audit_log.action }}</dd>
+        <dt>Actor admin</dt><dd>{{ audit_log.actor_admin_id or "system" }}</dd>
+        <dt>Created</dt><dd>{{ audit_log.created_at }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Target</h2>
+      <dl>
+        <dt>Type</dt><dd>{{ audit_log.target_type }}</dd>
+        <dt>ID</dt><dd>{{ audit_log.target_id or "n/a" }}</dd>
+        <dt>Request ID</dt><dd>{{ audit_log.request_id or "n/a" }}</dd>
+        <dt>IP address</dt><dd>{{ audit_log.ip_address or "n/a" }}</dd>
+        <dt>User agent</dt><dd>{{ audit_log.user_agent_summary or "n/a" }}</dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="detail-panel">
+    <h2>Sanitized Values</h2>
+    <dl>
+      <dt>Old values</dt><dd><code>{{ audit_log.old_values_summary }}</code></dd>
+      <dt>New values</dt><dd><code>{{ audit_log.new_values_summary }}</code></dd>
+      <dt>Note</dt><dd>{{ audit_log.note or "n/a" }}</dd>
+    </dl>
+  </section>
+</section>
+{% endblock %}

@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from slaif_gateway.db.models import EmailDelivery
+from slaif_gateway.db.models import EmailDelivery, Owner
 
 
 class EmailDeliveriesRepository:
@@ -115,3 +116,49 @@ class EmailDeliveriesRepository:
         statement = statement.order_by(EmailDelivery.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_email_deliveries_for_admin(
+        self,
+        *,
+        status: str | None = None,
+        owner_email: str | None = None,
+        gateway_key_id: uuid.UUID | None = None,
+        one_time_secret_id: uuid.UUID | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[EmailDelivery]:
+        """Return email delivery rows with safe dashboard relationships loaded."""
+        statement = _email_delivery_admin_statement()
+        if status is not None:
+            statement = statement.where(EmailDelivery.status == status)
+        if owner_email is not None:
+            statement = statement.join(EmailDelivery.owner).where(
+                func.lower(Owner.email).like(f"%{owner_email.lower()}%")
+            )
+        if gateway_key_id is not None:
+            statement = statement.where(EmailDelivery.gateway_key_id == gateway_key_id)
+        if one_time_secret_id is not None:
+            statement = statement.where(EmailDelivery.one_time_secret_id == one_time_secret_id)
+        if start_at is not None:
+            statement = statement.where(EmailDelivery.created_at >= start_at)
+        if end_at is not None:
+            statement = statement.where(EmailDelivery.created_at <= end_at)
+
+        statement = statement.order_by(EmailDelivery.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_email_delivery_for_admin_detail(self, email_delivery_id: uuid.UUID) -> EmailDelivery | None:
+        statement = _email_delivery_admin_statement().where(EmailDelivery.id == email_delivery_id)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+
+def _email_delivery_admin_statement() -> Select[tuple[EmailDelivery]]:
+    return select(EmailDelivery).options(
+        selectinload(EmailDelivery.owner),
+        selectinload(EmailDelivery.gateway_key),
+        selectinload(EmailDelivery.one_time_secret),
+    )
