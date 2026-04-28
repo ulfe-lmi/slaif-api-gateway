@@ -94,6 +94,16 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
     "gateway_key_create_failed": ("error", "Gateway key creation failed."),
     "invalid_email_delivery_mode": ("error", "Select a valid key email delivery mode."),
+    "email_delivery_sent": ("success", "Key email delivery sent."),
+    "email_delivery_queued": ("success", "Key email delivery queued."),
+    "email_delivery_send_failed": ("error", "Key email delivery failed safely."),
+    "email_delivery_not_sendable": (
+        "error",
+        "This email delivery cannot be sent. Rotate the key and create a new delivery if the secret is unavailable.",
+    ),
+    "email_delivery_send_confirmation_required": ("error", "Confirm email delivery before sending."),
+    "email_delivery_enqueue_confirmation_required": ("error", "Confirm queued email delivery before continuing."),
+    "email_delivery_configuration_required": ("error", "Email delivery configuration is incomplete."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -1804,9 +1814,116 @@ async def admin_email_delivery_detail(request: Request, email_delivery_id: str) 
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "email_delivery": delivery,
         },
     )
+
+
+@router.post("/email-deliveries/{email_delivery_id}/send-now", response_class=HTMLResponse)
+async def send_admin_email_delivery_now(
+    request: Request,
+    email_delivery_id: str,
+    csrf_token: str = Form(""),
+    confirm_send: str | None = Form(None),
+    reason: str | None = Form(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_email_delivery_id = uuid.UUID(email_delivery_id)
+    except ValueError:
+        return HTMLResponse("Email delivery row not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    if confirm_send != "true":
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_send_confirmation_required",
+        )
+
+    try:
+        _validate_admin_email_delivery_preconditions(settings, "send-now")
+        async with _admin_email_delivery_action_scope(request) as service:
+            sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
+            if not sendability.can_send or sendability.one_time_secret_id is None:
+                return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+            result = await service.send_pending_key_email(
+                one_time_secret_id=sendability.one_time_secret_id,
+                email_delivery_id=parsed_email_delivery_id,
+                actor_admin_id=action_context.admin_user.id,
+                reason=_clean_admin_reason(reason),
+            )
+    except ValueError:
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_configuration_required",
+        )
+    except EmailError:
+        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_send_failed")
+
+    return _redirect_to_admin_email_delivery(
+        parsed_email_delivery_id,
+        message="email_delivery_sent" if result.status == "sent" else "email_delivery_send_failed",
+    )
+
+
+@router.post("/email-deliveries/{email_delivery_id}/enqueue", response_class=HTMLResponse)
+async def enqueue_admin_email_delivery(
+    request: Request,
+    email_delivery_id: str,
+    csrf_token: str = Form(""),
+    confirm_enqueue: str | None = Form(None),
+    reason: str | None = Form(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_email_delivery_id = uuid.UUID(email_delivery_id)
+    except ValueError:
+        return HTMLResponse("Email delivery row not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    if confirm_enqueue != "true":
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_enqueue_confirmation_required",
+        )
+
+    try:
+        _validate_admin_email_delivery_preconditions(settings, "enqueue")
+        async with _admin_email_delivery_action_scope(request) as service:
+            sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
+            if not sendability.can_send or sendability.one_time_secret_id is None:
+                return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+            one_time_secret_id = sendability.one_time_secret_id
+    except ValueError:
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_configuration_required",
+        )
+    except EmailError:
+        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+
+    try:
+        _enqueue_admin_pending_key_email(
+            one_time_secret_id=one_time_secret_id,
+            email_delivery_id=parsed_email_delivery_id,
+            actor_admin_id=action_context.admin_user.id,
+        )
+    except Exception:  # noqa: BLE001
+        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_send_failed")
+
+    _ = reason
+    return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_queued")
 
 
 @router.post("/logout", response_class=HTMLResponse)
@@ -2020,6 +2137,23 @@ async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIter
             )
 
 
+@asynccontextmanager
+async def _admin_email_delivery_action_scope(request: Request) -> AsyncIterator[EmailDeliveryService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            settings = _settings(request)
+            yield EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                owners_repository=OwnersRepository(session),
+                audit_repository=AuditRepository(session),
+                email_service=EmailService(settings),
+            )
+
+
 def _build_admin_session_service(request: Request, session: AsyncSession) -> AdminSessionService:
     return AdminSessionService(
         settings=_settings(request),
@@ -2090,6 +2224,11 @@ def _admin_status_message(request: Request) -> dict[str, str] | None:
 def _redirect_to_admin_key(gateway_key_id: uuid.UUID, *, message: str) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/keys/{gateway_key_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_email_delivery(email_delivery_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/email-deliveries/{email_delivery_id}?{query}", status_code=303)
 
 
 def _set_no_store_headers(response: Response) -> None:

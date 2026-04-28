@@ -39,6 +39,7 @@
         <dt>Owner</dt><dd>{{ email_delivery.owner_email or email_delivery.owner_id or "n/a" }}</dd>
         <dt>Gateway key</dt><dd>{{ email_delivery.public_key_id or email_delivery.gateway_key_id or "n/a" }}</dd>
         <dt>One-time secret</dt><dd>{{ email_delivery.one_time_secret_id or "n/a" }}</dd>
+        <dt>Secret status</dt><dd>{{ email_delivery.one_time_secret_status }}</dd>
       </dl>
     </section>
 
@@ -56,6 +57,56 @@
       <dl>
         <dt>Reason</dt><dd>{{ email_delivery.failure_reason or "n/a" }}</dd>
       </dl>
+    </section>
+
+    <section class="detail-panel">
+      <h2>Send Key Email</h2>
+      <p class="muted small">
+        Delivery uses the linked one-time secret. The plaintext gateway key will not be shown in the browser.
+        Expired or consumed secrets cannot be resent; lost keys must be rotated.
+      </p>
+      {% if email_delivery.can_send_now %}
+      <form class="form-stack" method="post" action="/admin/email-deliveries/{{ email_delivery.id }}/send-now">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          Audit note
+          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note"></textarea>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="confirm_send" value="true">
+          Send this key email now through the configured SMTP service.
+        </label>
+        <button type="submit">Send now</button>
+      </form>
+      {% else %}
+      <p class="muted small">{{ email_delivery.safe_blocking_reason or "This delivery cannot be sent." }}</p>
+      <button type="button" disabled>Send now</button>
+      {% endif %}
+    </section>
+
+    <section class="detail-panel">
+      <h2>Enqueue Key Email</h2>
+      <p class="muted small">
+        Queued delivery sends only record IDs to Celery. The task payload never contains plaintext keys,
+        email bodies, or one-time-secret material.
+      </p>
+      {% if email_delivery.can_enqueue %}
+      <form class="form-stack" method="post" action="/admin/email-deliveries/{{ email_delivery.id }}/enqueue">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          Audit note
+          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note"></textarea>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="confirm_enqueue" value="true">
+          Enqueue this delivery with one-time-secret and email-delivery IDs only.
+        </label>
+        <button type="submit">Enqueue delivery</button>
+      </form>
+      {% else %}
+      <p class="muted small">{{ email_delivery.safe_blocking_reason or "This delivery cannot be queued." }}</p>
+      <button type="button" disabled>Enqueue delivery</button>
+      {% endif %}
     </section>
   </div>
 </section>

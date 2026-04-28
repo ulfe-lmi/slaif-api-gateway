@@ -166,6 +166,15 @@ email-delivery modes:
 - `enqueue` creates a pending delivery row, enqueues the Celery task with IDs
   only, and suppresses browser plaintext display.
 
+Existing pending or failed key email deliveries can be sent now or enqueued from
+the email delivery detail page only while the linked one-time secret is present,
+pending, unexpired, unconsumed, and valid for key email delivery. These actions
+require CSRF plus explicit confirmation, never accept plaintext key input, never
+display plaintext keys in the browser, and use the same `EmailDeliveryService`
+or ID-only Celery task path as the CLI. Consumed, expired, missing, or
+wrong-purpose one-time secrets fail safely; the operator must rotate the key and
+create a new delivery instead of resending an old plaintext key.
+
 Revoke and rotation also require an explicit confirmation field and
 dashboard-side audit reason before the key service is called. Validity, hard
 quota, usage-counter, and rotation changes call the existing key service and
@@ -187,7 +196,7 @@ never recover or send old plaintext keys.
 
 ## Current Limitations
 
-- Standalone dashboard email resend/retry actions are not implemented yet.
+- Arbitrary old-key dashboard email resend actions are not implemented.
   Owner, institution, cohort, provider,
   routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
   implemented yet.

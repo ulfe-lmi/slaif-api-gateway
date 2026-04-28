@@ -168,6 +168,11 @@ def _email() -> AdminEmailDeliveryDetail:
         **asdict(row),
         provider_message_id=None,
         failure_reason="safe SMTP failure",
+        email_delivery_status=row.status,
+        one_time_secret_status="present",
+        can_send_now=True,
+        can_enqueue=True,
+        safe_blocking_reason=None,
     )
 
 
@@ -236,6 +241,12 @@ def test_admin_activity_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "key.created" in html
     assert "Gateway key delivery" in html
     assert "pub_safe_email" in html
+    assert "/admin/email-deliveries/" in html
+    assert "confirm_send" in html
+    assert "confirm_enqueue" in html
+    assert "one-time secret" in html
+    assert "plaintext gateway key will not be shown" in html
+    assert "Celery" in html
 
     forbidden = [
         "sk-provider-secret-placeholder",

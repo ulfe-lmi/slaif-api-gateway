@@ -41,6 +41,18 @@ class PendingKeyEmailResult:
     error_message: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class KeyEmailDeliverySendability:
+    """Safe eligibility metadata for pending key email delivery actions."""
+
+    email_delivery_id: uuid.UUID
+    one_time_secret_id: uuid.UUID | None
+    email_delivery_status: str
+    one_time_secret_status: str
+    can_send: bool
+    blocking_reason: str | None
+
+
 class EmailDeliveryService:
     """Coordinates secret consumption, rendering, SMTP sending, and audit rows."""
 
@@ -244,6 +256,50 @@ class EmailDeliveryService:
             status="pending",
         )
 
+    async def get_key_email_delivery_sendability(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        now: datetime | None = None,
+    ) -> KeyEmailDeliverySendability:
+        """Return safe eligibility metadata for a dashboard send/enqueue action."""
+        delivery = await self._email_deliveries_repository.get_email_delivery_by_id(email_delivery_id)
+        if delivery is None:
+            raise EmailError("Email delivery row was not found")
+
+        checked_at = now or self._now()
+        secret = None
+        if delivery.one_time_secret_id is not None:
+            secret = await self._one_time_secrets_repository.get_one_time_secret_by_id(
+                delivery.one_time_secret_id
+            )
+
+        secret_status = "unavailable"
+        blocking_reason = _email_delivery_send_blocking_reason(
+            delivery_status=delivery.status,
+            delivery_owner_id=delivery.owner_id,
+            delivery_gateway_key_id=delivery.gateway_key_id,
+            delivery_secret_id=delivery.one_time_secret_id,
+            secret=secret,
+            checked_at=checked_at,
+        )
+        if secret is not None:
+            if secret.status == "consumed" or secret.consumed_at is not None:
+                secret_status = "consumed"
+            elif secret.status == "expired" or secret.expires_at <= checked_at:
+                secret_status = "expired"
+            elif secret.status == "pending" and secret.purpose in KEY_EMAIL_PURPOSES:
+                secret_status = "present"
+
+        return KeyEmailDeliverySendability(
+            email_delivery_id=delivery.id,
+            one_time_secret_id=delivery.one_time_secret_id,
+            email_delivery_status=delivery.status,
+            one_time_secret_status=secret_status,
+            can_send=blocking_reason is None,
+            blocking_reason=blocking_reason,
+        )
+
     async def _resolve_email_delivery(
         self,
         *,
@@ -329,4 +385,32 @@ def _coerce_uuid(value: object) -> uuid.UUID | None:
         return value
     if isinstance(value, str) and value:
         return uuid.UUID(value)
+    return None
+
+
+def _email_delivery_send_blocking_reason(
+    *,
+    delivery_status: str,
+    delivery_owner_id: uuid.UUID | None,
+    delivery_gateway_key_id: uuid.UUID | None,
+    delivery_secret_id: uuid.UUID | None,
+    secret: object | None,
+    checked_at: datetime,
+) -> str | None:
+    if delivery_status not in {"pending", "failed"}:
+        return "Only pending or failed key email deliveries can be sent."
+    if delivery_secret_id is None:
+        return "This delivery is not backed by a one-time secret; rotate the key and create a new delivery."
+    if secret is None:
+        return "The one-time secret is unavailable; rotate the key and create a new delivery."
+    if secret.purpose not in KEY_EMAIL_PURPOSES:
+        return "The one-time secret is not valid for key email delivery."
+    if secret.status == "consumed" or secret.consumed_at is not None:
+        return "The one-time secret was already consumed; lost keys must be rotated."
+    if secret.status == "expired" or secret.expires_at <= checked_at:
+        return "The one-time secret is expired; rotate the key and create a new delivery."
+    if secret.status != "pending":
+        return "The one-time secret is not pending; rotate the key and create a new delivery."
+    if secret.owner_id != delivery_owner_id or secret.gateway_key_id != delivery_gateway_key_id:
+        return "The one-time secret does not match this email delivery."
     return None
