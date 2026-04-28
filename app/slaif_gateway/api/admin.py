@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import ipaddress
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,9 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_session_service import (
     AdminAuthenticationError,
     AdminSessionContext,
@@ -161,6 +164,98 @@ async def dashboard(request: Request) -> Response:
     )
 
 
+@router.get("/keys", response_class=HTMLResponse)
+async def list_admin_keys(
+    request: Request,
+    status: str | None = Query(None),
+    owner_email: str | None = Query(None),
+    public_key_id: str | None = Query(None),
+    institution_id: str | None = Query(None),
+    cohort_id: str | None = Query(None),
+    expired: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    parsed_institution_id = _parse_optional_uuid(institution_id)
+    parsed_cohort_id = _parse_optional_uuid(cohort_id)
+    if parsed_institution_id is False or parsed_cohort_id is False:
+        return HTMLResponse("Invalid filter.", status_code=400)
+
+    async with _admin_key_dashboard_service_scope(request) as service:
+        rows = await service.list_keys(
+            status=status,
+            owner_email=owner_email,
+            public_key_id=public_key_id,
+            institution_id=parsed_institution_id,
+            cohort_id=parsed_cohort_id,
+            expired=expired,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "keys/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "keys": rows,
+            "filters": {
+                "status": status or "",
+                "owner_email": owner_email or "",
+                "public_key_id": public_key_id or "",
+                "institution_id": institution_id or "",
+                "cohort_id": cohort_id or "",
+                "expired": "" if expired is None else str(expired).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/keys/{gateway_key_id}", response_class=HTMLResponse)
+async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_key_id = uuid.UUID(gateway_key_id)
+    except ValueError:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(parsed_key_id)
+    except AdminKeyNotFoundError:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "keys/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "key": key,
+        },
+    )
+
+
 @router.post("/logout", response_class=HTMLResponse)
 async def logout(request: Request, csrf_token: str = Form("")) -> Response:
     settings = _settings(request)
@@ -203,12 +298,37 @@ async def _get_current_admin_context(request: Request) -> AdminSessionContext | 
         return None
 
 
+async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, str] | Response:
+    settings = _settings(request)
+    session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
+    if not session_token:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    try:
+        async with _admin_service_scope(request) as service:
+            context = await service.validate_admin_session(session_token=session_token)
+            csrf_token = await service.refresh_csrf_token(admin_session_id=context.admin_session.id)
+            return context, csrf_token
+    except (AdminSessionError, RuntimeError):
+        response = RedirectResponse("/admin/login", status_code=303)
+        _clear_session_cookie(response, settings)
+        return response
+
+
 @asynccontextmanager
 async def _admin_service_scope(request: Request) -> AsyncIterator[AdminSessionService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
             yield _build_admin_session_service(request, session)
+
+
+@asynccontextmanager
+async def _admin_key_dashboard_service_scope(request: Request) -> AsyncIterator[AdminKeyDashboardService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield AdminKeyDashboardService(gateway_keys_repository=GatewayKeysRepository(session))
 
 
 def _build_admin_session_service(request: Request, session: AsyncSession) -> AdminSessionService:
@@ -280,6 +400,15 @@ def _client_host(request: Request) -> str | None:
     except ValueError:
         return None
     return host
+
+
+def _parse_optional_uuid(value: str | None) -> uuid.UUID | None | bool:
+    if value is None or not value.strip():
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return False
 
 
 def _admin_not_found() -> HTMLResponse:

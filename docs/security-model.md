@@ -115,9 +115,13 @@ explicit confirmation.
 
 ## Admin Web Sessions And CSRF
 
-The admin web foundation exposes `/admin/login`, `/admin/logout`, and a
-placeholder `/admin` dashboard. Full dashboard CRUD pages are not implemented
-yet.
+The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
+`/admin` dashboard, and read-only key list/detail pages under `/admin/keys`.
+The key pages display safe key metadata only: prefix, public key ID, hint,
+owner, status, computed validity state, quotas, counters, allowed policy
+summaries, and rate-limit policy. They do not display plaintext gateway keys,
+token hashes, encrypted one-time-secret payloads, nonces, provider keys,
+password hashes, or admin session tokens.
 
 Admin passwords are verified with Argon2id password hashes. Successful login
 creates a server-side `admin_sessions` row. PostgreSQL stores HMAC-hashed
@@ -131,11 +135,12 @@ clears the browser cookie.
 
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
-server-side session row.
+server-side session row. The read-only key pages use authenticated GET routes
+and do not provide key mutation forms.
 
 ## Current Limitations
 
-- Full dashboard management pages are not implemented yet.
+- State-changing dashboard management pages are not implemented yet.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.

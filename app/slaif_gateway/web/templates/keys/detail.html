@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}Gateway Key Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="key-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Detail</p>
+      <h1 id="key-heading">{{ key.key_prefix }}{{ key.public_key_id }}</h1>
+      <p class="muted">Safe metadata only. Plaintext keys, token hashes, and one-time secret material are not displayed.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Identity</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ key.id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ key.public_key_id }}</dd>
+        <dt>Prefix</dt>
+        <dd>{{ key.key_prefix }}</dd>
+        <dt>Hint</dt>
+        <dd>{{ key.key_hint or "Not set" }}</dd>
+        <dt>Stored status</dt>
+        <dd>{{ key.status }}</dd>
+        <dt>Display status</dt>
+        <dd><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Owner</h2>
+      <dl>
+        <dt>Name</dt>
+        <dd>{{ key.owner_display_name or "Unknown owner" }}</dd>
+        <dt>Email</dt>
+        <dd>{{ key.owner_email or "Unknown" }}</dd>
+        <dt>Owner ID</dt>
+        <dd>{{ key.owner_id }}</dd>
+        <dt>Institution</dt>
+        <dd>{{ key.institution_name or "Not set" }}</dd>
+        <dt>Cohort</dt>
+        <dd>{{ key.cohort_name or "Not set" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Validity</h2>
+      <dl>
+        <dt>Valid from</dt>
+        <dd>{{ key.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt>
+        <dd>{{ key.valid_until.isoformat() }}</dd>
+        <dt>Revoked at</dt>
+        <dd>{{ key.revoked_at.isoformat() if key.revoked_at else "Not revoked" }}</dd>
+        <dt>Revoke reason</dt>
+        <dd>{{ key.revoked_reason or "Not set" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Quotas</h2>
+      <dl>
+        <dt>Cost limit</dt>
+        <dd>{{ "EUR " ~ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</dd>
+        <dt>Token limit</dt>
+        <dd>{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}</dd>
+        <dt>Request limit</dt>
+        <dd>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}</dd>
+        <dt>Used</dt>
+        <dd>EUR {{ key.cost_used_eur }}, {{ key.tokens_used_total }} tokens, {{ key.requests_used_total }} requests</dd>
+        <dt>Reserved</dt>
+        <dd>EUR {{ key.cost_reserved_eur }}, {{ key.tokens_reserved_total }} tokens, {{ key.requests_reserved_total }} requests</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Policy</h2>
+      <dl>
+        <dt>Allowed models</dt>
+        <dd>{{ key.allowed_models_summary }}</dd>
+        <dt>Allowed endpoints</dt>
+        <dd>{{ key.allowed_endpoints_summary }}</dd>
+        <dt>Allowed providers</dt>
+        <dd>{{ key.allowed_providers_summary }}</dd>
+        <dt>Rate limits</dt>
+        <dd>{{ key.rate_limit_policy_summary }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Metadata</h2>
+      <dl>
+        <dt>Created</dt>
+        <dd>{{ key.created_at.isoformat() }}</dd>
+        <dt>Updated</dt>
+        <dd>{{ key.updated_at.isoformat() }}</dd>
+        <dt>Last used</dt>
+        <dd>{{ key.last_used_at.isoformat() if key.last_used_at else "Never" }}</dd>
+        <dt>Quota resets</dt>
+        <dd>{{ key.quota_reset_count }}</dd>
+      </dl>
+    </section>
+  </div>
+</section>
+{% endblock %}

@@ -147,11 +147,17 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 - `ADMIN_LOGIN_CSRF_COOKIE_NAME` controls the temporary login CSRF cookie name.
 - `ADMIN_CSRF_TTL_SECONDS` controls login CSRF token lifetime.
 
-The current web surface includes `/admin/login`, `/admin/logout`, and a
-placeholder `/admin` dashboard. It does not include key, owner, institution,
-cohort, pricing, routing, provider, usage, or email delivery management pages
-yet. Admin sessions are stored server-side in PostgreSQL with only HMAC-hashed
-session and CSRF tokens. State-changing admin forms use CSRF protection.
+The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
+`/admin` dashboard, and read-only key list/detail pages under `/admin/keys`.
+The key pages show safe metadata only: public key ID, prefix, hint, owner,
+status, validity, quota counters, policy summaries, and rate-limit policy.
+They do not show plaintext gateway keys, token hashes, one-time-secret
+material, provider keys, password hashes, or session tokens.
+
+State-changing key, owner, institution, cohort, pricing, routing, provider,
+usage, and email delivery dashboard workflows are not implemented yet. Admin
+sessions are stored server-side in PostgreSQL with only HMAC-hashed session and
+CSRF tokens. State-changing admin forms use CSRF protection.
 
 ## Email, Celery, And SMTP
 

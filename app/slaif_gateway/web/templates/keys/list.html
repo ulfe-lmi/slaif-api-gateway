@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Gateway Keys{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="keys-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="keys-heading">Gateway Keys</h1>
+      <p class="muted">Read-only metadata. Plaintext keys are never available after creation or rotation.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar" method="get" action="/admin/keys">
+    <label>
+      Status
+      <select name="status">
+        <option value="" {% if not filters.status %}selected{% endif %}>Any</option>
+        <option value="active" {% if filters.status == "active" %}selected{% endif %}>Active</option>
+        <option value="suspended" {% if filters.status == "suspended" %}selected{% endif %}>Suspended</option>
+        <option value="revoked" {% if filters.status == "revoked" %}selected{% endif %}>Revoked</option>
+      </select>
+    </label>
+    <label>
+      Owner email
+      <input name="owner_email" value="{{ filters.owner_email }}" autocomplete="off">
+    </label>
+    <label>
+      Public key ID
+      <input name="public_key_id" value="{{ filters.public_key_id }}" autocomplete="off">
+    </label>
+    <label>
+      Cohort ID
+      <input name="cohort_id" value="{{ filters.cohort_id }}" autocomplete="off">
+    </label>
+    <label>
+      Expired
+      <select name="expired">
+        <option value="" {% if filters.expired == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.expired == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.expired == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th>Validity</th>
+          <th>Usage</th>
+          <th>Limits</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in keys %}
+        <tr>
+          <td>
+            <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
+            {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
+          </td>
+          <td>
+            {{ key.owner_display_name or "Unknown owner" }}
+            {% if key.owner_email %}<div class="muted small">{{ key.owner_email }}</div>{% endif %}
+            {% if key.institution_name or key.cohort_name %}
+            <div class="muted small">{{ key.institution_name or "No institution" }}{% if key.cohort_name %} / {{ key.cohort_name }}{% endif %}</div>
+            {% endif %}
+          </td>
+          <td><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></td>
+          <td>
+            <div>{{ key.valid_from.isoformat() }}</div>
+            <div class="muted small">until {{ key.valid_until.isoformat() }}</div>
+          </td>
+          <td>
+            <div>{{ key.requests_used_total }} requests</div>
+            <div class="muted small">{{ key.tokens_used_total }} tokens / EUR {{ key.cost_used_eur }}</div>
+          </td>
+          <td>
+            <div>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }} requests</div>
+            <div class="muted small">{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }} tokens / EUR {{ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="empty-state">No gateway keys found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
