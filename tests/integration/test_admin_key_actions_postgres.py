@@ -145,6 +145,21 @@ def _assert_safe_html(html: str, data: dict[str, object], settings: Settings) ->
     assert "session-token" not in html
 
 
+def _hard_quota_snapshot(key: GatewayKey) -> dict[str, object]:
+    return {
+        "cost_used_eur": key.cost_used_eur,
+        "tokens_used_total": key.tokens_used_total,
+        "requests_used_total": key.requests_used_total,
+        "cost_reserved_eur": key.cost_reserved_eur,
+        "tokens_reserved_total": key.tokens_reserved_total,
+        "requests_reserved_total": key.requests_reserved_total,
+        "rate_limit_requests_per_minute": key.rate_limit_requests_per_minute,
+        "rate_limit_tokens_per_minute": key.rate_limit_tokens_per_minute,
+        "max_concurrent_requests": key.max_concurrent_requests,
+        "metadata_json": key.metadata_json,
+    }
+
+
 def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> None:
     data = asyncio.run(_create_admin_and_key(migrated_postgres_url))
     key_id = data["gateway_key_id"]
@@ -160,6 +175,24 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         assert unauthenticated.status_code == 303
         assert unauthenticated.headers["location"] == "/admin/login"
         assert asyncio.run(_get_key(migrated_postgres_url, key_id)).status == "active"
+
+        unauthenticated_validity = client.post(
+            f"/admin/keys/{key_id}/validity",
+            data={"valid_until": "2026-06-01T00:00:00+00:00", "reason": "should not mutate"},
+            follow_redirects=False,
+        )
+        assert unauthenticated_validity.status_code == 303
+        assert unauthenticated_validity.headers["location"] == "/admin/login"
+
+        unauthenticated_limits = client.post(
+            f"/admin/keys/{key_id}/limits",
+            data={"cost_limit_eur": "99.000000000", "reason": "should not mutate"},
+            follow_redirects=False,
+        )
+        assert unauthenticated_limits.status_code == 303
+        assert unauthenticated_limits.headers["location"] == "/admin/login"
+        original_key = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert original_key.cost_limit_eur == Decimal("12.000000000")
 
         login_page = client.get("/admin/login")
         login_csrf = _csrf_from_html(login_page.text)
@@ -183,6 +216,107 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         assert "Invalid CSRF token." in no_csrf.text
         assert asyncio.run(_get_key(migrated_postgres_url, key_id)).status == "active"
 
+        csrf = _csrf_from_html(detail.text)
+        no_csrf_validity = client.post(
+            f"/admin/keys/{key_id}/validity",
+            data={"valid_until": "2026-06-01T00:00:00+00:00", "reason": "missing csrf"},
+        )
+        assert no_csrf_validity.status_code == 400
+        assert "Invalid CSRF token." in no_csrf_validity.text
+
+        before_policy_update = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        before_quota_snapshot = _hard_quota_snapshot(before_policy_update)
+
+        invalid_datetime = client.post(
+            f"/admin/keys/{key_id}/validity",
+            data={
+                "csrf_token": csrf,
+                "valid_until": "not-a-date",
+                "reason": "bad datetime",
+            },
+            follow_redirects=False,
+        )
+        assert invalid_datetime.status_code == 303
+        assert invalid_datetime.headers["location"] == (
+            f"/admin/keys/{key_id}?message=invalid_gateway_key_validity"
+        )
+        unchanged_after_bad_datetime = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert unchanged_after_bad_datetime.valid_from == before_policy_update.valid_from
+        assert unchanged_after_bad_datetime.valid_until == before_policy_update.valid_until
+
+        new_valid_from = datetime.now(UTC) - timedelta(hours=1)
+        new_valid_until = datetime.now(UTC) + timedelta(days=45)
+        validity_update = client.post(
+            f"/admin/keys/{key_id}/validity",
+            data={
+                "csrf_token": csrf,
+                "valid_from": new_valid_from.isoformat(),
+                "valid_until": new_valid_until.isoformat(),
+                "reason": "extend workshop window",
+            },
+            follow_redirects=False,
+        )
+        assert validity_update.status_code == 303
+        assert validity_update.headers["location"] == f"/admin/keys/{key_id}?message=key_validity_updated"
+        updated_validity = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert updated_validity.valid_from.replace(microsecond=0) == new_valid_from.replace(microsecond=0)
+        assert updated_validity.valid_until.replace(microsecond=0) == new_valid_until.replace(microsecond=0)
+        assert "extend_key" in asyncio.run(_audit_actions(migrated_postgres_url, key_id))
+
+        invalid_limit = client.post(
+            f"/admin/keys/{key_id}/limits",
+            data={
+                "csrf_token": csrf,
+                "cost_limit_eur": "-1",
+                "reason": "bad limit",
+            },
+            follow_redirects=False,
+        )
+        assert invalid_limit.status_code == 303
+        assert invalid_limit.headers["location"] == (
+            f"/admin/keys/{key_id}?message=invalid_gateway_key_limits"
+        )
+        unchanged_after_bad_limit = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert unchanged_after_bad_limit.cost_limit_eur == Decimal("12.000000000")
+        assert unchanged_after_bad_limit.token_limit_total == 1200
+        assert unchanged_after_bad_limit.request_limit_total == 120
+
+        limit_update = client.post(
+            f"/admin/keys/{key_id}/limits",
+            data={
+                "csrf_token": csrf,
+                "cost_limit_eur": "24.000000000",
+                "token_limit": "2400",
+                "request_limit": "240",
+                "reason": "raise hard quota",
+            },
+            follow_redirects=False,
+        )
+        assert limit_update.status_code == 303
+        assert limit_update.headers["location"] == f"/admin/keys/{key_id}?message=key_limits_updated"
+        updated_limits = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert updated_limits.cost_limit_eur == Decimal("24.000000000")
+        assert updated_limits.token_limit_total == 2400
+        assert updated_limits.request_limit_total == 240
+        after_quota_snapshot = _hard_quota_snapshot(updated_limits)
+        for field in (
+            "cost_used_eur",
+            "tokens_used_total",
+            "requests_used_total",
+            "cost_reserved_eur",
+            "tokens_reserved_total",
+            "requests_reserved_total",
+            "rate_limit_requests_per_minute",
+            "rate_limit_tokens_per_minute",
+            "max_concurrent_requests",
+            "metadata_json",
+        ):
+            assert after_quota_snapshot[field] == before_quota_snapshot[field]
+        assert "update_key_limits" in asyncio.run(_audit_actions(migrated_postgres_url, key_id))
+
+        detail = client.get(f"/admin/keys/{key_id}")
+        assert detail.status_code == 200
+        _assert_safe_html(detail.text, data, settings)
         csrf = _csrf_from_html(detail.text)
         suspended = client.post(
             f"/admin/keys/{key_id}/suspend",

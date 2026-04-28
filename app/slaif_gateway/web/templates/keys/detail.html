@@ -113,6 +113,86 @@
     </section>
   </div>
 
+  <section class="action-panel" aria-labelledby="key-policy-actions-heading">
+    <h2 id="key-policy-actions-heading">Validity And Hard Quota</h2>
+    <p class="muted">These forms update PostgreSQL-backed key policy through the existing key service and audit trail. Redis operational rate limits are configured separately. Plaintext keys cannot be recovered or sent again from this page.</p>
+    <div class="management-grid">
+      <div class="action-card">
+        <h3>Update Validity</h3>
+        <p class="muted">Change when this key is valid for `/v1` authentication. Leave a field blank to keep its current value.</p>
+        <dl class="compact-dl">
+          <dt>Current from</dt>
+          <dd>{{ key.valid_from.isoformat() }}</dd>
+          <dt>Current until</dt>
+          <dd>{{ key.valid_until.isoformat() }}</dd>
+        </dl>
+        <form method="post" action="/admin/keys/{{ key.id }}/validity">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Valid from
+            <input name="valid_from" autocomplete="off" placeholder="{{ key.valid_from.isoformat() }}">
+          </label>
+          <label>
+            Valid until
+            <input name="valid_until" autocomplete="off" placeholder="{{ key.valid_until.isoformat() }}">
+          </label>
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <p class="warning-text">Invalid windows are rejected; `valid_until` must be after `valid_from`.</p>
+          <button type="submit">Update validity</button>
+        </form>
+      </div>
+
+      <div class="action-card">
+        <h3>Update Hard Quota Limits</h3>
+        <p class="muted">Change lifetime cost, token, and request limits enforced by PostgreSQL. Leave a field blank to keep its current value.</p>
+        <dl class="compact-dl">
+          <dt>Current cost</dt>
+          <dd>{{ "EUR " ~ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</dd>
+          <dt>Current tokens</dt>
+          <dd>{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}</dd>
+          <dt>Current requests</dt>
+          <dd>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}</dd>
+        </dl>
+        <form method="post" action="/admin/keys/{{ key.id }}/limits">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Cost limit EUR
+            <input name="cost_limit_eur" inputmode="decimal" autocomplete="off" placeholder="{{ key.cost_limit_eur if key.cost_limit_eur is not none else 'No limit' }}">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="clear_cost_limit" value="true">
+            Clear cost limit
+          </label>
+          <label>
+            Token limit
+            <input name="token_limit" inputmode="numeric" autocomplete="off" placeholder="{{ key.token_limit_total if key.token_limit_total is not none else 'No limit' }}">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="clear_token_limit" value="true">
+            Clear token limit
+          </label>
+          <label>
+            Request limit
+            <input name="request_limit" inputmode="numeric" autocomplete="off" placeholder="{{ key.request_limit_total if key.request_limit_total is not none else 'No limit' }}">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="clear_request_limit" value="true">
+            Clear request limit
+          </label>
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <p class="warning-text">Lowering a hard quota can make future reservations fail. Used and reserved counters are not reset.</p>
+          <button type="submit">Update hard quota limits</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <section class="action-panel" aria-labelledby="key-actions-heading">
     <h2 id="key-actions-heading">Lifecycle Actions</h2>
     <p class="muted">Actions use the existing key service and audit trail. They do not display plaintext keys.</p>
