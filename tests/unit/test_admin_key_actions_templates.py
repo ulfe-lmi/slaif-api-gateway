@@ -186,6 +186,39 @@ def test_key_detail_renders_validity_and_limit_forms(monkeypatch) -> None:
     assert "Used and reserved counters are not reset" in html
 
 
+def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:
+    key = replace(
+        _detail(),
+        cost_used_eur=Decimal("3.000000000"),
+        tokens_used_total=30,
+        requests_used_total=3,
+        cost_reserved_eur=Decimal("4.000000000"),
+        tokens_reserved_total=40,
+        requests_reserved_total=4,
+    )
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert f'action="/admin/keys/{key.id}/reset-usage"' in html
+    assert 'name="csrf_token" value="rendered-csrf-token"' in html
+    assert 'name="confirm_reset_usage" value="true"' in html
+    assert 'name="reset_reserved" value="true"' in html
+    assert 'name="confirm_reset_reserved" value="true"' in html
+    assert "Reserved counters normally represent in-flight quota reservations" in html
+    assert "admin repair action" in html
+    assert "does not delete usage ledger history" in html
+    assert "Hard quota limits remain unchanged" in html
+    assert "Redis rate-limit counters are not reset" in html
+    assert str(key.cost_used_eur) in html
+    assert str(key.tokens_used_total) in html
+    assert str(key.requests_used_total) in html
+    assert str(key.cost_reserved_eur) in html
+    assert str(key.tokens_reserved_total) in html
+    assert str(key.requests_reserved_total) in html
+
+
 def test_suspended_key_detail_renders_activation_form(monkeypatch) -> None:
     key = _detail(status="suspended", display_status="suspended", can_suspend=False, can_activate=True)
     client = TestClient(_app())

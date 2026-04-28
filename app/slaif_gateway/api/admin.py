@@ -48,6 +48,7 @@ from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     RevokeGatewayKeyInput,
+    ResetGatewayKeyUsageInput,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyValidityInput,
@@ -62,10 +63,17 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_revoked": ("success", "Gateway key revoked permanently."),
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
+    "key_usage_reset": ("success", "Gateway key usage counters reset."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
     "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
     "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
     "limits_reason_required": ("error", "Enter an audit reason before updating hard quota limits."),
+    "usage_reset_confirmation_required": ("error", "Confirm usage-counter reset before continuing."),
+    "usage_reset_reason_required": ("error", "Enter an audit reason before resetting usage counters."),
+    "reserved_reset_confirmation_required": (
+        "error",
+        "Confirm reserved-counter repair reset before continuing.",
+    ),
     "invalid_gateway_key_validity": ("error", "Enter a valid key validity window."),
     "invalid_gateway_key_limits": ("error", "Enter valid positive hard quota limits."),
     "gateway_key_no_validity_change": ("error", "Change at least one validity field before submitting."),
@@ -550,6 +558,56 @@ async def update_admin_key_limits(
         return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_limits_updated")
+
+
+@router.post("/keys/{gateway_key_id}/reset-usage", response_class=HTMLResponse)
+async def reset_admin_key_usage(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    confirm_reset_usage: str = Form(""),
+    reset_reserved: str = Form(""),
+    confirm_reset_reserved: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if not _is_checked(confirm_reset_usage):
+        return _redirect_to_admin_key(parsed_key_id, message="usage_reset_confirmation_required")
+
+    reset_reserved_counters = _is_checked(reset_reserved)
+    if reset_reserved_counters and not _is_checked(confirm_reset_reserved):
+        return _redirect_to_admin_key(parsed_key_id, message="reserved_reset_confirmation_required")
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(parsed_key_id, message="usage_reset_reason_required")
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.reset_gateway_key_usage(
+                ResetGatewayKeyUsageInput(
+                    gateway_key_id=parsed_key_id,
+                    reset_used_counters=True,
+                    reset_reserved_counters=reset_reserved_counters,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_usage_reset")
 
 
 @router.get("/owners", response_class=HTMLResponse)

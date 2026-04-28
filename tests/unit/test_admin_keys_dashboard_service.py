@@ -138,6 +138,12 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert row.cost_limit_eur == Decimal("10.000000000")
     assert row.token_limit_total == 1000
     assert row.request_limit_total == 100
+    assert row.cost_used_eur == Decimal("1.000000000")
+    assert row.tokens_used_total == 10
+    assert row.requests_used_total == 2
+    assert row.cost_reserved_eur == Decimal("0.100000000")
+    assert row.tokens_reserved_total == 5
+    assert row.requests_reserved_total == 1
     assert "token_hash" not in row.__dataclass_fields__
     assert repo.list_calls[0]["institution_id"] == institution_id
     assert repo.list_calls[0]["cohort_id"] == cohort_id

@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import AuditLog, GatewayKey
+from slaif_gateway.db.models import AuditLog, GatewayKey, UsageLedger
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
@@ -132,6 +132,61 @@ async def _audit_actions(database_url: str, gateway_key_id: uuid.UUID) -> list[s
     return actions
 
 
+async def _seed_usage_counters_and_ledger(database_url: str, gateway_key_id: uuid.UUID) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        async with session.begin():
+            key = await session.get(GatewayKey, gateway_key_id)
+            assert key is not None
+            key.cost_used_eur = Decimal("3.000000000")
+            key.tokens_used_total = 30
+            key.requests_used_total = 3
+            key.cost_reserved_eur = Decimal("4.000000000")
+            key.tokens_reserved_total = 40
+            key.requests_reserved_total = 4
+            key.last_used_at = now
+            session.add(
+                UsageLedger(
+                    request_id=f"admin-reset-test-{uuid.uuid4()}",
+                    gateway_key_id=key.id,
+                    owner_id=key.owner_id,
+                    cohort_id=key.cohort_id,
+                    endpoint="/v1/chat/completions",
+                    provider="openai",
+                    requested_model="gpt-test",
+                    resolved_model="gpt-test",
+                    success=True,
+                    accounting_status="finalized",
+                    http_status=200,
+                    prompt_tokens=10,
+                    completion_tokens=20,
+                    input_tokens=10,
+                    output_tokens=20,
+                    total_tokens=30,
+                    actual_cost_eur=Decimal("3.000000000"),
+                    usage_raw={"total_tokens": 30},
+                    response_metadata={"source": "admin reset integration test"},
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+    await engine.dispose()
+
+
+async def _usage_ledger_count(database_url: str, gateway_key_id: uuid.UUID) -> int:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(func.count()).select_from(UsageLedger).where(UsageLedger.gateway_key_id == gateway_key_id)
+        )
+        count = int(result.scalar_one())
+    await engine.dispose()
+    return count
+
+
 def _assert_safe_html(html: str, data: dict[str, object], settings: Settings) -> None:
     assert str(data["public_key_id"]) in html
     assert str(data["plaintext_key"]) not in html
@@ -194,6 +249,20 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         original_key = asyncio.run(_get_key(migrated_postgres_url, key_id))
         assert original_key.cost_limit_eur == Decimal("12.000000000")
 
+        asyncio.run(_seed_usage_counters_and_ledger(migrated_postgres_url, key_id))
+        ledger_count_before_reset = asyncio.run(_usage_ledger_count(migrated_postgres_url, key_id))
+        unauthenticated_reset = client.post(
+            f"/admin/keys/{key_id}/reset-usage",
+            data={"confirm_reset_usage": "true", "reason": "should not mutate"},
+            follow_redirects=False,
+        )
+        assert unauthenticated_reset.status_code == 303
+        assert unauthenticated_reset.headers["location"] == "/admin/login"
+        after_unauthenticated_reset = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert after_unauthenticated_reset.cost_used_eur == Decimal("3.000000000")
+        assert after_unauthenticated_reset.cost_reserved_eur == Decimal("4.000000000")
+        assert asyncio.run(_usage_ledger_count(migrated_postgres_url, key_id)) == ledger_count_before_reset
+
         login_page = client.get("/admin/login")
         login_csrf = _csrf_from_html(login_page.text)
         login = client.post(
@@ -223,6 +292,16 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         )
         assert no_csrf_validity.status_code == 400
         assert "Invalid CSRF token." in no_csrf_validity.text
+
+        no_csrf_reset = client.post(
+            f"/admin/keys/{key_id}/reset-usage",
+            data={"confirm_reset_usage": "true", "reason": "missing csrf"},
+        )
+        assert no_csrf_reset.status_code == 400
+        assert "Invalid CSRF token." in no_csrf_reset.text
+        after_no_csrf_reset = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert after_no_csrf_reset.cost_used_eur == Decimal("3.000000000")
+        assert after_no_csrf_reset.cost_reserved_eur == Decimal("4.000000000")
 
         before_policy_update = asyncio.run(_get_key(migrated_postgres_url, key_id))
         before_quota_snapshot = _hard_quota_snapshot(before_policy_update)
@@ -313,6 +392,73 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         ):
             assert after_quota_snapshot[field] == before_quota_snapshot[field]
         assert "update_key_limits" in asyncio.run(_audit_actions(migrated_postgres_url, key_id))
+
+        detail = client.get(f"/admin/keys/{key_id}")
+        assert detail.status_code == 200
+        _assert_safe_html(detail.text, data, settings)
+        csrf = _csrf_from_html(detail.text)
+        used_reset = client.post(
+            f"/admin/keys/{key_id}/reset-usage",
+            data={
+                "csrf_token": csrf,
+                "confirm_reset_usage": "true",
+                "reason": "reset workshop usage counters",
+            },
+            follow_redirects=False,
+        )
+        assert used_reset.status_code == 303
+        assert used_reset.headers["location"] == f"/admin/keys/{key_id}?message=key_usage_reset"
+        after_used_reset = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert after_used_reset.cost_used_eur == Decimal("0E-9")
+        assert after_used_reset.tokens_used_total == 0
+        assert after_used_reset.requests_used_total == 0
+        assert after_used_reset.cost_reserved_eur == Decimal("4.000000000")
+        assert after_used_reset.tokens_reserved_total == 40
+        assert after_used_reset.requests_reserved_total == 4
+        assert asyncio.run(_usage_ledger_count(migrated_postgres_url, key_id)) == ledger_count_before_reset
+        assert "reset_quota" in asyncio.run(_audit_actions(migrated_postgres_url, key_id))
+
+        detail = client.get(f"/admin/keys/{key_id}")
+        csrf = _csrf_from_html(detail.text)
+        missing_reserved_confirmation = client.post(
+            f"/admin/keys/{key_id}/reset-usage",
+            data={
+                "csrf_token": csrf,
+                "confirm_reset_usage": "true",
+                "reset_reserved": "true",
+                "reason": "repair stale reserved counters",
+            },
+            follow_redirects=False,
+        )
+        assert missing_reserved_confirmation.status_code == 303
+        assert missing_reserved_confirmation.headers["location"] == (
+            f"/admin/keys/{key_id}?message=reserved_reset_confirmation_required"
+        )
+        after_missing_reserved_confirmation = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert after_missing_reserved_confirmation.cost_reserved_eur == Decimal("4.000000000")
+        assert after_missing_reserved_confirmation.tokens_reserved_total == 40
+        assert after_missing_reserved_confirmation.requests_reserved_total == 4
+
+        detail = client.get(f"/admin/keys/{key_id}")
+        csrf = _csrf_from_html(detail.text)
+        reserved_reset = client.post(
+            f"/admin/keys/{key_id}/reset-usage",
+            data={
+                "csrf_token": csrf,
+                "confirm_reset_usage": "true",
+                "reset_reserved": "true",
+                "confirm_reset_reserved": "true",
+                "reason": "repair stale reserved counters",
+            },
+            follow_redirects=False,
+        )
+        assert reserved_reset.status_code == 303
+        assert reserved_reset.headers["location"] == f"/admin/keys/{key_id}?message=key_usage_reset"
+        after_reserved_reset = asyncio.run(_get_key(migrated_postgres_url, key_id))
+        assert after_reserved_reset.cost_reserved_eur == Decimal("0E-9")
+        assert after_reserved_reset.tokens_reserved_total == 0
+        assert after_reserved_reset.requests_reserved_total == 0
+        assert asyncio.run(_usage_ledger_count(migrated_postgres_url, key_id)) == ledger_count_before_reset
 
         detail = client.get(f"/admin/keys/{key_id}")
         assert detail.status_code == 200
