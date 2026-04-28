@@ -242,6 +242,15 @@ Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRo
 
 Redis rate-limit integration tests use `TEST_REDIS_URL` when set. If it is not set and `redis-server` is available locally, tests start a temporary user-owned Redis instance on a free localhost port.
 
+## External Reviews And Remediation
+
+The project has undergone external quality/security-oriented mid-development reviews. Review artifacts and remediation status are tracked in:
+
+- [`docs/security/reviews/`](docs/security/reviews/)
+- [`docs/security/reviews/remediation-matrix.md`](docs/security/reviews/remediation-matrix.md)
+
+These reviews are not formal certifications or penetration tests. They document major architecture, security, accounting, compatibility, and production-readiness findings and the PRs/checks that addressed them.
+
 ## Security Notes
 
 - Plaintext gateway keys are shown only once at creation or rotation.
