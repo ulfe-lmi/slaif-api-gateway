@@ -35,5 +35,5 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 | Streaming finalization recovery | Implemented | OpenAI, OpenRouter | Provider-completed finalization failures are durable and operator-repairable | Unit and PostgreSQL integration tests |
 | Stale reservation reconciliation | Implemented | Not provider-specific | Operator repair for expired pending reservations; refuses provider-completed recovery rows as zero-cost stale failures | Unit and PostgreSQL integration tests |
 | Dashboard pages | Not implemented | None | Out of scope for current implementation | None |
-| Email/Celery workers | Not implemented | None | CLI/admin one-time secret storage exists separately; sending workers are future work | None |
+| Email/Celery workers | Implemented for explicit CLI workflows | Not provider-specific | Key create/rotate can create pending delivery rows, send immediately, or enqueue Celery delivery through encrypted one-time secrets; no automatic sending by default | Unit and PostgreSQL integration tests |
 | Real upstream calls in normal tests | Not used | None | Upstream HTTP is mocked with RESPX | Test suite configuration |

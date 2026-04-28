@@ -140,5 +140,5 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
 - Dashboard pages.
-- Email sending and Celery workers.
+- Automatic/dashboard email workflows.
 - Real upstream smoke tests in the normal test suite.

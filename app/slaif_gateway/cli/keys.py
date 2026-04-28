@@ -7,9 +7,10 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -19,8 +20,10 @@ from slaif_gateway.cli.common import CliError, write_secret_file
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.session import get_sessionmaker
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
@@ -36,8 +39,12 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
+from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.email_errors import EmailError
+from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import GatewayKeyNotFoundError, KeyManagementError
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
 
@@ -48,6 +55,24 @@ class CliKeyError(Exception):
 
 class CliDatabaseConfigError(CliKeyError):
     """Raised when CLI database settings are missing or invalid."""
+
+
+class EmailDeliveryMode(str, Enum):
+    """Explicit key email-delivery mode for create/rotate commands."""
+
+    none = "none"
+    pending = "pending"
+    send_now = "send-now"
+    enqueue = "enqueue"
+
+
+@dataclass(frozen=True, slots=True)
+class KeyEmailDeliveryCliResult:
+    """Safe combined metadata for key creation/rotation and optional delivery."""
+
+    key_result: CreatedGatewayKey | RotatedGatewayKeyResult
+    delivery_result: PendingKeyEmailResult | None = None
+    celery_task_id: str | None = None
 
 
 @asynccontextmanager
@@ -71,6 +96,42 @@ async def _key_runtime() -> AsyncIterator[tuple[Settings, GatewayKeysRepository,
                 audit_repository=AuditRepository(session),
             )
             yield settings, keys_repository, service
+
+
+@asynccontextmanager
+async def _key_email_runtime() -> AsyncIterator[
+    tuple[Settings, KeyService, EmailDeliveryService]
+]:
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        async with session.begin():
+            keys_repository = GatewayKeysRepository(session)
+            one_time_secrets_repository = OneTimeSecretsRepository(session)
+            audit_repository = AuditRepository(session)
+            key_service = KeyService(
+                settings=settings,
+                gateway_keys_repository=keys_repository,
+                one_time_secrets_repository=one_time_secrets_repository,
+                audit_repository=audit_repository,
+            )
+            email_delivery_service = EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=one_time_secrets_repository,
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=keys_repository,
+                owners_repository=OwnersRepository(session),
+                audit_repository=audit_repository,
+                email_service=EmailService(settings),
+            )
+            yield settings, key_service, email_delivery_service
 
 
 def _run_async(coro: Any) -> Any:
@@ -273,6 +334,49 @@ def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = Tr
     return payload
 
 
+def _delivery_result_dict(result: PendingKeyEmailResult) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "email_delivery_id": result.email_delivery_id,
+        "one_time_secret_id": result.one_time_secret_id,
+        "status": result.status,
+    }
+    if result.gateway_key_id is not None:
+        payload["gateway_key_id"] = result.gateway_key_id
+    if result.owner_id is not None:
+        payload["owner_id"] = result.owner_id
+    if result.recipient_email is not None:
+        payload["recipient_email"] = result.recipient_email
+    if result.provider_message_id is not None:
+        payload["provider_message_id"] = result.provider_message_id
+    if result.error_code is not None:
+        payload["error_code"] = result.error_code
+    if result.error_message is not None:
+        payload["error_message"] = result.error_message
+    return payload
+
+
+def _append_email_delivery_payload(
+    payload: dict[str, object],
+    *,
+    delivery_result: PendingKeyEmailResult | None,
+    celery_task_id: str | None = None,
+) -> dict[str, object]:
+    if delivery_result is not None:
+        payload["email_delivery"] = _delivery_result_dict(delivery_result)
+        payload["email_delivery_id"] = delivery_result.email_delivery_id
+        payload["email_delivery_status"] = delivery_result.status
+        if delivery_result.recipient_email is not None:
+            payload["email_delivery_recipient"] = delivery_result.recipient_email
+    if celery_task_id is not None:
+        payload["celery_task_id"] = celery_task_id
+    return payload
+
+
+def _exit_if_email_delivery_failed(delivery_result: PendingKeyEmailResult | None) -> None:
+    if delivery_result is not None and delivery_result.status == "failed":
+        raise typer.Exit(code=1)
+
+
 def _rotated_key_dict(
     result: RotatedGatewayKeyResult, *, include_plaintext: bool = True
 ) -> dict[str, object]:
@@ -285,6 +389,7 @@ def _rotated_key_dict(
         "new_status": result.new_status,
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
+        "owner_id": result.owner_id,
     }
     if include_plaintext:
         payload["new_plaintext_key"] = result.new_plaintext_key
@@ -306,6 +411,9 @@ def _echo_kv(payload: dict[str, object]) -> None:
 
 def _handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     if isinstance(exc, KeyManagementError):
+        message = exc.safe_message
+        code = exc.error_code
+    elif isinstance(exc, EmailError):
         message = exc.safe_message
         code = exc.error_code
     elif isinstance(exc, CliDatabaseConfigError):
@@ -333,9 +441,18 @@ def _validate_secret_output_options(
     json_output: bool,
     show_plaintext: bool,
     secret_output_file: Path | None,
+    email_delivery_mode: EmailDeliveryMode = EmailDeliveryMode.none,
 ) -> None:
     if show_plaintext and secret_output_file is not None:
         raise typer.BadParameter("Use either --show-plaintext or --secret-output-file, not both")
+    if email_delivery_mode in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}:
+        if show_plaintext:
+            raise typer.BadParameter("--show-plaintext cannot be combined with email-delivery send-now/enqueue")
+        if secret_output_file is not None:
+            raise typer.BadParameter(
+                "--secret-output-file cannot be combined with email-delivery send-now/enqueue"
+            )
+        return
     if json_output and not show_plaintext and secret_output_file is None:
         raise typer.BadParameter(
             "JSON output does not include plaintext keys by default; use --show-plaintext "
@@ -362,6 +479,31 @@ def _warn_secret_file(path: Path) -> None:
     )
 
 
+def _warn_email_delivery_channel(mode: EmailDeliveryMode) -> None:
+    if mode == EmailDeliveryMode.pending:
+        typer.secho(
+            "Warning: email delivery is pending; send it with "
+            "slaif-gateway email send-pending-key.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    elif mode == EmailDeliveryMode.send_now:
+        typer.secho(
+            "Warning: plaintext key is not printed because email delivery is the selected "
+            "secret output channel. Lost keys cannot be resent; rotate instead.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    elif mode == EmailDeliveryMode.enqueue:
+        typer.secho(
+            "Warning: plaintext key is not printed because queued email delivery is the selected "
+            "secret output channel. Delivery depends on worker availability; lost keys cannot be "
+            "resent, rotate instead.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+
 def _warn_reserved_counter_reset() -> None:
     typer.secho(
         "Warning: resetting reserved counters is an admin repair action and does not delete ledger rows.",
@@ -373,6 +515,65 @@ def _warn_reserved_counter_reset() -> None:
 async def _create_gateway_key(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
     async with _key_runtime() as (_, _, service):
         return await service.create_gateway_key(payload)
+
+
+async def _create_gateway_key_with_email_delivery(
+    payload: CreateGatewayKeyInput,
+    *,
+    email_delivery_mode: EmailDeliveryMode,
+) -> KeyEmailDeliveryCliResult:
+    async with _key_email_runtime() as (settings, key_service, email_delivery_service):
+        _validate_email_delivery_preconditions(settings, email_delivery_mode)
+        key_result = await key_service.create_gateway_key(payload)
+        delivery_result = await _create_pending_delivery_for_created_key(
+            email_delivery_service,
+            key_result=key_result,
+            actor_admin_id=payload.created_by_admin_id,
+            reason=payload.note,
+        )
+
+    if email_delivery_mode == EmailDeliveryMode.send_now:
+        delivery_result = await _send_pending_key_email_now(
+            one_time_secret_id=key_result.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=payload.created_by_admin_id,
+            reason=payload.note,
+        )
+    celery_task_id = _enqueue_pending_key_email(
+        one_time_secret_id=key_result.one_time_secret_id,
+        email_delivery_id=delivery_result.email_delivery_id,
+        actor_admin_id=payload.created_by_admin_id,
+    ) if email_delivery_mode == EmailDeliveryMode.enqueue else None
+    if email_delivery_mode == EmailDeliveryMode.enqueue:
+        delivery_result = PendingKeyEmailResult(
+            email_delivery_id=delivery_result.email_delivery_id,
+            one_time_secret_id=delivery_result.one_time_secret_id,
+            gateway_key_id=delivery_result.gateway_key_id,
+            owner_id=delivery_result.owner_id,
+            recipient_email=delivery_result.recipient_email,
+            status="queued",
+        )
+    return KeyEmailDeliveryCliResult(
+        key_result=key_result,
+        delivery_result=delivery_result,
+        celery_task_id=celery_task_id,
+    )
+
+
+async def _create_pending_delivery_for_created_key(
+    service: EmailDeliveryService,
+    *,
+    key_result: CreatedGatewayKey,
+    actor_admin_id: uuid.UUID | None,
+    reason: str | None,
+) -> PendingKeyEmailResult:
+    return await service.create_pending_key_email_delivery(
+        gateway_key_id=key_result.gateway_key_id,
+        one_time_secret_id=key_result.one_time_secret_id,
+        owner_id=key_result.owner_id,
+        actor_admin_id=actor_admin_id,
+        reason=reason,
+    )
 
 
 async def _list_gateway_keys(
@@ -529,6 +730,114 @@ async def _rotate_gateway_key(payload: RotateGatewayKeyInput) -> RotatedGatewayK
         return await service.rotate_gateway_key(payload)
 
 
+async def _rotate_gateway_key_with_email_delivery(
+    payload: RotateGatewayKeyInput,
+    *,
+    email_delivery_mode: EmailDeliveryMode,
+) -> KeyEmailDeliveryCliResult:
+    async with _key_email_runtime() as (settings, key_service, email_delivery_service):
+        _validate_email_delivery_preconditions(settings, email_delivery_mode)
+        key_result = await key_service.rotate_gateway_key(payload)
+        delivery_result = await _create_pending_delivery_for_rotated_key(
+            email_delivery_service,
+            key_result=key_result,
+            actor_admin_id=payload.actor_admin_id,
+            reason=payload.reason,
+        )
+
+    if email_delivery_mode == EmailDeliveryMode.send_now:
+        delivery_result = await _send_pending_key_email_now(
+            one_time_secret_id=key_result.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=payload.actor_admin_id,
+            reason=payload.reason,
+        )
+    celery_task_id = _enqueue_pending_key_email(
+        one_time_secret_id=key_result.one_time_secret_id,
+        email_delivery_id=delivery_result.email_delivery_id,
+        actor_admin_id=payload.actor_admin_id,
+    ) if email_delivery_mode == EmailDeliveryMode.enqueue else None
+    if email_delivery_mode == EmailDeliveryMode.enqueue:
+        delivery_result = PendingKeyEmailResult(
+            email_delivery_id=delivery_result.email_delivery_id,
+            one_time_secret_id=delivery_result.one_time_secret_id,
+            gateway_key_id=delivery_result.gateway_key_id,
+            owner_id=delivery_result.owner_id,
+            recipient_email=delivery_result.recipient_email,
+            status="queued",
+        )
+    return KeyEmailDeliveryCliResult(
+        key_result=key_result,
+        delivery_result=delivery_result,
+        celery_task_id=celery_task_id,
+    )
+
+
+async def _create_pending_delivery_for_rotated_key(
+    service: EmailDeliveryService,
+    *,
+    key_result: RotatedGatewayKeyResult,
+    actor_admin_id: uuid.UUID | None,
+    reason: str | None,
+) -> PendingKeyEmailResult:
+    if key_result.owner_id is None:
+        raise CliKeyError("Rotated key result did not include owner metadata for email delivery")
+    return await service.create_pending_key_email_delivery(
+        gateway_key_id=key_result.new_gateway_key_id,
+        one_time_secret_id=key_result.one_time_secret_id,
+        owner_id=key_result.owner_id,
+        actor_admin_id=actor_admin_id,
+        reason=reason,
+    )
+
+
+async def _send_pending_key_email_now(
+    *,
+    one_time_secret_id: uuid.UUID,
+    email_delivery_id: uuid.UUID,
+    actor_admin_id: uuid.UUID | None,
+    reason: str | None,
+) -> PendingKeyEmailResult:
+    async with _key_email_runtime() as (_, _, email_delivery_service):
+        return await email_delivery_service.send_pending_key_email(
+            one_time_secret_id=one_time_secret_id,
+            email_delivery_id=email_delivery_id,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+
+
+def _enqueue_pending_key_email(
+    *,
+    one_time_secret_id: uuid.UUID,
+    email_delivery_id: uuid.UUID,
+    actor_admin_id: uuid.UUID | None,
+) -> str:
+    async_result = send_pending_key_email_task.delay(
+        str(one_time_secret_id),
+        str(email_delivery_id),
+        str(actor_admin_id) if actor_admin_id else None,
+    )
+    return str(async_result.id)
+
+
+def _validate_email_delivery_preconditions(
+    settings: Settings,
+    email_delivery_mode: EmailDeliveryMode,
+) -> None:
+    if email_delivery_mode == EmailDeliveryMode.pending:
+        return
+    if email_delivery_mode == EmailDeliveryMode.send_now:
+        if not settings.ENABLE_EMAIL_DELIVERY:
+            raise CliKeyError("ENABLE_EMAIL_DELIVERY must be true for email-delivery=send-now")
+        return
+    if email_delivery_mode == EmailDeliveryMode.enqueue:
+        if not settings.ENABLE_EMAIL_DELIVERY:
+            raise CliKeyError("ENABLE_EMAIL_DELIVERY must be true for email-delivery=enqueue")
+        if not settings.get_celery_broker_url():
+            raise CliKeyError("CELERY_BROKER_URL or REDIS_URL is required for email-delivery=enqueue")
+
+
 @app.callback()
 def keys() -> None:
     """Manage gateway keys."""
@@ -612,6 +921,13 @@ def create(
         Path | None,
         typer.Option("--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"),
     ] = None,
+    email_delivery: Annotated[
+        EmailDeliveryMode,
+        typer.Option(
+            "--email-delivery",
+            help="Key email delivery mode: none, pending, send-now, or enqueue",
+        ),
+    ] = EmailDeliveryMode.none,
 ) -> None:
     """Create a gateway key and print the plaintext key once."""
     try:
@@ -619,6 +935,7 @@ def create(
             json_output=json_output,
             show_plaintext=show_plaintext,
             secret_output_file=secret_output_file,
+            email_delivery_mode=email_delivery,
         )
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
@@ -651,12 +968,25 @@ def create(
         note=reason,
     )
     try:
-        result = _run_async(_create_gateway_key(payload))
+        if email_delivery == EmailDeliveryMode.none:
+            cli_result = KeyEmailDeliveryCliResult(key_result=_run_async(_create_gateway_key(payload)))
+        else:
+            cli_result = _run_async(
+                _create_gateway_key_with_email_delivery(
+                    payload,
+                    email_delivery_mode=email_delivery,
+                )
+            )
+        result = cli_result.key_result
+        if not isinstance(result, CreatedGatewayKey):
+            raise CliKeyError("Unexpected key creation result")
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
         return
 
-    if secret_output_file is not None:
+    if email_delivery in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}:
+        _warn_email_delivery_channel(email_delivery)
+    elif secret_output_file is not None:
         try:
             write_secret_file(secret_output_file, result.plaintext_key)
         except Exception as exc:  # noqa: BLE001
@@ -665,14 +995,27 @@ def create(
         _warn_secret_file(secret_output_file)
     elif show_plaintext or not json_output:
         _warn_plaintext_display()
+    if email_delivery == EmailDeliveryMode.pending:
+        _warn_email_delivery_channel(email_delivery)
 
-    include_plaintext = secret_output_file is None and (show_plaintext or not json_output)
+    include_plaintext = (
+        email_delivery not in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}
+        and secret_output_file is None
+        and (show_plaintext or not json_output)
+    )
     payload_dict = _created_key_dict(result, include_plaintext=include_plaintext)
+    payload_dict = _append_email_delivery_payload(
+        payload_dict,
+        delivery_result=cli_result.delivery_result,
+        celery_task_id=cli_result.celery_task_id,
+    )
     if json_output:
         _emit_json(payload_dict)
+        _exit_if_email_delivery_failed(cli_result.delivery_result)
         return
 
     _echo_kv(payload_dict)
+    _exit_if_email_delivery_failed(cli_result.delivery_result)
 
 
 @app.command("list")
@@ -1155,6 +1498,13 @@ def rotate(
             help="Write the replacement plaintext key to a new 0600 file",
         ),
     ] = None,
+    email_delivery: Annotated[
+        EmailDeliveryMode,
+        typer.Option(
+            "--email-delivery",
+            help="Replacement key email delivery mode: none, pending, send-now, or enqueue",
+        ),
+    ] = EmailDeliveryMode.none,
 ) -> None:
     """Rotate a gateway key and print the replacement plaintext key once."""
     try:
@@ -1162,6 +1512,7 @@ def rotate(
             json_output=json_output,
             show_plaintext=show_plaintext,
             secret_output_file=secret_output_file,
+            email_delivery_mode=email_delivery,
         )
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
@@ -1182,12 +1533,25 @@ def rotate(
         new_valid_until=new_valid_until,
     )
     try:
-        result = _run_async(_rotate_gateway_key(payload))
+        if email_delivery == EmailDeliveryMode.none:
+            cli_result = KeyEmailDeliveryCliResult(key_result=_run_async(_rotate_gateway_key(payload)))
+        else:
+            cli_result = _run_async(
+                _rotate_gateway_key_with_email_delivery(
+                    payload,
+                    email_delivery_mode=email_delivery,
+                )
+            )
+        result = cli_result.key_result
+        if not isinstance(result, RotatedGatewayKeyResult):
+            raise CliKeyError("Unexpected key rotation result")
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
         return
 
-    if secret_output_file is not None:
+    if email_delivery in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}:
+        _warn_email_delivery_channel(email_delivery)
+    elif secret_output_file is not None:
         try:
             write_secret_file(secret_output_file, result.new_plaintext_key)
         except Exception as exc:  # noqa: BLE001
@@ -1196,14 +1560,27 @@ def rotate(
         _warn_secret_file(secret_output_file)
     elif show_plaintext or not json_output:
         _warn_plaintext_display()
+    if email_delivery == EmailDeliveryMode.pending:
+        _warn_email_delivery_channel(email_delivery)
 
-    include_plaintext = secret_output_file is None and (show_plaintext or not json_output)
+    include_plaintext = (
+        email_delivery not in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}
+        and secret_output_file is None
+        and (show_plaintext or not json_output)
+    )
     payload_dict = _rotated_key_dict(result, include_plaintext=include_plaintext)
+    payload_dict = _append_email_delivery_payload(
+        payload_dict,
+        delivery_result=cli_result.delivery_result,
+        celery_task_id=cli_result.celery_task_id,
+    )
     if json_output:
         _emit_json(payload_dict)
+        _exit_if_email_delivery_failed(cli_result.delivery_result)
         return
 
     _echo_kv(payload_dict)
+    _exit_if_email_delivery_failed(cli_result.delivery_result)
 
 
 def _safe_output_has_no_secrets(output: str, forbidden_terms: Sequence[str]) -> bool:
