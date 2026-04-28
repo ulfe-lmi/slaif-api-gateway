@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Provider Catalog</p>
       <h1 id="providers-heading">Provider Configs</h1>
-      <p class="muted">Read-only local metadata. Provider key values are never stored or displayed.</p>
+      <p class="muted">Local provider metadata. Provider key values are never stored or displayed.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/providers/new">Create provider config</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -101,6 +101,7 @@ class ProviderConfigsRepository:
         self,
         provider_config_id: uuid.UUID,
         *,
+        provider: str | None = None,
         display_name: str | None = None,
         kind: str | None = None,
         base_url: str | None = None,
@@ -113,6 +114,8 @@ class ProviderConfigsRepository:
         if row is None:
             return False
 
+        if provider is not None:
+            row.provider = provider
         if display_name is not None:
             row.display_name = display_name
         if kind is not None:

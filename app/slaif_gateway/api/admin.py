@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -48,6 +48,8 @@ from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.provider_config_service import ProviderConfigService
+from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -104,6 +106,20 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "email_delivery_send_confirmation_required": ("error", "Confirm email delivery before sending."),
     "email_delivery_enqueue_confirmation_required": ("error", "Confirm queued email delivery before continuing."),
     "email_delivery_configuration_required": ("error", "Email delivery configuration is incomplete."),
+    "provider_config_created": ("success", "Provider config created."),
+    "provider_config_updated": ("success", "Provider config updated."),
+    "provider_config_enabled": ("success", "Provider config enabled."),
+    "provider_config_disabled": ("success", "Provider config disabled."),
+    "provider_config_failed": ("error", "Provider config action failed."),
+    "provider_config_disable_confirmation_required": (
+        "error",
+        "Confirm provider config disable before continuing.",
+    ),
+    "provider_config_reason_required": (
+        "error",
+        "Enter an audit reason before changing provider config metadata.",
+    ),
+    "invalid_provider_config": ("error", "Enter valid provider config metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -1224,6 +1240,7 @@ async def list_admin_providers(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "providers": rows,
             "filters": {
                 "provider": provider or "",
@@ -1232,6 +1249,330 @@ async def list_admin_providers(
                 "offset": offset,
             },
         },
+    )
+
+
+@router.get("/providers/new", response_class=HTMLResponse)
+async def new_admin_provider_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_provider_config_form(
+        request,
+        template_name="providers/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_provider_config_form(),
+    )
+
+
+@router.post("/providers/new", response_class=HTMLResponse)
+async def create_admin_provider(
+    request: Request,
+    csrf_token: str = Form(""),
+    provider: str = Form(""),
+    display_name: str = Form(""),
+    kind: str = Form("openai_compatible"),
+    base_url: str = Form(""),
+    api_key_env_var: str = Form(""),
+    enabled: str = Form(""),
+    timeout_seconds: str = Form("300"),
+    max_retries: str = Form("2"),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _provider_config_form_from_values(
+        provider=provider,
+        display_name=display_name,
+        kind=kind,
+        base_url=base_url,
+        api_key_env_var=api_key_env_var,
+        enabled=enabled,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_provider_config_form(form, require_reason=True)
+    except ValueError as exc:
+        return _render_provider_config_form(
+            request,
+            template_name="providers/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_provider_config_service_scope(request) as service:
+            created = await service.create_provider_config(
+                provider=parsed["provider"],
+                display_name=parsed["display_name"],
+                kind=parsed["kind"],
+                base_url=parsed["base_url"],
+                api_key_env_var=parsed["api_key_env_var"],
+                enabled=parsed["enabled"],
+                timeout_seconds=parsed["timeout_seconds"],
+                max_retries=parsed["max_retries"],
+                notes=parsed["notes"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except (DuplicateRecordError, ValueError):
+        return _render_provider_config_form(
+            request,
+            template_name="providers/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["invalid_provider_config"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_provider(created.id, message="provider_config_created")
+
+
+@router.get("/providers/{provider_config_id}/edit", response_class=HTMLResponse)
+async def edit_admin_provider_form(request: Request, provider_config_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_provider_config_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            provider_row = await service.get_provider_detail(parsed_provider_config_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    return _render_provider_config_form(
+        request,
+        template_name="providers/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_provider_config_form_from_detail(provider_row),
+        provider_config_id=parsed_provider_config_id,
+    )
+
+
+@router.post("/providers/{provider_config_id}/edit", response_class=HTMLResponse)
+async def update_admin_provider(
+    request: Request,
+    provider_config_id: str,
+    csrf_token: str = Form(""),
+    provider: str = Form(""),
+    display_name: str = Form(""),
+    kind: str = Form("openai_compatible"),
+    base_url: str = Form(""),
+    api_key_env_var: str = Form(""),
+    enabled: str = Form(""),
+    timeout_seconds: str = Form("300"),
+    max_retries: str = Form("2"),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_provider_config_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _provider_config_form_from_values(
+        provider=provider,
+        display_name=display_name,
+        kind=kind,
+        base_url=base_url,
+        api_key_env_var=api_key_env_var,
+        enabled=enabled,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_provider_config_form(form, require_reason=True, require_base_url=True)
+    except ValueError as exc:
+        return _render_provider_config_form(
+            request,
+            template_name="providers/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_config_id=parsed_provider_config_id,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_provider_config_service_scope(request) as service:
+            updated = await service.update_provider_config(
+                str(parsed_provider_config_id),
+                provider=parsed["provider"],
+                display_name=parsed["display_name"],
+                kind=parsed["kind"],
+                base_url=parsed["base_url"] or "",
+                api_key_env_var=parsed["api_key_env_var"],
+                enabled=parsed["enabled"],
+                timeout_seconds=parsed["timeout_seconds"],
+                max_retries=parsed["max_retries"],
+                notes=parsed["notes"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    except (DuplicateRecordError, ValueError):
+        return _render_provider_config_form(
+            request,
+            template_name="providers/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_config_id=parsed_provider_config_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_provider_config"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_provider(updated.id, message="provider_config_updated")
+
+
+@router.post("/providers/{provider_config_id}/enable", response_class=HTMLResponse)
+async def enable_admin_provider(
+    request: Request,
+    provider_config_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    return await _set_admin_provider_enabled(
+        request,
+        provider_config_id=provider_config_id,
+        csrf_token=csrf_token,
+        enabled=True,
+        reason=reason,
+    )
+
+
+@router.post("/providers/{provider_config_id}/disable", response_class=HTMLResponse)
+async def disable_admin_provider(
+    request: Request,
+    provider_config_id: str,
+    csrf_token: str = Form(""),
+    confirm_disable: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_provider_config_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if not _is_checked(confirm_disable):
+        return _redirect_to_admin_provider(
+            parsed_provider_config_id,
+            message="provider_config_disable_confirmation_required",
+        )
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_reason_required")
+
+    try:
+        async with _admin_provider_config_service_scope(request) as service:
+            await service.set_provider_enabled(
+                str(parsed_provider_config_id),
+                enabled=False,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_failed")
+
+    return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_disabled")
+
+
+async def _set_admin_provider_enabled(
+    request: Request,
+    *,
+    provider_config_id: str,
+    csrf_token: str,
+    enabled: bool,
+    reason: str,
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_provider_config_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_reason_required")
+
+    try:
+        async with _admin_provider_config_service_scope(request) as service:
+            await service.set_provider_enabled(
+                str(parsed_provider_config_id),
+                enabled=enabled,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_failed")
+
+    return _redirect_to_admin_provider(
+        parsed_provider_config_id,
+        message="provider_config_enabled" if enabled else "provider_config_disabled",
     )
 
 
@@ -1263,6 +1604,7 @@ async def admin_provider_detail(request: Request, provider_config_id: str) -> Re
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "provider": provider_row,
         },
     )
@@ -2126,6 +2468,17 @@ async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncItera
 
 
 @asynccontextmanager
+async def _admin_provider_config_service_scope(request: Request) -> AsyncIterator[ProviderConfigService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield ProviderConfigService(
+                provider_configs_repository=ProviderConfigsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -2231,6 +2584,11 @@ def _redirect_to_admin_email_delivery(email_delivery_id: uuid.UUID, *, message: 
     return RedirectResponse(f"/admin/email-deliveries/{email_delivery_id}?{query}", status_code=303)
 
 
+def _redirect_to_admin_provider(provider_config_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/providers/{provider_config_id}?{query}", status_code=303)
+
+
 def _set_no_store_headers(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -2286,6 +2644,125 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_window_seconds": "",
         "email_delivery_mode": "none",
         "reason": "",
+    }
+
+
+def _render_provider_config_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    provider_config_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "provider_config_id": provider_config_id,
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _default_provider_config_form() -> dict[str, str]:
+    return {
+        "provider": "",
+        "display_name": "",
+        "kind": "openai_compatible",
+        "base_url": "",
+        "api_key_env_var": "",
+        "enabled": "true",
+        "timeout_seconds": "300",
+        "max_retries": "2",
+        "notes": "",
+        "reason": "",
+    }
+
+
+def _provider_config_form_from_detail(provider: object) -> dict[str, str]:
+    return _provider_config_form_from_values(
+        provider=str(getattr(provider, "provider")),
+        display_name=str(getattr(provider, "display_name")),
+        kind=str(getattr(provider, "kind")),
+        base_url=str(getattr(provider, "base_url")),
+        api_key_env_var=str(getattr(provider, "api_key_env_var")),
+        enabled="true" if bool(getattr(provider, "enabled")) else "",
+        timeout_seconds=str(getattr(provider, "timeout_seconds")),
+        max_retries=str(getattr(provider, "max_retries")),
+        notes=str(getattr(provider, "notes") or ""),
+        reason="",
+    )
+
+
+def _provider_config_form_from_values(
+    *,
+    provider: str,
+    display_name: str,
+    kind: str,
+    base_url: str,
+    api_key_env_var: str,
+    enabled: str,
+    timeout_seconds: str,
+    max_retries: str,
+    notes: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "provider": provider,
+        "display_name": display_name,
+        "kind": kind,
+        "base_url": base_url,
+        "api_key_env_var": api_key_env_var,
+        "enabled": enabled,
+        "timeout_seconds": timeout_seconds,
+        "max_retries": max_retries,
+        "notes": notes,
+        "reason": reason,
+    }
+
+
+def _parse_provider_config_form(
+    form: dict[str, str],
+    *,
+    require_reason: bool,
+    require_base_url: bool = False,
+) -> dict[str, object]:
+    provider = _parse_provider_slug(form.get("provider"))
+    display_name = _clean_admin_reason(form.get("display_name")) or provider
+    kind = (form.get("kind") or "openai_compatible").strip()
+    if kind != "openai_compatible":
+        raise ValueError("Provider kind must be openai_compatible.")
+    base_url = _clean_admin_reason(form.get("base_url"))
+    if require_base_url and base_url is None:
+        raise ValueError("Base URL is required.")
+    if base_url is not None:
+        _validate_admin_base_url(base_url)
+    api_key_env_var = _parse_provider_api_key_env_var(form.get("api_key_env_var"))
+    timeout_seconds = _parse_required_positive_admin_int(form.get("timeout_seconds"), field_name="timeout_seconds")
+    max_retries = _parse_required_non_negative_admin_int(form.get("max_retries"), field_name="max_retries")
+    reason = _clean_admin_reason(form.get("reason"))
+    if require_reason and reason is None:
+        raise ValueError(_ADMIN_STATUS_MESSAGES["provider_config_reason_required"][1])
+
+    return {
+        "provider": provider,
+        "display_name": display_name,
+        "kind": kind,
+        "base_url": base_url,
+        "api_key_env_var": api_key_env_var,
+        "enabled": _is_checked(form.get("enabled")),
+        "timeout_seconds": timeout_seconds,
+        "max_retries": max_retries,
+        "notes": _clean_admin_reason(form.get("notes")),
+        "reason": reason,
     }
 
 
@@ -2467,6 +2944,60 @@ def _parse_admin_text_list(value: str | None) -> list[str]:
         return []
     normalized = value.replace(",", "\n")
     return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+def _parse_provider_slug(value: str | None) -> str:
+    provider = (value or "").strip().lower()
+    if not provider:
+        raise ValueError("Provider is required.")
+    if not all(ch.isalnum() or ch in {"-", "_"} for ch in provider):
+        raise ValueError("Provider may contain only letters, numbers, hyphens, and underscores.")
+    return provider
+
+
+def _parse_provider_api_key_env_var(value: str | None) -> str:
+    env_var = (value or "").strip()
+    if not env_var:
+        raise ValueError("API key environment variable name is required.")
+    if _looks_like_provider_secret_value(env_var):
+        raise ValueError("Enter an environment variable name, not a provider API key value.")
+    if not (env_var[0].isalpha() or env_var[0] == "_"):
+        raise ValueError("API key environment variable name must start with a letter or underscore.")
+    if not all(ch.isalnum() or ch == "_" for ch in env_var):
+        raise ValueError("API key environment variable name may contain only letters, numbers, and underscores.")
+    return env_var
+
+
+def _looks_like_provider_secret_value(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(("sk-", "sk_", "sk-or-")) or any(ch.isspace() for ch in value)
+
+
+def _validate_admin_base_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Base URL must be an absolute http or https URL.")
+    if parsed.username or parsed.password:
+        raise ValueError("Base URL must not contain credentials.")
+
+
+def _parse_required_positive_admin_int(value: str | None, *, field_name: str) -> int:
+    provided, parsed = _parse_optional_admin_int(value)
+    if not provided or parsed is None:
+        raise ValueError(f"{field_name} is required.")
+    return parsed
+
+
+def _parse_required_non_negative_admin_int(value: str | None, *, field_name: str) -> int:
+    if value is None or not value.strip():
+        raise ValueError(f"{field_name} is required.")
+    try:
+        parsed = int(value.strip(), 10)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a whole number.") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be non-negative.")
+    return parsed
 
 
 def _parse_required_admin_uuid(value: str | None, *, field_name: str) -> uuid.UUID:

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Provider Config{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="provider-edit-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Provider Catalog</p>
+      <h1 id="provider-edit-heading">Edit Provider Config</h1>
+      <p class="muted">Update provider metadata without storing or displaying provider key values.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/providers/{{ provider_config_id }}">Provider detail</a>
+      <a class="button-link secondary" href="/admin/providers">Provider configs</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/providers/{{ provider_config_id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="provider-edit-metadata-heading">
+      <h2 id="provider-edit-metadata-heading">Metadata</h2>
+      <div class="form-grid">
+        <label>
+          Provider
+          <input name="provider" value="{{ form.provider }}" required autocomplete="off">
+        </label>
+        <label>
+          Display name
+          <input name="display_name" value="{{ form.display_name }}" autocomplete="off">
+        </label>
+        <label>
+          Kind
+          <select name="kind">
+            <option value="openai_compatible" {% if form.kind == "openai_compatible" %}selected{% endif %}>OpenAI-compatible</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-edit-connection-heading">
+      <h2 id="provider-edit-connection-heading">Connection Metadata</h2>
+      <p class="warning-text">Use an environment variable name such as OPENAI_UPSTREAM_API_KEY, never an actual provider key value.</p>
+      <div class="form-grid">
+        <label>
+          Base URL
+          <input name="base_url" value="{{ form.base_url }}" required autocomplete="off">
+        </label>
+        <label>
+          API key environment variable
+          <input name="api_key_env_var" value="{{ form.api_key_env_var }}" required autocomplete="off">
+        </label>
+        <label>
+          Status
+          <span class="checkbox-row">
+            <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+            <span>Enabled</span>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-edit-runtime-heading">
+      <h2 id="provider-edit-runtime-heading">Runtime Defaults</h2>
+      <div class="form-grid">
+        <label>
+          Timeout seconds
+          <input name="timeout_seconds" value="{{ form.timeout_seconds }}" inputmode="numeric" required>
+        </label>
+        <label>
+          Max retries
+          <input name="max_retries" value="{{ form.max_retries }}" inputmode="numeric" required>
+        </label>
+        <label>
+          Audit reason
+          <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+        </label>
+      </div>
+      <label>
+        Notes
+        <textarea name="notes">{{ form.notes }}</textarea>
+      </label>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-edit-submit-heading">
+      <h2 id="provider-edit-submit-heading">Save</h2>
+      <p class="muted">This changes provider metadata only. Route, pricing, FX, forwarding, and health behavior are unchanged.</p>
+      <button type="submit">Save provider config</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

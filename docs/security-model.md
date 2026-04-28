@@ -31,7 +31,9 @@ If a key is lost, rotate it; do not resend an old plaintext key.
 
 Provider secrets live in environment variables or deployment secrets. The
 `provider_configs` table stores provider metadata and environment variable names,
-not secret values.
+not secret values. Admin provider config forms accept `api_key_env_var` names
+only and reject provider-secret-looking values; they never accept, store, or
+display provider key values.
 
 Client `Authorization` headers contain gateway-issued keys and are never
 forwarded upstream. Provider adapters construct a new upstream `Authorization`
@@ -117,16 +119,18 @@ explicit confirmation.
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
-institution, and cohort list/detail pages, and read-only provider, route,
-pricing, and FX list/detail pages. The key pages display safe key metadata only:
+institution, and cohort list/detail pages, provider config pages, and read-only
+route, pricing, and FX list/detail pages. The key pages display safe key metadata only:
 prefix, public key ID, hint, owner, status, computed validity state, quotas,
 counters, allowed policy summaries, and rate-limit policy. Key detail pages
 provide CSRF-protected POST actions to suspend, activate, and permanently revoke
 gateway keys through the existing key service and audit behavior.
 Owner, institution, and cohort pages display safe record metadata and key count
-summaries. Catalog pages display safe local provider, route, pricing, and FX
-metadata. Provider config pages may display `api_key_env_var` names, but never
-provider secret values. Read-only usage, audit, and email delivery pages display
+summaries. Provider config pages display safe local metadata and provide
+CSRF-protected create, edit, enable, and disable forms for provider metadata
+only. They may display `api_key_env_var` names, but never provider secret values,
+and state changes write safe audit rows through the provider config service.
+Route, pricing, and FX catalog pages remain read-only. Read-only usage, audit, and email delivery pages display
 safe activity metadata only. Usage pages do not display prompts, completions, or
 raw request/response bodies. Email delivery pages do not display email bodies
 because key-delivery email bodies may contain plaintext gateway keys. Audit
@@ -197,7 +201,7 @@ never recover or send old plaintext keys.
 ## Current Limitations
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
-  Owner, institution, cohort, provider,
+  Owner, institution, cohort,
   routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
   implemented yet.
 - Docker/Nginx deployment packaging is not implemented yet.
