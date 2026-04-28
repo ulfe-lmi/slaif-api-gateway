@@ -104,7 +104,23 @@ alembic upgrade head
 uvicorn --app-dir app slaif_gateway.main:app --reload
 ```
 
-The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping.
+The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. Database pool and timeout behavior is configurable:
+
+```bash
+export DATABASE_POOL_SIZE=5
+export DATABASE_MAX_OVERFLOW=10
+export DATABASE_POOL_TIMEOUT_SECONDS=30
+export DATABASE_POOL_RECYCLE_SECONDS=1800
+export DATABASE_POOL_PRE_PING=true
+export DATABASE_CONNECT_TIMEOUT_SECONDS=10
+export DATABASE_STATEMENT_TIMEOUT_MS=30000
+```
+
+`DATABASE_POOL_PRE_PING` is enabled by default so stale pooled connections are checked before use. `DATABASE_CONNECT_TIMEOUT_SECONDS` is passed to asyncpg connection setup. `DATABASE_STATEMENT_TIMEOUT_MS` is optional; when set, PostgreSQL receives a per-connection `statement_timeout` server setting.
+
+`/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. `/readyz` never runs migrations or performs destructive actions.
+
+In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production.
 
 Redis rate limiting is optional and controls temporary operational throttles only:
 
@@ -146,7 +162,7 @@ Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Reques
 
 Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
 
-`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
+`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
 
 Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
 failure ledger metadata for operator troubleshooting. Raw provider response

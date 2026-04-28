@@ -37,6 +37,15 @@ def _clear_env(monkeypatch) -> None:
         "REQUEST_ID_HEADER",
         "LOG_LEVEL",
         "STRUCTURED_LOGS",
+        "DATABASE_POOL_SIZE",
+        "DATABASE_MAX_OVERFLOW",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_POOL_RECYCLE_SECONDS",
+        "DATABASE_POOL_PRE_PING",
+        "DATABASE_CONNECT_TIMEOUT_SECONDS",
+        "DATABASE_STATEMENT_TIMEOUT_MS",
+        "READYZ_INCLUDE_DETAILS",
+        "METRICS_PUBLIC_IN_PRODUCTION",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -50,6 +59,14 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.APP_ENV == "development"
     assert settings.APP_BASE_URL == "http://localhost:8000"
     assert settings.PUBLIC_BASE_URL == "http://localhost:8000/v1"
+    assert settings.DATABASE_POOL_SIZE == 5
+    assert settings.DATABASE_MAX_OVERFLOW == 10
+    assert settings.DATABASE_POOL_TIMEOUT_SECONDS == 30
+    assert settings.DATABASE_POOL_RECYCLE_SECONDS == 1800
+    assert settings.DATABASE_POOL_PRE_PING is True
+    assert settings.DATABASE_CONNECT_TIMEOUT_SECONDS == 10
+    assert settings.DATABASE_STATEMENT_TIMEOUT_MS is None
+    assert settings.readyz_include_details() is True
     assert settings.ACTIVE_HMAC_KEY_VERSION == "1"
     assert settings.get_gateway_key_prefix() == "sk-slaif-"
     assert settings.get_gateway_key_accepted_prefixes() == ("sk-slaif-",)
@@ -86,6 +103,7 @@ def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
 
     assert settings.metrics_require_auth() is True
     assert settings.rate_limit_fail_closed() is True
+    assert settings.readyz_include_details() is False
 
 
 def test_redis_rate_limits_require_redis_url_when_enabled(monkeypatch) -> None:
@@ -175,6 +193,77 @@ def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:
 
     assert settings.metrics_require_auth() is False
     assert settings.get_metrics_allowed_ips() == ()
+
+
+def test_metrics_public_in_production_can_be_explicitly_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    monkeypatch.setenv("METRICS_PUBLIC_IN_PRODUCTION", "true")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.metrics_require_auth() is False
+
+
+def test_readyz_include_details_can_be_explicitly_enabled_in_production(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    monkeypatch.setenv("READYZ_INCLUDE_DETAILS", "true")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.readyz_include_details() is True
+
+
+def test_database_pool_settings_are_validated(monkeypatch) -> None:
+    invalid_cases = (
+        ("DATABASE_POOL_SIZE", "0", "positive"),
+        ("DATABASE_MAX_OVERFLOW", "-1", "greater than or equal to 0"),
+        ("DATABASE_POOL_TIMEOUT_SECONDS", "0", "positive"),
+        ("DATABASE_POOL_RECYCLE_SECONDS", "-5", "positive"),
+        ("DATABASE_CONNECT_TIMEOUT_SECONDS", "0", "positive"),
+        ("DATABASE_STATEMENT_TIMEOUT_MS", "-1", "positive"),
+    )
+
+    for name, value, message in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError) as exc:
+            get_settings()
+
+        assert message in str(exc.value)
+
+
+def test_database_pool_settings_load_from_environment(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_POOL_SIZE", "7")
+    monkeypatch.setenv("DATABASE_MAX_OVERFLOW", "3")
+    monkeypatch.setenv("DATABASE_POOL_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("DATABASE_POOL_RECYCLE_SECONDS", "600")
+    monkeypatch.setenv("DATABASE_POOL_PRE_PING", "false")
+    monkeypatch.setenv("DATABASE_CONNECT_TIMEOUT_SECONDS", "4.5")
+    monkeypatch.setenv("DATABASE_STATEMENT_TIMEOUT_MS", "25000")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.DATABASE_POOL_SIZE == 7
+    assert settings.DATABASE_MAX_OVERFLOW == 3
+    assert settings.DATABASE_POOL_TIMEOUT_SECONDS == 12.5
+    assert settings.DATABASE_POOL_RECYCLE_SECONDS == 600
+    assert settings.DATABASE_POOL_PRE_PING is False
+    assert settings.DATABASE_CONNECT_TIMEOUT_SECONDS == 4.5
+    assert settings.DATABASE_STATEMENT_TIMEOUT_MS == 25000
 
 
 def test_metrics_allowed_ips_are_normalized(monkeypatch) -> None:
