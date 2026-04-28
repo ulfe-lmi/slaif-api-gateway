@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="dashboard-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">SLAIF API Gateway</p>
+      <h1 id="dashboard-heading">Admin Dashboard</h1>
+      <p class="muted">Signed in as {{ admin.display_name }} &lt;{{ admin.email }}&gt;</p>
+    </div>
+    <form method="post" action="/admin/logout">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="secondary">Sign out</button>
+    </form>
+  </header>
+
+  <div class="placeholder">
+    <h2>Dashboard Foundation</h2>
+    <p>Authentication, server-side sessions, and CSRF protection are active.</p>
+  </div>
+</section>
+{% endblock %}

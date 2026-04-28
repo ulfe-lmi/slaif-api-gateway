@@ -113,11 +113,29 @@ permissions. Send-now and enqueue email delivery modes reject additional
 plaintext destinations by default. Destructive reserved-counter resets require
 explicit confirmation.
 
+## Admin Web Sessions And CSRF
+
+The admin web foundation exposes `/admin/login`, `/admin/logout`, and a
+placeholder `/admin` dashboard. Full dashboard CRUD pages are not implemented
+yet.
+
+Admin passwords are verified with Argon2id password hashes. Successful login
+creates a server-side `admin_sessions` row. PostgreSQL stores HMAC-hashed
+session and CSRF tokens only; plaintext session tokens are sent only as secure
+browser cookies and are not logged or rendered in templates.
+
+Admin session cookies are `HttpOnly`, `SameSite=Lax` by default, and `Secure`
+by default in production. Session validation rejects missing, revoked, expired,
+or inactive-admin sessions. Logout revokes the server-side session row and
+clears the browser cookie.
+
+Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
+with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
+server-side session row.
+
 ## Current Limitations
 
-- Dashboard pages are not implemented yet.
-- Admin web authentication and CSRF-protected dashboard state changes are not
-  implemented yet.
+- Full dashboard management pages are not implemented yet.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.

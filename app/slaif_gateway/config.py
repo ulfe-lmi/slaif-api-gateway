@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     ENABLE_OPENAI_PROVIDER: bool = True
     ENABLE_OPENROUTER_PROVIDER: bool = True
     ENABLE_ADMIN_DASHBOARD: bool = True
+    ADMIN_SESSION_COOKIE_NAME: str = "slaif_admin_session"
+    ADMIN_SESSION_COOKIE_SECURE: bool | None = None
+    ADMIN_SESSION_COOKIE_HTTPONLY: bool = True
+    ADMIN_SESSION_COOKIE_SAMESITE: str = "lax"
+    ADMIN_SESSION_TTL_SECONDS: int = 28800
+    ADMIN_LOGIN_CSRF_COOKIE_NAME: str = "slaif_admin_login_csrf"
+    ADMIN_CSRF_TTL_SECONDS: int = 1800
     ENABLE_EMAIL_DELIVERY: bool = False
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 1025
@@ -115,6 +122,7 @@ class Settings(BaseSettings):
         self._validate_request_id_header()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
+        self._validate_admin_session_settings()
         self._validate_email_settings()
         return self
 
@@ -171,6 +179,31 @@ class Settings(BaseSettings):
                 raise ValueError("SMTP_HOST is required when ENABLE_EMAIL_DELIVERY=true")
             if not self.SMTP_FROM:
                 raise ValueError("SMTP_FROM is required when ENABLE_EMAIL_DELIVERY=true")
+
+    def _validate_admin_session_settings(self) -> None:
+        if self.ADMIN_SESSION_TTL_SECONDS <= 0:
+            raise ValueError("ADMIN_SESSION_TTL_SECONDS must be a positive integer")
+        if self.ADMIN_CSRF_TTL_SECONDS <= 0:
+            raise ValueError("ADMIN_CSRF_TTL_SECONDS must be a positive integer")
+
+        if not self.ADMIN_SESSION_COOKIE_NAME.strip():
+            raise ValueError("ADMIN_SESSION_COOKIE_NAME cannot be empty")
+        if not self.ADMIN_LOGIN_CSRF_COOKIE_NAME.strip():
+            raise ValueError("ADMIN_LOGIN_CSRF_COOKIE_NAME cannot be empty")
+        self.ADMIN_SESSION_COOKIE_NAME = self.ADMIN_SESSION_COOKIE_NAME.strip()
+        self.ADMIN_LOGIN_CSRF_COOKIE_NAME = self.ADMIN_LOGIN_CSRF_COOKIE_NAME.strip()
+
+        same_site = self.ADMIN_SESSION_COOKIE_SAMESITE.strip().lower()
+        if same_site not in {"lax", "strict", "none"}:
+            raise ValueError("ADMIN_SESSION_COOKIE_SAMESITE must be one of: lax, strict, none")
+        self.ADMIN_SESSION_COOKIE_SAMESITE = same_site
+
+        if (
+            self.APP_ENV.lower() == "production"
+            and same_site == "none"
+            and self.ADMIN_SESSION_COOKIE_SECURE is False
+        ):
+            raise ValueError("ADMIN_SESSION_COOKIE_SECURE must be true in production when SameSite=None")
 
     def _validate_request_caps(self) -> None:
         if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:
@@ -319,6 +352,12 @@ class Settings(BaseSettings):
         """Return Redis rate-limit failure policy for the current environment."""
         if self.RATE_LIMIT_FAIL_CLOSED is not None:
             return self.RATE_LIMIT_FAIL_CLOSED
+        return self.APP_ENV.lower() == "production"
+
+    def admin_session_cookie_secure(self) -> bool:
+        """Return whether admin session cookies should use Secure."""
+        if self.ADMIN_SESSION_COOKIE_SECURE is not None:
+            return self.ADMIN_SESSION_COOKIE_SECURE
         return self.APP_ENV.lower() == "production"
 
     def get_celery_broker_url(self) -> str | None:

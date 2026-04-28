@@ -58,6 +58,14 @@ def _clear_env(monkeypatch) -> None:
         "DATABASE_STATEMENT_TIMEOUT_MS",
         "READYZ_INCLUDE_DETAILS",
         "METRICS_PUBLIC_IN_PRODUCTION",
+        "ENABLE_ADMIN_DASHBOARD",
+        "ADMIN_SESSION_COOKIE_NAME",
+        "ADMIN_SESSION_COOKIE_SECURE",
+        "ADMIN_SESSION_COOKIE_HTTPONLY",
+        "ADMIN_SESSION_COOKIE_SAMESITE",
+        "ADMIN_SESSION_TTL_SECONDS",
+        "ADMIN_LOGIN_CSRF_COOKIE_NAME",
+        "ADMIN_CSRF_TTL_SECONDS",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -112,6 +120,14 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.SMTP_STARTTLS is False
     assert settings.SMTP_TIMEOUT_SECONDS == 10
     assert settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS == 86400
+    assert settings.ENABLE_ADMIN_DASHBOARD is True
+    assert settings.ADMIN_SESSION_COOKIE_NAME == "slaif_admin_session"
+    assert settings.admin_session_cookie_secure() is False
+    assert settings.ADMIN_SESSION_COOKIE_HTTPONLY is True
+    assert settings.ADMIN_SESSION_COOKIE_SAMESITE == "lax"
+    assert settings.ADMIN_SESSION_TTL_SECONDS == 28800
+    assert settings.ADMIN_LOGIN_CSRF_COOKIE_NAME == "slaif_admin_login_csrf"
+    assert settings.ADMIN_CSRF_TTL_SECONDS == 1800
 
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
@@ -127,6 +143,67 @@ def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
     assert settings.metrics_require_auth() is True
     assert settings.rate_limit_fail_closed() is True
     assert settings.readyz_include_details() is False
+    assert settings.admin_session_cookie_secure() is True
+
+
+def test_admin_session_settings_load_from_environment(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_ADMIN_DASHBOARD", "false")
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_NAME", "custom_admin")
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_HTTPONLY", "false")
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_SAMESITE", "strict")
+    monkeypatch.setenv("ADMIN_SESSION_TTL_SECONDS", "3600")
+    monkeypatch.setenv("ADMIN_LOGIN_CSRF_COOKIE_NAME", "custom_csrf")
+    monkeypatch.setenv("ADMIN_CSRF_TTL_SECONDS", "600")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.ENABLE_ADMIN_DASHBOARD is False
+    assert settings.ADMIN_SESSION_COOKIE_NAME == "custom_admin"
+    assert settings.admin_session_cookie_secure() is True
+    assert settings.ADMIN_SESSION_COOKIE_HTTPONLY is False
+    assert settings.ADMIN_SESSION_COOKIE_SAMESITE == "strict"
+    assert settings.ADMIN_SESSION_TTL_SECONDS == 3600
+    assert settings.ADMIN_LOGIN_CSRF_COOKIE_NAME == "custom_csrf"
+    assert settings.ADMIN_CSRF_TTL_SECONDS == 600
+
+
+def test_admin_session_settings_are_validated(monkeypatch) -> None:
+    invalid_cases = (
+        ("ADMIN_SESSION_TTL_SECONDS", "0", "ADMIN_SESSION_TTL_SECONDS must be a positive integer"),
+        ("ADMIN_CSRF_TTL_SECONDS", "-1", "ADMIN_CSRF_TTL_SECONDS must be a positive integer"),
+        ("ADMIN_SESSION_COOKIE_NAME", " ", "ADMIN_SESSION_COOKIE_NAME cannot be empty"),
+        ("ADMIN_LOGIN_CSRF_COOKIE_NAME", " ", "ADMIN_LOGIN_CSRF_COOKIE_NAME cannot be empty"),
+        ("ADMIN_SESSION_COOKIE_SAMESITE", "wide", "ADMIN_SESSION_COOKIE_SAMESITE must be one of"),
+    )
+
+    for name, value, message in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError) as exc:
+            get_settings()
+
+        assert message in str(exc.value)
+
+
+def test_production_samesite_none_requires_secure_when_explicitly_disabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("ADMIN_SESSION_COOKIE_SECURE", "false")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    assert "ADMIN_SESSION_COOKIE_SECURE must be true" in str(exc.value)
 
 
 def test_redis_rate_limits_require_redis_url_when_enabled(monkeypatch) -> None:
