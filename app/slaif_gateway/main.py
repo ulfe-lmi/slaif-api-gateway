@@ -17,12 +17,14 @@ from slaif_gateway.api.openai_compat import router as openai_compat_router
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
 from slaif_gateway.logging import configure_logging
+from slaif_gateway.startup_warnings import emit_startup_configuration_warnings
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create and configure FastAPI application instance."""
     app_settings = settings or get_settings()
     configure_logging(app_settings)
+    emit_startup_configuration_warnings(app_settings)
     app = FastAPI(title="SLAIF API Gateway", lifespan=build_lifespan(app_settings))
     app.state.settings = app_settings
     app.state.db_engine = None

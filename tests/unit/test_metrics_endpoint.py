@@ -54,6 +54,15 @@ def test_metrics_public_in_production_requires_explicit_setting() -> None:
     assert "gateway_http_requests_total" in response.text
 
 
+def test_metrics_auth_disabled_in_production_behavior_unchanged() -> None:
+    app = create_app(_production_settings(METRICS_REQUIRE_AUTH=False))
+
+    response = TestClient(app).get("/metrics")
+
+    assert response.status_code == 200
+    assert "gateway_http_requests_total" in response.text
+
+
 def test_metrics_allows_configured_ip_when_auth_required() -> None:
     app = create_app(_production_settings(METRICS_ALLOWED_IPS="testclient"))
 
