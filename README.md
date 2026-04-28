@@ -15,6 +15,9 @@ For exact reviewer-facing behavior, see:
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
+- [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
+- [`.env.example`](.env.example) and [`docs/configuration.md`](docs/configuration.md) for safe configuration templates and environment variable reference.
+- [`docs/security-model.md`](docs/security-model.md) for gateway key lifecycle, provider isolation, quota/accounting, Redis, email/Celery, and logging security boundaries.
 
 ## Current Status
 
