@@ -978,6 +978,106 @@ Migration strategy:
 - API and worker readiness should fail if the database schema is not current.
 - Local development may run migrations as part of explicit setup scripts, but this must be visible and documented.
 
+### 5.1 Documentation contract and implementation drift rules
+
+The following files are implementation contracts. Codex must treat them as
+current truth for the behavior they describe and keep them synchronized with
+code changes:
+
+- `docs/database-schema.md`
+- `docs/openai-compatibility.md`
+- `docs/provider-forwarding-contract.md`
+- `docs/compatibility-matrix.md`
+- `docs/accounting.md`, if present
+- `docs/provider-routing.md`, if present
+- `README.md`, for top-level current status, quickstart, and operator-facing
+  truth
+
+Documentation must be checked and updated in the same PR as the code change
+whenever that change affects the documented behavior below. If Codex finds
+that a required document is absent, it must either create it when that is in
+scope or report the missing document and update the closest existing contract
+document.
+
+OpenAI-compatible API behavior changes require checking and, when needed,
+updating `docs/openai-compatibility.md`, `docs/compatibility-matrix.md`, and
+`README.md` if user-facing status changes. Examples include:
+
+- adding, removing, or changing `/v1` endpoints
+- changing request fields that are accepted, preserved, mutated, or rejected
+- changing response shapes
+- changing OpenAI-shaped error behavior
+- changing streaming/SSE behavior
+- changing unsupported endpoint behavior
+
+Provider forwarding behavior changes require checking and, when needed,
+updating `docs/provider-forwarding-contract.md`,
+`docs/compatibility-matrix.md`, `docs/provider-routing.md` if present, and
+`README.md` if user-facing behavior changes. Examples include:
+
+- changing provider adapters
+- changing upstream endpoint paths
+- changing provider base URL behavior
+- changing provider `api_key_env_var` behavior
+- changing outbound header allowlists or blocklists
+- changing client `Authorization` forwarding behavior
+- changing upstream body mutation
+- changing model substitution behavior
+- changing OpenAI- or OpenRouter-specific behavior
+
+Streaming and accounting behavior changes require checking and, when needed,
+updating `docs/provider-forwarding-contract.md`,
+`docs/openai-compatibility.md`, `docs/accounting.md` if present,
+`docs/compatibility-matrix.md`, and `README.md` if user-facing behavior
+changes. Examples include:
+
+- changing `stream_options.include_usage` behavior
+- changing missing-usage behavior
+- changing provider-completed finalization-failure behavior
+- changing client-disconnect behavior
+- changing quota reservation, finalization, or release behavior
+- changing reconciliation behavior
+- changing usage-ledger semantics
+- changing prompt/completion storage policy
+
+Redis rate-limit behavior changes require checking and, when needed, updating
+`docs/accounting.md` if present, `docs/provider-forwarding-contract.md` if
+request-flow behavior changes, `docs/compatibility-matrix.md`, and `README.md`
+if operator-facing behavior changes. Examples include:
+
+- changing request, token, or concurrency limit semantics
+- changing active-concurrency TTL, heartbeat, or release policy
+- changing fail-open or fail-closed behavior
+- changing readiness behavior when Redis is enabled
+- changing whether Redis rate limiting is wired into endpoints
+
+CLI secret-output and operator-behavior changes require checking and, when
+needed, updating `README.md`, `docs/security-model.md` if present, and
+`docs/compatibility-matrix.md` if it tracks the affected CLI/operator support.
+Examples include:
+
+- changing key create/rotate plaintext output behavior
+- changing `--json` secret behavior
+- changing `--secret-output-file` behavior
+- changing repair or destructive confirmation requirements
+- changing usage export content
+- changing whether prompts, completions, or secrets appear in output
+
+Schema changes remain governed by the `docs/database-schema.md` rule above:
+the schema document must be updated first or in the same PR, models and
+migrations must follow it, and AGENTS.md must not duplicate competing schema
+detail.
+
+Every Codex final report must include a documentation impact line for the PR:
+
+- `Documentation updated: <files>`
+- `Documentation checked, no update needed because <specific reason>`
+- `Documentation intentionally deferred: <reason and follow-up task>`
+
+For tasks that change public API, provider, accounting, Redis, security, or
+operator behavior, "no update needed" must be justified specifically. It must
+not be omitted or treated as implicit.
+
 ---
 
 ## 6. Repository structure
@@ -1709,6 +1809,8 @@ Rules:
 - Codex must not commit local Codex state such as `.codex`.
 - At the end of every task, Codex must report the branch name, commit hash,
   pushed status, PR URL, tests run, and any failures or skips.
+- At the end of every task, Codex must also report documentation impact using
+  one of the forms required by the documentation contract section.
 
 Required start-of-task update sequence after a previous PR has been merged:
 
@@ -1926,6 +2028,12 @@ At every stage, keep OpenAI-compatible client usage working.
 - Do not return custom gateway-shaped errors from `/v1` routes; use OpenAI-style errors.
 - Do not implement a command or dashboard action that resends an old plaintext key.
 - Do not create schema fields/tables that conflict with `docs/database-schema.md`.
+- Do not change OpenAI-compatible endpoint behavior without checking `docs/openai-compatibility.md` and `docs/compatibility-matrix.md`.
+- Do not change provider forwarding behavior without checking `docs/provider-forwarding-contract.md`.
+- Do not change streaming, accounting, or reconciliation behavior without checking the relevant compatibility and accounting docs.
+- Do not change CLI secret-output behavior without updating operator-facing docs.
+- Do not let README or compatibility docs claim support that code and tests do not implement.
+- Do not leave documentation drift unreported in the final task report.
 - Do not run apt-based PostgreSQL installation unless the maintainer explicitly requests the Codex container PostgreSQL test harness.
 - Do not run destructive test setup against DATABASE_URL.
 - Use TEST_DATABASE_URL for integration-test database setup and seeding.
