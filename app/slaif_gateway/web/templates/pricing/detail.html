@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing Rule Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-rule-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Pricing Catalog</p>
+      <h1 id="pricing-rule-heading">{{ pricing_rule.upstream_model }}</h1>
+      <p class="muted">Read-only pricing metadata.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section>
+      <h2>Pricing Rule</h2>
+      <dl>
+        <dt>Provider</dt><dd>{{ pricing_rule.provider }}</dd>
+        <dt>Model</dt><dd>{{ pricing_rule.upstream_model }}</dd>
+        <dt>Endpoint</dt><dd>{{ pricing_rule.endpoint }}</dd>
+        <dt>Currency</dt><dd>{{ pricing_rule.currency }}</dd>
+        <dt>Input / 1M</dt><dd>{{ pricing_rule.input_price_per_1m if pricing_rule.input_price_per_1m is not none else "n/a" }}</dd>
+        <dt>Cached input / 1M</dt><dd>{{ pricing_rule.cached_input_price_per_1m if pricing_rule.cached_input_price_per_1m is not none else "n/a" }}</dd>
+        <dt>Output / 1M</dt><dd>{{ pricing_rule.output_price_per_1m if pricing_rule.output_price_per_1m is not none else "n/a" }}</dd>
+        <dt>Reasoning / 1M</dt><dd>{{ pricing_rule.reasoning_price_per_1m if pricing_rule.reasoning_price_per_1m is not none else "n/a" }}</dd>
+        <dt>Request price</dt><dd>{{ pricing_rule.request_price if pricing_rule.request_price is not none else "n/a" }}</dd>
+        <dt>Status</dt><dd>{{ "enabled" if pricing_rule.enabled else "disabled" }}</dd>
+        <dt>Valid from</dt><dd>{{ pricing_rule.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt><dd>{{ pricing_rule.valid_until.isoformat() if pricing_rule.valid_until else "open" }}</dd>
+        <dt>Metadata keys</dt><dd>{{ pricing_rule.metadata_summary }}</dd>
+        <dt>Created</dt><dd>{{ pricing_rule.created_at.isoformat() }}</dd>
+        <dt>Updated</dt><dd>{{ pricing_rule.updated_at.isoformat() }}</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Source</h2>
+      <dl>
+        <dt>Source URL</dt><dd>{{ pricing_rule.source_url or "Not set" }}</dd>
+        <dt>Notes</dt><dd>{{ pricing_rule.notes or "No notes." }}</dd>
+      </dl>
+      <h2>Provider Config</h2>
+      {% if pricing_rule.provider_config %}
+      <dl>
+        <dt>Name</dt><dd><a href="/admin/providers/{{ pricing_rule.provider_config.id }}">{{ pricing_rule.provider_config.display_name }}</a></dd>
+        <dt>API key env var</dt><dd><code>{{ pricing_rule.provider_config.api_key_env_var }}</code></dd>
+        <dt>Status</dt><dd>{{ "enabled" if pricing_rule.provider_config.enabled else "disabled" }}</dd>
+      </dl>
+      {% else %}
+      <p>No matching provider config found.</p>
+      {% endif %}
+    </section>
+  </div>
+</section>
+{% endblock %}

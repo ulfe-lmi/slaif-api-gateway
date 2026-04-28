@@ -61,6 +61,38 @@ class FxRatesRepository:
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_fx_rates_for_admin(
+        self,
+        *,
+        base_currency: str | None = None,
+        quote_currency: str | None = None,
+        source: str | None = None,
+        active: bool | None = None,
+        now: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[FxRate]:
+        statement: Select[tuple[FxRate]] = select(FxRate)
+        if base_currency is not None:
+            statement = statement.where(FxRate.base_currency == base_currency)
+        if quote_currency is not None:
+            statement = statement.where(FxRate.quote_currency == quote_currency)
+        if source is not None:
+            statement = statement.where(FxRate.source.ilike(f"%{source}%"))
+        if active is not None and now is not None:
+            active_condition = (
+                (FxRate.valid_from <= now)
+                & ((FxRate.valid_until.is_(None)) | (FxRate.valid_until >= now))
+            )
+            statement = statement.where(active_condition if active else ~active_condition)
+
+        statement = statement.order_by(FxRate.valid_from.desc(), FxRate.created_at.desc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_fx_rate_for_admin_detail(self, fx_rate_id: uuid.UUID) -> FxRate | None:
+        return await self._session.get(FxRate, fx_rate_id)
+
     async def find_latest_rate(
         self,
         *,

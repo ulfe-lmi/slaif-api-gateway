@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Model Route Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-heading">{{ route.requested_model }}</h1>
+      <p class="muted">Read-only route metadata.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section>
+      <h2>Route</h2>
+      <dl>
+        <dt>Requested model</dt><dd>{{ route.requested_model }}</dd>
+        <dt>Match type</dt><dd>{{ route.match_type }}</dd>
+        <dt>Endpoint</dt><dd>{{ route.endpoint }}</dd>
+        <dt>Provider</dt><dd>{{ route.provider }}</dd>
+        <dt>Upstream model</dt><dd>{{ route.upstream_model }}</dd>
+        <dt>Priority</dt><dd>{{ route.priority }}</dd>
+        <dt>Status</dt><dd>{{ "enabled" if route.enabled else "disabled" }}</dd>
+        <dt>Models visibility</dt><dd>{{ "visible" if route.visible_in_models else "hidden" }}</dd>
+        <dt>Streaming</dt><dd>{{ "supported" if route.supports_streaming else "not supported" }}</dd>
+        <dt>Capabilities</dt><dd>{{ route.capabilities_summary }}</dd>
+        <dt>Created</dt><dd>{{ route.created_at.isoformat() }}</dd>
+        <dt>Updated</dt><dd>{{ route.updated_at.isoformat() }}</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Provider Config</h2>
+      {% if route.provider_config %}
+      <dl>
+        <dt>Name</dt><dd><a href="/admin/providers/{{ route.provider_config.id }}">{{ route.provider_config.display_name }}</a></dd>
+        <dt>Base URL</dt><dd>{{ route.provider_config.base_url }}</dd>
+        <dt>API key env var</dt><dd><code>{{ route.provider_config.api_key_env_var }}</code></dd>
+        <dt>Status</dt><dd>{{ "enabled" if route.provider_config.enabled else "disabled" }}</dd>
+      </dl>
+      {% else %}
+      <p>No matching provider config found.</p>
+      {% endif %}
+      <h2>Notes</h2>
+      <p>{{ route.notes or "No notes." }}</p>
+    </section>
+  </div>
+</section>
+{% endblock %}

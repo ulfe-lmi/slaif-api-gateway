@@ -86,6 +86,48 @@ class PricingRulesRepository:
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_pricing_rules_for_admin(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        endpoint: str | None = None,
+        currency: str | None = None,
+        enabled: bool | None = None,
+        active: bool | None = None,
+        now: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[PricingRule]:
+        statement: Select[tuple[PricingRule]] = select(PricingRule)
+        if provider is not None:
+            statement = statement.where(PricingRule.provider == provider)
+        if model is not None:
+            statement = statement.where(PricingRule.upstream_model.ilike(f"%{model}%"))
+        if endpoint is not None:
+            statement = statement.where(PricingRule.endpoint == endpoint)
+        if currency is not None:
+            statement = statement.where(PricingRule.currency == currency)
+        if enabled is not None:
+            statement = statement.where(PricingRule.enabled == enabled)
+        if active is not None and now is not None:
+            active_condition = (
+                (PricingRule.valid_from <= now)
+                & ((PricingRule.valid_until.is_(None)) | (PricingRule.valid_until >= now))
+            )
+            statement = statement.where(active_condition if active else ~active_condition)
+
+        statement = (
+            statement.order_by(PricingRule.valid_from.desc(), PricingRule.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_pricing_rule_for_admin_detail(self, pricing_rule_id: uuid.UUID) -> PricingRule | None:
+        return await self._session.get(PricingRule, pricing_rule_id)
+
     async def list_enabled_pricing_rules(
         self,
         *,

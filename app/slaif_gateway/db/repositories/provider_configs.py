@@ -68,6 +68,27 @@ class ProviderConfigsRepository:
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_provider_configs_for_admin(
+        self,
+        *,
+        provider: str | None = None,
+        enabled: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ProviderConfig]:
+        statement: Select[tuple[ProviderConfig]] = select(ProviderConfig)
+        if provider is not None:
+            statement = statement.where(ProviderConfig.provider == provider)
+        if enabled is not None:
+            statement = statement.where(ProviderConfig.enabled == enabled)
+
+        statement = statement.order_by(ProviderConfig.provider.asc()).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_provider_config_for_admin_detail(self, provider_config_id: uuid.UUID) -> ProviderConfig | None:
+        return await self._session.get(ProviderConfig, provider_config_id)
+
     async def set_provider_enabled(self, provider_config_id: uuid.UUID, *, enabled: bool) -> bool:
         row = await self.get_provider_config_by_id(provider_config_id)
         if row is None:

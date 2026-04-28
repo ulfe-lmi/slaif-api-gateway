@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing Rules{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Pricing Catalog</p>
+      <h1 id="pricing-heading">Pricing Rules</h1>
+      <p class="muted">Read-only local pricing metadata. Import and disable actions are not implemented here.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar" method="get" action="/admin/pricing">
+    <label>Provider<input name="provider" value="{{ filters.provider }}" autocomplete="off"></label>
+    <label>Model<input name="model" value="{{ filters.model }}" autocomplete="off"></label>
+    <label>Endpoint<input name="endpoint" value="{{ filters.endpoint }}" autocomplete="off"></label>
+    <label>Currency<input name="currency" value="{{ filters.currency }}" autocomplete="off"></label>
+    <label>
+      Enabled
+      <select name="enabled">
+        <option value="" {% if filters.enabled == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.enabled == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.enabled == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <label>
+      Active
+      <select name="active">
+        <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Provider</th><th>Currency</th><th>Prices per 1M</th><th>Validity</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for pricing in pricing_rules %}
+        <tr>
+          <td><a href="/admin/pricing/{{ pricing.id }}">{{ pricing.upstream_model }}</a><div class="muted small">{{ pricing.endpoint }}</div></td>
+          <td>{{ pricing.provider }}</td>
+          <td>{{ pricing.currency }}</td>
+          <td>
+            <div>input {{ pricing.input_price_per_1m if pricing.input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">output {{ pricing.output_price_per_1m if pricing.output_price_per_1m is not none else "n/a" }}</div>
+          </td>
+          <td>
+            <div>{{ pricing.valid_from.isoformat() }}</div>
+            <div class="muted small">until {{ pricing.valid_until.isoformat() if pricing.valid_until else "open" }}</div>
+          </td>
+          <td>{{ "enabled" if pricing.enabled else "disabled" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">No pricing rules found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
