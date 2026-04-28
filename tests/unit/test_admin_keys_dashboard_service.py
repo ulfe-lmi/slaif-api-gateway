@@ -133,6 +133,11 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert row.can_suspend is True
     assert row.can_activate is False
     assert row.can_revoke is True
+    assert row.valid_from == repo.row.valid_from
+    assert row.valid_until == repo.row.valid_until
+    assert row.cost_limit_eur == Decimal("10.000000000")
+    assert row.token_limit_total == 1000
+    assert row.request_limit_total == 100
     assert "token_hash" not in row.__dataclass_fields__
     assert repo.list_calls[0]["institution_id"] == institution_id
     assert repo.list_calls[0]["cohort_id"] == cohort_id

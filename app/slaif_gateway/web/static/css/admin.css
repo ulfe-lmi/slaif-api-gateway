@@ -348,6 +348,12 @@ td a {
   gap: 14px;
 }
 
+.management-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .action-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -387,6 +393,11 @@ dl {
   margin: 0;
 }
 
+.compact-dl {
+  margin-bottom: 14px;
+  font-size: 0.9rem;
+}
+
 dt {
   color: var(--muted);
   font-weight: 750;
@@ -406,7 +417,8 @@ dd {
   .filter-bar,
   .filter-bar.compact,
   .detail-grid,
-  .action-grid {
+  .action-grid,
+  .management-grid {
     grid-template-columns: 1fr;
   }
 

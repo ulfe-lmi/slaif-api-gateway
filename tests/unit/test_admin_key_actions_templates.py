@@ -158,6 +158,34 @@ def test_key_detail_renders_lifecycle_forms_for_valid_actions(monkeypatch) -> No
     assert "Revoke key" in html
 
 
+def test_key_detail_renders_validity_and_limit_forms(monkeypatch) -> None:
+    key = _detail()
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert f'action="/admin/keys/{key.id}/validity"' in html
+    assert f'action="/admin/keys/{key.id}/limits"' in html
+    assert 'name="csrf_token" value="rendered-csrf-token"' in html
+    assert 'name="valid_from"' in html
+    assert 'name="valid_until"' in html
+    assert key.valid_from.isoformat() in html
+    assert key.valid_until.isoformat() in html
+    assert 'name="cost_limit_eur"' in html
+    assert 'name="token_limit"' in html
+    assert 'name="request_limit"' in html
+    assert 'name="clear_cost_limit" value="true"' in html
+    assert 'name="clear_token_limit" value="true"' in html
+    assert 'name="clear_request_limit" value="true"' in html
+    assert str(key.cost_limit_eur) in html
+    assert str(key.token_limit_total) in html
+    assert str(key.request_limit_total) in html
+    assert "PostgreSQL-backed key policy" in html
+    assert "Redis operational rate limits are configured separately" in html
+    assert "Used and reserved counters are not reset" in html
+
+
 def test_suspended_key_detail_renders_activation_form(monkeypatch) -> None:
     key = _detail(status="suspended", display_status="suspended", can_suspend=False, can_activate=True)
     client = TestClient(_app())

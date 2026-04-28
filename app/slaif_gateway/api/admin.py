@@ -6,7 +6,8 @@ import ipaddress
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -44,7 +45,13 @@ from slaif_gateway.services.admin_session_service import (
 )
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
-from slaif_gateway.schemas.keys import ActivateGatewayKeyInput, RevokeGatewayKeyInput, SuspendGatewayKeyInput
+from slaif_gateway.schemas.keys import (
+    ActivateGatewayKeyInput,
+    RevokeGatewayKeyInput,
+    SuspendGatewayKeyInput,
+    UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyValidityInput,
+)
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
@@ -53,8 +60,16 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_suspended": ("success", "Gateway key suspended."),
     "key_activated": ("success", "Gateway key activated."),
     "key_revoked": ("success", "Gateway key revoked permanently."),
+    "key_validity_updated": ("success", "Gateway key validity updated."),
+    "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
     "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
+    "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
+    "limits_reason_required": ("error", "Enter an audit reason before updating hard quota limits."),
+    "invalid_gateway_key_validity": ("error", "Enter a valid key validity window."),
+    "invalid_gateway_key_limits": ("error", "Enter valid positive hard quota limits."),
+    "gateway_key_no_validity_change": ("error", "Change at least one validity field before submitting."),
+    "gateway_key_no_limit_change": ("error", "Change or clear at least one hard quota limit before submitting."),
     "gateway_key_already_active": ("error", "Gateway key is already active."),
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
@@ -397,6 +412,144 @@ async def revoke_admin_key(
         return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_revoked")
+
+
+@router.post("/keys/{gateway_key_id}/validity", response_class=HTMLResponse)
+async def update_admin_key_validity(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(parsed_key_id, message="validity_reason_required")
+
+    try:
+        parsed_valid_from = _parse_admin_datetime(valid_from)
+        parsed_valid_until = _parse_admin_datetime(valid_until)
+    except ValueError:
+        return _redirect_to_admin_key(parsed_key_id, message="invalid_gateway_key_validity")
+
+    if parsed_valid_from is None and parsed_valid_until is None:
+        return _redirect_to_admin_key(parsed_key_id, message="gateway_key_no_validity_change")
+
+    try:
+        async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
+            gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if gateway_key is None:
+                return HTMLResponse("Gateway key not found.", status_code=404)
+            await service.update_gateway_key_validity(
+                UpdateGatewayKeyValidityInput(
+                    gateway_key_id=parsed_key_id,
+                    valid_from=parsed_valid_from,
+                    valid_until=parsed_valid_until or gateway_key.valid_until,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_validity_updated")
+
+
+@router.post("/keys/{gateway_key_id}/limits", response_class=HTMLResponse)
+async def update_admin_key_limits(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    cost_limit_eur: str = Form(""),
+    token_limit: str = Form(""),
+    request_limit: str = Form(""),
+    clear_cost_limit: str = Form(""),
+    clear_token_limit: str = Form(""),
+    clear_request_limit: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(parsed_key_id, message="limits_reason_required")
+
+    clear_cost = _is_checked(clear_cost_limit)
+    clear_tokens = _is_checked(clear_token_limit)
+    clear_requests = _is_checked(clear_request_limit)
+    try:
+        cost_provided, parsed_cost_limit = _parse_optional_admin_decimal(cost_limit_eur)
+        token_provided, parsed_token_limit = _parse_optional_admin_int(token_limit)
+        request_provided, parsed_request_limit = _parse_optional_admin_int(request_limit)
+    except ValueError:
+        return _redirect_to_admin_key(parsed_key_id, message="invalid_gateway_key_limits")
+
+    if (clear_cost and cost_provided) or (clear_tokens and token_provided) or (clear_requests and request_provided):
+        return _redirect_to_admin_key(parsed_key_id, message="invalid_gateway_key_limits")
+
+    if not any((cost_provided, token_provided, request_provided, clear_cost, clear_tokens, clear_requests)):
+        return _redirect_to_admin_key(parsed_key_id, message="gateway_key_no_limit_change")
+
+    try:
+        async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
+            gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if gateway_key is None:
+                return HTMLResponse("Gateway key not found.", status_code=404)
+            await service.update_gateway_key_limits(
+                UpdateGatewayKeyLimitsInput(
+                    gateway_key_id=parsed_key_id,
+                    cost_limit_eur=(
+                        None
+                        if clear_cost
+                        else parsed_cost_limit
+                        if cost_provided
+                        else gateway_key.cost_limit_eur
+                    ),
+                    token_limit_total=(
+                        None
+                        if clear_tokens
+                        else parsed_token_limit
+                        if token_provided
+                        else gateway_key.token_limit_total
+                    ),
+                    request_limit_total=(
+                        None
+                        if clear_requests
+                        else parsed_request_limit
+                        if request_provided
+                        else gateway_key.request_limit_total
+                    ),
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_limits_updated")
 
 
 @router.get("/owners", response_class=HTMLResponse)
@@ -1348,6 +1501,22 @@ async def _admin_key_management_service_scope(request: Request) -> AsyncIterator
 
 
 @asynccontextmanager
+async def _admin_key_management_runtime_scope(
+    request: Request,
+) -> AsyncIterator[tuple[GatewayKeysRepository, KeyService]]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            keys_repository = GatewayKeysRepository(session)
+            yield keys_repository, KeyService(
+                settings=_settings(request),
+                gateway_keys_repository=keys_repository,
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_records_dashboard_service_scope(request: Request) -> AsyncIterator[AdminRecordsDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -1475,6 +1644,57 @@ def _clean_admin_reason(reason: str | None) -> str | None:
         return None
     cleaned = reason.strip()
     return cleaned or None
+
+
+def _parse_admin_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("invalid datetime") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _parse_optional_admin_decimal(value: str | None) -> tuple[bool, Decimal | None]:
+    if value is None:
+        return False, None
+    normalized = value.strip()
+    if not normalized:
+        return False, None
+    try:
+        parsed = Decimal(normalized)
+        if not parsed.is_finite() or parsed <= 0:
+            raise ValueError("decimal must be positive")
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("invalid decimal") from exc
+    return True, parsed
+
+
+def _parse_optional_admin_int(value: str | None) -> tuple[bool, int | None]:
+    if value is None:
+        return False, None
+    normalized = value.strip()
+    if not normalized:
+        return False, None
+    try:
+        parsed = int(normalized, 10)
+    except ValueError as exc:
+        raise ValueError("invalid integer") from exc
+    if parsed <= 0:
+        raise ValueError("integer must be positive")
+    return True, parsed
+
+
+def _is_checked(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "on", "yes"}
 
 
 def _settings(request: Request) -> Settings:

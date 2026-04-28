@@ -154,18 +154,20 @@ pricing, FX, usage, audit, and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. Key detail pages
 include CSRF-protected POST actions to suspend, activate, and permanently revoke
-keys through the existing key service and audit behavior. Owner, institution,
-and cohort pages show safe record metadata and key count summaries. Catalog
-pages show local provider, route, pricing, and FX metadata. Provider pages may
+keys, update validity windows, and update PostgreSQL-backed hard quota limits
+through the existing key service and audit behavior. Hard quota limit updates
+are distinct from Redis operational rate-limit policy. Owner, institution, and
+cohort pages show safe record metadata and key count summaries. Catalog pages
+show local provider, route, pricing, and FX metadata. Provider pages may
 show `api_key_env_var` names, but never provider key values. Usage, audit, and
 email delivery pages show safe local metadata only; they do not show prompts,
 completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
-Admin dashboard key create, rotate, validity, limit, usage-reset, and email
-workflows are not implemented yet. Owner, institution, cohort, pricing, routing,
-provider, usage, and email delivery dashboard mutation workflows are not
+Admin dashboard key create, rotate, usage-reset, and email workflows are not
+implemented yet. Owner, institution, cohort, pricing, routing, provider, usage,
+and email delivery dashboard mutation workflows are not
 implemented yet. Admin sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.
