@@ -193,6 +193,56 @@
     </div>
   </section>
 
+  <section class="action-panel" aria-labelledby="key-usage-reset-heading">
+    <h2 id="key-usage-reset-heading">Reset Usage Counters</h2>
+    <p class="muted">Reset used counters through the existing key service and audit trail. This does not delete usage ledger history, does not change hard quota limits, and does not reset Redis operational rate-limit counters.</p>
+    <div class="management-grid">
+      <div class="action-card">
+        <h3>Current Usage</h3>
+        <dl class="compact-dl">
+          <dt>Used cost</dt>
+          <dd>EUR {{ key.cost_used_eur }}</dd>
+          <dt>Used tokens</dt>
+          <dd>{{ key.tokens_used_total }}</dd>
+          <dt>Used requests</dt>
+          <dd>{{ key.requests_used_total }}</dd>
+          <dt>Reserved cost</dt>
+          <dd>EUR {{ key.cost_reserved_eur }}</dd>
+          <dt>Reserved tokens</dt>
+          <dd>{{ key.tokens_reserved_total }}</dd>
+          <dt>Reserved requests</dt>
+          <dd>{{ key.requests_reserved_total }}</dd>
+        </dl>
+      </div>
+
+      <div class="action-card">
+        <h3>Reset Counters</h3>
+        <p class="muted">Used counters are reset only after confirmation and an audit reason. Reserved counters normally represent in-flight quota reservations; reset them only as an admin repair action.</p>
+        <form method="post" action="/admin/keys/{{ key.id }}/reset-usage">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_reset_usage" value="true" required>
+            I understand this resets used usage counters and preserves usage ledger rows.
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="reset_reserved" value="true">
+            Also reset reserved counters.
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_reset_reserved" value="true">
+            I understand reserved-counter reset is an admin repair action for stale in-flight reservations.
+          </label>
+          <p class="warning-text">Hard quota limits remain unchanged. Usage ledger rows remain historical. Redis rate-limit counters are not reset by this action.</p>
+          <button type="submit" class="danger">Reset usage counters</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <section class="action-panel" aria-labelledby="key-actions-heading">
     <h2 id="key-actions-heading">Lifecycle Actions</h2>
     <p class="muted">Actions use the existing key service and audit trail. They do not display plaintext keys.</p>

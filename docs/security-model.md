@@ -149,20 +149,23 @@ Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
 pricing, FX, usage, audit, and email delivery pages use authenticated GET
-routes. Key suspend, activate, revoke, validity-window update, and hard quota
-limit update forms require a valid authenticated session plus the per-session
-CSRF token. Revoke also requires an explicit confirmation field and
-dashboard-side audit reason before the key service is called. Validity and hard
-quota changes also require dashboard-side audit reasons, call the existing key
-service, and write audit rows through the same service-layer behavior as the
-CLI. Hard quota limit updates affect PostgreSQL-backed lifetime cost, token, and
-request limits; they do not reset used/reserved counters and are distinct from
-Redis operational rate-limit policy. These key detail actions never display,
-recover, or send old plaintext keys.
+routes. Key suspend, activate, revoke, validity-window update, hard quota limit
+update, and usage-counter reset forms require a valid authenticated session plus
+the per-session CSRF token. Revoke also requires an explicit confirmation field
+and dashboard-side audit reason before the key service is called. Validity, hard
+quota, and usage-counter changes also require dashboard-side audit reasons, call
+the existing key service, and write audit rows through the same service-layer
+behavior as the CLI. Hard quota limit updates affect PostgreSQL-backed lifetime
+cost, token, and request limits; they do not reset used/reserved counters and
+are distinct from Redis operational rate-limit policy. Usage-counter reset does
+not delete usage ledger rows, and reserved-counter reset requires a second
+explicit confirmation because it is an admin repair action for stale in-flight
+reservations. These key detail actions never display, recover, or send old
+plaintext keys.
 
 ## Current Limitations
 
-- Admin dashboard key create, rotate, usage-reset, and email workflows are not
+- Admin dashboard key create, rotate, and email workflows are not
   implemented yet. Owner, institution, cohort, provider,
   routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
   implemented yet.
