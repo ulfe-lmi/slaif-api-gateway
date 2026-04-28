@@ -245,7 +245,7 @@
 
   <section class="action-panel" aria-labelledby="key-rotation-heading">
     <h2 id="key-rotation-heading">Rotate Key</h2>
-    <p class="muted">Generate a replacement gateway key through the existing key service and audit trail. The replacement plaintext key is shown once after submission; lost keys cannot be resent.</p>
+    <p class="muted">Generate a replacement gateway key through the existing key service and audit trail. Choose one explicit secret delivery mode; lost keys cannot be resent.</p>
     <div class="management-grid">
       <div class="action-card">
         <h3>Rotation Policy</h3>
@@ -270,7 +270,16 @@
             <input type="checkbox" name="keep_old_active" value="true">
             Keep the old key active after rotation.
           </label>
-          <p class="warning-text">Do not select keep-old-active unless you need a temporary overlap. No email is sent by this dashboard action.</p>
+          <label>
+            Email delivery mode
+            <select name="email_delivery_mode">
+              <option value="none" selected>None - show replacement once in browser</option>
+              <option value="pending">Pending - create delivery row and show replacement once</option>
+              <option value="send-now">Send now - email is the delivery channel</option>
+              <option value="enqueue">Enqueue - Celery email delivery</option>
+            </select>
+          </label>
+          <p class="warning-text">Do not select keep-old-active unless you need a temporary overlap. Send-now and enqueue suppress browser plaintext display; pending still shows the replacement once. Old plaintext keys are never resent.</p>
           <button type="submit" class="danger">Rotate key</button>
         </form>
         {% else %}

@@ -56,7 +56,12 @@
 
   <section class="action-panel" aria-labelledby="rotation-safety-heading">
     <h2 id="rotation-safety-heading">Safety Notes</h2>
-    <p class="muted">The old plaintext key is not displayed or resent. This dashboard action does not send email. PostgreSQL stores the replacement key HMAC and encrypted one-time-secret material only.</p>
+    {% if email_delivery_mode == "pending" and delivery %}
+    <p class="muted">Email delivery is pending for {{ delivery.recipient_email }}. Delivery ID: {{ delivery.email_delivery_id }}. Send it later through the existing CLI or service workflow.</p>
+    {% else %}
+    <p class="muted">No email delivery row was created, no SMTP message was sent, and no Celery task was queued.</p>
+    {% endif %}
+    <p class="muted">The old plaintext key is not displayed or resent. PostgreSQL stores the replacement key HMAC and encrypted one-time-secret material only. Celery payloads, audit rows, sessions, cookies, URLs, and email delivery rows do not store plaintext keys.</p>
   </section>
 </section>
 {% endblock %}

@@ -152,19 +152,32 @@ pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
 quota limit update, usage-counter reset, and rotation forms require a valid
 authenticated session plus the per-session CSRF token. Dashboard key creation
-only selects existing owners/cohorts, calls the existing key service, writes the
-service audit row, and renders a no-cache result page that shows the newly
-generated plaintext key exactly once. It does not send email, create an email
-delivery row, or enqueue Celery tasks. Revoke and rotation also require an
-explicit confirmation field and dashboard-side audit reason before the key
-service is called. Validity, hard quota, usage-counter, and rotation changes call
-the existing key service and write audit rows through the same service-layer
-behavior as the CLI. Dashboard rotation renders a no-cache result page that
-shows the replacement plaintext key exactly once; it never displays or resends
-the old plaintext key, and lost replacement keys must be rotated again. Dashboard
-creation and rotation plaintext keys are not stored in PostgreSQL, audit rows,
-cookies, server-side sessions, URLs, email delivery rows, or Celery payloads. The
-service stores the key HMAC and encrypted one-time-secret material only. Hard quota
+only selects existing owners/cohorts, calls the existing key service, and writes
+the service audit row. Dashboard key creation and rotation support explicit
+email-delivery modes:
+
+- `none` renders a no-cache result page that shows the newly generated plaintext
+  key exactly once.
+- `pending` creates a pending `email_deliveries` row linked to the encrypted
+  one-time secret and still shows the plaintext key exactly once.
+- `send-now` sends through `EmailDeliveryService`, consumes the one-time secret
+  only after SMTP success, records delivery status, and suppresses browser
+  plaintext display.
+- `enqueue` creates a pending delivery row, enqueues the Celery task with IDs
+  only, and suppresses browser plaintext display.
+
+Revoke and rotation also require an explicit confirmation field and
+dashboard-side audit reason before the key service is called. Validity, hard
+quota, usage-counter, and rotation changes call the existing key service and
+write audit rows through the same service-layer behavior as the CLI. Dashboard
+rotation never displays or resends the old plaintext key, and lost replacement
+keys must be rotated again. Dashboard creation and rotation plaintext keys are
+not stored in PostgreSQL key rows, audit rows, logs, cookies, server-side
+sessions, URLs, email delivery rows, or Celery payloads. The service stores the
+key HMAC and encrypted one-time-secret material only. Send-now and enqueue use
+email/Celery as the selected secret delivery channel and therefore suppress
+browser plaintext display. Celery task payloads contain IDs only, never
+plaintext keys, email bodies, encrypted payloads, or nonces. Hard quota
 limit updates affect PostgreSQL-backed lifetime cost, token, and request limits;
 they do not reset used/reserved counters and are distinct from Redis operational
 rate-limit policy. Usage-counter reset does not delete usage ledger rows, and
@@ -174,8 +187,8 @@ never recover or send old plaintext keys.
 
 ## Current Limitations
 
-- Admin dashboard key email workflows are not implemented yet. Owner,
-  institution, cohort, provider,
+- Standalone dashboard email resend/retry actions are not implemented yet.
+  Owner, institution, cohort, provider,
   routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
   implemented yet.
 - Docker/Nginx deployment packaging is not implemented yet.

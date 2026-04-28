@@ -153,17 +153,20 @@ institution, and cohort list/detail pages, and read-only provider, route,
 pricing, FX, usage, audit, and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
-creates one key for an existing owner/cohort and renders a no-cache result page
-that shows the plaintext gateway key exactly once; it does not send email or
-enqueue Celery tasks. Key detail pages
-include CSRF-protected POST actions to suspend, activate, and permanently revoke
-keys, update validity windows, update PostgreSQL-backed hard quota limits, reset
-usage counters, and rotate keys through the existing key service and audit
-behavior. Dashboard rotation shows the replacement plaintext key exactly once on
-a no-cache result page and does not send email. Usage reset preserves usage
-ledger rows; reserved-counter reset requires an additional admin repair
-confirmation. Hard quota limit updates are distinct from Redis operational
-rate-limit policy. Owner, institution, and
+creates one key for an existing owner/cohort. Key creation and key rotation
+support explicit email-delivery modes: `none`, `pending`, `send-now`, and
+`enqueue`. `none` renders a no-cache result page that shows the plaintext
+gateway key exactly once. `pending` creates a pending `email_deliveries` row
+linked to the encrypted one-time secret and still shows the plaintext once.
+`send-now` sends through the configured SMTP delivery service and suppresses
+browser plaintext display. `enqueue` queues the Celery key delivery task with IDs
+only and suppresses browser plaintext display. Key detail pages include
+CSRF-protected POST actions to suspend, activate, and permanently revoke keys,
+update validity windows, update PostgreSQL-backed hard quota limits, reset usage
+counters, and rotate keys through the existing key service and audit behavior.
+Usage reset preserves usage ledger rows; reserved-counter reset requires an
+additional admin repair confirmation. Hard quota limit updates are distinct from
+Redis operational rate-limit policy. Owner, institution, and
 cohort pages show safe record metadata and key count summaries. Catalog pages
 show local provider, route, pricing, and FX metadata. Provider pages may
 show `api_key_env_var` names, but never provider key values. Usage, audit, and
@@ -172,10 +175,10 @@ completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
-Admin dashboard key email workflows are not implemented yet. Owner,
-institution, cohort, pricing, routing, provider, usage, and email delivery
-dashboard mutation workflows are not
-implemented yet. Admin sessions are stored server-side in PostgreSQL with only
+Standalone dashboard email delivery resend/retry actions, bulk key creation
+forms, and owner, institution, cohort, pricing, routing, provider, usage, and
+email delivery dashboard mutation workflows are not implemented yet. Admin
+sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.
 
