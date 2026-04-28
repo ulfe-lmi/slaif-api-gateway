@@ -38,8 +38,9 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert 'name="allowed_models"' in html
     assert 'name="allowed_endpoints"' in html
     assert "key plaintext is shown once" not in html.lower()
-    assert "plaintext key is shown once" in html
-    assert "does not email the key" in html
+    assert "None - show key once in browser" in html
+    assert "Email delivery mode" in html
+    assert "Send-now and enqueue suppress browser plaintext display" in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html
@@ -103,8 +104,8 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert html.count(plaintext_key) == 1
     assert "Copy this key now" in html
     assert "rotate the key" in html
-    assert "email delivery row" in html
-    assert "queue a Celery task" in html
+    assert "No email delivery row was created" in html
+    assert "no Celery task was queued" in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html

@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Key Management</p>
       <h1 id="create-key-heading">Create Gateway Key</h1>
-      <p class="muted">Create one key for an existing owner. The plaintext key is shown once after creation.</p>
+      <p class="muted">Create one key for an existing owner and choose one explicit secret delivery mode.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/keys">All keys</a>
@@ -133,7 +133,17 @@
 
     <section class="action-panel" aria-labelledby="create-submit-heading">
       <h2 id="create-submit-heading">Create Key</h2>
-      <p class="warning-text">The next page shows the plaintext gateway key once on a no-cache response. This dashboard workflow does not email the key or enqueue Celery tasks. Provider keys are never involved.</p>
+      <p class="warning-text">The selected mode controls the only plaintext destination. Old keys cannot be resent; lost keys must be rotated.</p>
+      <label>
+        Email delivery mode
+        <select name="email_delivery_mode">
+          <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - show key once in browser</option>
+          <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - create delivery row and show key once</option>
+          <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - email is the delivery channel</option>
+          <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>Enqueue - Celery email delivery</option>
+        </select>
+      </label>
+      <p class="muted small">Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="Required reason">

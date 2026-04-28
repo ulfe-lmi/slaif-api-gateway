@@ -43,18 +43,24 @@ from slaif_gateway.services.admin_session_service import (
     AdminSessionError,
     AdminSessionService,
 )
+from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.email_errors import EmailError
+from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
+    CreatedGatewayKey,
     RevokeGatewayKeyInput,
     ResetGatewayKeyUsageInput,
+    RotatedGatewayKeyResult,
     RotateGatewayKeyInput,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
+from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
@@ -87,10 +93,13 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
     "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
     "gateway_key_create_failed": ("error", "Gateway key creation failed."),
+    "invalid_email_delivery_mode": ("error", "Select a valid key email delivery mode."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
 }
+
+_ADMIN_EMAIL_DELIVERY_MODES = {"none", "pending", "send-now", "enqueue"}
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -324,6 +333,7 @@ async def create_admin_key(
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
     rate_limit_window_seconds: str = Form(""),
+    email_delivery_mode: str = Form("none"),
     reason: str = Form(""),
 ) -> Response:
     settings = _settings(request)
@@ -349,6 +359,7 @@ async def create_admin_key(
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
         "rate_limit_window_seconds": rate_limit_window_seconds,
+        "email_delivery_mode": email_delivery_mode,
         "reason": reason,
     }
     options = await _load_key_create_form_options(request)
@@ -358,6 +369,8 @@ async def create_admin_key(
             form,
             actor_admin_id=action_context.admin_user.id,
         )
+        parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
+        _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
     except ValueError as exc:
         return _render_key_create_form(
             request,
@@ -370,7 +383,13 @@ async def create_admin_key(
         )
 
     try:
-        async with _admin_key_creation_runtime_scope(request) as (owners_repository, cohorts_repository, service):
+        delivery_result: PendingKeyEmailResult | None = None
+        async with _admin_key_email_delivery_runtime_scope(request) as (
+            owners_repository,
+            cohorts_repository,
+            service,
+            email_delivery_service,
+        ):
             owner = await owners_repository.get_owner_by_id(parsed_input.owner_id)
             if owner is None:
                 return _render_key_create_form(
@@ -396,7 +415,16 @@ async def create_admin_key(
                         status_code=400,
                     )
             created = await service.create_gateway_key(parsed_input)
-    except (KeyManagementError, ValueError):
+            delivery_result = await _handle_admin_key_email_delivery_in_transaction(
+                email_delivery_service,
+                mode=parsed_email_delivery_mode,
+                gateway_key_id=created.gateway_key_id,
+                one_time_secret_id=created.one_time_secret_id,
+                owner_id=created.owner_id,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed_input.note,
+            )
+    except (EmailError, KeyManagementError, ValueError):
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
@@ -406,6 +434,50 @@ async def create_admin_key(
             error=_ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
             status_code=400,
         )
+
+    celery_task_id: str | None = None
+    if parsed_email_delivery_mode == "enqueue" and delivery_result is not None:
+        try:
+            celery_task_id = _enqueue_admin_pending_key_email(
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                email_delivery_id=delivery_result.email_delivery_id,
+                actor_admin_id=action_context.admin_user.id,
+            )
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="queued",
+            )
+        except Exception:  # noqa: BLE001
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="failed",
+                error_code="celery_enqueue_failed",
+                error_message="Email delivery could not be queued.",
+            )
+
+    if parsed_email_delivery_mode in {"send-now", "enqueue"}:
+        response = templates.TemplateResponse(
+            request,
+            "keys/email_delivery_result.html",
+            {
+                "admin": action_context.admin_user,
+                "workflow": "created",
+                "email_delivery_mode": parsed_email_delivery_mode,
+                "key_result": _safe_created_key_result(created),
+                "delivery": delivery_result,
+                "celery_task_id": celery_task_id,
+            },
+        )
+        _set_no_store_headers(response)
+        return response
 
     response = templates.TemplateResponse(
         request,
@@ -425,6 +497,9 @@ async def create_admin_key(
                 "allowed_endpoints": parsed_input.allowed_endpoints,
                 "rate_limit_policy": parsed_input.rate_limit_policy,
             },
+            "email_delivery_mode": parsed_email_delivery_mode,
+            "delivery": delivery_result,
+            "celery_task_id": celery_task_id,
         },
     )
     _set_no_store_headers(response)
@@ -771,6 +846,7 @@ async def rotate_admin_key(
     confirm_rotate: str = Form(""),
     reason: str = Form(""),
     keep_old_active: str = Form(""),
+    email_delivery_mode: str = Form("none"),
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -791,9 +867,21 @@ async def rotate_admin_key(
     if cleaned_reason is None:
         return _redirect_to_admin_key(parsed_key_id, message="rotation_reason_required")
 
+    try:
+        parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
+        _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
+    except ValueError:
+        return _redirect_to_admin_key(parsed_key_id, message="invalid_email_delivery_mode")
+
     revoke_old_key = not _is_checked(keep_old_active)
     try:
-        async with _admin_key_management_service_scope(request) as service:
+        delivery_result: PendingKeyEmailResult | None = None
+        async with _admin_key_email_delivery_runtime_scope(request) as (
+            _owners_repository,
+            _cohorts_repository,
+            service,
+            email_delivery_service,
+        ):
             rotation = await service.rotate_gateway_key(
                 RotateGatewayKeyInput(
                     gateway_key_id=parsed_key_id,
@@ -802,8 +890,66 @@ async def rotate_admin_key(
                     revoke_old_key=revoke_old_key,
                 )
             )
+            if rotation.owner_id is None:
+                raise ValueError("Rotated key result did not include owner metadata for email delivery")
+            delivery_result = await _handle_admin_key_email_delivery_in_transaction(
+                email_delivery_service,
+                mode=parsed_email_delivery_mode,
+                gateway_key_id=rotation.new_gateway_key_id,
+                one_time_secret_id=rotation.one_time_secret_id,
+                owner_id=rotation.owner_id,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
     except KeyManagementError as exc:
         return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+    except (EmailError, ValueError):
+        return _redirect_to_admin_key(parsed_key_id, message="gateway_key_rotation_failed")
+
+    celery_task_id: str | None = None
+    if parsed_email_delivery_mode == "enqueue" and delivery_result is not None:
+        try:
+            celery_task_id = _enqueue_admin_pending_key_email(
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                email_delivery_id=delivery_result.email_delivery_id,
+                actor_admin_id=action_context.admin_user.id,
+            )
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="queued",
+            )
+        except Exception:  # noqa: BLE001
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="failed",
+                error_code="celery_enqueue_failed",
+                error_message="Email delivery could not be queued.",
+            )
+
+    if parsed_email_delivery_mode in {"send-now", "enqueue"}:
+        response = templates.TemplateResponse(
+            request,
+            "keys/email_delivery_result.html",
+            {
+                "admin": action_context.admin_user,
+                "workflow": "rotated",
+                "email_delivery_mode": parsed_email_delivery_mode,
+                "key_result": _safe_rotated_key_result(rotation),
+                "delivery": delivery_result,
+                "celery_task_id": celery_task_id,
+                "old_key_revoked": revoke_old_key,
+            },
+        )
+        _set_no_store_headers(response)
+        return response
 
     response = templates.TemplateResponse(
         request,
@@ -812,6 +958,9 @@ async def rotate_admin_key(
             "admin": action_context.admin_user,
             "rotation": rotation,
             "old_key_revoked": revoke_old_key,
+            "email_delivery_mode": parsed_email_delivery_mode,
+            "delivery": delivery_result,
+            "celery_task_id": celery_task_id,
         },
     )
     _set_no_store_headers(response)
@@ -1802,6 +1951,39 @@ async def _admin_key_creation_runtime_scope(
 
 
 @asynccontextmanager
+async def _admin_key_email_delivery_runtime_scope(
+    request: Request,
+) -> AsyncIterator[tuple[OwnersRepository, CohortsRepository, KeyService, EmailDeliveryService]]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            settings = _settings(request)
+            keys_repository = GatewayKeysRepository(session)
+            one_time_secrets_repository = OneTimeSecretsRepository(session)
+            owners_repository = OwnersRepository(session)
+            audit_repository = AuditRepository(session)
+            yield (
+                owners_repository,
+                CohortsRepository(session),
+                KeyService(
+                    settings=settings,
+                    gateway_keys_repository=keys_repository,
+                    one_time_secrets_repository=one_time_secrets_repository,
+                    audit_repository=audit_repository,
+                ),
+                EmailDeliveryService(
+                    settings=settings,
+                    one_time_secrets_repository=one_time_secrets_repository,
+                    email_deliveries_repository=EmailDeliveriesRepository(session),
+                    gateway_keys_repository=keys_repository,
+                    owners_repository=owners_repository,
+                    audit_repository=audit_repository,
+                    email_service=EmailService(settings),
+                ),
+            )
+
+
+@asynccontextmanager
 async def _admin_records_dashboard_service_scope(request: Request) -> AsyncIterator[AdminRecordsDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -1963,6 +2145,7 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_tokens_per_minute": "",
         "rate_limit_concurrent_requests": "",
         "rate_limit_window_seconds": "",
+        "email_delivery_mode": "none",
         "reason": "",
     }
 
@@ -2012,6 +2195,91 @@ def _parse_key_create_form(
         rate_limit_policy=rate_limit_policy,
         note=cleaned_reason,
     )
+
+
+def _parse_admin_email_delivery_mode(value: str | None) -> str:
+    mode = (value or "none").strip().lower()
+    if mode not in _ADMIN_EMAIL_DELIVERY_MODES:
+        raise ValueError("Select a valid key email delivery mode.")
+    return mode
+
+
+def _validate_admin_email_delivery_preconditions(settings: Settings, mode: str) -> None:
+    if mode in {"none", "pending"}:
+        return
+    if not settings.ENABLE_EMAIL_DELIVERY:
+        raise ValueError("Email delivery must be enabled before using this delivery mode.")
+    if not settings.SMTP_HOST or not settings.SMTP_FROM:
+        raise ValueError("SMTP_HOST and SMTP_FROM are required for this delivery mode.")
+    if mode == "enqueue" and not settings.get_celery_broker_url():
+        raise ValueError("CELERY_BROKER_URL or REDIS_URL is required for queued delivery.")
+
+
+async def _handle_admin_key_email_delivery_in_transaction(
+    service: EmailDeliveryService,
+    *,
+    mode: str,
+    gateway_key_id: uuid.UUID,
+    one_time_secret_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    actor_admin_id: uuid.UUID,
+    reason: str | None,
+) -> PendingKeyEmailResult | None:
+    if mode == "none":
+        return None
+    pending = await service.create_pending_key_email_delivery(
+        gateway_key_id=gateway_key_id,
+        one_time_secret_id=one_time_secret_id,
+        owner_id=owner_id,
+        actor_admin_id=actor_admin_id,
+        reason=reason,
+    )
+    if mode == "send-now":
+        return await service.send_pending_key_email(
+            one_time_secret_id=one_time_secret_id,
+            email_delivery_id=pending.email_delivery_id,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+    return pending
+
+
+def _enqueue_admin_pending_key_email(
+    *,
+    one_time_secret_id: uuid.UUID,
+    email_delivery_id: uuid.UUID,
+    actor_admin_id: uuid.UUID | None,
+) -> str:
+    result = send_pending_key_email_task.delay(
+        str(one_time_secret_id),
+        str(email_delivery_id),
+        str(actor_admin_id) if actor_admin_id else None,
+    )
+    return str(result.id)
+
+
+def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
+    return {
+        "gateway_key_id": created.gateway_key_id,
+        "public_key_id": created.public_key_id,
+        "display_prefix": created.display_prefix,
+        "owner_id": created.owner_id,
+        "valid_from": created.valid_from,
+        "valid_until": created.valid_until,
+    }
+
+
+def _safe_rotated_key_result(rotation: RotatedGatewayKeyResult) -> dict[str, object]:
+    return {
+        "old_gateway_key_id": rotation.old_gateway_key_id,
+        "new_gateway_key_id": rotation.new_gateway_key_id,
+        "new_public_key_id": rotation.new_public_key_id,
+        "old_status": rotation.old_status,
+        "new_status": rotation.new_status,
+        "valid_from": rotation.valid_from,
+        "valid_until": rotation.valid_until,
+        "owner_id": rotation.owner_id,
+    }
 
 
 def _parse_create_valid_until(

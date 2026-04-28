@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Gateway Key Email Delivery{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="email-delivery-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Email Delivery</p>
+      <h1 id="email-delivery-heading">
+        {% if workflow == "rotated" %}Replacement Key Delivery{% else %}New Key Delivery{% endif %}
+      </h1>
+      <p class="muted">Email delivery is the selected secret channel. The plaintext gateway key is not shown in the browser.</p>
+    </div>
+    <div class="header-actions">
+      {% if workflow == "rotated" %}
+      <a class="button-link secondary" href="/admin/keys/{{ key_result.new_gateway_key_id }}">New key detail</a>
+      <a class="button-link secondary" href="/admin/keys/{{ key_result.old_gateway_key_id }}">Old key detail</a>
+      {% else %}
+      <a class="button-link secondary" href="/admin/keys/{{ key_result.gateway_key_id }}">Key detail</a>
+      {% endif %}
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="email-result-status-heading">
+    <h2 id="email-result-status-heading">Delivery Status</h2>
+    <dl>
+      <dt>Mode</dt>
+      <dd>{{ email_delivery_mode }}</dd>
+      <dt>Status</dt>
+      <dd>{{ delivery.status if delivery else "not-created" }}</dd>
+      {% if delivery %}
+      <dt>Email delivery ID</dt>
+      <dd>{{ delivery.email_delivery_id }}</dd>
+      <dt>Recipient</dt>
+      <dd>{{ delivery.recipient_email or "Unknown" }}</dd>
+      {% endif %}
+      {% if celery_task_id %}
+      <dt>Celery task ID</dt>
+      <dd>{{ celery_task_id }}</dd>
+      {% endif %}
+      {% if delivery and delivery.provider_message_id %}
+      <dt>Provider message ID</dt>
+      <dd>{{ delivery.provider_message_id }}</dd>
+      {% endif %}
+      {% if delivery and delivery.error_message %}
+      <dt>Error</dt>
+      <dd>{{ delivery.error_message }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+
+  <div class="detail-grid">
+    {% if workflow == "rotated" %}
+    <section class="detail-section">
+      <h2>Replacement Key</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ key_result.new_gateway_key_id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ key_result.new_public_key_id }}</dd>
+        <dt>Status</dt>
+        <dd>{{ key_result.new_status }}</dd>
+        <dt>Valid from</dt>
+        <dd>{{ key_result.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt>
+        <dd>{{ key_result.valid_until.isoformat() }}</dd>
+      </dl>
+    </section>
+    <section class="detail-section">
+      <h2>Old Key</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ key_result.old_gateway_key_id }}</dd>
+        <dt>Status after rotation</dt>
+        <dd>{{ key_result.old_status }}</dd>
+        <dt>Old key revoked</dt>
+        <dd>{{ "Yes" if old_key_revoked else "No" }}</dd>
+      </dl>
+    </section>
+    {% else %}
+    <section class="detail-section">
+      <h2>New Key</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ key_result.gateway_key_id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ key_result.public_key_id }}</dd>
+        <dt>Display prefix</dt>
+        <dd>{{ key_result.display_prefix }}</dd>
+        <dt>Owner ID</dt>
+        <dd>{{ key_result.owner_id }}</dd>
+        <dt>Valid from</dt>
+        <dd>{{ key_result.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt>
+        <dd>{{ key_result.valid_until.isoformat() }}</dd>
+      </dl>
+    </section>
+    {% endif %}
+  </div>
+
+  <section class="action-panel" aria-labelledby="email-result-safety-heading">
+    <h2 id="email-result-safety-heading">Safety Notes</h2>
+    {% if email_delivery_mode == "send-now" %}
+    <p class="muted">The one-time secret is consumed only after SMTP success. If delivery failed, the failure is recorded without showing plaintext in this response.</p>
+    {% elif email_delivery_mode == "enqueue" %}
+    <p class="muted">The Celery task payload contains IDs only. The worker decrypts the existing one-time secret during delivery.</p>
+    {% endif %}
+    <p class="warning-text">The plaintext gateway key is not in this browser response, URL, cookies, admin session, audit row, email delivery row, or Celery payload. Old plaintext keys cannot be resent.</p>
+  </section>
+</section>
+{% endblock %}

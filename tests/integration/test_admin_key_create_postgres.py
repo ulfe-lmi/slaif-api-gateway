@@ -272,8 +272,8 @@ def test_admin_key_create_form_postgres(migrated_postgres_url: str) -> None:
         assert created.text.count(plaintext_key) == 1
         assert plaintext_key not in str(created.url)
         assert plaintext_key not in created.headers.get("set-cookie", "")
-        assert "email delivery row" in created.text
-        assert "queue a Celery task" in created.text
+        assert "No email delivery row was created" in created.text
+        assert "no Celery task was queued" in created.text
         assert "token_hash" not in created.text
         assert "encrypted_payload" not in created.text
         assert "nonce" not in created.text

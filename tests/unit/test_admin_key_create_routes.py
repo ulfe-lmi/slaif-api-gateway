@@ -120,7 +120,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="cost_limit_eur"' in response.text
     assert 'name="allowed_models"' in response.text
     assert 'name="rate_limit_requests_per_minute"' in response.text
-    assert "dashboard workflow does not email the key" in response.text
+    assert "Email delivery mode" in response.text
+    assert "Send-now and enqueue suppress browser plaintext display" in response.text
     assert "token_hash" not in response.text
     assert "encrypted_payload" not in response.text
     assert "nonce" not in response.text
@@ -352,7 +353,7 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
     assert response.headers["Pragma"] == "no-cache"
     assert response.url.path == "/admin/keys/create"
     assert plaintext_key not in response.headers.get("set-cookie", "")
-    assert "email_delivery" not in response.text
+    assert "Email delivery is pending" not in response.text
     assert "celery_task_id" not in response.text
     assert "token_hash" not in response.text
     assert "encrypted_payload" not in response.text

@@ -232,9 +232,10 @@ def test_key_detail_renders_rotation_form(monkeypatch) -> None:
     assert 'name="csrf_token" value="rendered-csrf-token"' in html
     assert 'name="confirm_rotate" value="true"' in html
     assert 'name="keep_old_active" value="true"' in html
-    assert "replacement plaintext key is shown once" in html
+    assert 'name="email_delivery_mode"' in html
+    assert "None - show replacement once in browser" in html
     assert "lost keys cannot be resent" in html
-    assert "No email is sent by this dashboard action." in html
+    assert "Send-now and enqueue suppress browser plaintext display" in html
     assert "Rotate key" in html
 
 
@@ -294,4 +295,4 @@ def test_key_detail_action_panel_does_not_render_sensitive_values(monkeypatch) -
     assert "session-token-must-not-render" not in html
     assert "session_hash_must_not_render" not in html
     assert "resend" not in html.lower()
-    assert "email action" not in html.lower()
+    assert "resend" not in html.lower()
