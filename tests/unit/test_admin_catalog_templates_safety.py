@@ -220,7 +220,9 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
     combined = "\n".join(
         [
             client.get("/admin/providers").text,
+            client.get("/admin/providers/new").text,
             client.get(f"/admin/providers/{provider.id}").text,
+            client.get(f"/admin/providers/{provider.id}/edit").text,
             client.get("/admin/routes").text,
             client.get(f"/admin/routes/{route.id}").text,
             client.get("/admin/pricing").text,
@@ -232,6 +234,11 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
 
     assert provider.provider in combined
     assert provider.api_key_env_var in combined
+    assert "/admin/providers/new" in combined
+    assert f"/admin/providers/{provider.id}/edit" in combined
+    assert f"/admin/providers/{provider.id}/disable" in combined
+    assert 'name="csrf_token" value="rendered-csrf-token"' in combined
+    assert 'name="confirm_disable" value="true"' in combined
     assert route.requested_model in combined
     assert pricing.currency in combined
     assert "USD / EUR" in combined
@@ -248,5 +255,6 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "nonce" not in combined
     assert "plaintext gateway key" not in combined.lower()
     assert "providersecret" not in combined
+    assert "api_key_value" not in combined
     assert "prompt text must not render" not in combined
     assert "completion text must not render" not in combined

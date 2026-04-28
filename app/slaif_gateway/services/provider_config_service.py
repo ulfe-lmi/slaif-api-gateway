@@ -31,8 +31,14 @@ class ProviderConfigService:
         api_key_env_var: str,
         enabled: bool,
         notes: str | None,
+        kind: str = "openai_compatible",
+        timeout_seconds: int = 300,
+        max_retries: int = 2,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> ProviderConfig:
         normalized_provider = _required_text(provider, "Provider")
+        normalized_kind = _validate_kind(kind)
         normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
         if _looks_like_secret(normalized_env_var):
             raise ValueError("Store the provider API key in an environment variable; pass only its name")
@@ -44,14 +50,19 @@ class ProviderConfigService:
             display_name=_clean_optional(display_name) or normalized_provider,
             base_url=_clean_optional(base_url) or _default_base_url(normalized_provider),
             api_key_env_var=normalized_env_var,
+            kind=normalized_kind,
             enabled=enabled,
+            timeout_seconds=_positive_int(timeout_seconds, "Timeout seconds"),
+            max_retries=_non_negative_int(max_retries, "Max retries"),
             notes=_clean_optional(notes),
         )
         await self._audit.add_audit_log(
             action="provider_config_created",
             entity_type="provider_config",
+            admin_user_id=actor_admin_id,
             entity_id=row.id,
             new_values=_safe_audit_values(row),
+            note=_clean_optional(reason),
         )
         return row
 
@@ -77,7 +88,70 @@ class ProviderConfigService:
             raise RecordNotFoundError("Provider config")
         return row
 
-    async def set_provider_enabled(self, provider_or_id: str, *, enabled: bool) -> ProviderConfig:
+    async def update_provider_config(
+        self,
+        provider_or_id: str,
+        *,
+        provider: str,
+        display_name: str | None,
+        kind: str,
+        base_url: str,
+        api_key_env_var: str,
+        enabled: bool,
+        timeout_seconds: int,
+        max_retries: int,
+        notes: str | None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> ProviderConfig:
+        row = await self.get_provider_config(provider_or_id)
+        old_values = _safe_audit_values(row)
+        normalized_provider = _required_text(provider, "Provider")
+        normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
+        if _looks_like_secret(normalized_env_var):
+            raise ValueError("Store the provider API key in an environment variable; pass only its name")
+        if normalized_provider != row.provider:
+            existing = await self._providers.get_provider_config_by_provider(normalized_provider)
+            if existing is not None and existing.id != row.id:
+                raise DuplicateRecordError("Provider config", "provider")
+
+        updated = await self._providers.update_provider_metadata(
+            row.id,
+            provider=normalized_provider,
+            display_name=_clean_optional(display_name) or normalized_provider,
+            kind=_validate_kind(kind),
+            base_url=_required_text(base_url, "Base URL"),
+            api_key_env_var=normalized_env_var,
+            timeout_seconds=_positive_int(timeout_seconds, "Timeout seconds"),
+            max_retries=_non_negative_int(max_retries, "Max retries"),
+            notes=_clean_optional(notes),
+        )
+        if not updated:
+            raise RecordNotFoundError("Provider config")
+        refreshed = await self._providers.get_provider_config_by_id(row.id)
+        if refreshed is None:
+            raise RecordNotFoundError("Provider config")
+        refreshed.enabled = enabled
+        await self._providers.set_provider_enabled(refreshed.id, enabled=enabled)
+        await self._audit.add_audit_log(
+            action="provider_config_updated",
+            entity_type="provider_config",
+            admin_user_id=actor_admin_id,
+            entity_id=refreshed.id,
+            old_values=old_values,
+            new_values=_safe_audit_values(refreshed),
+            note=_clean_optional(reason),
+        )
+        return refreshed
+
+    async def set_provider_enabled(
+        self,
+        provider_or_id: str,
+        *,
+        enabled: bool,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> ProviderConfig:
         row = await self.get_provider_config(provider_or_id)
         old_enabled = row.enabled
         updated = await self._providers.set_provider_enabled(row.id, enabled=enabled)
@@ -87,9 +161,11 @@ class ProviderConfigService:
         await self._audit.add_audit_log(
             action="provider_config_enabled" if enabled else "provider_config_disabled",
             entity_type="provider_config",
+            admin_user_id=actor_admin_id,
             entity_id=row.id,
             old_values={"enabled": old_enabled},
             new_values={"enabled": enabled},
+            note=_clean_optional(reason),
         )
         return row
 
@@ -114,6 +190,25 @@ def _default_base_url(provider: str) -> str:
     if provider == "openrouter":
         return "https://openrouter.ai/api/v1"
     raise ValueError("--base-url is required for providers without a built-in default")
+
+
+def _validate_kind(value: str) -> str:
+    kind = _required_text(value, "Provider kind")
+    if kind != "openai_compatible":
+        raise ValueError("Provider kind must be openai_compatible")
+    return kind
+
+
+def _positive_int(value: int, label: str) -> int:
+    if value <= 0:
+        raise ValueError(f"{label} must be positive")
+    return value
+
+
+def _non_negative_int(value: int, label: str) -> int:
+    if value < 0:
+        raise ValueError(f"{label} must be non-negative")
+    return value
 
 
 def _looks_like_secret(value: str) -> bool:

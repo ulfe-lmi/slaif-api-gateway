@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Create Provider Config{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="provider-create-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Provider Catalog</p>
+      <h1 id="provider-create-heading">Create Provider Config</h1>
+      <p class="muted">Store provider metadata and the environment variable name that holds the real provider key.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/providers">Provider configs</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/providers/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="provider-metadata-heading">
+      <h2 id="provider-metadata-heading">Metadata</h2>
+      <p class="muted">Provider config rows do not contain provider key values.</p>
+      <div class="form-grid">
+        <label>
+          Provider
+          <input name="provider" value="{{ form.provider }}" required autocomplete="off" placeholder="openai">
+        </label>
+        <label>
+          Display name
+          <input name="display_name" value="{{ form.display_name }}" autocomplete="off" placeholder="OpenAI">
+        </label>
+        <label>
+          Kind
+          <select name="kind">
+            <option value="openai_compatible" {% if form.kind == "openai_compatible" %}selected{% endif %}>OpenAI-compatible</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-connection-heading">
+      <h2 id="provider-connection-heading">Connection Metadata</h2>
+      <p class="warning-text">Enter the environment variable name only. The actual provider key must stay in environment variables or deployment secrets.</p>
+      <div class="form-grid">
+        <label>
+          Base URL
+          <input name="base_url" value="{{ form.base_url }}" autocomplete="off" placeholder="https://api.openai.com/v1">
+        </label>
+        <label>
+          API key environment variable
+          <input name="api_key_env_var" value="{{ form.api_key_env_var }}" required autocomplete="off" placeholder="OPENAI_UPSTREAM_API_KEY">
+        </label>
+        <label>
+          Status
+          <span class="checkbox-row">
+            <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+            <span>Enabled</span>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-runtime-heading">
+      <h2 id="provider-runtime-heading">Runtime Defaults</h2>
+      <div class="form-grid">
+        <label>
+          Timeout seconds
+          <input name="timeout_seconds" value="{{ form.timeout_seconds }}" inputmode="numeric" required>
+        </label>
+        <label>
+          Max retries
+          <input name="max_retries" value="{{ form.max_retries }}" inputmode="numeric" required>
+        </label>
+        <label>
+          Audit reason
+          <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+        </label>
+      </div>
+      <label>
+        Notes
+        <textarea name="notes">{{ form.notes }}</textarea>
+      </label>
+    </section>
+
+    <section class="action-panel" aria-labelledby="provider-submit-heading">
+      <h2 id="provider-submit-heading">Create</h2>
+      <p class="muted">This updates provider metadata only. It does not add routes, pricing, FX rates, or health checks.</p>
+      <button type="submit">Create provider config</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

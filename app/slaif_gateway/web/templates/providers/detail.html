@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Provider Catalog</p>
       <h1 id="provider-heading">{{ provider.display_name }}</h1>
-      <p class="muted">Read-only provider metadata. The dashboard shows environment variable names, never provider key values.</p>
+      <p class="muted">Provider metadata. The dashboard shows environment variable names, never provider key values.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/providers/{{ provider.id }}/edit">Edit</a>
       <a class="button-link secondary" href="/admin/providers">Provider configs</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -39,6 +40,50 @@
       <p>{{ provider.notes or "No notes." }}</p>
     </section>
   </div>
+
+  <section class="action-panel" aria-labelledby="provider-actions-heading">
+    <h2 id="provider-actions-heading">Provider Status Actions</h2>
+    <p class="muted">These actions update provider metadata only. They do not call upstream providers or change route, pricing, or FX records.</p>
+    <div class="action-grid">
+      <div class="action-card">
+        <h3>Enable</h3>
+        {% if not provider.enabled %}
+        <form method="post" action="/admin/providers/{{ provider.id }}/enable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off">
+          </label>
+          <button type="submit">Enable provider config</button>
+        </form>
+        {% else %}
+        <button type="button" disabled>Enable provider config</button>
+        <p class="muted small">Provider config is already enabled.</p>
+        {% endif %}
+      </div>
+      <div class="action-card">
+        <h3>Disable</h3>
+        {% if provider.enabled %}
+        <form method="post" action="/admin/providers/{{ provider.id }}/disable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_disable" value="true" required>
+            <span>I understand routes using this provider may stop resolving.</span>
+          </label>
+          <p class="warning-text">Disabling provider metadata can make dependent routes unavailable until another enabled provider route is configured.</p>
+          <button type="submit" class="danger">Disable provider config</button>
+        </form>
+        {% else %}
+        <button type="button" class="danger" disabled>Disable provider config</button>
+        <p class="muted small">Provider config is already disabled.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
 
   <div class="related-section">
     <h2>Recent Routes</h2>

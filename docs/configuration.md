@@ -97,8 +97,10 @@ remains the hard quota and accounting source of truth.
 
 The `provider_configs` table stores provider metadata and environment variable
 names such as `OPENAI_UPSTREAM_API_KEY`; it does not store provider secret
-values. Model routes, pricing, and FX rates are configured through CLI/database
-metadata.
+values. Admin dashboard provider config forms create, edit, enable, and disable
+metadata rows by referencing environment variable names only; they do not accept
+actual provider key values. Model routes, pricing, and FX rates are configured
+through CLI/database metadata.
 
 ## Request Caps
 
@@ -149,8 +151,9 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 
 The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
-institution, and cohort list/detail pages, and read-only provider, route,
-pricing, FX, usage, audit, and email delivery list/detail pages. The key pages
+institution, and cohort list/detail pages, provider config list/detail/create/edit
+pages under `/admin/providers`, and read-only route, pricing, FX, usage, audit,
+and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
 creates one key for an existing owner/cohort. Key creation and key rotation
@@ -171,16 +174,17 @@ counters, and rotate keys through the existing key service and audit behavior.
 Usage reset preserves usage ledger rows; reserved-counter reset requires an
 additional admin repair confirmation. Hard quota limit updates are distinct from
 Redis operational rate-limit policy. Owner, institution, and
-cohort pages show safe record metadata and key count summaries. Catalog pages
-show local provider, route, pricing, and FX metadata. Provider pages may
-show `api_key_env_var` names, but never provider key values. Usage, audit, and
+cohort pages show safe record metadata and key count summaries. Provider pages
+allow CSRF-protected metadata create/edit/enable/disable actions and may show
+`api_key_env_var` names, but never provider key values. Route, pricing, and FX
+catalog pages remain read-only. Usage, audit, and
 email delivery pages show safe local metadata only; they do not show prompts,
 completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms, and
-owner, institution, cohort, pricing, routing, provider, usage, and audit
+owner, institution, cohort, pricing, routing, FX, usage, and audit
 dashboard mutation workflows are not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
