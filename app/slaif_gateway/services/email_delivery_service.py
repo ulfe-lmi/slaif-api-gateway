@@ -187,6 +187,63 @@ class EmailDeliveryService:
                 error=exc,
             )
 
+    async def create_pending_key_email_delivery(
+        self,
+        *,
+        gateway_key_id: uuid.UUID,
+        one_time_secret_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> PendingKeyEmailResult:
+        """Create safe pending delivery metadata for an existing one-time secret."""
+        one_time_secret = await self._one_time_secrets_repository.get_one_time_secret_by_id(
+            one_time_secret_id
+        )
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id(gateway_key_id)
+        owner = await self._owners_repository.get_owner_by_id(owner_id)
+        if one_time_secret is None or gateway_key is None or owner is None:
+            raise EmailError("Key email metadata is incomplete")
+        if one_time_secret.gateway_key_id != gateway_key.id or one_time_secret.owner_id != owner.id:
+            raise EmailError("One-time secret does not match the requested key email metadata")
+        if one_time_secret.purpose not in KEY_EMAIL_PURPOSES:
+            raise EmailError("One-time secret purpose is not deliverable by email")
+        if one_time_secret.status != "pending" or one_time_secret.consumed_at is not None:
+            raise EmailError("One-time secret is not pending")
+
+        subject = gateway_key_email_subject(rotation=one_time_secret.purpose == "gateway_key_rotation_email")
+        email_delivery = await self._email_deliveries_repository.create_email_delivery(
+            recipient_email=owner.email,
+            subject=subject,
+            template_name="gateway_key_email",
+            owner_id=owner.id,
+            gateway_key_id=gateway_key.id,
+            one_time_secret_id=one_time_secret.id,
+            status="pending",
+        )
+        await self._audit_repository.add_audit_log(
+            action="email_key_delivery_created",
+            entity_type="email_delivery",
+            entity_id=email_delivery.id,
+            admin_user_id=actor_admin_id,
+            note=reason,
+            new_values={
+                "email_delivery_id": str(email_delivery.id),
+                "one_time_secret_id": str(one_time_secret.id),
+                "gateway_key_id": str(gateway_key.id),
+                "owner_id": str(owner.id),
+                "status": "pending",
+            },
+        )
+        return PendingKeyEmailResult(
+            email_delivery_id=email_delivery.id,
+            one_time_secret_id=one_time_secret.id,
+            gateway_key_id=gateway_key.id,
+            owner_id=owner.id,
+            recipient_email=owner.email,
+            status="pending",
+        )
+
     async def _resolve_email_delivery(
         self,
         *,

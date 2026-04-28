@@ -554,6 +554,7 @@ class KeyService:
             new_status=new_key.status,
             valid_from=new_valid_from,
             valid_until=new_valid_until,
+            owner_id=old_key.owner_id,
         )
 
     @staticmethod

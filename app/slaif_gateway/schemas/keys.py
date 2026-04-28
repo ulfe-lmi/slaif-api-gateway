@@ -165,3 +165,4 @@ class RotatedGatewayKeyResult:
     new_status: str
     valid_from: datetime
     valid_until: datetime
+    owner_id: uuid.UUID | None = None

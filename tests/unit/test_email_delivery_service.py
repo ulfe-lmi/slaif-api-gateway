@@ -67,6 +67,9 @@ class _OneTimeRepo:
     def __init__(self, row: _OneTimeSecret) -> None:
         self.row = row
 
+    async def get_one_time_secret_by_id(self, one_time_secret_id: uuid.UUID):
+        return self.row if one_time_secret_id == self.row.id else None
+
     async def get_one_time_secret_for_update(self, one_time_secret_id: uuid.UUID):
         return self.row if one_time_secret_id == self.row.id else None
 
@@ -257,3 +260,30 @@ async def test_email_delivery_service_marks_created_delivery_failed_on_smtp_erro
     assert result.email_delivery_id in email_repo.rows
     assert email_repo.rows[result.email_delivery_id].status == "failed"
     assert secret.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_service_creates_pending_delivery_without_plaintext() -> None:
+    service, secret, email_repo, audit_repo, _sender, plaintext_key = _service()
+
+    result = await service.create_pending_key_email_delivery(
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        owner_id=secret.owner_id,
+    )
+
+    assert result.status == "pending"
+    assert result.email_delivery_id in email_repo.rows
+    assert email_repo.rows[result.email_delivery_id].one_time_secret_id == secret.id
+    assert secret.status == "pending"
+    assert secret.consumed_at is None
+    serialized = json.dumps(
+        {
+            "delivery": email_repo.rows[result.email_delivery_id].__dict__,
+            "audit": audit_repo.calls,
+        },
+        default=str,
+    )
+    assert plaintext_key not in serialized
+    assert secret.encrypted_payload not in serialized
+    assert secret.nonce not in serialized

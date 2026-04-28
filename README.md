@@ -29,13 +29,13 @@ Implemented:
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
-- Email/Celery delivery foundation for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, and Celery task payloads that carry IDs only.
+- Explicit CLI-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, and Celery task payloads that carry IDs only.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
 - Admin dashboard pages.
-- Automatic key-email wiring from key creation or rotation.
+- Automatic key-email sending by default.
 - OpenTelemetry tracing and full deployment docs.
 
 ## OpenAI-Compatible Usage
@@ -191,7 +191,7 @@ slaif-gateway keys set-rate-limits <key-id> --requests-per-minute 60 --tokens-pe
 
 Text-mode `keys create` and `keys rotate` show the plaintext gateway key once for the operator workflow. JSON mode is secret-safe by default: use `--show-plaintext` only when intentionally capturing the one-time key in JSON, or use `--secret-output-file PATH` to write it to a new `0600` file without printing it to stdout. Lost keys cannot be resent; rotate them. Reserved-counter repair requires `keys reset-usage --reset-reserved --confirm-reset-reserved`.
 
-Email delivery is available as a foundation but is not automatically wired into key creation or rotation yet. Configure local SMTP/Mailpit-style settings before using it:
+Email delivery is explicit and operator-controlled; key creation and rotation never send email by default. Configure local SMTP/Mailpit-style settings before using it:
 
 ```bash
 export ENABLE_EMAIL_DELIVERY=true
@@ -201,7 +201,9 @@ export SMTP_FROM=noreply@example.org
 export CELERY_BROKER_URL="${REDIS_URL:-redis://localhost:6379/0}"
 ```
 
-`slaif-gateway email test --to ada@example.org` sends a safe test email with no gateway key material. `slaif-gateway email send-pending-key --one-time-secret-id <id> --send-now` sends a key from an existing encrypted `one_time_secrets` row, and `--enqueue` queues the Celery task instead. The task payload contains only IDs such as `one_time_secret_id` and `email_delivery_id`; plaintext gateway keys are decrypted only inside the delivery process and are never placed in Redis/Celery payloads, audit rows, or `email_deliveries`. Lost keys cannot be resent from old plaintext; rotate the key and send the replacement one-time secret.
+`slaif-gateway keys create --email-delivery pending` and `slaif-gateway keys rotate --email-delivery pending` create a pending `email_deliveries` row linked to the new one-time secret. Use `--email-delivery send-now` to send immediately, or `--email-delivery enqueue` to queue the Celery task. Send-now and enqueue modes treat email as the secret delivery channel and do not print the plaintext key to stdout; they reject `--show-plaintext` and `--secret-output-file` to avoid multiple secret destinations.
+
+`slaif-gateway email test --to ada@example.org` sends a safe test email with no gateway key material. `slaif-gateway email send-pending-key --one-time-secret-id <id> --send-now` retries/sends a key from an existing encrypted `one_time_secrets` row, and `--enqueue` queues the Celery task instead. The task payload contains only IDs such as `one_time_secret_id` and `email_delivery_id`; plaintext gateway keys are decrypted only inside the delivery process and are never placed in Redis/Celery payloads, audit rows, or `email_deliveries`. Lost keys cannot be resent from old plaintext; rotate the key and send the replacement one-time secret.
 
 Configure local provider, route, pricing, and FX metadata:
 
@@ -287,7 +289,7 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes admin dashboard routes/templates, email delivery through Celery and one-time secrets, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes admin dashboard routes/templates, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 
