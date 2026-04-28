@@ -38,5 +38,5 @@ Status values are intentionally conservative:
 | 4.2 | `n > 1` Chat Completions accounting policy | High | Planned | Not implemented | Follow-up required | Latest review identifies this as the clearest remaining hard-accounting edge. Recommended policy: reject `n > 1` until multi-choice accounting is implemented. |
 | 4.2 | Scheduled reconciliation or alerting | Medium | Planned | Not implemented | Follow-up required | Manual operator repair exists, but background jobs/alerts are intentionally out of scope until Celery/scheduler work. |
 | 4.2 | Dashboard pages | Medium | Planned | Not implemented | Not applicable | Admin dashboard is listed as not implemented in README. |
-| 4.2 | Email sending / Celery workers | Medium | Planned | Not implemented | Not applicable | Email/Celery remain out of scope for the current implementation snapshot. |
+| 4.2 | Email sending / Celery workers | Medium | Addressed | #74, #75 | Unit and PostgreSQL integration tests | Explicit CLI-controlled email delivery and Celery task foundations exist for newly generated/rotated keys. Automatic/dashboard email workflows remain out of scope. |
 | 4.2 | Docker deployment files | Medium | Planned | Not implemented | Not applicable | Deployment docs/files are intentionally pending; no Docker deployment files are included by this remediation tracker. |
