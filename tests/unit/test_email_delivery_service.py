@@ -287,3 +287,28 @@ async def test_email_delivery_service_creates_pending_delivery_without_plaintext
     assert plaintext_key not in serialized
     assert secret.encrypted_payload not in serialized
     assert secret.nonce not in serialized
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_sendability_requires_pending_unconsumed_secret() -> None:
+    service, secret, email_repo, _audit_repo, _sender, _plaintext_key = _service()
+    delivery = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        status="pending",
+    )
+
+    sendability = await service.get_key_email_delivery_sendability(delivery.id)
+    assert sendability.can_send is True
+    assert sendability.one_time_secret_status == "present"
+
+    secret.status = "consumed"
+    secret.consumed_at = datetime.now(UTC)
+    blocked = await service.get_key_email_delivery_sendability(delivery.id)
+    assert blocked.can_send is False
+    assert blocked.one_time_secret_status == "consumed"
+    assert "rotated" in (blocked.blocking_reason or "")

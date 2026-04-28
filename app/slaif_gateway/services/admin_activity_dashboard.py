@@ -7,7 +7,7 @@ import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol
 
 from slaif_gateway.db.models import AuditLog, EmailDelivery, UsageLedger
@@ -294,11 +294,37 @@ def _email_delivery_list_row(row: EmailDelivery) -> AdminEmailDeliveryListRow:
 
 def _email_delivery_detail(row: EmailDelivery) -> AdminEmailDeliveryDetail:
     base = _email_delivery_list_row(row)
+    one_time_secret_status, blocking_reason = _email_delivery_action_state(row)
+    can_send = blocking_reason is None
     return AdminEmailDeliveryDetail(
         **asdict(base),
         provider_message_id=_safe_optional_text(row.provider_message_id),
         failure_reason=_safe_optional_text(row.error_message),
+        email_delivery_status=row.status,
+        one_time_secret_status=one_time_secret_status,
+        can_send_now=can_send,
+        can_enqueue=can_send,
+        safe_blocking_reason=blocking_reason,
     )
+
+
+def _email_delivery_action_state(row: EmailDelivery) -> tuple[str, str | None]:
+    if row.status not in {"pending", "failed"}:
+        return "unavailable", "Only pending or failed key email deliveries can be sent."
+    if row.one_time_secret is None:
+        return "unavailable", "The one-time secret is unavailable; rotate the key and create a new delivery."
+    if row.one_time_secret.status == "consumed" or row.one_time_secret.consumed_at is not None:
+        return "consumed", "The one-time secret was already consumed; lost keys must be rotated."
+    now = datetime.now(UTC)
+    if row.one_time_secret.status == "expired" or row.one_time_secret.expires_at <= now:
+        return "expired", "The one-time secret is expired; rotate the key and create a new delivery."
+    if row.one_time_secret.status != "pending":
+        return "unavailable", "The one-time secret is not pending; rotate the key and create a new delivery."
+    if row.one_time_secret.purpose not in {"gateway_key_email", "gateway_key_rotation_email"}:
+        return "unavailable", "The one-time secret is not valid for key email delivery."
+    if row.one_time_secret.owner_id != row.owner_id or row.one_time_secret.gateway_key_id != row.gateway_key_id:
+        return "unavailable", "The one-time secret does not match this email delivery."
+    return "present", None
 
 
 def _owner_display_name(row: UsageLedger) -> str | None:

@@ -91,3 +91,8 @@ class AdminEmailDeliveryListRow:
 class AdminEmailDeliveryDetail(AdminEmailDeliveryListRow):
     provider_message_id: str | None
     failure_reason: str | None
+    email_delivery_status: str
+    one_time_secret_status: str
+    can_send_now: bool
+    can_enqueue: bool
+    safe_blocking_reason: str | None

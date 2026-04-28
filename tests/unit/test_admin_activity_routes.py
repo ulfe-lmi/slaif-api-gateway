@@ -178,6 +178,11 @@ def _email() -> AdminEmailDeliveryDetail:
         **asdict(row),
         provider_message_id="smtp-message-id",
         failure_reason=None,
+        email_delivery_status=row.status,
+        one_time_secret_status="consumed",
+        can_send_now=False,
+        can_enqueue=False,
+        safe_blocking_reason="Only pending or failed key email deliveries can be sent.",
     )
 
 

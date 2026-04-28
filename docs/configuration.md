@@ -160,7 +160,11 @@ gateway key exactly once. `pending` creates a pending `email_deliveries` row
 linked to the encrypted one-time secret and still shows the plaintext once.
 `send-now` sends through the configured SMTP delivery service and suppresses
 browser plaintext display. `enqueue` queues the Celery key delivery task with IDs
-only and suppresses browser plaintext display. Key detail pages include
+only and suppresses browser plaintext display. Existing pending/failed key email
+deliveries can be sent now or enqueued from the email delivery detail page only
+when a valid unconsumed one-time secret is still available. Those actions require
+CSRF plus explicit confirmation, never accept plaintext key input, and enqueue
+IDs only. Key detail pages include
 CSRF-protected POST actions to suspend, activate, and permanently revoke keys,
 update validity windows, update PostgreSQL-backed hard quota limits, reset usage
 counters, and rotate keys through the existing key service and audit behavior.
@@ -175,9 +179,9 @@ completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
-Standalone dashboard email delivery resend/retry actions, bulk key creation
-forms, and owner, institution, cohort, pricing, routing, provider, usage, and
-email delivery dashboard mutation workflows are not implemented yet. Admin
+Arbitrary old-key dashboard email resend actions, bulk key creation forms, and
+owner, institution, cohort, pricing, routing, provider, usage, and audit
+dashboard mutation workflows are not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.
