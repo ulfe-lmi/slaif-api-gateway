@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Gateway Key Created{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="created-key-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Creation</p>
+      <h1 id="created-key-heading">Gateway Key Created</h1>
+      <p class="muted">This page is the only dashboard display of the plaintext gateway key.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ created.gateway_key_id }}">Key detail</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="created-plaintext-heading">
+    <h2 id="created-plaintext-heading">Plaintext Gateway Key</h2>
+    <p class="warning-text">Copy this key now. It will not be shown again. If it is lost, rotate the key.</p>
+    <div class="secret-display" aria-label="Plaintext gateway key">
+      <code>{{ created.plaintext_key }}</code>
+    </div>
+  </section>
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Key Metadata</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ created.gateway_key_id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ created.public_key_id }}</dd>
+        <dt>Display prefix</dt>
+        <dd>{{ created.display_prefix }}</dd>
+        <dt>Valid from</dt>
+        <dd>{{ created.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt>
+        <dd>{{ created.valid_until.isoformat() }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Owner</h2>
+      <dl>
+        <dt>Owner ID</dt>
+        <dd>{{ created.owner_id }}</dd>
+        <dt>Name</dt>
+        <dd>{{ (owner.name ~ " " ~ owner.surname).strip() if owner else "Unknown owner" }}</dd>
+        <dt>Email</dt>
+        <dd>{{ owner.email if owner else "Unknown" }}</dd>
+        <dt>Cohort</dt>
+        <dd>{{ cohort.name if cohort else "Not set" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Limits</h2>
+      <dl>
+        <dt>Cost limit</dt>
+        <dd>{{ "EUR " ~ limits.cost_limit_eur if limits.cost_limit_eur is not none else "Unlimited" }}</dd>
+        <dt>Token limit</dt>
+        <dd>{{ limits.token_limit_total if limits.token_limit_total is not none else "Unlimited" }}</dd>
+        <dt>Request limit</dt>
+        <dd>{{ limits.request_limit_total if limits.request_limit_total is not none else "Unlimited" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Policy</h2>
+      <dl>
+        <dt>Allowed models</dt>
+        <dd>{{ ", ".join(policy.allowed_models) if policy.allowed_models else "None" }}</dd>
+        <dt>Allowed endpoints</dt>
+        <dd>{{ ", ".join(policy.allowed_endpoints) if policy.allowed_endpoints else "None" }}</dd>
+        <dt>Rate limits</dt>
+        <dd>
+          {% if policy.rate_limit_policy %}
+          {{ policy.rate_limit_policy }}
+          {% else %}
+          Default
+          {% endif %}
+        </dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="action-panel" aria-labelledby="created-key-safety-heading">
+    <h2 id="created-key-safety-heading">Safety Notes</h2>
+    <p class="muted">PostgreSQL stores the key HMAC and encrypted one-time-secret material only. This dashboard action does not send email, create an email delivery row, or queue a Celery task.</p>
+  </section>
+</section>
+{% endblock %}
