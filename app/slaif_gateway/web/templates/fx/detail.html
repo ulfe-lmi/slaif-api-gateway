@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}FX Rate Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-rate-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-rate-heading">{{ fx_rate.base_currency }} / {{ fx_rate.quote_currency }}</h1>
+      <p class="muted">Read-only FX metadata.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section>
+      <h2>FX Rate</h2>
+      <dl>
+        <dt>Base currency</dt><dd>{{ fx_rate.base_currency }}</dd>
+        <dt>Quote currency</dt><dd>{{ fx_rate.quote_currency }}</dd>
+        <dt>Rate</dt><dd>{{ fx_rate.rate }}</dd>
+        <dt>Valid from</dt><dd>{{ fx_rate.valid_from.isoformat() }}</dd>
+        <dt>Valid until</dt><dd>{{ fx_rate.valid_until.isoformat() if fx_rate.valid_until else "open" }}</dd>
+        <dt>Source</dt><dd>{{ fx_rate.source or "Not set" }}</dd>
+        <dt>Created</dt><dd>{{ fx_rate.created_at.isoformat() }}</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Scope</h2>
+      <p>This page displays local configured FX metadata only. External rate-fetching and update workflows are not implemented in this dashboard slice.</p>
+    </section>
+  </div>
+</section>
+{% endblock %}

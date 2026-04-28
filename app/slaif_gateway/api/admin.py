@@ -19,10 +19,15 @@ from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
 from slaif_gateway.services.admin_session_service import (
@@ -481,6 +486,328 @@ async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
     )
 
 
+@router.get("/providers", response_class=HTMLResponse)
+async def list_admin_providers(
+    request: Request,
+    provider: str | None = Query(None),
+    enabled: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        rows = await service.list_providers(provider=provider, enabled=enabled, limit=limit, offset=offset)
+
+    return templates.TemplateResponse(
+        request,
+        "providers/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "providers": rows,
+            "filters": {
+                "provider": provider or "",
+                "enabled": "" if enabled is None else str(enabled).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/providers/{provider_config_id}", response_class=HTMLResponse)
+async def admin_provider_detail(request: Request, provider_config_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_provider_config_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            provider_row = await service.get_provider_detail(parsed_provider_config_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "providers/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "provider": provider_row,
+        },
+    )
+
+
+@router.get("/routes", response_class=HTMLResponse)
+async def list_admin_routes(
+    request: Request,
+    provider: str | None = Query(None),
+    requested_model: str | None = Query(None),
+    match_type: str | None = Query(None),
+    enabled: bool | None = Query(None),
+    visible: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        rows = await service.list_routes(
+            provider=provider,
+            requested_model=requested_model,
+            match_type=match_type,
+            enabled=enabled,
+            visible=visible,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "routes/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "routes": rows,
+            "filters": {
+                "provider": provider or "",
+                "requested_model": requested_model or "",
+                "match_type": match_type or "",
+                "enabled": "" if enabled is None else str(enabled).lower(),
+                "visible": "" if visible is None else str(visible).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/routes/{route_id}", response_class=HTMLResponse)
+async def admin_route_detail(request: Request, route_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            route = await service.get_route_detail(parsed_route_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "routes/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "route": route,
+        },
+    )
+
+
+@router.get("/pricing", response_class=HTMLResponse)
+async def list_admin_pricing_rules(
+    request: Request,
+    provider: str | None = Query(None),
+    model: str | None = Query(None),
+    endpoint: str | None = Query(None),
+    currency: str | None = Query(None),
+    enabled: bool | None = Query(None),
+    active: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        rows = await service.list_pricing_rules(
+            provider=provider,
+            model=model,
+            endpoint=endpoint,
+            currency=currency,
+            enabled=enabled,
+            active=active,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "pricing/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "pricing_rules": rows,
+            "filters": {
+                "provider": provider or "",
+                "model": model or "",
+                "endpoint": endpoint or "",
+                "currency": currency or "",
+                "enabled": "" if enabled is None else str(enabled).lower(),
+                "active": "" if active is None else str(active).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/pricing/{pricing_rule_id}", response_class=HTMLResponse)
+async def admin_pricing_rule_detail(request: Request, pricing_rule_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
+    except ValueError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            pricing_rule = await service.get_pricing_rule_detail(parsed_pricing_rule_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "pricing/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "pricing_rule": pricing_rule,
+        },
+    )
+
+
+@router.get("/fx", response_class=HTMLResponse)
+async def list_admin_fx_rates(
+    request: Request,
+    base_currency: str | None = Query(None),
+    quote_currency: str | None = Query(None),
+    source: str | None = Query(None),
+    active: bool | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        rows = await service.list_fx_rates(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
+            source=source,
+            active=active,
+            limit=limit,
+            offset=offset,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "fx/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "fx_rates": rows,
+            "filters": {
+                "base_currency": base_currency or "",
+                "quote_currency": quote_currency or "",
+                "source": source or "",
+                "active": "" if active is None else str(active).lower(),
+                "limit": limit,
+                "offset": offset,
+            },
+        },
+    )
+
+
+@router.get("/fx/{fx_rate_id}", response_class=HTMLResponse)
+async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_fx_rate_id = uuid.UUID(fx_rate_id)
+    except ValueError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            fx_rate = await service.get_fx_rate_detail(parsed_fx_rate_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "fx/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "fx_rate": fx_rate,
+        },
+    )
+
+
 @router.post("/logout", response_class=HTMLResponse)
 async def logout(request: Request, csrf_token: str = Form("")) -> Response:
     settings = _settings(request)
@@ -565,6 +892,19 @@ async def _admin_records_dashboard_service_scope(request: Request) -> AsyncItera
                 owners_repository=OwnersRepository(session),
                 institutions_repository=InstitutionsRepository(session),
                 cohorts_repository=CohortsRepository(session),
+            )
+
+
+@asynccontextmanager
+async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncIterator[AdminCatalogDashboardService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield AdminCatalogDashboardService(
+                provider_configs_repository=ProviderConfigsRepository(session),
+                model_routes_repository=ModelRoutesRepository(session),
+                pricing_rules_repository=PricingRulesRepository(session),
+                fx_rates_repository=FxRatesRepository(session),
             )
 
 

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Provider Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="provider-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Provider Catalog</p>
+      <h1 id="provider-heading">{{ provider.display_name }}</h1>
+      <p class="muted">Read-only provider metadata. The dashboard shows environment variable names, never provider key values.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/providers">Provider configs</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section>
+      <h2>Provider</h2>
+      <dl>
+        <dt>Name</dt><dd>{{ provider.provider }}</dd>
+        <dt>Kind</dt><dd>{{ provider.kind }}</dd>
+        <dt>Status</dt><dd>{{ "enabled" if provider.enabled else "disabled" }}</dd>
+        <dt>Base URL</dt><dd>{{ provider.base_url }}</dd>
+        <dt>API key env var</dt><dd><code>{{ provider.api_key_env_var }}</code></dd>
+        <dt>Timeout</dt><dd>{{ provider.timeout_seconds }}s</dd>
+        <dt>Max retries</dt><dd>{{ provider.max_retries }}</dd>
+        <dt>Created</dt><dd>{{ provider.created_at.isoformat() }}</dd>
+        <dt>Updated</dt><dd>{{ provider.updated_at.isoformat() }}</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Notes</h2>
+      <p>{{ provider.notes or "No notes." }}</p>
+    </section>
+  </div>
+
+  <div class="related-section">
+    <h2>Recent Routes</h2>
+    <table>
+      <thead>
+        <tr><th>Requested model</th><th>Upstream model</th><th>Priority</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for route in provider.route_summaries %}
+        <tr>
+          <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
+          <td>{{ route.upstream_model }}</td>
+          <td>{{ route.priority }}</td>
+          <td>{{ "enabled" if route.enabled else "disabled" }} / {{ "visible" if route.visible_in_models else "hidden" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty-state">No routes found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="related-section">
+    <h2>Recent Pricing Rules</h2>
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Endpoint</th><th>Currency</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for pricing in provider.pricing_summaries %}
+        <tr>
+          <td><a href="/admin/pricing/{{ pricing.id }}">{{ pricing.upstream_model }}</a></td>
+          <td>{{ pricing.endpoint }}</td>
+          <td>{{ pricing.currency }}</td>
+          <td>{{ "enabled" if pricing.enabled else "disabled" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty-state">No pricing rules found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

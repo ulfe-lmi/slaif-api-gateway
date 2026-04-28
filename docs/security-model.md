@@ -116,13 +116,16 @@ explicit confirmation.
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
-`/admin` dashboard, read-only key list/detail pages under `/admin/keys`, and
-read-only owner, institution, and cohort list/detail pages. The key pages
-display safe key metadata only: prefix, public key ID, hint, owner, status,
-computed validity state, quotas, counters, allowed policy summaries, and
-rate-limit policy. Owner, institution, and cohort pages display safe record
-metadata and key count summaries. They do not display plaintext gateway keys,
-token hashes, encrypted one-time-secret payloads, nonces, provider keys,
+`/admin` dashboard, read-only key list/detail pages under `/admin/keys`,
+read-only owner, institution, and cohort list/detail pages, and read-only
+provider, route, pricing, and FX list/detail pages. The key pages display safe
+key metadata only: prefix, public key ID, hint, owner, status, computed validity
+state, quotas, counters, allowed policy summaries, and rate-limit policy.
+Owner, institution, and cohort pages display safe record metadata and key count
+summaries. Catalog pages display safe local provider, route, pricing, and FX
+metadata. Provider config pages may display `api_key_env_var` names, but never
+provider secret values. These pages do not display plaintext gateway keys, token
+hashes, encrypted one-time-secret payloads, nonces, provider key values,
 password hashes, admin session tokens, or prompt/completion content.
 
 Admin passwords are verified with Argon2id password hashes. Successful login
@@ -137,8 +140,9 @@ clears the browser cookie.
 
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
-server-side session row. The read-only key, owner, institution, and cohort pages
-use authenticated GET routes and do not provide mutation forms.
+server-side session row. The read-only key, owner, institution, cohort,
+provider, route, pricing, and FX pages use authenticated GET routes and do not
+provide mutation forms.
 
 ## Current Limitations
 

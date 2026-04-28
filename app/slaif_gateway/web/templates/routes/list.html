@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Model Routes{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="routes-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="routes-heading">Model Routes</h1>
+      <p class="muted">Read-only routing metadata. Enable/disable and priority edits are not implemented here.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar" method="get" action="/admin/routes">
+    <label>Provider<input name="provider" value="{{ filters.provider }}" autocomplete="off"></label>
+    <label>Requested model<input name="requested_model" value="{{ filters.requested_model }}" autocomplete="off"></label>
+    <label>
+      Match type
+      <select name="match_type">
+        <option value="" {% if filters.match_type == "" %}selected{% endif %}>Any</option>
+        <option value="exact" {% if filters.match_type == "exact" %}selected{% endif %}>Exact</option>
+        <option value="prefix" {% if filters.match_type == "prefix" %}selected{% endif %}>Prefix</option>
+        <option value="glob" {% if filters.match_type == "glob" %}selected{% endif %}>Glob</option>
+      </select>
+    </label>
+    <label>
+      Enabled
+      <select name="enabled">
+        <option value="" {% if filters.enabled == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.enabled == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.enabled == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <label>
+      Visible
+      <select name="visible">
+        <option value="" {% if filters.visible == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.visible == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.visible == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Priority</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for route in routes %}
+        <tr>
+          <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
+          <td>{{ route.provider }}</td>
+          <td>{{ route.upstream_model }}</td>
+          <td>{{ route.priority }}</td>
+          <td>
+            <div>{{ "enabled" if route.enabled else "disabled" }}</div>
+            <div class="muted small">{{ "visible" if route.visible_in_models else "hidden" }} / {{ "streaming" if route.supports_streaming else "non-streaming" }}</div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty-state">No model routes found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}FX Rates{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-heading">FX Rates</h1>
+      <p class="muted">Read-only local FX metadata. Rate updates are not implemented here.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/fx">
+    <label>Base currency<input name="base_currency" value="{{ filters.base_currency }}" autocomplete="off"></label>
+    <label>Quote currency<input name="quote_currency" value="{{ filters.quote_currency }}" autocomplete="off"></label>
+    <label>Source<input name="source" value="{{ filters.source }}" autocomplete="off"></label>
+    <label>
+      Active
+      <select name="active">
+        <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
+        <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
+        <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <input type="hidden" name="limit" value="{{ filters.limit }}">
+    <button type="submit">Filter</button>
+  </form>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Pair</th><th>Rate</th><th>Validity</th><th>Source</th><th>Created</th></tr>
+      </thead>
+      <tbody>
+        {% for fx_rate in fx_rates %}
+        <tr>
+          <td><a href="/admin/fx/{{ fx_rate.id }}">{{ fx_rate.base_currency }} / {{ fx_rate.quote_currency }}</a></td>
+          <td>{{ fx_rate.rate }}</td>
+          <td>
+            <div>{{ fx_rate.valid_from.isoformat() }}</div>
+            <div class="muted small">until {{ fx_rate.valid_until.isoformat() if fx_rate.valid_until else "open" }}</div>
+          </td>
+          <td>{{ fx_rate.source or "Not set" }}</td>
+          <td>{{ fx_rate.created_at.isoformat() }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty-state">No FX rates found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -73,6 +73,40 @@ class ModelRoutesRepository:
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_model_routes_for_admin(
+        self,
+        *,
+        provider: str | None = None,
+        requested_model: str | None = None,
+        match_type: str | None = None,
+        enabled: bool | None = None,
+        visible: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ModelRoute]:
+        statement: Select[tuple[ModelRoute]] = select(ModelRoute)
+        if provider is not None:
+            statement = statement.where(ModelRoute.provider == provider)
+        if requested_model is not None:
+            statement = statement.where(ModelRoute.requested_model.ilike(f"%{requested_model}%"))
+        if match_type is not None:
+            statement = statement.where(ModelRoute.match_type == match_type)
+        if enabled is not None:
+            statement = statement.where(ModelRoute.enabled == enabled)
+        if visible is not None:
+            statement = statement.where(ModelRoute.visible_in_models == visible)
+
+        statement = (
+            statement.order_by(ModelRoute.priority.asc(), ModelRoute.created_at.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_model_route_for_admin_detail(self, route_id: uuid.UUID) -> ModelRoute | None:
+        return await self._session.get(ModelRoute, route_id)
+
     async def list_enabled_model_routes(self, *, endpoint: str | None = None) -> list[ModelRoute]:
         statement: Select[tuple[ModelRoute]] = select(ModelRoute).where(ModelRoute.enabled.is_(True))
         if endpoint is not None:
