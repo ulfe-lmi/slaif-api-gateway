@@ -114,6 +114,7 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         can_suspend=row.status == "active",
         can_activate=row.status == "suspended",
         can_revoke=row.status in {"active", "suspended"},
+        can_rotate=row.status != "revoked",
         valid_from=row.valid_from,
         valid_until=row.valid_until,
         cost_limit_eur=row.cost_limit_eur,

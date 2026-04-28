@@ -28,6 +28,7 @@ class AdminKeyListRow:
     can_suspend: bool
     can_activate: bool
     can_revoke: bool
+    can_rotate: bool
     valid_from: datetime
     valid_until: datetime
     cost_limit_eur: Decimal | None

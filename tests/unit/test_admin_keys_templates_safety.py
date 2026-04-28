@@ -46,6 +46,7 @@ def _safe_key() -> AdminKeyDetail:
         can_suspend=True,
         can_activate=False,
         can_revoke=True,
+        can_rotate=True,
         valid_from=datetime.now(UTC) - timedelta(days=1),
         valid_until=datetime.now(UTC) + timedelta(days=1),
         cost_limit_eur=Decimal("5.000000000"),

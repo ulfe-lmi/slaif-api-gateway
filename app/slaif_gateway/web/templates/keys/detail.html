@@ -243,6 +243,44 @@
     </div>
   </section>
 
+  <section class="action-panel" aria-labelledby="key-rotation-heading">
+    <h2 id="key-rotation-heading">Rotate Key</h2>
+    <p class="muted">Generate a replacement gateway key through the existing key service and audit trail. The replacement plaintext key is shown once after submission; lost keys cannot be resent.</p>
+    <div class="management-grid">
+      <div class="action-card">
+        <h3>Rotation Policy</h3>
+        <p class="warning-text">Rotation creates a new plaintext key and never shows the old plaintext key. Copy the replacement on the next page; it will not be shown again.</p>
+        <p class="muted">By default, the old key is revoked after rotation. Keeping the old key active temporarily allows both keys to authenticate until an admin revokes the old key.</p>
+      </div>
+
+      <div class="action-card">
+        <h3>Rotate Existing Key</h3>
+        {% if key.can_rotate %}
+        <form method="post" action="/admin/keys/{{ key.id }}/rotate">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_rotate" value="true" required>
+            I understand the replacement plaintext key will be shown once.
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="keep_old_active" value="true">
+            Keep the old key active after rotation.
+          </label>
+          <p class="warning-text">Do not select keep-old-active unless you need a temporary overlap. No email is sent by this dashboard action.</p>
+          <button type="submit" class="danger">Rotate key</button>
+        </form>
+        {% else %}
+        <button type="button" class="danger" disabled>Rotate key</button>
+        <p class="muted small">Revoked keys cannot be rotated.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
   <section class="action-panel" aria-labelledby="key-actions-heading">
     <h2 id="key-actions-heading">Lifecycle Actions</h2>
     <p class="muted">Actions use the existing key service and audit trail. They do not display plaintext keys.</p>

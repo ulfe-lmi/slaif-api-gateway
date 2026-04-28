@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import AuditLog, GatewayKey, UsageLedger
+from slaif_gateway.db.models import AuditLog, GatewayKey, OneTimeSecret, UsageLedger
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
@@ -118,6 +119,16 @@ async def _get_key(database_url: str, gateway_key_id: uuid.UUID) -> GatewayKey:
     return key
 
 
+async def _get_key_by_public_id(database_url: str, public_key_id: str) -> GatewayKey:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(select(GatewayKey).where(GatewayKey.public_key_id == public_key_id))
+        key = result.scalar_one()
+    await engine.dispose()
+    return key
+
+
 async def _audit_actions(database_url: str, gateway_key_id: uuid.UUID) -> list[str]:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -130,6 +141,42 @@ async def _audit_actions(database_url: str, gateway_key_id: uuid.UUID) -> list[s
         actions = list(result.scalars().all())
     await engine.dispose()
     return actions
+
+
+async def _audit_rows(database_url: str, gateway_key_id: uuid.UUID) -> list[AuditLog]:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(AuditLog)
+            .where(AuditLog.entity_id == gateway_key_id)
+            .order_by(AuditLog.created_at.asc())
+        )
+        rows = list(result.scalars().all())
+    await engine.dispose()
+    return rows
+
+
+async def _gateway_key_count(database_url: str) -> int:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(select(func.count()).select_from(GatewayKey))
+        count = int(result.scalar_one())
+    await engine.dispose()
+    return count
+
+
+async def _one_time_secret_for_key(database_url: str, gateway_key_id: uuid.UUID) -> OneTimeSecret:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(OneTimeSecret).where(OneTimeSecret.gateway_key_id == gateway_key_id)
+        )
+        one_time_secret = result.scalar_one()
+    await engine.dispose()
+    return one_time_secret
 
 
 async def _seed_usage_counters_and_ledger(database_url: str, gateway_key_id: uuid.UUID) -> None:
@@ -200,6 +247,30 @@ def _assert_safe_html(html: str, data: dict[str, object], settings: Settings) ->
     assert "session-token" not in html
 
 
+def _replacement_key_from_html(html: str) -> str:
+    match = re.search(r"sk-slaif-[A-Za-z0-9_-]{8,64}\.[A-Za-z0-9_-]{43,}", html)
+    assert match is not None
+    return match.group(0)
+
+
+def _assert_safe_rotation_result_html(
+    html: str,
+    *,
+    old_plaintext_key: str,
+    replacement_key: str,
+    settings: Settings,
+) -> None:
+    assert html.count(replacement_key) == 1
+    assert old_plaintext_key not in html
+    assert "token_hash" not in html
+    assert "encrypted_payload" not in html
+    assert "nonce" not in html
+    assert settings.OPENAI_UPSTREAM_API_KEY not in html
+    assert settings.OPENROUTER_API_KEY not in html
+    assert "password_hash" not in html
+    assert "session-token" not in html
+
+
 def _hard_quota_snapshot(key: GatewayKey) -> dict[str, object]:
     return {
         "cost_used_eur": key.cost_used_eur,
@@ -219,6 +290,9 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
     data = asyncio.run(_create_admin_and_key(migrated_postgres_url))
     key_id = data["gateway_key_id"]
     assert isinstance(key_id, uuid.UUID)
+    rotation_data = asyncio.run(_create_admin_and_key(migrated_postgres_url))
+    rotation_key_id = rotation_data["gateway_key_id"]
+    assert isinstance(rotation_key_id, uuid.UUID)
     settings = _settings(
         migrated_postgres_url,
         one_time_secret_key=str(data["one_time_secret_key"]),
@@ -248,6 +322,15 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         assert unauthenticated_limits.headers["location"] == "/admin/login"
         original_key = asyncio.run(_get_key(migrated_postgres_url, key_id))
         assert original_key.cost_limit_eur == Decimal("12.000000000")
+
+        unauthenticated_rotate = client.post(
+            f"/admin/keys/{rotation_key_id}/rotate",
+            data={"confirm_rotate": "true", "reason": "should not mutate"},
+            follow_redirects=False,
+        )
+        assert unauthenticated_rotate.status_code == 303
+        assert unauthenticated_rotate.headers["location"] == "/admin/login"
+        assert asyncio.run(_get_key(migrated_postgres_url, rotation_key_id)).status == "active"
 
         asyncio.run(_seed_usage_counters_and_ledger(migrated_postgres_url, key_id))
         ledger_count_before_reset = asyncio.run(_usage_ledger_count(migrated_postgres_url, key_id))
@@ -303,6 +386,105 @@ def test_admin_key_lifecycle_actions_postgres(migrated_postgres_url: str) -> Non
         assert after_no_csrf_reset.cost_used_eur == Decimal("3.000000000")
         assert after_no_csrf_reset.cost_reserved_eur == Decimal("4.000000000")
 
+        rotate_detail = client.get(f"/admin/keys/{rotation_key_id}")
+        assert rotate_detail.status_code == 200
+        _assert_safe_html(rotate_detail.text, rotation_data, settings)
+        rotate_csrf = _csrf_from_html(rotate_detail.text)
+        before_rotation_count = asyncio.run(_gateway_key_count(migrated_postgres_url))
+
+        rotate_without_csrf = client.post(
+            f"/admin/keys/{rotation_key_id}/rotate",
+            data={"confirm_rotate": "true", "reason": "missing csrf"},
+        )
+        assert rotate_without_csrf.status_code == 400
+        assert "Invalid CSRF token." in rotate_without_csrf.text
+        assert asyncio.run(_get_key(migrated_postgres_url, rotation_key_id)).status == "active"
+        assert asyncio.run(_gateway_key_count(migrated_postgres_url)) == before_rotation_count
+
+        rotate_without_confirm = client.post(
+            f"/admin/keys/{rotation_key_id}/rotate",
+            data={"csrf_token": rotate_csrf, "reason": "missing confirmation"},
+            follow_redirects=False,
+        )
+        assert rotate_without_confirm.status_code == 303
+        assert rotate_without_confirm.headers["location"] == (
+            f"/admin/keys/{rotation_key_id}?message=rotation_confirmation_required"
+        )
+        assert asyncio.run(_get_key(migrated_postgres_url, rotation_key_id)).status == "active"
+        assert asyncio.run(_gateway_key_count(migrated_postgres_url)) == before_rotation_count
+
+        rotate_without_reason = client.post(
+            f"/admin/keys/{rotation_key_id}/rotate",
+            data={"csrf_token": rotate_csrf, "confirm_rotate": "true"},
+            follow_redirects=False,
+        )
+        assert rotate_without_reason.status_code == 303
+        assert rotate_without_reason.headers["location"] == (
+            f"/admin/keys/{rotation_key_id}?message=rotation_reason_required"
+        )
+        assert asyncio.run(_get_key(migrated_postgres_url, rotation_key_id)).status == "active"
+        assert asyncio.run(_gateway_key_count(migrated_postgres_url)) == before_rotation_count
+
+        rotated = client.post(
+            f"/admin/keys/{rotation_key_id}/rotate",
+            data={
+                "csrf_token": rotate_csrf,
+                "confirm_rotate": "true",
+                "reason": "dashboard rotation integration",
+            },
+        )
+        assert rotated.status_code == 200
+        assert rotated.headers["Cache-Control"] == "no-store, no-cache, must-revalidate"
+        assert rotated.headers["Pragma"] == "no-cache"
+        replacement_key = _replacement_key_from_html(rotated.text)
+        _assert_safe_rotation_result_html(
+            rotated.text,
+            old_plaintext_key=str(rotation_data["plaintext_key"]),
+            replacement_key=replacement_key,
+            settings=settings,
+        )
+        assert asyncio.run(_gateway_key_count(migrated_postgres_url)) == before_rotation_count + 1
+        old_rotated_key = asyncio.run(_get_key(migrated_postgres_url, rotation_key_id))
+        assert old_rotated_key.status == "revoked"
+        assert old_rotated_key.revoked_reason == "dashboard rotation integration"
+        new_public_key_id = replacement_key.removeprefix("sk-slaif-").split(".", 1)[0]
+        new_key = asyncio.run(_get_key_by_public_id(migrated_postgres_url, new_public_key_id))
+        new_key_id = new_key.id
+        assert new_key.status == "active"
+        assert new_key.public_key_id == new_public_key_id
+        assert new_key.token_hash
+        assert not new_key.token_hash.startswith("sk-")
+        assert replacement_key not in new_key.token_hash
+        assert replacement_key not in (new_key.key_hint or "")
+        one_time_secret = asyncio.run(_one_time_secret_for_key(migrated_postgres_url, new_key_id))
+        assert one_time_secret.purpose == "gateway_key_rotation_email"
+        assert replacement_key not in one_time_secret.encrypted_payload
+        assert replacement_key not in one_time_secret.nonce
+        assert "rotate_key" in asyncio.run(_audit_actions(migrated_postgres_url, rotation_key_id))
+        assert "gateway_key_rotation_created" in asyncio.run(_audit_actions(migrated_postgres_url, new_key_id))
+        serialized_audit = json.dumps(
+            [
+                {
+                    "action": row.action,
+                    "old_values": row.old_values,
+                    "new_values": row.new_values,
+                    "note": row.note,
+                }
+                for row in (
+                    asyncio.run(_audit_rows(migrated_postgres_url, rotation_key_id))
+                    + asyncio.run(_audit_rows(migrated_postgres_url, new_key_id))
+                )
+            ],
+            default=str,
+        )
+        assert replacement_key not in serialized_audit
+        assert new_key.token_hash not in serialized_audit
+        assert one_time_secret.encrypted_payload not in serialized_audit
+        assert one_time_secret.nonce not in serialized_audit
+
+        detail = client.get(f"/admin/keys/{key_id}")
+        assert detail.status_code == 200
+        csrf = _csrf_from_html(detail.text)
         before_policy_update = asyncio.run(_get_key(migrated_postgres_url, key_id))
         before_quota_snapshot = _hard_quota_snapshot(before_policy_update)
 
