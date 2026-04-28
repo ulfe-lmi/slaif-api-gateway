@@ -1,9 +1,13 @@
 """ASGI app entrypoint for the SLAIF API Gateway."""
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slaif_gateway.api.admin import router as admin_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
     http_exception_handler,
@@ -31,6 +35,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db_sessionmaker = None
     app.state.redis_client = None
 
+    static_dir = Path(__file__).resolve().parent / "web" / "static"
+    app.mount("/admin/static", StaticFiles(directory=str(static_dir)), name="admin_static")
+
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIdMiddleware, settings=app_settings)
 
@@ -40,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(admin_router)
     app.include_router(openai_compat_router)
 
     return app

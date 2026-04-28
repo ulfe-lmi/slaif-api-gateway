@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AdminSession
@@ -47,6 +48,14 @@ class AdminSessionsRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_admin_session_with_user_by_hash(self, session_token_hash: str) -> AdminSession | None:
+        result = await self._session.execute(
+            select(AdminSession)
+            .options(selectinload(AdminSession.admin_user))
+            .where(AdminSession.session_token_hash == session_token_hash)
+        )
+        return result.scalar_one_or_none()
+
     async def revoke_admin_session(self, admin_session_id: uuid.UUID, *, revoked_at: datetime) -> bool:
         statement = (
             update(AdminSession)
@@ -64,3 +73,21 @@ class AdminSessionsRepository:
         )
         result = await self._session.execute(statement)
         return int(result.rowcount or 0)
+
+    async def set_csrf_token_hash(self, admin_session_id: uuid.UUID, csrf_token_hash: str) -> bool:
+        statement = (
+            update(AdminSession)
+            .where(AdminSession.id == admin_session_id, AdminSession.revoked_at.is_(None))
+            .values(csrf_token_hash=csrf_token_hash)
+        )
+        result = await self._session.execute(statement)
+        return result.rowcount > 0
+
+    async def set_last_seen_at(self, admin_session_id: uuid.UUID, last_seen_at: datetime) -> bool:
+        statement = (
+            update(AdminSession)
+            .where(AdminSession.id == admin_session_id, AdminSession.revoked_at.is_(None))
+            .values(last_seen_at=last_seen_at)
+        )
+        result = await self._session.execute(statement)
+        return result.rowcount > 0

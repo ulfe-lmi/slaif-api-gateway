@@ -134,6 +134,25 @@ layer.
 Structured logs redact gateway keys, provider keys, passwords, cookies, session
 tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 
+## Admin Web
+
+- `ENABLE_ADMIN_DASHBOARD` enables the server-rendered admin web foundation.
+- `ADMIN_SESSION_SECRET` signs/HMACs admin session and CSRF tokens.
+- `ADMIN_SESSION_COOKIE_NAME` controls the browser session cookie name.
+- `ADMIN_SESSION_COOKIE_SECURE` can override cookie `Secure`; when unset it is
+  enabled in production and disabled in development/test.
+- `ADMIN_SESSION_COOKIE_HTTPONLY` defaults to true.
+- `ADMIN_SESSION_COOKIE_SAMESITE` defaults to `lax`.
+- `ADMIN_SESSION_TTL_SECONDS` controls server-side admin session lifetime.
+- `ADMIN_LOGIN_CSRF_COOKIE_NAME` controls the temporary login CSRF cookie name.
+- `ADMIN_CSRF_TTL_SECONDS` controls login CSRF token lifetime.
+
+The current web surface includes `/admin/login`, `/admin/logout`, and a
+placeholder `/admin` dashboard. It does not include key, owner, institution,
+cohort, pricing, routing, provider, usage, or email delivery management pages
+yet. Admin sessions are stored server-side in PostgreSQL with only HMAC-hashed
+session and CSRF tokens. State-changing admin forms use CSRF protection.
+
 ## Email, Celery, And SMTP
 
 - `ENABLE_EMAIL_DELIVERY` enables SMTP key delivery workflows.

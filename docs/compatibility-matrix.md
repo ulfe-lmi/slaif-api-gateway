@@ -34,6 +34,7 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 | Usage ledger without prompt/completion storage | Implemented | All accounting paths | Stores metadata, token counts, cost, status, diagnostics; not full content | Accounting, redaction, integration tests |
 | Streaming finalization recovery | Implemented | OpenAI, OpenRouter | Provider-completed finalization failures are durable and operator-repairable | Unit and PostgreSQL integration tests |
 | Stale reservation reconciliation | Implemented | Not provider-specific | Operator repair for expired pending reservations; refuses provider-completed recovery rows as zero-cost stale failures | Unit and PostgreSQL integration tests |
-| Dashboard pages | Not implemented | None | Out of scope for current implementation | None |
+| Admin web auth foundation | Implemented | Not provider-specific | `/admin/login`, `/admin/logout`, and placeholder `/admin` dashboard with server-side sessions and CSRF; no management CRUD pages yet | Unit and PostgreSQL integration tests |
+| Dashboard management pages | Not implemented | None | Key, owner, institution, cohort, pricing, routing, provider, usage, and email delivery web management pages are out of scope for current implementation | None |
 | Email/Celery workers | Implemented for explicit CLI workflows | Not provider-specific | Key create/rotate can create pending delivery rows, send immediately, or enqueue Celery delivery through encrypted one-time secrets; no automatic sending by default | Unit and PostgreSQL integration tests |
 | Real upstream calls in normal tests | Not used | None | Upstream HTTP is mocked with RESPX | Test suite configuration |

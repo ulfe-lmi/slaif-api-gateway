@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,5 +65,13 @@ class AdminUsersRepository:
         if admin_user is None:
             return False
         admin_user.is_active = is_active
+        await self._session.flush()
+        return True
+
+    async def set_last_login_at(self, admin_user_id: uuid.UUID, last_login_at: datetime) -> bool:
+        admin_user = await self.get_admin_user_by_id(admin_user_id)
+        if admin_user is None:
+            return False
+        admin_user.last_login_at = last_login_at
         await self._session.flush()
         return True

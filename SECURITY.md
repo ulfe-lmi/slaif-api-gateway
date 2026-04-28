@@ -22,7 +22,7 @@ Examples of useful reports include:
 - prompt or completion storage contrary to the documented policy
 - accidental OpenAI/OpenRouter upstream calls in normal tests or local tooling
 - authentication, HMAC validation, or key parsing bypasses
-- admin authentication, CSRF, or session bugs once dashboard routes exist
+- admin authentication, CSRF, or session bugs
 - email/Celery plaintext key payload leakage
 - logs or metrics exposing secrets
 
