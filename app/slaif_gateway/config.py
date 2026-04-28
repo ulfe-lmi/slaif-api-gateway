@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     DATABASE_CONNECT_TIMEOUT_SECONDS: float = 10
     DATABASE_STATEMENT_TIMEOUT_MS: int | None = None
     REDIS_URL: str | None = None
+    CELERY_BROKER_URL: str | None = None
+    CELERY_RESULT_BACKEND: str | None = None
     ENABLE_REDIS_RATE_LIMITS: bool = False
     REDIS_CONNECT_TIMEOUT_SECONDS: float = 2
     REDIS_SOCKET_TIMEOUT_SECONDS: float = 2
@@ -56,6 +58,16 @@ class Settings(BaseSettings):
     ENABLE_OPENAI_PROVIDER: bool = True
     ENABLE_OPENROUTER_PROVIDER: bool = True
     ENABLE_ADMIN_DASHBOARD: bool = True
+    ENABLE_EMAIL_DELIVERY: bool = False
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 1025
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str | None = None
+    SMTP_USE_TLS: bool = False
+    SMTP_STARTTLS: bool = False
+    SMTP_TIMEOUT_SECONDS: float = 10
+    EMAIL_KEY_SECRET_MAX_AGE_SECONDS: int = 86400
     ENABLE_METRICS: bool = True
     METRICS_REQUIRE_AUTH: bool | None = None
     METRICS_PUBLIC_IN_PRODUCTION: bool = False
@@ -103,6 +115,7 @@ class Settings(BaseSettings):
         self._validate_request_id_header()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
+        self._validate_email_settings()
         return self
 
     def _validate_database_settings(self) -> None:
@@ -145,6 +158,19 @@ class Settings(BaseSettings):
                 "RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS must be less than "
                 "RATE_LIMIT_CONCURRENCY_TTL_SECONDS"
             )
+
+    def _validate_email_settings(self) -> None:
+        if self.SMTP_PORT <= 0:
+            raise ValueError("SMTP_PORT must be a positive integer")
+        if self.SMTP_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SMTP_TIMEOUT_SECONDS must be a positive number")
+        if self.EMAIL_KEY_SECRET_MAX_AGE_SECONDS <= 0:
+            raise ValueError("EMAIL_KEY_SECRET_MAX_AGE_SECONDS must be a positive integer")
+        if self.ENABLE_EMAIL_DELIVERY:
+            if not self.SMTP_HOST:
+                raise ValueError("SMTP_HOST is required when ENABLE_EMAIL_DELIVERY=true")
+            if not self.SMTP_FROM:
+                raise ValueError("SMTP_FROM is required when ENABLE_EMAIL_DELIVERY=true")
 
     def _validate_request_caps(self) -> None:
         if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:
@@ -294,6 +320,10 @@ class Settings(BaseSettings):
         if self.RATE_LIMIT_FAIL_CLOSED is not None:
             return self.RATE_LIMIT_FAIL_CLOSED
         return self.APP_ENV.lower() == "production"
+
+    def get_celery_broker_url(self) -> str | None:
+        """Return Celery broker URL, defaulting to Redis when configured."""
+        return self.CELERY_BROKER_URL or self.REDIS_URL
 
 
 @lru_cache(maxsize=1)

@@ -66,6 +66,38 @@ class EmailDeliveriesRepository:
     async def get_email_delivery_by_id(self, email_delivery_id: uuid.UUID) -> EmailDelivery | None:
         return await self._session.get(EmailDelivery, email_delivery_id)
 
+    async def mark_sent(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        sent_at: datetime,
+        provider_message_id: str | None = None,
+    ) -> bool:
+        return await self.update_email_delivery_status(
+            email_delivery_id,
+            status="sent",
+            provider_message_id=provider_message_id,
+            error_message=None,
+            sent_at=sent_at,
+            failed_at=None,
+        )
+
+    async def mark_failed(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        failed_at: datetime,
+        error_message: str,
+    ) -> bool:
+        return await self.update_email_delivery_status(
+            email_delivery_id,
+            status="failed",
+            provider_message_id=None,
+            error_message=error_message,
+            sent_at=None,
+            failed_at=failed_at,
+        )
+
     async def list_email_deliveries(
         self,
         *,
