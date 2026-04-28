@@ -75,6 +75,7 @@ That means:
 - Errors from `/v1` routes must be OpenAI-shaped JSON errors.
 - Unsupported endpoints must return OpenAI-shaped errors, not custom gateway errors.
 - A compatibility matrix must document the exact endpoint support level.
+  Current compatibility documentation lives in `docs/compatibility-matrix.md`.
 
 Do not expose a custom API to training users unless explicitly requested later.
 

@@ -10,6 +10,12 @@ SLAIF API Gateway is an open-source, OpenAI-compatible API gateway for education
 
 The gateway is intended for workshops, courses, training events, and AI-factory environments where users need practical LLM API access but organizers must protect upstream provider credentials and spending.
 
+For exact reviewer-facing behavior, see:
+
+- [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
+- [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
+- [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
+
 ## Current Status
 
 Implemented:
