@@ -8,6 +8,11 @@
   </head>
   <body>
     <main class="page-shell">
+      {% if admin_status_message %}
+      <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">
+        {{ admin_status_message.text }}
+      </div>
+      {% endif %}
       {% block body %}{% endblock %}
     </main>
   </body>

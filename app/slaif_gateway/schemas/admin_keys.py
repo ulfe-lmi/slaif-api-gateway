@@ -25,6 +25,9 @@ class AdminKeyListRow:
     cohort_name: str | None
     status: str
     computed_display_status: str
+    can_suspend: bool
+    can_activate: bool
+    can_revoke: bool
     valid_from: datetime
     valid_until: datetime
     cost_limit_eur: Decimal | None

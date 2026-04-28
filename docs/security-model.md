@@ -116,11 +116,13 @@ explicit confirmation.
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
-`/admin` dashboard, read-only key list/detail pages under `/admin/keys`,
-read-only owner, institution, and cohort list/detail pages, and read-only
-provider, route, pricing, and FX list/detail pages. The key pages display safe
-key metadata only: prefix, public key ID, hint, owner, status, computed validity
-state, quotas, counters, allowed policy summaries, and rate-limit policy.
+`/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
+institution, and cohort list/detail pages, and read-only provider, route,
+pricing, and FX list/detail pages. The key pages display safe key metadata only:
+prefix, public key ID, hint, owner, status, computed validity state, quotas,
+counters, allowed policy summaries, and rate-limit policy. Key detail pages
+provide CSRF-protected POST actions to suspend, activate, and permanently revoke
+gateway keys through the existing key service and audit behavior.
 Owner, institution, and cohort pages display safe record metadata and key count
 summaries. Catalog pages display safe local provider, route, pricing, and FX
 metadata. Provider config pages may display `api_key_env_var` names, but never
@@ -145,13 +147,20 @@ clears the browser cookie.
 
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
-server-side session row. The read-only key, owner, institution, cohort,
-provider, route, pricing, FX, usage, audit, and email delivery pages use
-authenticated GET routes and do not provide mutation forms.
+server-side session row. Admin key, owner, institution, cohort, provider, route,
+pricing, FX, usage, audit, and email delivery pages use authenticated GET
+routes. Key suspend, activate, and revoke forms require a valid authenticated
+session plus the per-session CSRF token. Revoke also requires an explicit
+confirmation field and dashboard-side audit reason before the key service is
+called. These lifecycle actions never display, recover, or send old plaintext
+keys.
 
 ## Current Limitations
 
-- State-changing dashboard management pages are not implemented yet.
+- Admin dashboard key create, rotate, validity, limit, usage-reset, and email
+  workflows are not implemented yet. Owner, institution, cohort, provider,
+  routing, pricing, FX, usage, audit, and email-delivery mutation pages are not
+  implemented yet.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.

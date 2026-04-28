@@ -139,6 +139,6 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
-- State-changing dashboard management workflows.
+- Dashboard management workflows beyond key suspend/activate/revoke.
 - Automatic/dashboard email workflows.
 - Real upstream smoke tests in the normal test suite.

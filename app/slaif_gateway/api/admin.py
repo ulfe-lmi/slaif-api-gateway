@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -24,6 +25,7 @@ from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
@@ -40,9 +42,25 @@ from slaif_gateway.services.admin_session_service import (
     AdminSessionError,
     AdminSessionService,
 )
+from slaif_gateway.services.key_errors import KeyManagementError
+from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.schemas.keys import ActivateGatewayKeyInput, RevokeGatewayKeyInput, SuspendGatewayKeyInput
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
+
+_ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
+    "key_suspended": ("success", "Gateway key suspended."),
+    "key_activated": ("success", "Gateway key activated."),
+    "key_revoked": ("success", "Gateway key revoked permanently."),
+    "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
+    "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
+    "gateway_key_already_active": ("error", "Gateway key is already active."),
+    "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
+    "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
+    "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
+    "key_action_failed": ("error", "Gateway key action failed."),
+}
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -221,6 +239,7 @@ async def list_admin_keys(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "keys": rows,
             "filters": {
                 "status": status or "",
@@ -264,9 +283,120 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "key": key,
         },
     )
+
+
+@router.post("/keys/{gateway_key_id}/suspend", response_class=HTMLResponse)
+async def suspend_admin_key(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.suspend_gateway_key(
+                SuspendGatewayKeyInput(
+                    gateway_key_id=parsed_key_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=_clean_admin_reason(reason),
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_suspended")
+
+
+@router.post("/keys/{gateway_key_id}/activate", response_class=HTMLResponse)
+async def activate_admin_key(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.activate_gateway_key(
+                ActivateGatewayKeyInput(
+                    gateway_key_id=parsed_key_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=_clean_admin_reason(reason),
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_activated")
+
+
+@router.post("/keys/{gateway_key_id}/revoke", response_class=HTMLResponse)
+async def revoke_admin_key(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+    confirm_revoke: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if confirm_revoke != "true":
+        return _redirect_to_admin_key(parsed_key_id, message="revoke_confirmation_required")
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(parsed_key_id, message="revoke_reason_required")
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.revoke_gateway_key(
+                RevokeGatewayKeyInput(
+                    gateway_key_id=parsed_key_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except KeyManagementError as exc:
+        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_revoked")
 
 
 @router.get("/owners", response_class=HTMLResponse)
@@ -1170,6 +1300,24 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         return response
 
 
+async def _admin_action_context(request: Request, *, csrf_token: str) -> AdminSessionContext | Response:
+    settings = _settings(request)
+    session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
+    if not session_token:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    try:
+        async with _admin_service_scope(request) as service:
+            context = await service.validate_admin_session(session_token=session_token)
+            if not service.verify_session_csrf_token(context.admin_session, csrf_token):
+                return HTMLResponse("Invalid CSRF token.", status_code=400)
+            return context
+    except (AdminSessionError, RuntimeError):
+        response = RedirectResponse("/admin/login", status_code=303)
+        _clear_session_cookie(response, settings)
+        return response
+
+
 @asynccontextmanager
 async def _admin_service_scope(request: Request) -> AsyncIterator[AdminSessionService]:
     session_factory = get_sessionmaker_from_app(request)
@@ -1184,6 +1332,19 @@ async def _admin_key_dashboard_service_scope(request: Request) -> AsyncIterator[
     async with session_factory() as session:
         async with session.begin():
             yield AdminKeyDashboardService(gateway_keys_repository=GatewayKeysRepository(session))
+
+
+@asynccontextmanager
+async def _admin_key_management_service_scope(request: Request) -> AsyncIterator[KeyService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield KeyService(
+                settings=_settings(request),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
 
 
 @asynccontextmanager
@@ -1277,6 +1438,43 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
         secure=settings.admin_session_cookie_secure(),
         samesite=settings.ADMIN_SESSION_COOKIE_SAMESITE,
     )
+
+
+def _admin_status_message(request: Request) -> dict[str, str] | None:
+    message_code = request.query_params.get("message")
+    if message_code is None:
+        return None
+    message = _ADMIN_STATUS_MESSAGES.get(message_code)
+    if message is None:
+        return None
+    level, text = message
+    return {"level": level, "text": text}
+
+
+def _redirect_to_admin_key(gateway_key_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/keys/{gateway_key_id}?{query}", status_code=303)
+
+
+def _key_management_error_response(exc: KeyManagementError, *, gateway_key_id: uuid.UUID) -> Response:
+    if exc.status_code == 404:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+    message = exc.error_code if exc.error_code in _ADMIN_STATUS_MESSAGES else "key_action_failed"
+    return _redirect_to_admin_key(gateway_key_id, message=message)
+
+
+def _parse_gateway_key_id(gateway_key_id: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(gateway_key_id)
+    except ValueError:
+        return None
+
+
+def _clean_admin_reason(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    cleaned = reason.strip()
+    return cleaned or None
 
 
 def _settings(request: Request) -> Settings:

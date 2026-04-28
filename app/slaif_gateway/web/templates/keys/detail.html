@@ -112,5 +112,72 @@
       </dl>
     </section>
   </div>
+
+  <section class="action-panel" aria-labelledby="key-actions-heading">
+    <h2 id="key-actions-heading">Lifecycle Actions</h2>
+    <p class="muted">Actions use the existing key service and audit trail. They do not display plaintext keys.</p>
+    <div class="action-grid">
+      <div class="action-card">
+        <h3>Suspend</h3>
+        <p class="muted">Temporarily blocks this key from using `/v1` routes until it is activated again.</p>
+        {% if key.can_suspend %}
+        <form method="post" action="/admin/keys/{{ key.id }}/suspend">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit note
+            <input name="reason" autocomplete="off" placeholder="Optional note">
+          </label>
+          <p class="warning-text">This immediately disables API access for the key.</p>
+          <button type="submit">Suspend key</button>
+        </form>
+        {% else %}
+        <button type="button" disabled>Suspend key</button>
+        <p class="muted small">Only active keys can be suspended.</p>
+        {% endif %}
+      </div>
+
+      <div class="action-card">
+        <h3>Activate</h3>
+        <p class="muted">Restores a suspended key to active status while keeping existing validity and quota policy.</p>
+        {% if key.can_activate %}
+        <form method="post" action="/admin/keys/{{ key.id }}/activate">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit note
+            <input name="reason" autocomplete="off" placeholder="Optional note">
+          </label>
+          <p class="warning-text">This allows API access again if validity and policy checks pass.</p>
+          <button type="submit">Activate key</button>
+        </form>
+        {% else %}
+        <button type="button" disabled>Activate key</button>
+        <p class="muted small">Only suspended keys can be activated.</p>
+        {% endif %}
+      </div>
+
+      <div class="action-card">
+        <h3>Revoke</h3>
+        <p class="muted">Permanently revokes this key. Old plaintext keys remain unavailable; use CLI rotation workflows when replacement is needed.</p>
+        {% if key.can_revoke %}
+        <form method="post" action="/admin/keys/{{ key.id }}/revoke">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_revoke" value="true" required>
+            I understand revocation is permanent.
+          </label>
+          <p class="warning-text">This cannot be undone from the dashboard.</p>
+          <button type="submit" class="danger">Revoke key</button>
+        </form>
+        {% else %}
+        <button type="button" class="danger" disabled>Revoke key</button>
+        <p class="muted small">Revoked keys cannot be revoked again.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
 </section>
 {% endblock %}
