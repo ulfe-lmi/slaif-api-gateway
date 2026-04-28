@@ -346,7 +346,8 @@ def test_streaming_missing_final_usage_releases_concurrency(monkeypatch) -> None
         body = "".join(response.iter_text())
 
     assert response.status_code == 200
-    assert "data: [DONE]" in body
+    assert "stream_usage_missing" in body
+    assert "data: [DONE]" not in body
     assert rate_state["release_calls"] == [
         (auth.gateway_key_id, rate_state["reserve_calls"][0][1])
     ]

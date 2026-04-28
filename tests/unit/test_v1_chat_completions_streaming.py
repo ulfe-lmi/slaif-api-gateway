@@ -265,10 +265,46 @@ def test_streaming_missing_final_usage_records_failure(monkeypatch) -> None:
         body = "".join(response.iter_text())
 
     assert response.status_code == 200
-    assert "data: [DONE]" in body
+    assert "stream_usage_missing" in body
+    assert "final usage metadata" in body
+    assert "data: [DONE]" not in body
     assert state["failure_calls"]
     assert state["failure_calls"][0]["error_code"] == "stream_usage_missing"
     assert state["finalize_calls"] == []
+
+
+def test_streaming_missing_final_usage_error_event_is_safe(monkeypatch) -> None:
+    secret_text = "sk-slaif-public1234abcd.supersecret"
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data=f'{{"id":"chunk","choices":[{{"delta":{{"content":"{secret_text}"}}}}]}}',
+            raw_sse_event=(
+                'data: {"id":"chunk","choices":[{"delta":{"content":"partial content"}}]}\n\n'
+            ),
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data="[DONE]",
+            raw_sse_event="data: [DONE]\n\n",
+            is_done=True,
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    _wire_streaming_pipeline(monkeypatch, app, chunks=chunks)
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "stream_usage_missing" in body
+    assert "partial content" in body
+    assert "data: [DONE]" not in body
+    error_event = body.rsplit("data: ", 1)[-1]
+    assert "partial content" not in error_event
+    assert secret_text not in error_event
 
 
 def test_streaming_finalization_failure_marks_recovery_and_suppresses_done(monkeypatch) -> None:

@@ -51,7 +51,13 @@ def format_sse_data(data: str) -> str:
     return "".join(f"data: {line}\n" for line in data.splitlines() or [""]) + "\n"
 
 
-def format_openai_error_event(*, message: str, error_type: str, code: str | None) -> str:
+def format_openai_error_event(
+    *,
+    message: str,
+    error_type: str,
+    code: str | None,
+    request_id: str | None = None,
+) -> str:
     """Format a safe OpenAI-shaped error event for an already-open stream."""
     payload = {
         "error": {
@@ -61,6 +67,8 @@ def format_openai_error_event(*, message: str, error_type: str, code: str | None
             "code": code,
         }
     }
+    if request_id is not None:
+        payload["request_id"] = request_id
     return format_sse_data(json.dumps(payload, separators=(",", ":")))
 
 

@@ -129,7 +129,9 @@ def test_streaming_chat_completions_postgres_missing_usage_releases_reservation(
                 streamed = "".join(response.iter_text())
 
     assert response.status_code == 200
-    assert "data: [DONE]" in streamed
+    assert "stream_usage_missing" in streamed
+    assert "final usage metadata" in streamed
+    assert "data: [DONE]" not in streamed
 
     state = asyncio.run(_load_accounting_state(migrated_postgres_url, created.gateway_key_id))
     assert state.reservation.status == "released"
@@ -141,6 +143,14 @@ def test_streaming_chat_completions_postgres_missing_usage_releases_reservation(
     assert state.usage_ledger.accounting_status == "failed"
     assert state.usage_ledger.error_type == "stream_usage_missing"
     assert state.usage_ledger.actual_cost_eur == Decimal("0E-9")
+    usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
+    metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+    assert PROMPT_TEXT not in usage_payload
+    assert COMPLETION_TEXT not in usage_payload
+    assert PROMPT_TEXT not in metadata_payload
+    assert COMPLETION_TEXT not in metadata_payload
+    assert created.plaintext_gateway_key not in metadata_payload
+    assert FAKE_OPENAI_UPSTREAM_KEY not in metadata_payload
 
 
 def test_streaming_chat_completions_postgres_provider_error_releases_reservation(

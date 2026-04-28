@@ -105,11 +105,13 @@ Implemented streaming behavior:
 - The gateway forces `stream_options.include_usage=true`.
 - Final provider usage is required for successful streaming accounting finalization.
 - The provider `[DONE]` event is held until finalization succeeds.
-- If final usage is missing, the gateway records a failed/incomplete accounting event, releases the reservation according to current policy, and does not charge actual cost.
+- If final usage is missing, the gateway records a failed/incomplete accounting event, releases the reservation according to current policy, does not charge actual cost, emits a safe SSE error event, and does not emit a normal successful `[DONE]`.
 - If the provider completed with usage but finalization fails after content was already delivered, the gateway leaves a durable provider-completed recovery row marked for reconciliation and does not treat the request as a zero-cost provider failure.
 - Streaming Redis concurrency slots are heartbeated while the stream remains open and released in the generator cleanup path.
 
-Client disconnect handling is best-effort through generator cancellation cleanup. The code records a provider failure for detected cancellation and releases rate-limit concurrency, but real-server disconnect timing remains future hardening coverage.
+Client disconnect handling is best-effort through generator cancellation cleanup. The code records a provider failure for detected cancellation, releases the quota reservation, and releases rate-limit concurrency when Redis rate limits are enabled. A real ASGI server test closes a stream early and verifies this cleanup path.
+
+Successful streaming is covered by mocked official OpenAI Python client E2E tests. The missing-final-usage error path is covered by unit and PostgreSQL integration tests; an additional official-client assertion for the exact exception shape can be added later if needed.
 
 ## Error Compatibility
 

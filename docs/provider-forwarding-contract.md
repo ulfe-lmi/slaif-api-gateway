@@ -110,7 +110,7 @@ Streaming has an extra finalization rule because content may already have reache
 
 - Provider chunks are forwarded as they arrive.
 - Final provider usage is required for success.
-- If usage is missing, the reservation is released and a failed/incomplete event is recorded with zero actual cost.
+- If usage is missing, the reservation is released, a failed/incomplete event is recorded with zero actual cost, a safe SSE error event is emitted, and normal successful `[DONE]` is not emitted.
 - If usage is present, the gateway writes a durable provider-completed record before final counter mutation.
 - If finalization succeeds, that record is marked finalized and `[DONE]` is emitted.
 - If finalization fails, the record is marked with `needs_reconciliation=true` and `recovery_state=provider_completed_finalization_failed`; `[DONE]` is not emitted.
