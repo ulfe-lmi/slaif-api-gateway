@@ -130,6 +130,9 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert row.allowed_endpoints_summary == "/v1/chat/completions"
     assert row.allowed_providers_summary == "openai"
     assert "30 req/min" in row.rate_limit_policy_summary
+    assert row.can_suspend is True
+    assert row.can_activate is False
+    assert row.can_revoke is True
     assert "token_hash" not in row.__dataclass_fields__
     assert repo.list_calls[0]["institution_id"] == institution_id
     assert repo.list_calls[0]["cohort_id"] == cohort_id
@@ -160,3 +163,29 @@ def test_computed_display_status_values() -> None:
     assert compute_key_display_status("active", now - timedelta(days=2), now - timedelta(days=1), now=now) == "expired"
     assert compute_key_display_status("suspended", now - timedelta(days=2), now - timedelta(days=1), now=now) == "suspended"
     assert compute_key_display_status("revoked", now - timedelta(days=1), now + timedelta(days=1), now=now) == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_action_flags_follow_stored_status() -> None:
+    active = _row()
+    active.status = "active"
+    active_detail = await AdminKeyDashboardService(gateway_keys_repository=_Repo(active)).get_key_detail(active.id)
+    assert active_detail.can_suspend is True
+    assert active_detail.can_activate is False
+    assert active_detail.can_revoke is True
+
+    suspended = _row()
+    suspended.status = "suspended"
+    suspended_detail = await AdminKeyDashboardService(
+        gateway_keys_repository=_Repo(suspended)
+    ).get_key_detail(suspended.id)
+    assert suspended_detail.can_suspend is False
+    assert suspended_detail.can_activate is True
+    assert suspended_detail.can_revoke is True
+
+    revoked = _row()
+    revoked.status = "revoked"
+    revoked_detail = await AdminKeyDashboardService(gateway_keys_repository=_Repo(revoked)).get_key_detail(revoked.id)
+    assert revoked_detail.can_suspend is False
+    assert revoked_detail.can_activate is False
+    assert revoked_detail.can_revoke is False
