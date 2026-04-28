@@ -120,7 +120,7 @@ export DATABASE_STATEMENT_TIMEOUT_MS=30000
 
 `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. `/readyz` never runs migrations or performs destructive actions.
 
-In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production.
+In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production; when Nginx or Docker deployment files are added, they should deny public access to `/readyz` by default.
 
 Redis rate limiting is optional and controls temporary operational throttles only:
 
@@ -162,7 +162,7 @@ Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Reques
 
 Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
 
-`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
+`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available; future Nginx/deployment docs should keep `/metrics` internal or allowlisted by default. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
 
 Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
 failure ledger metadata for operator troubleshooting. Raw provider response
