@@ -98,6 +98,7 @@ def _catalog_records():
         valid_until=None,
         source_url="https://pricing.example.org/openai",
         notes="safe pricing note",
+        pricing_metadata={"source": "manual"},
         metadata_summary="source",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -229,7 +230,9 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
             client.get(f"/admin/routes/{route.id}").text,
             client.get(f"/admin/routes/{route.id}/edit").text,
             client.get("/admin/pricing").text,
+            client.get("/admin/pricing/new").text,
             client.get(f"/admin/pricing/{pricing.id}").text,
+            client.get(f"/admin/pricing/{pricing.id}/edit").text,
             client.get("/admin/fx").text,
             client.get(f"/admin/fx/{fx_rate.id}").text,
         ]
@@ -243,10 +246,14 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "/admin/routes/new" in combined
     assert f"/admin/routes/{route.id}/edit" in combined
     assert f"/admin/routes/{route.id}/disable" in combined
+    assert "/admin/pricing/new" in combined
+    assert f"/admin/pricing/{pricing.id}/edit" in combined
+    assert f"/admin/pricing/{pricing.id}/disable" in combined
     assert 'name="csrf_token" value="rendered-csrf-token"' in combined
     assert 'name="confirm_disable" value="true"' in combined
     assert route.requested_model in combined
     assert pricing.currency in combined
+    assert "matching future requests may fail closed" in combined
     assert "USD / EUR" in combined
     assert "password_hash_must_not_render" not in combined
     assert "session_hash_must_not_render" not in combined

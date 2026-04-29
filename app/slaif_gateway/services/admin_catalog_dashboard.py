@@ -318,6 +318,7 @@ def _to_pricing_list_row(row: PricingRule) -> AdminPricingRuleListRow:
         valid_until=row.valid_until,
         source_url=row.source_url,
         notes=row.notes,
+        pricing_metadata=row.pricing_metadata or {},
         metadata_summary=_json_summary(row.pricing_metadata),
         created_at=row.created_at,
         updated_at=row.updated_at,

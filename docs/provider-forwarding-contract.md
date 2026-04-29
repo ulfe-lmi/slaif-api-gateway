@@ -14,6 +14,10 @@ Anthropic-family, Google, Meta, Mistral, Qwen, and other non-OpenAI model names 
 Model route rows are local metadata used by the existing route resolver. They
 may be managed from the admin dashboard, but that dashboard workflow does not
 change the forwarding contract or provider adapter semantics described below.
+Pricing rows are local metadata used by the existing pricing and FX estimate
+path before forwarding. They may also be managed from the admin dashboard, but
+that workflow does not change the Python pricing calculation or provider
+forwarding semantics described below.
 
 ## OpenAI Upstream Forwarding
 

@@ -171,6 +171,48 @@ class PricingRulesRepository:
         await self._session.flush()
         return True
 
+    async def update_pricing_rule_metadata(
+        self,
+        pricing_rule_id: uuid.UUID,
+        *,
+        provider: str,
+        upstream_model: str,
+        endpoint: str,
+        currency: str,
+        input_price_per_1m: Decimal,
+        cached_input_price_per_1m: Decimal | None,
+        output_price_per_1m: Decimal,
+        reasoning_price_per_1m: Decimal | None,
+        request_price: Decimal | None,
+        pricing_metadata: dict[str, object],
+        valid_from: datetime,
+        valid_until: datetime | None,
+        enabled: bool,
+        source_url: str | None,
+        notes: str | None,
+    ) -> bool:
+        row = await self.get_pricing_rule_by_id(pricing_rule_id)
+        if row is None:
+            return False
+
+        row.provider = provider
+        row.upstream_model = upstream_model
+        row.endpoint = endpoint
+        row.currency = currency
+        row.input_price_per_1m = input_price_per_1m
+        row.cached_input_price_per_1m = cached_input_price_per_1m
+        row.output_price_per_1m = output_price_per_1m
+        row.reasoning_price_per_1m = reasoning_price_per_1m
+        row.request_price = request_price
+        row.pricing_metadata = pricing_metadata
+        row.valid_from = valid_from
+        row.valid_until = valid_until
+        row.enabled = enabled
+        row.source_url = source_url
+        row.notes = notes
+        await self._session.flush()
+        return True
+
     async def find_active_pricing_rule(
         self,
         *,

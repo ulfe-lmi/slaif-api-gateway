@@ -135,8 +135,14 @@ for local routing metadata only. Route forms validate exact/prefix/glob match
 types, provider config references, priority values, endpoints, and safe metadata;
 they may display provider env var names for operator selection, but never
 provider secret values. Route state changes write safe audit rows through the
-model route service and do not change provider adapter behavior. Pricing and FX
-catalog pages remain read-only. Read-only usage, audit, and email delivery pages display
+model route service and do not change provider adapter behavior. Pricing pages
+provide CSRF-protected create, edit, enable, and disable forms for local pricing
+metadata only. Pricing forms parse decimal strings directly, validate
+currencies, validity windows, provider references, and safe metadata, and write
+safe audit rows through the pricing rule service. Pricing changes may affect
+future quota reservation and accounting, but the dashboard does not change the
+runtime pricing calculation semantics and does not accept provider secret
+values. FX catalog pages remain read-only. Read-only usage, audit, and email delivery pages display
 safe activity metadata only. Usage pages do not display prompts, completions, or
 raw request/response bodies. Email delivery pages do not display email bodies
 because key-delivery email bodies may contain plaintext gateway keys. Audit
@@ -160,8 +166,9 @@ with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
 pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
-quota limit update, usage-counter reset, and rotation forms require a valid
-authenticated session plus the per-session CSRF token. Dashboard key creation
+quota limit update, usage-counter reset, rotation, provider config, route, and
+pricing metadata mutation forms require a valid authenticated session plus the
+per-session CSRF token. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -208,8 +215,8 @@ never recover or send old plaintext keys.
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Owner, institution, cohort,
-  pricing, FX, usage, audit, and email-delivery mutation pages are not
-  implemented yet.
+  FX, usage, audit, and email-delivery mutation pages are not implemented yet.
+  Pricing import/upload and FX mutation workflows are future work.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.

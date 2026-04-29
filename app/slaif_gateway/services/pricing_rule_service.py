@@ -70,11 +70,16 @@ class PricingRuleService:
         source_url: str | None,
         notes: str | None,
         enabled: bool,
+        request_price: Decimal | None = None,
+        pricing_metadata: dict[str, object] | None = None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> PricingRule:
         _validate_non_negative(input_price_per_1m, "input_price_per_1m")
         _validate_non_negative(output_price_per_1m, "output_price_per_1m")
         _validate_optional_non_negative(cached_input_price_per_1m, "cached_input_price_per_1m")
         _validate_optional_non_negative(reasoning_price_per_1m, "reasoning_price_per_1m")
+        _validate_optional_non_negative(request_price, "request_price")
         valid_from = _aware_time(valid_from)
         valid_until = _optional_aware_time(valid_until)
         _validate_validity(valid_from, valid_until)
@@ -88,6 +93,8 @@ class PricingRuleService:
             cached_input_price_per_1m=cached_input_price_per_1m,
             output_price_per_1m=output_price_per_1m,
             reasoning_price_per_1m=reasoning_price_per_1m,
+            request_price=request_price,
+            pricing_metadata=pricing_metadata,
             valid_from=valid_from,
             valid_until=valid_until,
             enabled=enabled,
@@ -98,7 +105,9 @@ class PricingRuleService:
             action="pricing_rule_created",
             entity_type="pricing_rule",
             entity_id=row.id,
+            admin_user_id=actor_admin_id,
             new_values=_safe_audit_values(row),
+            note=_clean_optional(reason),
         )
         return row
 
@@ -156,6 +165,100 @@ class PricingRuleService:
                     new_values={"enabled": False},
                 )
         return disabled
+
+    async def update_pricing_rule(
+        self,
+        pricing_rule_id: uuid.UUID | str,
+        *,
+        provider: str,
+        model: str,
+        endpoint: str,
+        currency: str,
+        input_price_per_1m: Decimal,
+        output_price_per_1m: Decimal,
+        cached_input_price_per_1m: Decimal | None,
+        reasoning_price_per_1m: Decimal | None,
+        request_price: Decimal | None,
+        pricing_metadata: dict[str, object],
+        valid_from: datetime,
+        valid_until: datetime | None,
+        source_url: str | None,
+        notes: str | None,
+        enabled: bool,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> PricingRule:
+        parsed_id = _parse_pricing_rule_id(pricing_rule_id)
+        existing = await self.get_pricing_rule(parsed_id)
+        old_values = _safe_audit_values(existing)
+
+        _validate_non_negative(input_price_per_1m, "input_price_per_1m")
+        _validate_non_negative(output_price_per_1m, "output_price_per_1m")
+        _validate_optional_non_negative(cached_input_price_per_1m, "cached_input_price_per_1m")
+        _validate_optional_non_negative(reasoning_price_per_1m, "reasoning_price_per_1m")
+        _validate_optional_non_negative(request_price, "request_price")
+        valid_from = _aware_time(valid_from)
+        valid_until = _optional_aware_time(valid_until)
+        _validate_validity(valid_from, valid_until)
+
+        updated = await self._pricing.update_pricing_rule_metadata(
+            parsed_id,
+            provider=_required_text(provider, "Provider"),
+            upstream_model=_required_text(model, "Model"),
+            endpoint=normalize_endpoint(endpoint),
+            currency=_normalize_currency(currency),
+            input_price_per_1m=input_price_per_1m,
+            cached_input_price_per_1m=cached_input_price_per_1m,
+            output_price_per_1m=output_price_per_1m,
+            reasoning_price_per_1m=reasoning_price_per_1m,
+            request_price=request_price,
+            pricing_metadata=pricing_metadata,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            enabled=enabled,
+            source_url=_clean_optional(source_url),
+            notes=_clean_optional(notes),
+        )
+        if not updated:
+            raise RecordNotFoundError("Pricing rule")
+
+        row = await self.get_pricing_rule(parsed_id)
+        await self._audit.add_audit_log(
+            action="pricing_rule_updated",
+            entity_type="pricing_rule",
+            entity_id=row.id,
+            admin_user_id=actor_admin_id,
+            old_values=old_values,
+            new_values=_safe_audit_values(row),
+            note=_clean_optional(reason),
+        )
+        return row
+
+    async def set_pricing_rule_enabled(
+        self,
+        pricing_rule_id: uuid.UUID | str,
+        *,
+        enabled: bool,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> PricingRule:
+        parsed_id = _parse_pricing_rule_id(pricing_rule_id)
+        row = await self.get_pricing_rule(parsed_id)
+        old_enabled = row.enabled
+        updated = await self._pricing.set_pricing_rule_enabled(parsed_id, enabled=enabled)
+        if not updated:
+            raise RecordNotFoundError("Pricing rule")
+        row.enabled = enabled
+        await self._audit.add_audit_log(
+            action="pricing_rule_enabled" if enabled else "pricing_rule_disabled",
+            entity_type="pricing_rule",
+            entity_id=row.id,
+            admin_user_id=actor_admin_id,
+            old_values={"enabled": old_enabled},
+            new_values={"enabled": enabled},
+            note=_clean_optional(reason),
+        )
+        return row
 
     async def import_pricing_rules(
         self,
@@ -229,6 +332,15 @@ def _required_text(value: str, label: str) -> str:
     if not normalized:
         raise ValueError(f"{label} cannot be empty")
     return normalized
+
+
+def _parse_pricing_rule_id(value: uuid.UUID | str) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise ValueError("pricing_rule_id must be a valid UUID") from exc
 
 
 def _clean_optional(value: str | None) -> str | None:
@@ -359,6 +471,8 @@ def _safe_audit_values(row: PricingRule) -> dict[str, object]:
         "reasoning_price_per_1m": (
             str(row.reasoning_price_per_1m) if row.reasoning_price_per_1m is not None else None
         ),
+        "request_price": str(row.request_price) if row.request_price is not None else None,
+        "pricing_metadata": row.pricing_metadata or {},
         "valid_from": row.valid_from.isoformat(),
         "valid_until": row.valid_until.isoformat() if row.valid_until is not None else None,
         "enabled": row.enabled,

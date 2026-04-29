@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Pricing Catalog</p>
       <h1 id="pricing-rule-heading">{{ pricing_rule.upstream_model }}</h1>
-      <p class="muted">Read-only pricing metadata.</p>
+      <p class="muted">Pricing metadata for future quota reservation and accounting.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/pricing/{{ pricing_rule.id }}/edit">Edit</a>
       <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,6 +19,10 @@
       </form>
     </div>
   </header>
+
+  {% if admin_status_message %}
+  <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
+  {% endif %}
 
   <div class="detail-grid">
     <section>
@@ -58,5 +63,47 @@
       {% endif %}
     </section>
   </div>
+
+  <section class="action-panel" aria-labelledby="pricing-actions-heading">
+    <h2 id="pricing-actions-heading">Pricing Actions</h2>
+    <p class="warning-text">Pricing changes affect future quota reservation and accounting. If no alternate rule applies, disabled pricing can make matching future requests fail closed.</p>
+    <div class="management-grid">
+      {% if not pricing_rule.enabled %}
+      <div class="action-card">
+        <h3>Enable pricing rule</h3>
+        <form method="post" action="/admin/pricing/{{ pricing_rule.id }}/enable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Audit reason<input name="reason" required autocomplete="off"></label>
+          <button type="submit">Enable</button>
+        </form>
+      </div>
+      {% else %}
+      <div class="action-card">
+        <h3>Enabled</h3>
+        <p class="muted">This pricing rule is already enabled.</p>
+      </div>
+      {% endif %}
+
+      {% if pricing_rule.enabled %}
+      <div class="action-card">
+        <h3>Disable pricing rule</h3>
+        <form method="post" action="/admin/pricing/{{ pricing_rule.id }}/disable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Audit reason<input name="reason" required autocomplete="off"></label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="confirm_disable" value="true" required>
+            <span>I understand matching future requests may fail closed if no alternate pricing rule applies.</span>
+          </label>
+          <button type="submit" class="danger">Disable</button>
+        </form>
+      </div>
+      {% else %}
+      <div class="action-card">
+        <h3>Disabled</h3>
+        <p class="muted">This pricing rule is already disabled.</p>
+      </div>
+      {% endif %}
+    </div>
+  </section>
 </section>
 {% endblock %}
