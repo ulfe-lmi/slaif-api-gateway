@@ -341,3 +341,19 @@ through an operator-managed bridge.
   keeps `/readyz` private-network allowlisted and denies `/metrics` by default;
   review and tighten those controls for the target network.
 - Configure SSE streaming without proxy buffering.
+
+## Optional Browser Test Configuration
+
+Playwright admin dashboard smoke tests are opt-in. Normal unit, integration, and
+OpenAI-compatible E2E tests do not require browser installation. To run the
+browser smoke suite, install Chromium explicitly and provide a safe PostgreSQL
+test database through `TEST_DATABASE_URL`:
+
+```bash
+python -m playwright install chromium
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m playwright
+```
+
+The suite starts a local FastAPI server and uses safe dummy data only. It does
+not use `DATABASE_URL` for destructive setup, call real OpenAI/OpenRouter
+providers, or send real email.
