@@ -11,17 +11,14 @@ This document describes exactly how implemented `/v1/chat/completions` requests 
 
 Anthropic-family, Google, Meta, Mistral, Qwen, and other non-OpenAI model names are supported only when a route sends them to OpenRouter's OpenAI-compatible interface. There is no native Anthropic adapter in this implementation.
 
-Model route rows are local metadata used by the existing route resolver. They
-may be managed from the admin dashboard, but that dashboard workflow does not
-change the forwarding contract or provider adapter semantics described below.
-Pricing rows are local metadata used by the existing pricing and FX estimate
-path before forwarding. They may also be managed from the admin dashboard, but
-that workflow does not change the Python pricing calculation or provider
-forwarding semantics described below.
-FX rows are local metadata used by the same estimate path for EUR conversion.
-They may be created and edited from the admin dashboard, but that workflow does
-not change the Python FX lookup, pricing calculation, or provider forwarding
-semantics described below.
+Provider config rows, model route rows, pricing rows, and FX rows are local
+metadata used by the existing provider factory, route resolver, pricing, and FX
+estimate paths. The implemented admin dashboard can manage provider config,
+route, pricing, and FX metadata where described in the compatibility matrix, but
+those dashboard workflows do not change the forwarding contract, provider
+adapter semantics, route-resolution algorithm, pricing algorithm, or FX lookup
+semantics described below. Provider config rows store environment variable names
+only, never provider key values.
 
 ## OpenAI Upstream Forwarding
 

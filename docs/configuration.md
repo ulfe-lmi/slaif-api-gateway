@@ -112,7 +112,8 @@ names such as `OPENAI_UPSTREAM_API_KEY`; it does not store provider secret
 values. Admin dashboard provider config forms create, edit, enable, and disable
 metadata rows by referencing environment variable names only; they do not accept
 actual provider key values. Model routes, pricing, and FX rates are configured
-through CLI/database metadata.
+through CLI/database metadata and the implemented admin metadata forms; those
+forms do not accept provider key values or call upstream providers.
 
 ## Request Caps
 

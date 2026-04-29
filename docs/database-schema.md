@@ -346,14 +346,16 @@ never store plaintext passwords
 never log password hashes
 ```
 
-Suggested role semantics:
+Current implementation role semantics:
 
 ```text
-viewer      read-only dashboard access
-operator    can create/export reports and inspect usage
-admin       can create/revoke/extend keys and manage cohorts
-superadmin  can manage admins, pricing, routes, and provider config
+All active admin users are full operators for now.
+The role values are metadata/future-proofing, not an enforced RBAC boundary.
+Inactive admin accounts cannot log in.
 ```
+
+Future RBAC may define viewer/operator/admin/superadmin permissions, but the
+current dashboard and admin CLI do not enforce per-role authorization checks.
 
 ---
 
