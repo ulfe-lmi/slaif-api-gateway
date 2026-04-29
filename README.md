@@ -132,7 +132,9 @@ containers do not run migrations automatically; `slaif-gateway db upgrade` is
 an explicit operator command. Docker Compose is local/development packaging, not
 complete production hardening. Production deployments must replace all secrets,
 run migrations explicitly, use HTTPS, and restrict `/admin`, `/readyz`, and
-`/metrics`.
+`/metrics`. The Compose file publishes Postgres on host port `15432` and Redis
+on host port `16379` by default to avoid common local service collisions; the
+container-internal URLs still use `postgres:5432` and `redis:6379`.
 
 See [`docs/deployment.md`](docs/deployment.md) for the full deployment runbook
 and optional Nginx configuration.
