@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     SMTP_STARTTLS: bool = False
     SMTP_TIMEOUT_SECONDS: float = 10
     EMAIL_KEY_SECRET_MAX_AGE_SECONDS: int = 86400
+    ENABLE_SCHEDULED_RECONCILIATION: bool = False
+    RECONCILIATION_DRY_RUN: bool = True
+    RECONCILIATION_INTERVAL_SECONDS: int = 300
+    RECONCILIATION_EXPIRED_RESERVATION_LIMIT: int = 100
+    RECONCILIATION_PROVIDER_COMPLETED_LIMIT: int = 100
+    RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS: int = 0
+    RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS: int = 0
+    RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS: bool = False
+    RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED: bool = False
     ENABLE_METRICS: bool = True
     METRICS_REQUIRE_AUTH: bool | None = None
     METRICS_PUBLIC_IN_PRODUCTION: bool = False
@@ -138,6 +147,7 @@ class Settings(BaseSettings):
         self._validate_redis_rate_limit_settings()
         self._validate_admin_session_settings()
         self._validate_email_settings()
+        self._validate_reconciliation_settings()
         return self
 
     def _validate_database_settings(self) -> None:
@@ -193,6 +203,22 @@ class Settings(BaseSettings):
                 raise ValueError("SMTP_HOST is required when ENABLE_EMAIL_DELIVERY=true")
             if not self.SMTP_FROM:
                 raise ValueError("SMTP_FROM is required when ENABLE_EMAIL_DELIVERY=true")
+
+    def _validate_reconciliation_settings(self) -> None:
+        if self.RECONCILIATION_INTERVAL_SECONDS <= 0:
+            raise ValueError("RECONCILIATION_INTERVAL_SECONDS must be a positive integer")
+        if self.RECONCILIATION_EXPIRED_RESERVATION_LIMIT <= 0:
+            raise ValueError("RECONCILIATION_EXPIRED_RESERVATION_LIMIT must be a positive integer")
+        if self.RECONCILIATION_PROVIDER_COMPLETED_LIMIT <= 0:
+            raise ValueError("RECONCILIATION_PROVIDER_COMPLETED_LIMIT must be a positive integer")
+        if self.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS < 0:
+            raise ValueError(
+                "RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS must be greater than or equal to 0"
+            )
+        if self.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS < 0:
+            raise ValueError(
+                "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS must be greater than or equal to 0"
+            )
 
     def _validate_admin_session_settings(self) -> None:
         if self.ADMIN_SESSION_TTL_SECONDS <= 0:

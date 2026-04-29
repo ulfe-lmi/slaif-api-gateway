@@ -79,6 +79,21 @@ RATE_LIMIT_HEARTBEAT_FAILURES = Counter(
     "Redis-backed concurrency heartbeat failures.",
     ("error_code",),
 )
+RECONCILIATION_BACKLOG = Counter(
+    "gateway_reconciliation_backlog_total",
+    "Reconciliation backlog items observed by type.",
+    ("type",),
+)
+RECONCILIATION_RUNS = Counter(
+    "gateway_reconciliation_runs_total",
+    "Reconciliation task runs by type, status, and dry-run mode.",
+    ("type", "status", "dry_run"),
+)
+RECONCILIATION_ITEMS = Counter(
+    "gateway_reconciliation_items_total",
+    "Reconciliation items handled by type, status, and dry-run mode.",
+    ("type", "status", "dry_run"),
+)
 
 
 def prometheus_response_body() -> bytes:
@@ -184,6 +199,44 @@ def increment_rate_limit_release_failure(error_code: str | None) -> None:
 def increment_rate_limit_heartbeat_failure(error_code: str | None) -> None:
     """Record a concurrency heartbeat failure with a low-cardinality error code."""
     RATE_LIMIT_HEARTBEAT_FAILURES.labels(error_code=error_code or "unknown").inc()
+
+
+def observe_reconciliation_backlog(*, reconciliation_type: str, count: int) -> None:
+    """Record a low-cardinality reconciliation backlog observation."""
+    if count <= 0:
+        return
+    RECONCILIATION_BACKLOG.labels(type=reconciliation_type).inc(count)
+
+
+def increment_reconciliation_run(
+    *,
+    reconciliation_type: str,
+    status: str,
+    dry_run: bool,
+) -> None:
+    """Record a reconciliation task run."""
+    RECONCILIATION_RUNS.labels(
+        type=reconciliation_type,
+        status=status,
+        dry_run=str(dry_run).lower(),
+    ).inc()
+
+
+def add_reconciliation_items(
+    *,
+    reconciliation_type: str,
+    status: str,
+    dry_run: bool,
+    count: int,
+) -> None:
+    """Record the number of reconciliation items handled."""
+    if count <= 0:
+        return
+    RECONCILIATION_ITEMS.labels(
+        type=reconciliation_type,
+        status=status,
+        dry_run=str(dry_run).lower(),
+    ).inc(count)
 
 
 def add_tokens(*, provider: str, model: str, token_type: str, count: int | None) -> None:

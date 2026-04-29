@@ -257,6 +257,35 @@ be resent; rotate and send a replacement key. In-progress or ambiguous delivery
 rows are not retried automatically, preventing duplicate key emails after
 possible SMTP acceptance.
 
+## Scheduled Reconciliation
+
+Scheduled reconciliation is a Celery/Celery Beat foundation for existing
+operator reconciliation workflows:
+
+- `ENABLE_SCHEDULED_RECONCILIATION=false` disables all Beat entries by default.
+- `RECONCILIATION_DRY_RUN=true` keeps scheduled reconciliation in reporting mode
+  unless explicitly changed.
+- `RECONCILIATION_INTERVAL_SECONDS` controls the Beat interval when scheduling
+  is enabled.
+- `RECONCILIATION_EXPIRED_RESERVATION_LIMIT` and
+  `RECONCILIATION_PROVIDER_COMPLETED_LIMIT` cap batch size.
+- `RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS` and
+  `RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS` can ignore very recent
+  candidates.
+- `RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS=false` and
+  `RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED=false` keep mutation disabled
+  by default.
+
+With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
+inspection/reporting. Automatic repair of expired pending reservations or
+provider-completed finalization-failed rows requires the matching auto-execute
+flag and `RECONCILIATION_DRY_RUN=false`. The scheduled tasks reuse
+`ReservationReconciliationService`, do not call providers, and do not expose
+plaintext gateway keys, provider keys, token hashes, encrypted payloads, nonces,
+prompts, completions, or email bodies in task payloads/results. Manual CLI
+reconciliation remains available and is still the operator review path for
+unexpected accounting failures.
+
 ## Production Notes
 
 - Never commit `.env`.

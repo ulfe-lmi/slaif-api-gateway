@@ -65,6 +65,16 @@ Manual reconciliation exists for expired pending reservations and
 provider-completed streaming finalization failures. Provider-completed repair
 uses stored safe usage/cost metadata and does not call providers.
 
+Celery/Celery Beat can be configured to inspect reconciliation backlog
+periodically. Scheduled reconciliation is disabled by default and scheduled
+mutation remains opt-in: expired-reservation and provider-completed repair tasks
+only execute when the matching auto-execute setting is enabled and dry-run mode
+is disabled. Scheduled tasks call the same reconciliation service used by the
+CLI, never call providers, and return/log only low-cardinality counts plus safe
+IDs and statuses. They do not include plaintext gateway keys, token hashes,
+encrypted payloads, nonces, provider keys, prompts, completions, or email bodies
+in task payloads/results.
+
 ## Streaming Security And Accounting
 
 Streaming requests force `stream_options.include_usage=true` upstream so final
@@ -266,6 +276,6 @@ never recover or send old plaintext keys.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.
-- Scheduled reconciliation/alerting is not implemented yet.
+- External Slack/PagerDuty/webhook alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.
