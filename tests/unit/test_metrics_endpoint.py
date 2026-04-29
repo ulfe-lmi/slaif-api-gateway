@@ -14,6 +14,8 @@ def _production_settings(**overrides) -> Settings:
         "TOKEN_HMAC_SECRET_V1": "h" * 32,
         "ADMIN_SESSION_SECRET": "a" * 32,
         "ONE_TIME_SECRET_ENCRYPTION_KEY": generate_secret_key(),
+        "OPENAI_UPSTREAM_API_KEY": "sk-live-openai-provider-aaaaaaaaaaaa",
+        "OPENROUTER_API_KEY": "sk-or-live-openrouter-aaaaaaaaaaaa",
     }
     values.update(overrides)
     return Settings(**values)

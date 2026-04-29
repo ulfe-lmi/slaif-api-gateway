@@ -41,6 +41,11 @@ semantics described below.
 | Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost |
 | Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored |
 
+`OPENAI_API_KEY` is reserved for client OpenAI-compatible configuration and is
+never used as the gateway's upstream OpenAI provider secret. In production,
+`OPENAI_UPSTREAM_API_KEY` must be configured for the enabled built-in OpenAI
+provider, and route/provider config overrides must reference env var names only.
+
 ## OpenRouter Upstream Forwarding
 
 | Area | Contract |
@@ -59,6 +64,11 @@ semantics described below.
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
 | Usage/accounting | Token usage is parsed; OpenRouter `usage.cost` or `usage.cost_usd` is captured as provider-reported native cost metadata when supplied; gateway cost finalization still uses the configured pricing/FX estimate path |
 | Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored |
+
+In production, `OPENROUTER_API_KEY` must be configured for the enabled built-in
+OpenRouter provider. DB-backed `provider_configs.api_key_env_var` values are env
+var names only; readiness may report missing env var names but never secret
+values.
 
 Known limitations:
 

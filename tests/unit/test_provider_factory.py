@@ -80,7 +80,19 @@ def test_factory_missing_configured_api_key_env_var_raises_safe_error(monkeypatc
 
     assert exc_info.value.provider == "openai"
     assert "fallback-must-not-be-used" not in exc_info.value.safe_message
-    assert "MISSING_PROVIDER_KEY" not in exc_info.value.safe_message
+    assert "MISSING_PROVIDER_KEY" in exc_info.value.safe_message
+
+
+def test_factory_does_not_fallback_to_client_openai_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-provider-value-aaaaaaaa")
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        get_provider_adapter("openai", Settings(OPENAI_UPSTREAM_API_KEY=None))
+
+    assert exc_info.value.provider == "openai"
+    assert "OPENAI_UPSTREAM_API_KEY" in exc_info.value.safe_message
+    assert "sk-real-provider-value" not in exc_info.value.safe_message
 
 
 def test_factory_rejects_unknown_provider() -> None:

@@ -11,8 +11,16 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MIN_PRODUCTION_SECRET_LENGTH = 32
+_MIN_PROVIDER_SECRET_LENGTH = 20
 _ONE_TIME_SECRET_KEY_BYTES = 32
 _GATEWAY_PREFIX_PATTERN = re.compile(r"^sk-[a-z0-9-]+-$")
+_PLACEHOLDER_SECRET_SUBSTRINGS = (
+    "change-me",
+    "changeme",
+    "placeholder",
+    "example",
+    "dummy",
+)
 
 
 class Settings(BaseSettings):
@@ -118,6 +126,8 @@ class Settings(BaseSettings):
                 "ONE_TIME_SECRET_ENCRYPTION_KEY",
                 self.ONE_TIME_SECRET_ENCRYPTION_KEY,
             )
+            self._validate_production_provider_secrets()
+            self._validate_openai_api_key_boundary()
 
         if self.ONE_TIME_SECRET_ENCRYPTION_KEY:
             self._validate_encryption_key_shape(self.ONE_TIME_SECRET_ENCRYPTION_KEY)
@@ -240,13 +250,37 @@ class Settings(BaseSettings):
         if not value:
             raise ValueError(f"{name} is required when APP_ENV=production")
 
-        normalized = value.lower()
-        if "change-me" in normalized:
+        if is_placeholder_secret(value):
             raise ValueError(f"{name} cannot contain placeholder text in production")
 
         if len(value) < _MIN_PRODUCTION_SECRET_LENGTH:
             raise ValueError(
                 f"{name} must be at least {_MIN_PRODUCTION_SECRET_LENGTH} characters in production"
+            )
+
+    def _validate_production_provider_secrets(self) -> None:
+        if self.ENABLE_OPENAI_PROVIDER:
+            validate_provider_secret_present(
+                "OPENAI_UPSTREAM_API_KEY",
+                self.OPENAI_UPSTREAM_API_KEY,
+            )
+        if self.ENABLE_OPENROUTER_PROVIDER:
+            validate_provider_secret_present(
+                "OPENROUTER_API_KEY",
+                self.OPENROUTER_API_KEY,
+            )
+
+    def _validate_openai_api_key_boundary(self) -> None:
+        client_key = os.getenv("OPENAI_API_KEY")
+        if not client_key:
+            return
+        if looks_like_real_upstream_openai_key(
+            client_key,
+            gateway_prefixes=self.get_gateway_key_accepted_prefixes(),
+        ):
+            raise ValueError(
+                "OPENAI_API_KEY is reserved for clients; use OPENAI_UPSTREAM_API_KEY for "
+                "the gateway's upstream OpenAI provider key"
             )
 
     @staticmethod
@@ -379,3 +413,49 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return cached settings instance."""
     return Settings()
+
+
+def is_placeholder_secret(value: str | None) -> bool:
+    """Return whether a configured secret is an obvious placeholder."""
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return True
+    if normalized in {"test", "sk-test"}:
+        return True
+    if normalized.startswith("sk-test"):
+        return True
+    return any(placeholder in normalized for placeholder in _PLACEHOLDER_SECRET_SUBSTRINGS)
+
+
+def validate_provider_secret_present(name: str, value: str | None) -> None:
+    """Validate that an enabled production provider has plausible secret material."""
+    if value is None or not value.strip():
+        raise ValueError(f"{name} is required in production when the provider is enabled")
+    if is_placeholder_secret(value):
+        raise ValueError(f"{name} cannot contain placeholder text in production")
+    if any(ch.isspace() for ch in value.strip()):
+        raise ValueError(f"{name} cannot contain whitespace")
+    if len(value.strip()) < _MIN_PROVIDER_SECRET_LENGTH:
+        raise ValueError(
+            f"{name} must be at least {_MIN_PROVIDER_SECRET_LENGTH} characters in production"
+        )
+
+
+def looks_like_real_upstream_openai_key(
+    value: str | None,
+    *,
+    gateway_prefixes: tuple[str, ...] = ("sk-slaif-",),
+) -> bool:
+    """Conservatively detect likely server-side provider keys in OPENAI_API_KEY."""
+    if value is None:
+        return False
+    normalized = value.strip()
+    if not normalized.startswith("sk-"):
+        return False
+    if is_placeholder_secret(normalized):
+        return False
+    if len(normalized) < _MIN_PROVIDER_SECRET_LENGTH:
+        return False
+    return not any(normalized.startswith(prefix) for prefix in gateway_prefixes)

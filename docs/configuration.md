@@ -38,6 +38,13 @@ The server uses `OPENAI_UPSTREAM_API_KEY` for the actual OpenAI provider key.
 Do not set the gateway's upstream provider secret as `OPENAI_API_KEY` in the
 server environment. OpenRouter uses `OPENROUTER_API_KEY`.
 
+When `APP_ENV=production`, enabled built-in providers require configured
+non-placeholder upstream secrets. `OPENAI_API_KEY` is validated as a client-side
+variable name boundary: values that look like real upstream provider keys fail
+startup with a safe error directing operators to `OPENAI_UPSTREAM_API_KEY`.
+Gateway-looking or placeholder `OPENAI_API_KEY` values are not copied into
+provider settings.
+
 ## App And Gateway Keys
 
 - `APP_ENV` controls environment-sensitive defaults such as production readiness
@@ -95,6 +102,11 @@ remains the hard quota and accounting source of truth.
 - `ENABLE_OPENAI_PROVIDER` and `ENABLE_OPENROUTER_PROVIDER` toggle provider
   availability at configuration level.
 
+In production, an enabled built-in provider cannot start with a missing,
+placeholder, whitespace-containing, or implausibly short provider secret.
+Validation messages name only the environment variable, never the configured
+value.
+
 The `provider_configs` table stores provider metadata and environment variable
 names such as `OPENAI_UPSTREAM_API_KEY`; it does not store provider secret
 values. Admin dashboard provider config forms create, edit, enable, and disable
@@ -116,15 +128,17 @@ upstream forwarding.
 
 - `/healthz` is process liveness and can be public-ish.
 - `/readyz` checks database/schema readiness and Redis readiness only when
-  Redis-backed features are enabled. Keep it internal or allowlisted in
-  production.
+  Redis-backed features are enabled. In production it also checks enabled
+  provider config rows for present `api_key_env_var` names and returns
+  `provider_secrets=missing` with HTTP 503 when any referenced env var is absent.
+  Keep it internal or allowlisted in production.
 - `/metrics` exposes Prometheus metrics. Keep it internal or allowlisted in
   production.
 - `ENABLE_METRICS=false` disables metrics.
 - `METRICS_REQUIRE_AUTH`, `METRICS_PUBLIC_IN_PRODUCTION`, and
   `METRICS_ALLOWED_IPS` control production metrics exposure.
 - `READYZ_INCLUDE_DETAILS` controls whether exact readiness details such as
-  Alembic revisions are included.
+  Alembic revisions and missing provider-secret env var names are included.
 - `REQUEST_ID_HEADER`, `LOG_LEVEL`, and `STRUCTURED_LOGS` control request IDs
   and logging output.
 

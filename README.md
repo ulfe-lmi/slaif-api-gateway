@@ -29,6 +29,7 @@ Implemented:
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
+- Production provider-secret validation that requires enabled built-in providers to have non-placeholder upstream secrets, keeps `OPENAI_API_KEY` reserved for client gateway keys, and checks enabled DB provider config env vars in `/readyz`.
 - Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes.
 - Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
 - Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
@@ -127,7 +128,7 @@ export DATABASE_STATEMENT_TIMEOUT_MS=30000
 
 `DATABASE_POOL_PRE_PING` is enabled by default so stale pooled connections are checked before use. `DATABASE_CONNECT_TIMEOUT_SECONDS` is passed to asyncpg connection setup. `DATABASE_STATEMENT_TIMEOUT_MS` is optional; when set, PostgreSQL receives a per-connection `statement_timeout` server setting.
 
-`/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. `/readyz` never runs migrations or performs destructive actions.
+`/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. In production, `/readyz` also checks enabled `provider_configs.api_key_env_var` references and reports only missing environment variable names when details are enabled, never secret values. `/readyz` never runs migrations or performs destructive actions.
 
 In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production; when Nginx or Docker deployment files are added, they should deny public access to `/readyz` by default.
 
@@ -291,6 +292,7 @@ These reviews are not formal certifications or penetration tests. They document 
 - Plaintext gateway keys are shown only once at creation or rotation.
 - PostgreSQL stores gateway key HMAC digests, not plaintext gateway keys.
 - Provider configs store provider API key environment variable names, not provider secret values.
+- Server-side upstream provider secrets use `OPENAI_UPSTREAM_API_KEY` and `OPENROUTER_API_KEY`; `OPENAI_API_KEY` remains reserved for OpenAI-compatible clients carrying gateway-issued keys.
 - Usage summaries and exports include metadata, token counts, and costs. They do not include prompts, completions, request bodies, response bodies, token hashes, provider keys, or other secrets.
 - Usage ledger rows do not store prompts or completions by default.
 - Unknown pricing or required FX conversion data fails closed for cost-limited requests.

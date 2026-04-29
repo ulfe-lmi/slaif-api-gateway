@@ -86,6 +86,32 @@ def test_non_production_defaults_do_not_emit_production_warnings(monkeypatch) ->
     assert fake_logger.warnings == []
 
 
+def test_safe_production_settings_do_not_emit_warnings(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    fake_logger = _FakeLogger()
+    monkeypatch.setattr(startup_warnings, "logger", fake_logger)
+    settings = _production_settings()
+
+    emit_startup_configuration_warnings(settings)
+
+    assert fake_logger.warnings == []
+
+
+def test_production_openai_api_key_boundary_warning_is_safe(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-slaif-public.secret")
+    fake_logger = _FakeLogger()
+    monkeypatch.setattr(startup_warnings, "logger", fake_logger)
+    settings = _production_settings()
+
+    emit_startup_configuration_warnings(settings)
+
+    assert len(fake_logger.warnings) == 1
+    assert fake_logger.warnings[0][1]["setting"] == "OPENAI_API_KEY"
+    text = _warning_text(fake_logger)
+    assert "OPENAI_UPSTREAM_API_KEY" in text
+    assert "sk-slaif-public.secret" not in text
+
+
 def test_startup_warnings_do_not_log_secrets(monkeypatch) -> None:
     fake_logger = _FakeLogger()
     monkeypatch.setattr(startup_warnings, "logger", fake_logger)

@@ -4,6 +4,9 @@ from pydantic import ValidationError
 from slaif_gateway.config import get_settings
 from slaif_gateway.utils.secrets import generate_secret_key
 
+_VALID_OPENAI_PROVIDER_KEY = "sk-live-openai-provider-aaaaaaaaaaaa"
+_VALID_OPENROUTER_PROVIDER_KEY = "sk-or-live-openrouter-aaaaaaaaaaaa"
+
 
 def _clear_env(monkeypatch) -> None:
     for env_name in (
@@ -70,8 +73,22 @@ def _clear_env(monkeypatch) -> None:
         "ADMIN_LOGIN_MAX_FAILED_ATTEMPTS",
         "ADMIN_LOGIN_WINDOW_SECONDS",
         "ADMIN_LOGIN_LOCKOUT_SECONDS",
+        "OPENAI_API_KEY",
+        "OPENAI_UPSTREAM_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ENABLE_OPENAI_PROVIDER",
+        "ENABLE_OPENROUTER_PROVIDER",
     ):
         monkeypatch.delenv(env_name, raising=False)
+
+
+def _set_required_production_env(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    monkeypatch.setenv("OPENAI_UPSTREAM_API_KEY", _VALID_OPENAI_PROVIDER_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY", _VALID_OPENROUTER_PROVIDER_KEY)
 
 
 def test_default_settings_load(monkeypatch) -> None:
@@ -140,10 +157,7 @@ def test_default_settings_load(monkeypatch) -> None:
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
-    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    _set_required_production_env(monkeypatch)
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -215,10 +229,7 @@ def test_admin_session_settings_are_validated(monkeypatch) -> None:
 
 def test_production_samesite_none_requires_secure_when_explicitly_disabled(monkeypatch) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
-    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    _set_required_production_env(monkeypatch)
     monkeypatch.setenv("ADMIN_SESSION_COOKIE_SAMESITE", "none")
     monkeypatch.setenv("ADMIN_SESSION_COOKIE_SECURE", "false")
     get_settings.cache_clear()
@@ -397,10 +408,7 @@ def test_redis_rate_limit_heartbeat_must_be_less_than_ttl(monkeypatch) -> None:
 
 def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
-    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    _set_required_production_env(monkeypatch)
     monkeypatch.setenv("METRICS_REQUIRE_AUTH", "false")
     get_settings.cache_clear()
 
@@ -412,10 +420,7 @@ def test_metrics_auth_can_be_explicitly_disabled(monkeypatch) -> None:
 
 def test_metrics_public_in_production_can_be_explicitly_enabled(monkeypatch) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
-    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    _set_required_production_env(monkeypatch)
     monkeypatch.setenv("METRICS_PUBLIC_IN_PRODUCTION", "true")
     get_settings.cache_clear()
 
@@ -426,10 +431,7 @@ def test_metrics_public_in_production_can_be_explicitly_enabled(monkeypatch) -> 
 
 def test_readyz_include_details_can_be_explicitly_enabled_in_production(monkeypatch) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "h" * 32)
-    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
+    _set_required_production_env(monkeypatch)
     monkeypatch.setenv("READYZ_INCLUDE_DETAILS", "true")
     get_settings.cache_clear()
 
@@ -664,11 +666,11 @@ def test_production_requires_versioned_hmac_secret(monkeypatch) -> None:
 
 
 def test_production_strong_secrets_succeed(monkeypatch) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
     monkeypatch.setenv("ACTIVE_HMAC_KEY_VERSION", "1")
     monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "t" * 32)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 40)
-    monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -676,3 +678,110 @@ def test_production_strong_secrets_succeed(monkeypatch) -> None:
     assert settings.APP_ENV == "production"
     assert settings.get_active_hmac_secret() == ("1", "t" * 32)
     assert len(settings.ADMIN_SESSION_SECRET or "") >= 32
+
+
+def test_production_requires_openai_provider_secret_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    message = str(exc.value)
+    assert "OPENAI_UPSTREAM_API_KEY is required" in message
+
+
+def test_production_rejects_placeholder_openai_provider_secret(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_UPSTREAM_API_KEY", "sk-test")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    message = str(exc.value)
+    assert "OPENAI_UPSTREAM_API_KEY" in message
+    assert "placeholder" in message
+    assert "sk-test" not in message
+
+
+def test_production_requires_openrouter_provider_secret_when_enabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    assert "OPENROUTER_API_KEY is required" in str(exc.value)
+
+
+def test_production_rejects_placeholder_openrouter_provider_secret(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-openrouter-secret")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    message = str(exc.value)
+    assert "OPENROUTER_API_KEY" in message
+    assert "placeholder" in message
+    assert "placeholder-openrouter-secret" not in message
+
+
+def test_production_disabled_provider_does_not_require_secret(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_OPENAI_PROVIDER", "false")
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.ENABLE_OPENAI_PROVIDER is False
+    assert settings.OPENAI_UPSTREAM_API_KEY is None
+
+
+def test_non_production_does_not_require_provider_secrets(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.OPENAI_UPSTREAM_API_KEY is None
+    assert settings.OPENROUTER_API_KEY is None
+
+
+def test_production_rejects_server_side_openai_api_key_misuse(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-provider-value-aaaaaaaa")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc:
+        get_settings()
+
+    message = str(exc.value)
+    assert "OPENAI_API_KEY is reserved for clients" in message
+    assert "OPENAI_UPSTREAM_API_KEY" in message
+    assert "sk-real-provider-value" not in message
+
+
+def test_production_allows_gateway_key_in_openai_api_key_boundary(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    _set_required_production_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-slaif-public.secret")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.APP_ENV == "production"
