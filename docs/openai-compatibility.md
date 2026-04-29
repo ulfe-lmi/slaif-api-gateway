@@ -153,6 +153,12 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
-- Dashboard management workflows beyond key suspend/activate/revoke.
-- Automatic/dashboard email workflows.
+- Bulk/import dashboard workflows, owner/institution/cohort mutation pages,
+  usage/audit mutation pages, MFA, and deployment packaging remain outside the
+  current admin surface. The implemented dashboard and key-email delivery
+  workflows are summarized in `docs/compatibility-matrix.md` and
+  `docs/security-model.md`.
+- Automatic key-email sending by default. Key email delivery is explicit through
+  create/rotate email modes, CLI commands, or the one-time-secret-backed email
+  delivery detail actions.
 - Real upstream smoke tests in the normal test suite.
