@@ -102,8 +102,12 @@ export OPENAI_API_KEY="sk-slaif-..."
 export OPENAI_BASE_URL="http://localhost:8000/v1"
 ```
 
-Mailpit is available at `http://localhost:8025`. Its SMTP endpoint is
-`mailpit:1025` from containers and `localhost:1025` from the host.
+Mailpit is available at `http://localhost:8025` by default. Its SMTP endpoint is
+`mailpit:1025` from containers and `localhost:1025` from the host. Compose host
+ports are configurable with `API_HOST_PORT`, `POSTGRES_HOST_PORT`,
+`REDIS_HOST_PORT`, `MAILPIT_SMTP_HOST_PORT`, `MAILPIT_WEB_HOST_PORT`, and
+`NGINX_HOST_PORT`; the default Postgres and Redis host ports are `15432` and
+`16379` to avoid common collisions with host-local services.
 
 Stop the local stack:
 

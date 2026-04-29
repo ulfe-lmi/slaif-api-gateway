@@ -74,9 +74,12 @@ provider settings.
 CLI DB commands and service workflows create explicit settings/sessionmaker
 instances. Engines are not created at import time.
 
-The checked-in `.env.example` uses the Docker Compose hostname `postgres`. For
-host-local development outside Compose, use a localhost URL such as
-`postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway`.
+The checked-in `.env.example` uses the Docker Compose hostname `postgres` inside
+containers and publishes the container's PostgreSQL port on host port `15432` by
+default through `POSTGRES_HOST_PORT`. For host-local development outside Compose,
+use a localhost URL such as
+`postgresql+asyncpg://slaif:slaif@localhost:15432/slaif_gateway`, or set
+`POSTGRES_HOST_PORT` to match your local port plan.
 
 ## Redis And Rate Limiting
 
@@ -99,9 +102,11 @@ remains the hard quota and accounting source of truth.
   `RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS` control active concurrency slot
   cleanup and stream heartbeats.
 
-The checked-in `.env.example` uses the Docker Compose hostname `redis`. For
-host-local development outside Compose, use a localhost URL such as
-`redis://localhost:6379/0`.
+The checked-in `.env.example` uses the Docker Compose hostname `redis` inside
+containers and publishes the container's Redis port on host port `16379` by
+default through `REDIS_HOST_PORT`. For host-local development outside Compose,
+use a localhost URL such as `redis://localhost:16379/0`, or set
+`REDIS_HOST_PORT` to match your local port plan.
 
 ## Provider Configuration
 
@@ -267,7 +272,9 @@ possible SMTP acceptance.
 
 The checked-in `.env.example` uses the Docker Compose hostname `mailpit` and
 port `1025`. From the host, the Compose Mailpit SMTP port is published as
-`localhost:1025` and the web UI is available at `http://localhost:8025`.
+`localhost:1025` and the web UI is available at `http://localhost:8025` by
+default. Override `MAILPIT_SMTP_HOST_PORT` or `MAILPIT_WEB_HOST_PORT` if those
+ports are already in use.
 
 ## Scheduled Reconciliation
 
