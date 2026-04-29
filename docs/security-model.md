@@ -120,7 +120,8 @@ explicit confirmation.
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
 institution, and cohort list/detail pages, provider config pages, model route
-pages, pricing pages, and FX list/detail pages. The key pages display safe key metadata only:
+pages, pricing pages, and FX list/detail/create/edit pages. The key pages
+display safe key metadata only:
 prefix, public key ID, hint, owner, status, computed validity state, quotas,
 counters, allowed policy summaries, and rate-limit policy. Key detail pages
 provide CSRF-protected POST actions to suspend, activate, and permanently revoke
@@ -172,9 +173,9 @@ with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
 pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
-quota limit update, usage-counter reset, rotation, provider config, route, and
-pricing metadata mutation forms require a valid authenticated session plus the
-per-session CSRF token. Dashboard key creation
+quota limit update, usage-counter reset, rotation, provider config, route,
+pricing, and FX metadata mutation forms require a valid authenticated session
+plus the per-session CSRF token. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -220,8 +221,10 @@ never recover or send old plaintext keys.
 ## Current Limitations
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
-  Owner, institution, cohort,
-  usage, audit, and email-delivery mutation pages are not implemented yet.
+  Standalone email-delivery mutation pages beyond the existing
+  one-time-secret-backed send-now/enqueue actions are not implemented.
+  Owner, institution, cohort, usage, and audit mutation pages are not
+  implemented yet.
   Pricing import/upload and FX import/upload/external-refresh workflows are future work.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
