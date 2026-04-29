@@ -301,7 +301,7 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes state-changing admin dashboard management pages, dashboard-driven email workflows, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes owner/institution/cohort mutation pages, bulk key creation, pricing/FX import workflows, OpenTelemetry tracing, and fuller public deployment documentation.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 

@@ -154,8 +154,8 @@ The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 institution, and cohort list/detail pages, provider config list/detail/create/edit
 pages under `/admin/providers`, model route list/detail/create/edit pages under
 `/admin/routes`, pricing list/detail/create/edit pages under `/admin/pricing`,
-and read-only FX, usage, audit, and email delivery
-list/detail pages. The key pages
+FX list/detail/create/edit pages under `/admin/fx`, and read-only usage, audit,
+and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
 creates one key for an existing owner/cohort. Key creation and key rotation
@@ -198,8 +198,10 @@ token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-pricing import/upload forms, FX import/upload/external-refresh forms, and owner,
-institution, cohort, usage, and audit dashboard mutation workflows are not implemented yet. Admin
+pricing import/upload forms, FX import/upload/external-refresh forms, standalone
+email-delivery mutation pages beyond the existing send-now/enqueue actions, and
+owner, institution, cohort, usage, and audit dashboard mutation workflows are
+not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.
