@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+MULTI_CHOICE_UNSUPPORTED_MESSAGE = (
+    "n > 1 is not supported by this gateway until multi-choice quota accounting is implemented."
+)
+
 
 class RequestPolicyError(Exception):
     """Base domain error for request-policy violations."""
@@ -38,3 +42,7 @@ class InvalidChatMessagesError(RequestPolicyError):
 
 class InvalidStreamOptionsError(RequestPolicyError):
     error_code = "invalid_stream_options"
+
+
+class InvalidChoiceCountError(RequestPolicyError):
+    error_code = "invalid_choice_count"

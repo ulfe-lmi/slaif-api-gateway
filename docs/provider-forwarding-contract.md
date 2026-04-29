@@ -91,6 +91,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
 | `stream_options` | Preserved, but `include_usage` forced to `true` for streaming | Required for reliable streaming accounting |
+| `n` | Preserved only when omitted or exactly `1`; rejected for any other value | Multi-choice accounting is not implemented, so `n > 1` is rejected before provider forwarding |
 | `tools` / `tool_choice` | Preserved | Ordinary OpenAI Chat Completions fields |
 | `response_format` | Preserved | Ordinary OpenAI Chat Completions field |
 | `metadata` | Preserved to provider; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field |
@@ -98,6 +99,8 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `temperature` / `top_p` | Preserved | Ordinary OpenAI Chat Completions fields |
 | Unknown ordinary JSON fields | Preserved | Avoid silently dropping OpenAI SDK/provider-compatible fields |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
+
+`n > 1` is a deliberate compatibility limitation, not a forwarding transformation. Supporting it later requires choice-aware reservation, cost estimation, and final usage validation before the gateway can safely forward multi-choice requests.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 

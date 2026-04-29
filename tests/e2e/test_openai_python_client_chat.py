@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 import uvicorn
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.integration.db_test_utils import run_alembic_upgrade_head
@@ -277,6 +277,36 @@ async def _load_accounting_state(
         await engine.dispose()
 
 
+async def _load_accounting_side_effect_counts(
+    database_url: str,
+    gateway_key_id: uuid.UUID,
+) -> tuple[int, int]:
+    from slaif_gateway.db.models import QuotaReservation, UsageLedger
+
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            reservation_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(QuotaReservation)
+                    .where(QuotaReservation.gateway_key_id == gateway_key_id)
+                )
+            ).scalar_one()
+            usage_ledger_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(UsageLedger)
+                    .where(UsageLedger.gateway_key_id == gateway_key_id)
+                )
+            ).scalar_one()
+            return int(reservation_count), int(usage_ledger_count)
+    finally:
+        await engine.dispose()
+
+
 def _free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -440,3 +470,55 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
     )
     assert FAKE_OPENAI_UPSTREAM_KEY not in provider_config_text
     assert state.provider_config.api_key_env_var == "OPENAI_UPSTREAM_API_KEY"
+
+
+@pytest.mark.e2e
+def test_openai_python_client_rejects_multi_choice_chat_before_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url))
+
+    from openai import BadRequestError, OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    500,
+                    json={"error": {"message": "upstream should not be called"}},
+                )
+            )
+
+            client = OpenAI()
+            with pytest.raises(BadRequestError) as exc_info:
+                client.chat.completions.create(
+                    model=TEST_MODEL,
+                    messages=[{"role": "user", "content": PROMPT_TEXT}],
+                    n=2,
+                )
+
+    error = exc_info.value
+    assert error.status_code == 400
+    assert error.body is not None
+    assert error.body["code"] == "invalid_choice_count"
+    assert error.body["param"] == "n"
+    assert "multi-choice quota accounting" in error.body["message"]
+    assert len(upstream_route.calls) == 0
+
+    reservation_count, usage_ledger_count = asyncio.run(
+        _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
+    )
+    assert reservation_count == 0
+    assert usage_ledger_count == 0

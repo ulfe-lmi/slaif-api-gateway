@@ -84,6 +84,10 @@ the gateway explicitly rejects them. For streaming requests, the gateway forward
 `stream_options.include_usage=true` so final provider usage can be captured for
 accounting.
 
+Chat Completions `n` is preserved when omitted or exactly `1`. `n > 1` is
+intentionally rejected until multi-choice quota reservation and cost accounting
+are implemented; it is not silently clamped or dropped.
+
 `sk-slaif-` is the default generated gateway key prefix. New key generation uses `GATEWAY_KEY_PREFIX`, and authentication accepts only prefixes configured in `GATEWAY_KEY_ACCEPTED_PREFIXES`, which must include the active generation prefix.
 
 ## Quick Local Setup
