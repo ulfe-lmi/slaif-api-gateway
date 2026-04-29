@@ -18,6 +18,7 @@ For exact reviewer-facing behavior, see:
 - [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
 - [`.env.example`](.env.example) and [`docs/configuration.md`](docs/configuration.md) for safe configuration templates and environment variable reference.
 - [`docs/security-model.md`](docs/security-model.md) for gateway key lifecycle, provider isolation, quota/accounting, Redis, email/Celery, and logging security boundaries.
+- [`docs/deployment.md`](docs/deployment.md) for Docker Compose, worker/scheduler, and Nginx deployment notes.
 
 ## Current Status
 
@@ -36,13 +37,14 @@ Implemented:
 - Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, key list/detail pages with CSRF-protected create, suspend/activate/revoke, validity-window, PostgreSQL hard quota limit, usage-counter reset, rotation, and create/rotate email-delivery mode actions, read-only owner/institution/cohort pages, provider config pages with CSRF-protected create/edit/enable/disable metadata actions, model route pages with CSRF-protected create/edit/enable/disable metadata actions, pricing pages with CSRF-protected create/edit/enable/disable metadata actions, FX pages with CSRF-protected create/edit metadata actions, usage/audit activity pages, and email delivery pages with CSRF-protected send-now/enqueue actions for valid pending key deliveries, secure cookie settings, server-side session rows, and CSRF-protected forms.
 - Explicit CLI/dashboard-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, fail-closed in-progress/ambiguous delivery state, and Celery task payloads that carry IDs only.
 - Admin role semantics are explicit for the current implementation: every active admin account is a full operator, and `superadmin` is metadata/future-proofing rather than an enforced RBAC boundary.
+- Docker Compose packaging for API, Celery worker, Celery Beat scheduler, PostgreSQL, Redis, Mailpit, and an optional Nginx reverse proxy profile. Migrations remain explicit operator actions.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
 
 - Bulk key creation forms, arbitrary/old-key dashboard email resend actions, pricing import/upload forms, FX import/upload/external-refresh forms, and state-changing management pages for owners, institutions, cohorts, usage, and audit.
 - Automatic key-email sending by default.
-- OpenTelemetry tracing and full deployment docs.
+- OpenTelemetry tracing and full production hardening/CI/CD runbooks.
 
 ## OpenAI-Compatible Usage
 
@@ -94,6 +96,49 @@ are implemented; it is not silently clamped or dropped.
 
 ## Quick Local Setup
 
+Docker Compose local setup:
+
+```bash
+git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
+cd slaif-api-gateway
+cp .env.example .env
+docker compose build
+docker compose up -d postgres redis mailpit
+docker compose run --rm api slaif-gateway db upgrade
+docker compose up
+```
+
+Create the first admin after migrations:
+
+```bash
+printf '%s\n' 'replace-this-password' \
+  | docker compose run --rm api slaif-gateway admin create \
+      --email admin@example.org \
+      --display-name "Admin User" \
+      --password-stdin
+```
+
+Configure provider, route, pricing, and FX metadata with the CLI examples below,
+then issue a gateway key. Users call the local gateway with standard
+OpenAI-compatible variables:
+
+```bash
+export OPENAI_API_KEY="sk-slaif-..."
+export OPENAI_BASE_URL="http://localhost:8000/v1"
+```
+
+Mailpit is available at `http://localhost:8025`. API, worker, and scheduler
+containers do not run migrations automatically; `slaif-gateway db upgrade` is
+an explicit operator command. Docker Compose is local/development packaging, not
+complete production hardening. Production deployments must replace all secrets,
+run migrations explicitly, use HTTPS, and restrict `/admin`, `/readyz`, and
+`/metrics`.
+
+See [`docs/deployment.md`](docs/deployment.md) for the full deployment runbook
+and optional Nginx configuration.
+
+Python local setup:
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -131,7 +176,7 @@ export DATABASE_STATEMENT_TIMEOUT_MS=30000
 
 `/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. In production, `/readyz` also checks enabled `provider_configs.api_key_env_var` references and reports only missing environment variable names when details are enabled, never secret values. `/readyz` never runs migrations or performs destructive actions.
 
-In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production; when Nginx or Docker deployment files are added, they should deny public access to `/readyz` by default.
+In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production; the provided Nginx example allowlists `/readyz` to private networks by default.
 
 When `APP_ENV=production`, startup logs warn if `READYZ_INCLUDE_DETAILS=true` because detailed readiness output is more informative than the safe production default. The warning is an operator visibility guardrail, not a substitute for network or reverse-proxy controls.
 
@@ -175,7 +220,7 @@ Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Reques
 
 Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
 
-`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available; future Nginx/deployment docs should keep `/metrics` internal or allowlisted by default. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
+`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available; the provided Nginx example denies `/metrics` by default. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
 
 When `APP_ENV=production`, startup logs warn if metrics are explicitly made public or metrics auth is disabled. These warnings make risky overrides visible but do not replace internal networking, reverse-proxy allowlists, or an admin/auth layer.
 
@@ -316,7 +361,7 @@ Migrations are explicit operator actions and are not run during application star
 
 ## Roadmap
 
-Near-term remaining work includes owner/institution/cohort mutation pages, bulk key creation, pricing/FX import workflows, OpenTelemetry tracing, and fuller public deployment documentation.
+Near-term remaining work includes owner/institution/cohort mutation pages, bulk key creation, pricing/FX import workflows, OpenTelemetry tracing, and fuller production hardening runbooks.
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 

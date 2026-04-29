@@ -28,3 +28,35 @@ def test_db_show_url_redacts_password(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "supersecret" not in result.stdout
     assert "***" in result.stdout
+
+
+def test_db_upgrade_invokes_alembic_upgrade(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def fake_upgrade(config, revision: str) -> None:
+        called["config"] = config
+        called["revision"] = revision
+
+    monkeypatch.setattr("slaif_gateway.cli.db.alembic_command.upgrade", fake_upgrade)
+
+    result = runner.invoke(app, ["db", "upgrade"])
+
+    assert result.exit_code == 0
+    assert called["revision"] == "head"
+    assert called["config"].config_file_name.endswith("alembic.ini")
+
+
+def test_db_current_invokes_alembic_current(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def fake_current(config, *, verbose: bool) -> None:
+        called["config"] = config
+        called["verbose"] = verbose
+
+    monkeypatch.setattr("slaif_gateway.cli.db.alembic_command.current", fake_current)
+
+    result = runner.invoke(app, ["db", "current", "--verbose"])
+
+    assert result.exit_code == 0
+    assert called["verbose"] is True
+    assert called["config"].config_file_name.endswith("alembic.ini")

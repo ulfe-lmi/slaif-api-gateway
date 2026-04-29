@@ -1,9 +1,9 @@
 # Configuration
 
 This gateway is configured with environment variables. Secrets should come from
-environment variables, a deployment secret manager, or Docker secrets when those
-deployment files exist. The root `.env.example` file is a safe template only; it
-must not contain real credentials.
+environment variables, a deployment secret manager, or Docker secrets. The root
+`.env.example` file is a safe Docker Compose-oriented template only; it must not
+contain real credentials.
 
 Migrations are explicit operator actions. The application and `/readyz` do not
 run migrations on startup.
@@ -74,6 +74,10 @@ provider settings.
 CLI DB commands and service workflows create explicit settings/sessionmaker
 instances. Engines are not created at import time.
 
+The checked-in `.env.example` uses the Docker Compose hostname `postgres`. For
+host-local development outside Compose, use a localhost URL such as
+`postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway`.
+
 ## Redis And Rate Limiting
 
 Redis is used for operational throttling and Celery broker state. PostgreSQL
@@ -94,6 +98,10 @@ remains the hard quota and accounting source of truth.
   `RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS`, and
   `RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS` control active concurrency slot
   cleanup and stream heartbeats.
+
+The checked-in `.env.example` uses the Docker Compose hostname `redis`. For
+host-local development outside Compose, use a localhost URL such as
+`redis://localhost:6379/0`.
 
 ## Provider Configuration
 
@@ -257,6 +265,10 @@ be resent; rotate and send a replacement key. In-progress or ambiguous delivery
 rows are not retried automatically, preventing duplicate key emails after
 possible SMTP acceptance.
 
+The checked-in `.env.example` uses the Docker Compose hostname `mailpit` and
+port `1025`. From the host, the Compose Mailpit SMTP port is published as
+`localhost:1025` and the web UI is available at `http://localhost:8025`.
+
 ## Scheduled Reconciliation
 
 Scheduled reconciliation is a Celery/Celery Beat foundation for existing
@@ -294,6 +306,10 @@ unexpected accounting failures.
 - Rotate provider keys immediately if leaked.
 - Rotate HMAC secrets carefully; removing an old version invalidates keys that
   were created with that version.
-- Use HTTPS and a reverse proxy in production. When deployment/Nginx files are
-  added, keep `/readyz` and `/metrics` internal or allowlisted and configure SSE
-  streaming without proxy buffering.
+- Docker Compose packaging is provided for local/development service layout.
+  API, worker, and scheduler containers do not run migrations automatically; use
+  `slaif-gateway db upgrade` as an explicit operator step.
+- Use HTTPS and a reverse proxy in production. The checked-in Nginx example
+  keeps `/readyz` private-network allowlisted and denies `/metrics` by default;
+  review and tighten those controls for the target network.
+- Configure SSE streaming without proxy buffering.

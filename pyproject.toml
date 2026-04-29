@@ -53,6 +53,12 @@ package-dir = {"" = "app"}
 [tool.setuptools.packages.find]
 where = ["app"]
 
+[tool.setuptools.package-data]
+slaif_gateway = [
+  "web/templates/**/*.html",
+  "web/static/**/*",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["app"]
 addopts = "-q"
