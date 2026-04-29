@@ -148,6 +148,11 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 - `ADMIN_SESSION_TTL_SECONDS` controls server-side admin session lifetime.
 - `ADMIN_LOGIN_CSRF_COOKIE_NAME` controls the temporary login CSRF cookie name.
 - `ADMIN_CSRF_TTL_SECONDS` controls login CSRF token lifetime.
+- `ADMIN_LOGIN_RATE_LIMIT_ENABLED` controls DB/audit-backed failed-attempt
+  lockout for `/admin/login`.
+- `ADMIN_LOGIN_MAX_FAILED_ATTEMPTS` defaults to `5`.
+- `ADMIN_LOGIN_WINDOW_SECONDS` defaults to `900`.
+- `ADMIN_LOGIN_LOCKOUT_SECONDS` defaults to `900`.
 
 The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
@@ -204,7 +209,10 @@ owner, institution, cohort, usage, and audit dashboard mutation workflows are
 not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
-protection.
+protection. Failed admin login attempts and temporary lockout events are tracked
+through PostgreSQL audit rows by normalized email and client IP; Redis is not
+required for this admin protection. Login failure and lockout messages remain
+generic and do not reveal whether an account exists or how many attempts remain.
 
 ## Email, Celery, And SMTP
 

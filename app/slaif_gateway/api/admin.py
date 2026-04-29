@@ -40,6 +40,7 @@ from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService,
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
 from slaif_gateway.services.admin_session_service import (
     AdminAuthenticationError,
+    AdminLoginRateLimitedError,
     AdminSessionContext,
     AdminSessionError,
     AdminSessionService,
@@ -215,32 +216,30 @@ async def login(
         _set_login_csrf_cookie(response, settings, replacement)
         return response
 
+    login_failure: tuple[str, int] | None = None
     try:
         async with _admin_service_scope(request) as service:
-            admin_user = await service.authenticate_admin(
-                email=email,
-                password=password,
-                ip_address=_client_host(request),
-                user_agent=request.headers.get("user-agent"),
-            )
-            created_session = await service.create_admin_session(
-                admin_user_id=admin_user.id,
-                ip_address=_client_host(request),
-                user_agent=request.headers.get("user-agent"),
-            )
-    except AdminAuthenticationError:
-        try:
-            replacement = create_login_csrf_token(settings)
-        except CsrfError:
-            return _admin_unavailable()
-        response = _render_login(
-            request,
-            csrf_token=replacement,
-            error="Invalid email or password.",
-            status_code=401,
-        )
-        _set_login_csrf_cookie(response, settings, replacement)
-        return response
+            try:
+                admin_user = await service.authenticate_admin(
+                    email=email,
+                    password=password,
+                    ip_address=_client_host(request),
+                    user_agent=request.headers.get("user-agent"),
+                )
+            except AdminLoginRateLimitedError:
+                login_failure = ("Too many failed login attempts. Try again later.", 429)
+            except AdminAuthenticationError:
+                login_failure = ("Invalid email or password.", 401)
+                admin_user = None
+            if login_failure is not None:
+                created_session = None
+            else:
+                assert admin_user is not None
+                created_session = await service.create_admin_session(
+                    admin_user_id=admin_user.id,
+                    ip_address=_client_host(request),
+                    user_agent=request.headers.get("user-agent"),
+                )
     except (AdminSessionError, RuntimeError):
         try:
             replacement = create_login_csrf_token(settings)
@@ -254,6 +253,23 @@ async def login(
         )
         _set_login_csrf_cookie(response, settings, replacement)
         return response
+
+    if login_failure is not None:
+        try:
+            replacement = create_login_csrf_token(settings)
+        except CsrfError:
+            return _admin_unavailable()
+        message, status_code = login_failure
+        response = _render_login(
+            request,
+            csrf_token=replacement,
+            error=message,
+            status_code=status_code,
+        )
+        _set_login_csrf_cookie(response, settings, replacement)
+        return response
+
+    assert created_session is not None
 
     response = RedirectResponse("/admin", status_code=303)
     _clear_login_csrf_cookie(response, settings)

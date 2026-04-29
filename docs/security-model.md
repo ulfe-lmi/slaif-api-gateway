@@ -168,6 +168,14 @@ by default in production. Session validation rejects missing, revoked, expired,
 or inactive-admin sessions. Logout revokes the server-side session row and
 clears the browser cookie.
 
+Admin login is protected by DB/audit-backed failed-attempt rate limiting. The
+gateway counts recent failed `/admin/login` attempts by normalized email and
+client IP, records failed attempts and temporary lockout events in `audit_log`,
+and blocks password verification while the lockout is active. Failure and
+lockout messages are generic, do not reveal whether an account exists, and do
+not expose exact attempt counts. Redis is not required for this admin control.
+Plaintext passwords are never stored, logged, or written to audit metadata.
+
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
