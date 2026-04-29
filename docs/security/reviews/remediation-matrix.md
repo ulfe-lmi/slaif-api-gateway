@@ -40,3 +40,17 @@ Status values are intentionally conservative:
 | 4.2 | Dashboard pages | Medium | Planned | Not implemented | Not applicable | Admin dashboard is listed as not implemented in README. |
 | 4.2 | Email sending / Celery workers | Medium | Addressed | #74, #75 | Unit and PostgreSQL integration tests | Explicit CLI-controlled email delivery and Celery task foundations exist for newly generated/rotated keys. Automatic/dashboard email workflows remain out of scope. |
 | 4.2 | Docker deployment files | Medium | Planned | Not implemented | Not applicable | Deployment docs/files are intentionally pending; no Docker deployment files are included by this remediation tracker. |
+
+## Review 5.0 findings
+
+Review 5.0 grades the project as B+ / serious pre-production infrastructure for the implemented scope, but not yet production-release-ready.
+
+| Finding | Severity | Status | Planned / fixed in PR(s) | Verification | Notes |
+|---|---:|---|---|---|---|
+| `n > 1` Chat Completions accounting ambiguity | P0/P1 | Open | Planned fix: reject `n > 1` until multi-choice accounting is implemented. | API/policy tests and E2E/provider-body tests. | Top hard-quota correctness risk identified by Review 5.0. |
+| `/v1/models` empty `allowed_models` policy mismatch | P1 | Open | Planned fix: align `ModelCatalogService` with documented `allow_all_models` / `allowed_models` semantics. | Model catalog unit tests and `/v1/models` route tests. | Verify current behavior before implementation. |
+| Admin login brute-force/rate-limit protection | P1 | Open | Planned fix: add login attempt rate limiting or lockout by normalized email/IP. | Admin auth unit/integration tests. | Admin login surface is now real and should receive rate-limit coverage. |
+| Production provider-secret validation drift | P1/P2 | Open | Planned fix: ensure production provider settings fail/warn when enabled providers lack usable upstream secrets, and warn/fail on server-side `OPENAI_API_KEY` misuse if appropriate. | Config tests and readiness/startup tests. | Must preserve provider-secret isolation and normal client `OPENAI_API_KEY` semantics. |
+| Admin role semantics unclear | P2 | Open | Planned fix: either document all active admins are full operators for now, or enforce role checks. | Docs/config tests or RBAC tests depending on chosen policy. | Current dashboard actions assume operator-level admin capability. |
+| Email delivery exactly-once semantics | P2 | Open | Planned fix: harden SMTP-success/DB-commit failure path with outbox/attempt state or documented operational policy. | Email delivery service tests simulating SMTP success followed by DB failure. | One-time-secret payload design is sound, but delivery outcome atomicity needs clearer handling. |
+| `docs/openai-compatibility.md` admin/email status drift | P2 | Open | Planned fix: update the “not implemented” section so it reflects admin/email dashboard workflows now implemented. | Docs diff. | Current main still contains stale wording around automatic/dashboard email workflows; verify exact intended wording before fixing. |
