@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 TARGET_REVISION_0004 = "0004_email_secrets_and_background_jobs"
 TARGET_HEAD_0005 = "0005_fix_gateway_key_prefix_default"
+CURRENT_HEAD = "0006_email_delivery_attempt_state"
 
 
 
@@ -200,7 +201,8 @@ def test_migration_0005_normalizes_gateway_key_prefix_and_default() -> None:
 
         script = ScriptDirectory.from_config(_alembic_config(database_url))
         heads = script.get_heads()
-        assert heads == [TARGET_HEAD_0005]
+        assert TARGET_HEAD_0005 in {revision.revision for revision in script.walk_revisions()}
+        assert heads == [CURRENT_HEAD]
     finally:
         asyncio.run(_reset_public_schema(database_url))
         _upgrade_to_revision(database_url, "head")

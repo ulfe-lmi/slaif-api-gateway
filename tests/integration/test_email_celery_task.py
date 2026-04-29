@@ -107,3 +107,63 @@ async def test_email_celery_task_sends_with_ids_only(
     assert created.plaintext_key in _FakeEmailService.sent_bodies[0]
     assert secret is not None and secret.status == "consumed"
     assert email_row is not None and email_row.status == "sent"
+
+
+@pytest.mark.asyncio
+async def test_email_celery_task_refuses_ambiguous_delivery(
+    migrated_postgres_url: str,
+    monkeypatch,
+) -> None:
+    settings = _settings(migrated_postgres_url)
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        async with session.begin():
+            owner = await OwnersRepository(session).create_owner(
+                name="Ada",
+                surname="Lovelace",
+                email=f"task-ambiguous-{datetime.now(UTC).timestamp()}@example.org",
+            )
+            created = await KeyService(
+                settings=settings,
+                gateway_keys_repository=GatewayKeysRepository(session),
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            ).create_gateway_key(
+                CreateGatewayKeyInput(
+                    owner_id=owner.id,
+                    valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+                    valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+                )
+            )
+            delivery = await EmailDeliveriesRepository(session).create_email_delivery(
+                recipient_email=owner.email,
+                subject="Your SLAIF API Gateway key",
+                template_name="gateway_key_email",
+                owner_id=owner.id,
+                gateway_key_id=created.gateway_key_id,
+                one_time_secret_id=created.one_time_secret_id,
+                status="ambiguous",
+            )
+
+    _FakeEmailService.sent_bodies = []
+    monkeypatch.setattr(tasks_email, "EmailService", _FakeEmailService)
+
+    result = await tasks_email._send_pending_key_email(
+        settings=settings,
+        one_time_secret_id=str(created.one_time_secret_id),
+        email_delivery_id=str(delivery.id),
+    )
+
+    async with session_factory() as session:
+        secret = await session.get(OneTimeSecret, created.one_time_secret_id)
+        email_row = await session.get(EmailDelivery, delivery.id)
+
+    await engine.dispose()
+
+    assert result["status"] == "ambiguous"
+    assert result["error_code"] == "email_delivery_ambiguous"
+    assert _FakeEmailService.sent_bodies == []
+    assert created.plaintext_key not in str(result)
+    assert secret is not None and secret.status == "pending"
+    assert email_row is not None and email_row.status == "ambiguous"

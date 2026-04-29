@@ -31,6 +31,36 @@ class SmtpSendError(EmailError):
     error_code = "smtp_send_error"
 
 
+class EmailDeliveryNotSendableError(EmailError):
+    """Raised when an email delivery is not safe to send."""
+
+    error_code = "email_delivery_not_sendable"
+
+
+class EmailDeliveryInProgressError(EmailDeliveryNotSendableError):
+    """Raised when an email delivery is already in progress."""
+
+    error_code = "email_delivery_in_progress"
+
+
+class EmailDeliveryAmbiguousError(EmailDeliveryNotSendableError):
+    """Raised when prior SMTP acceptance cannot be finalized safely."""
+
+    error_code = "email_delivery_ambiguous"
+
+
+class EmailDeliveryFinalizationError(EmailDeliveryAmbiguousError):
+    """Raised when DB finalization fails after SMTP success."""
+
+    error_code = "email_delivery_finalization_failed"
+
+
+class EmailDeliveryAttemptStateError(EmailError):
+    """Raised when the attempt state cannot be persisted safely."""
+
+    error_code = "email_delivery_attempt_state_error"
+
+
 class OneTimeSecretError(EmailError):
     """Base class for one-time secret consumption errors."""
 

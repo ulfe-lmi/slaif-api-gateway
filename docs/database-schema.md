@@ -950,8 +950,10 @@ Allowed `status` values:
 
 ```text
 pending
+sending
 sent
 failed
+ambiguous
 cancelled
 ```
 
@@ -962,13 +964,18 @@ index(owner_id)
 index(gateway_key_id)
 index(one_time_secret_id)
 index(status, created_at)
-check(status in ('pending', 'sent', 'failed', 'cancelled'))
+check(status in ('pending', 'sending', 'sent', 'failed', 'ambiguous', 'cancelled'))
 ```
 
 Rules:
 
 - Never store plaintext keys in `email_deliveries`.
 - Store only status, recipient, template, and delivery metadata.
+- `sending` means SMTP delivery has started or been prepared and must not be
+  retried automatically.
+- `ambiguous` means SMTP may have accepted the email but database finalization
+  did not complete. Operators must not resend the same one-time secret; rotate
+  the key if receipt cannot be confirmed.
 
 ---
 

@@ -38,4 +38,4 @@ def test_alembic_has_exactly_one_head_revision() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0005_fix_gateway_key_prefix_default"]
+    assert heads == ["0006_email_delivery_attempt_state"]

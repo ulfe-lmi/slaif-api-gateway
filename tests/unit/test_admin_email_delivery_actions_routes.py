@@ -353,3 +353,52 @@ def test_expired_or_consumed_secret_prevents_send_and_enqueue(monkeypatch) -> No
     assert enqueue.headers["location"] == f"/admin/email-deliveries/{delivery_id}?message=email_delivery_not_sendable"
     assert send_called is False
     assert fake_task.calls == []
+
+
+def test_ambiguous_delivery_prevents_send_and_enqueue(monkeypatch) -> None:
+    delivery_id = uuid.uuid4()
+    secret_id = uuid.uuid4()
+    send_called = False
+    fake_task = _FakeTask()
+
+    async def get_key_email_delivery_sendability(self, email_delivery_id):
+        return KeyEmailDeliverySendability(
+            email_delivery_id=email_delivery_id,
+            one_time_secret_id=secret_id,
+            email_delivery_status="ambiguous",
+            one_time_secret_status="present",
+            can_send=False,
+            blocking_reason="SMTP may have accepted this email; rotate the key.",
+        )
+
+    async def send_pending_key_email(self, **kwargs):
+        nonlocal send_called
+        send_called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.get_key_email_delivery_sendability",
+        get_key_email_delivery_sendability,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.send_pending_key_email",
+        send_pending_key_email,
+    )
+    monkeypatch.setattr("slaif_gateway.api.admin.send_pending_key_email_task", fake_task)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    send = client.post(
+        f"/admin/email-deliveries/{delivery_id}/send-now",
+        data={"csrf_token": "dashboard-csrf", "confirm_send": "true"},
+        follow_redirects=False,
+    )
+    enqueue = client.post(
+        f"/admin/email-deliveries/{delivery_id}/enqueue",
+        data={"csrf_token": "dashboard-csrf", "confirm_enqueue": "true"},
+        follow_redirects=False,
+    )
+
+    assert send.headers["location"] == f"/admin/email-deliveries/{delivery_id}?message=email_delivery_not_sendable"
+    assert enqueue.headers["location"] == f"/admin/email-deliveries/{delivery_id}?message=email_delivery_not_sendable"
+    assert send_called is False
+    assert fake_task.calls == []

@@ -45,22 +45,22 @@ async def _send_pending_key_email(
     try:
         session_factory = create_sessionmaker_from_engine(engine)
         async with session_factory() as session:
-            async with session.begin():
-                service = EmailDeliveryService(
-                    settings=settings,
-                    one_time_secrets_repository=OneTimeSecretsRepository(session),
-                    email_deliveries_repository=EmailDeliveriesRepository(session),
-                    gateway_keys_repository=GatewayKeysRepository(session),
-                    owners_repository=OwnersRepository(session),
-                    audit_repository=AuditRepository(session),
-                    email_service=EmailService(settings),
-                )
-                result = await service.send_pending_key_email(
-                    one_time_secret_id=uuid.UUID(one_time_secret_id),
-                    email_delivery_id=uuid.UUID(email_delivery_id) if email_delivery_id else None,
-                    actor_admin_id=uuid.UUID(actor_admin_id) if actor_admin_id else None,
-                )
-                return _safe_task_result(result)
+            service = EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                owners_repository=OwnersRepository(session),
+                audit_repository=AuditRepository(session),
+                email_service=EmailService(settings),
+                session=session,
+            )
+            result = await service.send_pending_key_email(
+                one_time_secret_id=uuid.UUID(one_time_secret_id),
+                email_delivery_id=uuid.UUID(email_delivery_id) if email_delivery_id else None,
+                actor_admin_id=uuid.UUID(actor_admin_id) if actor_admin_id else None,
+            )
+            return _safe_task_result(result)
     finally:
         await engine.dispose()
 

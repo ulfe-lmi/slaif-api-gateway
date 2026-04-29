@@ -97,6 +97,16 @@ class _EmailRepo:
     async def get_email_delivery_by_id(self, email_delivery_id: uuid.UUID):
         return self.rows.get(email_delivery_id)
 
+    async def get_email_delivery_for_update(self, email_delivery_id: uuid.UUID):
+        return self.rows.get(email_delivery_id)
+
+    async def mark_sending(self, email_delivery_id: uuid.UUID, *, started_at: datetime):
+        row = self.rows[email_delivery_id]
+        row.status = "sending"
+        row.failed_at = started_at
+        row.error_message = None
+        return True
+
     async def mark_sent(self, email_delivery_id: uuid.UUID, *, sent_at: datetime, provider_message_id: str | None):
         row = self.rows[email_delivery_id]
         row.status = "sent"
@@ -110,6 +120,26 @@ class _EmailRepo:
         row.failed_at = failed_at
         row.error_message = error_message
         return True
+
+    async def mark_ambiguous(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        failed_at: datetime,
+        error_message: str,
+        provider_message_id: str | None = None,
+    ):
+        row = self.rows[email_delivery_id]
+        row.status = "ambiguous"
+        row.failed_at = failed_at
+        row.error_message = error_message
+        row.provider_message_id = provider_message_id
+        return True
+
+
+class _FinalizationFailingEmailRepo(_EmailRepo):
+    async def mark_sent(self, email_delivery_id: uuid.UUID, *, sent_at: datetime, provider_message_id: str | None):
+        raise RuntimeError("database finalization failed")
 
 
 class _KeyRepo:
@@ -203,6 +233,56 @@ def _service(*, email_service: _EmailService | None = None):
     return service, secret, email_repo, audit_repo, sender, plaintext_key
 
 
+def _service_with_email_repo(*, email_repo: _EmailRepo, email_service: _EmailService | None = None):
+    encryption_key = generate_secret_key()
+    owner = _Owner(id=uuid.uuid4())
+    gateway_key = _GatewayKey(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    plaintext_key = "sk-slaif-public.once-only-secret"
+    encrypted = encrypt_secret(
+        json.dumps(
+            {
+                "plaintext_key": plaintext_key,
+                "gateway_key_id": str(gateway_key.id),
+                "owner_id": str(owner.id),
+                "purpose": "gateway_key_email",
+            }
+        ),
+        encryption_key,
+    )
+    secret = _OneTimeSecret(
+        id=uuid.uuid4(),
+        purpose="gateway_key_email",
+        owner_id=owner.id,
+        gateway_key_id=gateway_key.id,
+        encrypted_payload=encrypted.ciphertext,
+        nonce=encrypted.nonce,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    audit_repo = _AuditRepo()
+    sender = email_service or _EmailService()
+    service = EmailDeliveryService(
+        settings=Settings(
+            ENABLE_EMAIL_DELIVERY=True,
+            SMTP_HOST="localhost",
+            SMTP_FROM="noreply@example.org",
+            ONE_TIME_SECRET_ENCRYPTION_KEY=encryption_key,
+            PUBLIC_BASE_URL="https://api.ulfe.slaif.si/v1",
+        ),
+        one_time_secrets_repository=_OneTimeRepo(secret),
+        email_deliveries_repository=email_repo,
+        gateway_keys_repository=_KeyRepo(gateway_key),
+        owners_repository=_OwnerRepo(owner),
+        audit_repository=audit_repo,
+        email_service=sender,
+    )
+    return service, secret, email_repo, audit_repo, sender, plaintext_key
+
+
 @pytest.mark.asyncio
 async def test_email_delivery_service_sends_and_consumes_secret() -> None:
     service, secret, email_repo, audit_repo, sender, plaintext_key = _service()
@@ -246,6 +326,7 @@ async def test_email_delivery_service_records_failure_without_consuming_secret()
     assert secret.consumed_at is None
     assert email_repo.rows[existing.id].status == "failed"
     assert "smtp-secret" not in (email_repo.rows[existing.id].error_message or "")
+    assert "sk-slaif-" not in (email_repo.rows[existing.id].error_message or "")
 
 
 @pytest.mark.asyncio
@@ -312,3 +393,63 @@ async def test_email_delivery_sendability_requires_pending_unconsumed_secret() -
     assert blocked.can_send is False
     assert blocked.one_time_secret_status == "consumed"
     assert "rotated" in (blocked.blocking_reason or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery_status", ["sent", "sending", "ambiguous"])
+async def test_email_delivery_service_blocks_terminal_or_in_progress_statuses(delivery_status: str) -> None:
+    service, secret, email_repo, _audit_repo, sender, _plaintext_key = _service()
+    delivery = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        status=delivery_status,
+    )
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret.id,
+        email_delivery_id=delivery.id,
+    )
+
+    assert result.status in {"failed", "ambiguous"}
+    assert sender.sent_bodies == []
+    assert email_repo.rows[delivery.id].status == delivery_status
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_service_marks_ambiguous_after_finalization_failure() -> None:
+    email_repo = _FinalizationFailingEmailRepo()
+    service, secret, email_repo, audit_repo, sender, plaintext_key = _service_with_email_repo(email_repo=email_repo)
+    existing = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        status="pending",
+    )
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret.id,
+        email_delivery_id=existing.id,
+    )
+
+    assert result.status == "ambiguous"
+    assert result.error_code == "email_delivery_finalization_failed"
+    assert plaintext_key in sender.sent_bodies[0]
+    assert email_repo.rows[existing.id].status == "ambiguous"
+    assert plaintext_key not in (email_repo.rows[existing.id].error_message or "")
+    serialized_audit = json.dumps(audit_repo.calls, default=str)
+    assert plaintext_key not in serialized_audit
+
+    retry = await service.send_pending_key_email(
+        one_time_secret_id=secret.id,
+        email_delivery_id=existing.id,
+    )
+
+    assert retry.status == "ambiguous"
+    assert len(sender.sent_bodies) == 1

@@ -309,6 +309,16 @@ def _email_delivery_detail(row: EmailDelivery) -> AdminEmailDeliveryDetail:
 
 
 def _email_delivery_action_state(row: EmailDelivery) -> tuple[str, str | None]:
+    if row.status == "sending":
+        return (
+            "present",
+            "This delivery is already in progress. Do not retry automatically; rotate the key if delivery cannot be confirmed.",
+        )
+    if row.status == "ambiguous":
+        return (
+            "present",
+            "SMTP may have accepted this email, but finalization did not complete. Do not retry; rotate the key if receipt cannot be confirmed.",
+        )
     if row.status not in {"pending", "failed"}:
         return "unavailable", "Only pending or failed key email deliveries can be sent."
     if row.one_time_secret is None:

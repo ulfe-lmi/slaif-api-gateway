@@ -104,6 +104,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "email_delivery_sent": ("success", "Key email delivery sent."),
     "email_delivery_queued": ("success", "Key email delivery queued."),
     "email_delivery_send_failed": ("error", "Key email delivery failed safely."),
+    "email_delivery_ambiguous": (
+        "error",
+        "Email delivery is ambiguous after possible SMTP acceptance. Do not retry; rotate the key if receipt cannot be confirmed.",
+    ),
     "email_delivery_not_sendable": (
         "error",
         "This email delivery cannot be sent. Rotate the key and create a new delivery if the secret is unavailable.",
@@ -513,6 +517,26 @@ async def create_admin_key(
             error=_ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
             status_code=400,
         )
+
+    if parsed_email_delivery_mode == "send-now" and delivery_result is not None:
+        try:
+            async with _admin_email_delivery_action_scope(request) as email_delivery_service:
+                delivery_result = await email_delivery_service.send_pending_key_email(
+                    one_time_secret_id=delivery_result.one_time_secret_id,
+                    email_delivery_id=delivery_result.email_delivery_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=parsed_input.note,
+                )
+        except EmailError:
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="failed",
+                error_code="email_delivery_failed",
+            )
 
     celery_task_id: str | None = None
     if parsed_email_delivery_mode == "enqueue" and delivery_result is not None:
@@ -984,6 +1008,26 @@ async def rotate_admin_key(
         return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
     except (EmailError, ValueError):
         return _redirect_to_admin_key(parsed_key_id, message="gateway_key_rotation_failed")
+
+    if parsed_email_delivery_mode == "send-now" and delivery_result is not None:
+        try:
+            async with _admin_email_delivery_action_scope(request) as email_delivery_service:
+                delivery_result = await email_delivery_service.send_pending_key_email(
+                    one_time_secret_id=delivery_result.one_time_secret_id,
+                    email_delivery_id=delivery_result.email_delivery_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+        except EmailError:
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="failed",
+                error_code="email_delivery_failed",
+            )
 
     celery_task_id: str | None = None
     if parsed_email_delivery_mode == "enqueue" and delivery_result is not None:
@@ -3174,10 +3218,13 @@ async def send_admin_email_delivery_now(
     except EmailError:
         return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_send_failed")
 
-    return _redirect_to_admin_email_delivery(
-        parsed_email_delivery_id,
-        message="email_delivery_sent" if result.status == "sent" else "email_delivery_send_failed",
-    )
+    if result.status == "sent":
+        message = "email_delivery_sent"
+    elif result.status == "ambiguous":
+        message = "email_delivery_ambiguous"
+    else:
+        message = "email_delivery_send_failed"
+    return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message=message)
 
 
 @router.post("/email-deliveries/{email_delivery_id}/enqueue", response_class=HTMLResponse)
@@ -3404,6 +3451,7 @@ async def _admin_key_email_delivery_runtime_scope(
                     owners_repository=owners_repository,
                     audit_repository=audit_repository,
                     email_service=EmailService(settings),
+                    session=session,
                 ),
             )
 
@@ -3493,17 +3541,17 @@ async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIter
 async def _admin_email_delivery_action_scope(request: Request) -> AsyncIterator[EmailDeliveryService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
-        async with session.begin():
-            settings = _settings(request)
-            yield EmailDeliveryService(
-                settings=settings,
-                one_time_secrets_repository=OneTimeSecretsRepository(session),
-                email_deliveries_repository=EmailDeliveriesRepository(session),
-                gateway_keys_repository=GatewayKeysRepository(session),
-                owners_repository=OwnersRepository(session),
-                audit_repository=AuditRepository(session),
-                email_service=EmailService(settings),
-            )
+        settings = _settings(request)
+        yield EmailDeliveryService(
+            settings=settings,
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            email_deliveries_repository=EmailDeliveriesRepository(session),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            owners_repository=OwnersRepository(session),
+            audit_repository=AuditRepository(session),
+            email_service=EmailService(settings),
+            session=session,
+        )
 
 
 def _build_admin_session_service(request: Request, session: AsyncSession) -> AdminSessionService:
@@ -4407,12 +4455,7 @@ async def _handle_admin_key_email_delivery_in_transaction(
         reason=reason,
     )
     if mode == "send-now":
-        return await service.send_pending_key_email(
-            one_time_secret_id=one_time_secret_id,
-            email_delivery_id=pending.email_delivery_id,
-            actor_admin_id=actor_admin_id,
-            reason=reason,
-        )
+        return pending
     return pending
 
 
