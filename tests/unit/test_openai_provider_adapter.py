@@ -63,6 +63,7 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto",
         "response_format": {"type": "json_object"},
+        "n": 1,
         "x_unknown_json_compatible": {"preserved": True},
     }
 
@@ -80,6 +81,7 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     assert sent_body["tools"] == caller_body["tools"]
     assert sent_body["tool_choice"] == "auto"
     assert sent_body["response_format"] == {"type": "json_object"}
+    assert sent_body["n"] == 1
     assert sent_body["x_unknown_json_compatible"] == {"preserved": True}
     assert caller_body["model"] == "client-model"
     assert response.provider == "openai"

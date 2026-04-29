@@ -49,7 +49,7 @@ The schema preserves extra JSON-compatible fields instead of silently dropping t
 - `top_logprobs`
 - `presence_penalty`
 - `frequency_penalty`
-- `n`
+- `n` when omitted or exactly `1`
 - `stream`
 - `stream_options`
 - `metadata`
@@ -60,7 +60,9 @@ The schema preserves extra JSON-compatible fields instead of silently dropping t
 - `max_tokens`
 - `max_completion_tokens`
 
-Unknown ordinary JSON-compatible fields are also preserved unless a gateway policy explicitly rejects them. Current request policy rejects malformed `messages`, invalid output-token controls, input estimates over the configured hard input cap, and non-object `stream_options` when `stream=true`.
+Unknown ordinary JSON-compatible fields are also preserved unless a gateway policy explicitly rejects them. Current request policy rejects malformed `messages`, invalid output-token controls, input estimates over the configured hard input cap, non-object `stream_options` when `stream=true`, and Chat Completions `n` values other than integer `1`.
+
+`n > 1` is intentionally rejected for now. Multi-choice Chat Completions can produce multiple choices and require choice-aware quota reservation, cost estimation, and final usage validation. The gateway does not silently clamp or drop `n`; future support requires multiplying reservation and cost policy by the requested choice count and validating provider final-usage semantics.
 
 ## Gateway-Mutated Fields
 

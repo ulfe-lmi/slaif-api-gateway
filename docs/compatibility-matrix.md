@@ -17,6 +17,7 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 | `stream_options.include_usage` | Forced to `true` for streaming | OpenAI, OpenRouter | Other `stream_options` keys are preserved | Unit, integration, E2E streaming tests |
 | `temperature` / `top_p` / `stop` | Preserved | OpenAI, OpenRouter | Forwarded as ordinary JSON fields | Request passthrough tests |
 | `max_tokens` / `max_completion_tokens` | Validated/preserved or defaulted | OpenAI, OpenRouter | Conflicting values rejected; absent values inject `max_completion_tokens` | Request policy tests |
+| `n` | Limited | OpenAI, OpenRouter | Omitted or `1` is allowed and preserved; `n > 1` and invalid values are rejected before rate limiting, routing, pricing, quota reservation, or forwarding until multi-choice accounting is implemented | Request policy, route policy, provider adapter, and E2E tests |
 | `metadata` / `user` | Preserved upstream | OpenAI, OpenRouter | Not stored wholesale in usage ledger | Request passthrough tests |
 | Unknown ordinary JSON fields | Preserved | OpenAI, OpenRouter | The gateway avoids silent dropping; explicit policy errors still apply | Request passthrough tests |
 | OpenAI non-streaming | Implemented | OpenAI | Uses OpenAI provider key and JSON Accept | Provider adapter tests |

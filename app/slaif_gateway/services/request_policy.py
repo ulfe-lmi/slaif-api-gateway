@@ -13,8 +13,10 @@ from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidChatMessagesError,
+    InvalidChoiceCountError,
     InvalidOutputTokenLimitError,
     InvalidStreamOptionsError,
+    MULTI_CHOICE_UNSUPPORTED_MESSAGE,
     OutputTokenLimitExceededError,
 )
 
@@ -27,6 +29,7 @@ class ChatCompletionRequestPolicy:
 
     def apply(self, body: Mapping[str, Any]) -> ChatCompletionPolicyResult:
         effective_body = copy.deepcopy(dict(body))
+        self._validate_choice_count(effective_body.get("n"))
         messages = self._validate_messages(effective_body.get("messages"))
 
         requested_output_tokens, effective_output_tokens, injected_default = (
@@ -78,6 +81,28 @@ class ChatCompletionRequestPolicy:
         default_limit = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
         body["max_completion_tokens"] = default_limit
         return default_limit, default_limit, True
+
+    def _validate_choice_count(self, value: Any) -> None:
+        if value is None:
+            return
+
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise InvalidChoiceCountError(
+                "The 'n' field must be the integer 1.",
+                param="n",
+            )
+
+        if value < 1:
+            raise InvalidChoiceCountError(
+                "The 'n' field must be the integer 1.",
+                param="n",
+            )
+
+        if value > 1:
+            raise InvalidChoiceCountError(
+                MULTI_CHOICE_UNSUPPORTED_MESSAGE,
+                param="n",
+            )
 
     def _force_streaming_usage_metadata(self, body: dict[str, Any]) -> None:
         if body.get("stream") is not True:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import copy
 
 import pytest
 
@@ -10,6 +11,7 @@ from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidOutputTokenLimitError,
+    InvalidChoiceCountError,
     InvalidStreamOptionsError,
     OutputTokenLimitExceededError,
 )
@@ -249,6 +251,51 @@ def test_unrelated_fields_are_preserved() -> None:
     assert result.effective_body["store"] is False
     assert result.effective_body["prediction"]["content"] == "hello"
     assert result.effective_body["service_tier"] == "auto"
+
+
+def test_choice_count_omitted_is_allowed() -> None:
+    policy = ChatCompletionRequestPolicy(_settings())
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+
+    assert "n" not in result.effective_body
+
+
+def test_choice_count_one_is_allowed_and_preserved() -> None:
+    policy = ChatCompletionRequestPolicy(_settings())
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "n": 1,
+        }
+    )
+
+    assert result.effective_body["n"] == 1
+
+
+@pytest.mark.parametrize("value", [2, 10, 0, -1, True, False, "1", 1.0, {}, []])
+def test_invalid_choice_count_is_rejected_without_mutating_original(value: object) -> None:
+    policy = ChatCompletionRequestPolicy(_settings())
+    body = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "n": value,
+        "max_completion_tokens": 8,
+    }
+    original = copy.deepcopy(body)
+
+    with pytest.raises(InvalidChoiceCountError) as exc_info:
+        policy.apply(body)
+
+    assert exc_info.value.param == "n"
+    assert body == original
 
 
 def test_chat_completion_request_model_preserves_extra_openai_fields() -> None:

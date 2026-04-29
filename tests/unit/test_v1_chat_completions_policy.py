@@ -277,6 +277,68 @@ def test_excessive_estimated_input_returns_openai_shaped_invalid_request_error(m
     assert response.json()["error"]["code"] == "input_token_limit_exceeded"
 
 
+def test_multi_choice_count_is_rejected_before_side_effects(monkeypatch) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    calls: list[str] = []
+
+    async def _fake_redis_reserve(**kwargs):
+        _ = kwargs
+        calls.append("redis")
+        return None
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, requested_model, authenticated_key)
+        calls.append("route")
+        return _route_result()
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, endpoint, at)
+        calls.append("pricing")
+        return object()
+
+    async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
+        _ = (self, authenticated_key, route, policy, cost_estimate, request_id, now)
+        calls.append("quota")
+        raise AssertionError("quota reservation should not be called")
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_redis_reserve)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "n": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "n > 1 is not supported by this gateway until multi-choice quota accounting is implemented.",
+        "type": "invalid_request_error",
+        "param": "n",
+        "code": "invalid_choice_count",
+    }
+    assert calls == []
+
+
 def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> None:
     import slaif_gateway.services.chat_completion_gateway as main_module
     from slaif_gateway.services.routing_errors import ModelNotFoundError
