@@ -47,6 +47,15 @@ def _clear_env(monkeypatch) -> None:
         "SMTP_STARTTLS",
         "SMTP_TIMEOUT_SECONDS",
         "EMAIL_KEY_SECRET_MAX_AGE_SECONDS",
+        "ENABLE_SCHEDULED_RECONCILIATION",
+        "RECONCILIATION_DRY_RUN",
+        "RECONCILIATION_INTERVAL_SECONDS",
+        "RECONCILIATION_EXPIRED_RESERVATION_LIMIT",
+        "RECONCILIATION_PROVIDER_COMPLETED_LIMIT",
+        "RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS",
+        "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS",
+        "RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS",
+        "RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED",
         "METRICS_REQUIRE_AUTH",
         "METRICS_ALLOWED_IPS",
         "REQUEST_ID_HEADER",
@@ -141,6 +150,15 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.SMTP_STARTTLS is False
     assert settings.SMTP_TIMEOUT_SECONDS == 10
     assert settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS == 86400
+    assert settings.ENABLE_SCHEDULED_RECONCILIATION is False
+    assert settings.RECONCILIATION_DRY_RUN is True
+    assert settings.RECONCILIATION_INTERVAL_SECONDS == 300
+    assert settings.RECONCILIATION_EXPIRED_RESERVATION_LIMIT == 100
+    assert settings.RECONCILIATION_PROVIDER_COMPLETED_LIMIT == 100
+    assert settings.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS == 0
+    assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 0
+    assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is False
+    assert settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED is False
     assert settings.ENABLE_ADMIN_DASHBOARD is True
     assert settings.ADMIN_SESSION_COOKIE_NAME == "slaif_admin_session"
     assert settings.admin_session_cookie_secure() is False
@@ -381,6 +399,52 @@ def test_email_settings_validate_positive_numbers(monkeypatch) -> None:
             "0",
             "EMAIL_KEY_SECRET_MAX_AGE_SECONDS must be a positive integer",
         ),
+    )
+
+    for name, value, message in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError) as exc:
+            get_settings()
+
+        assert message in str(exc.value)
+
+
+def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENABLE_SCHEDULED_RECONCILIATION", "true")
+    monkeypatch.setenv("RECONCILIATION_DRY_RUN", "false")
+    monkeypatch.setenv("RECONCILIATION_INTERVAL_SECONDS", "600")
+    monkeypatch.setenv("RECONCILIATION_EXPIRED_RESERVATION_LIMIT", "20")
+    monkeypatch.setenv("RECONCILIATION_PROVIDER_COMPLETED_LIMIT", "30")
+    monkeypatch.setenv("RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS", "60")
+    monkeypatch.setenv("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "120")
+    monkeypatch.setenv("RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS", "true")
+    monkeypatch.setenv("RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED", "true")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.ENABLE_SCHEDULED_RECONCILIATION is True
+    assert settings.RECONCILIATION_DRY_RUN is False
+    assert settings.RECONCILIATION_INTERVAL_SECONDS == 600
+    assert settings.RECONCILIATION_EXPIRED_RESERVATION_LIMIT == 20
+    assert settings.RECONCILIATION_PROVIDER_COMPLETED_LIMIT == 30
+    assert settings.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS == 60
+    assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 120
+    assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is True
+    assert settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED is True
+
+
+def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
+    invalid_cases = (
+        ("RECONCILIATION_INTERVAL_SECONDS", "0", "positive"),
+        ("RECONCILIATION_EXPIRED_RESERVATION_LIMIT", "0", "positive"),
+        ("RECONCILIATION_PROVIDER_COMPLETED_LIMIT", "-1", "positive"),
+        ("RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
+        ("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
     )
 
     for name, value, message in invalid_cases:

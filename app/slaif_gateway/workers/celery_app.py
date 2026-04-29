@@ -15,7 +15,10 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         "slaif_gateway",
         broker=broker_url,
         backend=resolved.CELERY_RESULT_BACKEND,
-        include=("slaif_gateway.workers.tasks_email",),
+        include=(
+            "slaif_gateway.workers.tasks_email",
+            "slaif_gateway.workers.tasks_reconciliation",
+        ),
     )
     app.conf.update(
         task_serializer="json",
@@ -24,8 +27,35 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         timezone="UTC",
         enable_utc=True,
         task_ignore_result=resolved.CELERY_RESULT_BACKEND is None,
+        beat_schedule=_reconciliation_beat_schedule(resolved),
     )
     return app
+
+def _reconciliation_beat_schedule(settings: Settings) -> dict[str, dict[str, object]]:
+    """Return opt-in Celery Beat entries for reconciliation tasks."""
+    if not settings.ENABLE_SCHEDULED_RECONCILIATION:
+        return {}
+
+    interval = settings.RECONCILIATION_INTERVAL_SECONDS
+    schedule: dict[str, dict[str, object]] = {
+        "inspect-reconciliation-backlog": {
+            "task": "slaif_gateway.reconciliation.inspect_backlog",
+            "schedule": interval,
+        }
+    }
+    if settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS:
+        schedule["reconcile-expired-reservations"] = {
+            "task": "slaif_gateway.reconciliation.reconcile_expired_reservations",
+            "schedule": interval,
+            "kwargs": {"dry_run": settings.RECONCILIATION_DRY_RUN},
+        }
+    if settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED:
+        schedule["reconcile-provider-completed"] = {
+            "task": "slaif_gateway.reconciliation.reconcile_provider_completed",
+            "schedule": interval,
+            "kwargs": {"dry_run": settings.RECONCILIATION_DRY_RUN},
+        }
+    return schedule
 
 
 celery_app = create_celery_app()

@@ -331,9 +331,13 @@ class ReservationReconciliationService:
         actor_admin_id: uuid.UUID | None = None,
         reason: str | None = None,
         now: datetime | None = None,
+        older_than: datetime | None = None,
     ) -> ProviderCompletedReconciliationSummary:
         """Reconcile a deterministic batch of provider-completed recovery rows."""
-        candidates = await self.list_provider_completed_recovery_rows(limit=limit)
+        candidates = await self.list_provider_completed_recovery_rows(
+            limit=limit,
+            older_than=older_than,
+        )
         results: list[ProviderCompletedReconciliationResult] = []
         for candidate in candidates:
             results.append(
