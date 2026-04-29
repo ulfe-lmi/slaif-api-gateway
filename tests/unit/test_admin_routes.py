@@ -10,6 +10,7 @@ from slaif_gateway.main import create_app
 from slaif_gateway.services.admin_session_service import (
     CreatedAdminSession,
     AdminAuthenticationError,
+    AdminLoginRateLimitedError,
     AdminSessionContext,
 )
 
@@ -147,6 +148,49 @@ def test_post_admin_login_wrong_password_fails_safely(monkeypatch) -> None:
     assert response.status_code == 401
     assert "Invalid email or password." in response.text
     assert "missing@example.org" not in response.text
+
+
+def test_post_admin_login_rate_limited_fails_safely(monkeypatch) -> None:
+    async def authenticate_admin(self, **kwargs):
+        raise AdminLoginRateLimitedError("Too many failed login attempts")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.authenticate_admin",
+        authenticate_admin,
+    )
+    client = TestClient(_app())
+    get_response = client.get("/admin/login")
+    csrf_token = _csrf_from_html(get_response.text)
+
+    response = client.post(
+        "/admin/login",
+        data={"email": "admin@example.org", "password": "correct", "csrf_token": csrf_token},
+    )
+
+    assert response.status_code == 429
+    assert "Too many failed login attempts. Try again later." in response.text
+    assert "admin@example.org" not in response.text
+    assert "correct" not in response.text
+
+
+def test_post_admin_login_invalid_csrf_fails_before_authentication(monkeypatch) -> None:
+    async def authenticate_admin(self, **kwargs):
+        raise AssertionError("authentication should not run without valid login CSRF")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.authenticate_admin",
+        authenticate_admin,
+    )
+    client = TestClient(_app())
+
+    response = client.post(
+        "/admin/login",
+        data={"email": "admin@example.org", "password": "wrong", "csrf_token": "bad"},
+    )
+
+    assert response.status_code == 400
+    assert "Your login form expired. Try again." in response.text
+    assert "wrong" not in response.text
 
 
 def test_get_admin_redirects_when_unauthenticated() -> None:

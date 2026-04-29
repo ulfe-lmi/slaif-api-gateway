@@ -66,6 +66,10 @@ def _clear_env(monkeypatch) -> None:
         "ADMIN_SESSION_TTL_SECONDS",
         "ADMIN_LOGIN_CSRF_COOKIE_NAME",
         "ADMIN_CSRF_TTL_SECONDS",
+        "ADMIN_LOGIN_RATE_LIMIT_ENABLED",
+        "ADMIN_LOGIN_MAX_FAILED_ATTEMPTS",
+        "ADMIN_LOGIN_WINDOW_SECONDS",
+        "ADMIN_LOGIN_LOCKOUT_SECONDS",
     ):
         monkeypatch.delenv(env_name, raising=False)
 
@@ -128,6 +132,10 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.ADMIN_SESSION_TTL_SECONDS == 28800
     assert settings.ADMIN_LOGIN_CSRF_COOKIE_NAME == "slaif_admin_login_csrf"
     assert settings.ADMIN_CSRF_TTL_SECONDS == 1800
+    assert settings.ADMIN_LOGIN_RATE_LIMIT_ENABLED is True
+    assert settings.ADMIN_LOGIN_MAX_FAILED_ATTEMPTS == 5
+    assert settings.ADMIN_LOGIN_WINDOW_SECONDS == 900
+    assert settings.ADMIN_LOGIN_LOCKOUT_SECONDS == 900
 
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
@@ -156,6 +164,10 @@ def test_admin_session_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_SESSION_TTL_SECONDS", "3600")
     monkeypatch.setenv("ADMIN_LOGIN_CSRF_COOKIE_NAME", "custom_csrf")
     monkeypatch.setenv("ADMIN_CSRF_TTL_SECONDS", "600")
+    monkeypatch.setenv("ADMIN_LOGIN_RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("ADMIN_LOGIN_MAX_FAILED_ATTEMPTS", "7")
+    monkeypatch.setenv("ADMIN_LOGIN_WINDOW_SECONDS", "1200")
+    monkeypatch.setenv("ADMIN_LOGIN_LOCKOUT_SECONDS", "1800")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -168,12 +180,23 @@ def test_admin_session_settings_load_from_environment(monkeypatch) -> None:
     assert settings.ADMIN_SESSION_TTL_SECONDS == 3600
     assert settings.ADMIN_LOGIN_CSRF_COOKIE_NAME == "custom_csrf"
     assert settings.ADMIN_CSRF_TTL_SECONDS == 600
+    assert settings.ADMIN_LOGIN_RATE_LIMIT_ENABLED is False
+    assert settings.ADMIN_LOGIN_MAX_FAILED_ATTEMPTS == 7
+    assert settings.ADMIN_LOGIN_WINDOW_SECONDS == 1200
+    assert settings.ADMIN_LOGIN_LOCKOUT_SECONDS == 1800
 
 
 def test_admin_session_settings_are_validated(monkeypatch) -> None:
     invalid_cases = (
         ("ADMIN_SESSION_TTL_SECONDS", "0", "ADMIN_SESSION_TTL_SECONDS must be a positive integer"),
         ("ADMIN_CSRF_TTL_SECONDS", "-1", "ADMIN_CSRF_TTL_SECONDS must be a positive integer"),
+        (
+            "ADMIN_LOGIN_MAX_FAILED_ATTEMPTS",
+            "0",
+            "ADMIN_LOGIN_MAX_FAILED_ATTEMPTS must be a positive integer",
+        ),
+        ("ADMIN_LOGIN_WINDOW_SECONDS", "0", "ADMIN_LOGIN_WINDOW_SECONDS must be a positive integer"),
+        ("ADMIN_LOGIN_LOCKOUT_SECONDS", "-1", "ADMIN_LOGIN_LOCKOUT_SECONDS must be a positive integer"),
         ("ADMIN_SESSION_COOKIE_NAME", " ", "ADMIN_SESSION_COOKIE_NAME cannot be empty"),
         ("ADMIN_LOGIN_CSRF_COOKIE_NAME", " ", "ADMIN_LOGIN_CSRF_COOKIE_NAME cannot be empty"),
         ("ADMIN_SESSION_COOKIE_SAMESITE", "wide", "ADMIN_SESSION_COOKIE_SAMESITE must be one of"),

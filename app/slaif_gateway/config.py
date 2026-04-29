@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     ADMIN_SESSION_TTL_SECONDS: int = 28800
     ADMIN_LOGIN_CSRF_COOKIE_NAME: str = "slaif_admin_login_csrf"
     ADMIN_CSRF_TTL_SECONDS: int = 1800
+    ADMIN_LOGIN_RATE_LIMIT_ENABLED: bool = True
+    ADMIN_LOGIN_MAX_FAILED_ATTEMPTS: int = 5
+    ADMIN_LOGIN_WINDOW_SECONDS: int = 900
+    ADMIN_LOGIN_LOCKOUT_SECONDS: int = 900
     ENABLE_EMAIL_DELIVERY: bool = False
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 1025
@@ -185,6 +189,12 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_SESSION_TTL_SECONDS must be a positive integer")
         if self.ADMIN_CSRF_TTL_SECONDS <= 0:
             raise ValueError("ADMIN_CSRF_TTL_SECONDS must be a positive integer")
+        if self.ADMIN_LOGIN_MAX_FAILED_ATTEMPTS <= 0:
+            raise ValueError("ADMIN_LOGIN_MAX_FAILED_ATTEMPTS must be a positive integer")
+        if self.ADMIN_LOGIN_WINDOW_SECONDS <= 0:
+            raise ValueError("ADMIN_LOGIN_WINDOW_SECONDS must be a positive integer")
+        if self.ADMIN_LOGIN_LOCKOUT_SECONDS <= 0:
+            raise ValueError("ADMIN_LOGIN_LOCKOUT_SECONDS must be a positive integer")
 
         if not self.ADMIN_SESSION_COOKIE_NAME.strip():
             raise ValueError("ADMIN_SESSION_COOKIE_NAME cannot be empty")

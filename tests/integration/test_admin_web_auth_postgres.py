@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import AdminSession
+from slaif_gateway.db.models import AdminSession, AuditLog
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.main import create_app
 from slaif_gateway.utils.passwords import hash_admin_password
@@ -62,6 +62,32 @@ async def _session_count(database_url: str, admin_user_id: uuid.UUID) -> int:
         count = int(result.scalar_one())
     await engine.dispose()
     return count
+
+
+async def _audit_rows(database_url: str, *, actions: tuple[str, ...], email: str | None = None) -> list[AuditLog]:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        statement = select(AuditLog).where(AuditLog.action.in_(actions))
+        if email is not None:
+            statement = statement.where(AuditLog.new_values["email"].as_string() == email)
+        result = await session.execute(statement.order_by(AuditLog.created_at.asc()))
+        rows = list(result.scalars().all())
+    await engine.dispose()
+    return rows
+
+
+async def _age_login_audits(database_url: str) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(AuditLog)
+                .where(AuditLog.action.in_(("admin_login_failed", "admin_login_rate_limited")))
+                .values(created_at=datetime.now(UTC) - timedelta(hours=2))
+            )
+    await engine.dispose()
 
 
 async def _expire_session(database_url: str, admin_session_id: uuid.UUID) -> None:
@@ -163,3 +189,78 @@ def test_admin_web_auth_session_and_csrf_flow(migrated_postgres_url: str) -> Non
         assert expired_response.status_code == 303
         assert expired_response.headers["location"] == "/admin/login"
         assert second_session_cookie not in expired_response.text
+
+
+def test_admin_login_rate_limit_blocks_brute_force_attempts(migrated_postgres_url: str) -> None:
+    email = f"admin-{uuid.uuid4()}@example.org"
+    password = "correct horse battery staple"
+    admin_user_id = asyncio.run(_create_admin_user(migrated_postgres_url, email=email, password=password))
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL=migrated_postgres_url,
+        ADMIN_SESSION_SECRET="s" * 40,
+        ADMIN_LOGIN_MAX_FAILED_ATTEMPTS=3,
+        ADMIN_LOGIN_WINDOW_SECONDS=1800,
+        ADMIN_LOGIN_LOCKOUT_SECONDS=1800,
+    )
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        for _ in range(3):
+            login_page = client.get("/admin/login")
+            login_csrf = _csrf_from_html(login_page.text)
+            wrong_password = client.post(
+                "/admin/login",
+                data={"email": email.upper(), "password": "wrong", "csrf_token": login_csrf},
+            )
+            assert wrong_password.status_code == 401
+            assert "Invalid email or password." in wrong_password.text
+            assert email not in wrong_password.text
+            assert "wrong" not in wrong_password.text
+
+        assert asyncio.run(_session_count(migrated_postgres_url, admin_user_id)) == 0
+
+        login_page = client.get("/admin/login")
+        login_csrf = _csrf_from_html(login_page.text)
+        blocked = client.post(
+            "/admin/login",
+            data={"email": email, "password": password, "csrf_token": login_csrf},
+            follow_redirects=False,
+        )
+        assert blocked.status_code == 429
+        assert "Too many failed login attempts. Try again later." in blocked.text
+        assert email not in blocked.text
+        assert password not in blocked.text
+        assert asyncio.run(_session_count(migrated_postgres_url, admin_user_id)) == 0
+
+        audit_rows = asyncio.run(
+            _audit_rows(
+                migrated_postgres_url,
+                actions=("admin_login_failed", "admin_login_rate_limited"),
+                email=email,
+            )
+        )
+        assert [row.action for row in audit_rows].count("admin_login_failed") == 3
+        assert [row.action for row in audit_rows].count("admin_login_rate_limited") >= 1
+        audit_dump = " ".join(
+            str(value)
+            for row in audit_rows
+            for value in (row.old_values, row.new_values, row.note, row.user_agent)
+        )
+        assert password not in audit_dump
+        assert "password_hash" not in audit_dump
+        assert "slaif_admin_session" not in audit_dump
+        assert audit_rows[0].new_values["email"] == email
+
+        asyncio.run(_age_login_audits(migrated_postgres_url))
+        login_page = client.get("/admin/login")
+        login_csrf = _csrf_from_html(login_page.text)
+        successful = client.post(
+            "/admin/login",
+            data={"email": email, "password": password, "csrf_token": login_csrf},
+            follow_redirects=False,
+        )
+
+        assert successful.status_code == 303
+        assert successful.headers["location"] == "/admin"
+        assert asyncio.run(_session_count(migrated_postgres_url, admin_user_id)) == 1

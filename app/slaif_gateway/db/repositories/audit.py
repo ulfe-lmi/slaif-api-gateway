@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AuditLog
@@ -106,6 +106,55 @@ class AuditRepository:
 
     async def get_audit_log_for_admin_detail(self, audit_log_id: uuid.UUID) -> AuditLog | None:
         return await self._session.get(AuditLog, audit_log_id)
+
+    async def count_recent_admin_login_failures(
+        self,
+        *,
+        normalized_email: str,
+        ip_address: str | None,
+        since: datetime,
+    ) -> int:
+        """Count recent failed admin-login attempts by email or client IP."""
+        conditions = [AuditLog.new_values["email"].as_string() == normalized_email]
+        if ip_address is not None:
+            conditions.append(AuditLog.ip_address == ip_address)
+
+        statement = (
+            select(func.count())
+            .select_from(AuditLog)
+            .where(
+                AuditLog.action == "admin_login_failed",
+                AuditLog.created_at >= since,
+                or_(*conditions),
+            )
+        )
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())
+
+    async def get_latest_admin_login_lockout(
+        self,
+        *,
+        normalized_email: str,
+        ip_address: str | None,
+        since: datetime,
+    ) -> AuditLog | None:
+        """Return the latest active admin-login lockout audit row for email or IP."""
+        conditions = [AuditLog.new_values["email"].as_string() == normalized_email]
+        if ip_address is not None:
+            conditions.append(AuditLog.ip_address == ip_address)
+
+        statement = (
+            select(AuditLog)
+            .where(
+                AuditLog.action == "admin_login_rate_limited",
+                AuditLog.created_at >= since,
+                or_(*conditions),
+            )
+            .order_by(desc(AuditLog.created_at))
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
 
 
 def _sanitize_optional_metadata(values: dict[str, object] | None) -> dict[str, object] | None:

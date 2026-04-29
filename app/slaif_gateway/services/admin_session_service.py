@@ -14,6 +14,7 @@ from slaif_gateway.db.models import AdminSession, AdminUser
 from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.services.admin_login_rate_limit import AdminLoginRateLimitService, normalize_admin_login_email
 from slaif_gateway.utils.passwords import verify_admin_password
 
 _SESSION_TOKEN_BYTES = 32
@@ -22,6 +23,10 @@ _CSRF_TOKEN_BYTES = 32
 
 class AdminAuthenticationError(Exception):
     """Raised when admin authentication fails with a safe generic error."""
+
+
+class AdminLoginRateLimitedError(AdminAuthenticationError):
+    """Raised when admin login is temporarily blocked by failed-attempt policy."""
 
 
 class AdminSessionError(Exception):
@@ -57,11 +62,16 @@ class AdminSessionService:
         admin_users_repository: AdminUsersRepository,
         admin_sessions_repository: AdminSessionsRepository,
         audit_repository: AuditRepository,
+        login_rate_limit_service: AdminLoginRateLimitService | None = None,
     ) -> None:
         self._settings = settings
         self._admin_users = admin_users_repository
         self._admin_sessions = admin_sessions_repository
         self._audit = audit_repository
+        self._login_rate_limit = login_rate_limit_service or AdminLoginRateLimitService(
+            settings=settings,
+            audit_repository=audit_repository,
+        )
 
     async def authenticate_admin(
         self,
@@ -73,7 +83,22 @@ class AdminSessionService:
         now: datetime | None = None,
     ) -> AdminUser:
         timestamp = _utcnow(now)
-        normalized_email = email.strip().lower()
+        normalized_email = normalize_admin_login_email(email)
+        rate_limit = await self._login_rate_limit.check_login_allowed(
+            normalized_email=normalized_email,
+            ip_address=ip_address,
+            now=timestamp,
+        )
+        if not rate_limit.allowed:
+            await self._login_rate_limit.record_lockout_event(
+                normalized_email=normalized_email,
+                admin_user_id=None,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                now=timestamp,
+            )
+            raise AdminLoginRateLimitedError("Too many failed login attempts")
+
         admin_user = await self._admin_users.get_admin_user_by_email(normalized_email)
         password_matches = False
         if admin_user is not None and password:
@@ -84,13 +109,12 @@ class AdminSessionService:
             and password_matches
         )
         if not authenticated:
-            await self._audit.add_audit_log(
-                action="admin_login_failed",
-                entity_type="admin_user",
-                entity_id=admin_user.id if admin_user is not None else None,
+            await self._login_rate_limit.record_failed_login(
+                normalized_email=normalized_email,
+                admin_user_id=admin_user.id if admin_user is not None else None,
                 ip_address=ip_address,
                 user_agent=user_agent,
-                new_values={"email": normalized_email},
+                now=timestamp,
             )
             raise AdminAuthenticationError("Invalid email or password")
 

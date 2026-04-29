@@ -183,7 +183,7 @@ The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/lo
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms, pricing import/upload forms, FX import/upload/external-refresh forms, and owner, institution, cohort, usage, and audit mutation pages are not implemented yet.
 
-Admin passwords are verified with the existing Argon2id utilities. Login creates a server-side `admin_sessions` row and stores only HMAC-hashed session and CSRF tokens in PostgreSQL. The browser receives a session cookie named by `ADMIN_SESSION_COOKIE_NAME`; it is `HttpOnly`, `SameSite=Lax` by default, and `Secure` by default in production. State-changing admin forms use CSRF tokens. This foundation uses local Jinja2 templates and static CSS only; it does not use CDN Tailwind or CDN HTMX.
+Admin passwords are verified with the existing Argon2id utilities. Login has DB/audit-backed failed-attempt rate limiting by normalized email and client IP; failed attempts and temporary lockout events are audited, messages remain generic, and Redis is not required. Login creates a server-side `admin_sessions` row and stores only HMAC-hashed session and CSRF tokens in PostgreSQL. The browser receives a session cookie named by `ADMIN_SESSION_COOKIE_NAME`; it is `HttpOnly`, `SameSite=Lax` by default, and `Secure` by default in production. State-changing admin forms use CSRF tokens. This foundation uses local Jinja2 templates and static CSS only; it does not use CDN Tailwind or CDN HTMX.
 
 Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
 failure ledger metadata for operator troubleshooting. Raw provider response

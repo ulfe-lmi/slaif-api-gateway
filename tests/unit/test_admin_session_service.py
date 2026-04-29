@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,8 +81,34 @@ class _AuditRepo:
         self.rows = []
 
     async def add_audit_log(self, **kwargs):
+        kwargs.setdefault("created_at", datetime.now(UTC))
         self.rows.append(kwargs)
         return kwargs
+
+    async def count_recent_admin_login_failures(self, **kwargs) -> int:
+        normalized_email = kwargs["normalized_email"]
+        ip_address = kwargs["ip_address"]
+        return sum(
+            1
+            for row in self.rows
+            if row["action"] == "admin_login_failed"
+            and (
+                row.get("new_values", {}).get("email") == normalized_email
+                or (ip_address is not None and row.get("ip_address") == ip_address)
+            )
+        )
+
+    async def get_latest_admin_login_lockout(self, **kwargs):
+        normalized_email = kwargs["normalized_email"]
+        ip_address = kwargs["ip_address"]
+        for row in reversed(self.rows):
+            if row["action"] != "admin_login_rate_limited":
+                continue
+            if row.get("new_values", {}).get("email") == normalized_email:
+                return SimpleNamespace(created_at=row.get("created_at", datetime.now(UTC)))
+            if ip_address is not None and row.get("ip_address") == ip_address:
+                return SimpleNamespace(created_at=row.get("created_at", datetime.now(UTC)))
+        return None
 
 
 def _admin_user(*, active: bool = True) -> AdminUser:
@@ -127,6 +154,36 @@ async def test_wrong_password_fails_safely() -> None:
         await service.authenticate_admin(email="admin@example.org", password="wrong")
 
     assert audit.rows[-1]["action"] == "admin_login_failed"
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_blocks_before_password_verification(monkeypatch) -> None:
+    service, _sessions, audit = _service(_admin_user())
+    audit.rows.append(
+        {
+            "action": "admin_login_rate_limited",
+            "new_values": {"email": "admin@example.org"},
+            "ip_address": "203.0.113.10",
+            "created_at": datetime.now(UTC),
+        }
+    )
+
+    def fail_if_called(password: str, password_hash: str) -> bool:
+        raise AssertionError("password verification should not run during lockout")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.verify_admin_password",
+        fail_if_called,
+    )
+
+    with pytest.raises(AdminAuthenticationError):
+        await service.authenticate_admin(
+            email="admin@example.org",
+            password="correct horse",
+            ip_address="203.0.113.10",
+        )
+
+    assert audit.rows[-1]["action"] == "admin_login_rate_limited"
 
 
 @pytest.mark.asyncio
