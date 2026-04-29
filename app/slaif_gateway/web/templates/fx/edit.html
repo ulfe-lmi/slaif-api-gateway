@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Edit FX Rate{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-edit-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-edit-heading">Edit FX rate</h1>
+      <p class="muted">Update local FX metadata only. Runtime FX lookup semantics are unchanged.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx/{{ fx_rate_id }}">FX detail</a>
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/fx/{{ fx_rate_id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="fx-pair-heading">
+      <h2 id="fx-pair-heading">Currency Pair</h2>
+      <div class="form-grid">
+        <label>Base currency<input name="base_currency" value="{{ form.base_currency }}" maxlength="3" autocomplete="off" required></label>
+        <label>Quote currency<input name="quote_currency" value="{{ form.quote_currency }}" maxlength="3" autocomplete="off" required></label>
+        <label>Rate<input name="rate" value="{{ form.rate }}" inputmode="decimal" autocomplete="off" required></label>
+      </div>
+      <p class="muted small">Changing this row can affect future EUR conversion, quota reservation, and accounting.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="fx-validity-heading">
+      <h2 id="fx-validity-heading">Validity</h2>
+      <div class="form-grid">
+        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" autocomplete="off"></label>
+        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" placeholder="Optional ISO datetime" autocomplete="off"></label>
+      </div>
+      <p class="muted small">FX rates have no enabled state. To retire a row, set a valid-until timestamp and create a replacement rate if needed.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="fx-audit-heading">
+      <h2 id="fx-audit-heading">Audit</h2>
+      <label>Source<input name="source" value="{{ form.source }}" autocomplete="off"></label>
+      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <button type="submit">Save FX rate</button>
+      <a class="button-link secondary" href="/admin/fx/{{ fx_rate_id }}">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

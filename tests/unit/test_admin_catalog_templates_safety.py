@@ -234,7 +234,9 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
             client.get(f"/admin/pricing/{pricing.id}").text,
             client.get(f"/admin/pricing/{pricing.id}/edit").text,
             client.get("/admin/fx").text,
+            client.get("/admin/fx/new").text,
             client.get(f"/admin/fx/{fx_rate.id}").text,
+            client.get(f"/admin/fx/{fx_rate.id}/edit").text,
         ]
     )
 
@@ -249,6 +251,8 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "/admin/pricing/new" in combined
     assert f"/admin/pricing/{pricing.id}/edit" in combined
     assert f"/admin/pricing/{pricing.id}/disable" in combined
+    assert "/admin/fx/new" in combined
+    assert f"/admin/fx/{fx_rate.id}/edit" in combined
     assert 'name="csrf_token" value="rendered-csrf-token"' in combined
     assert 'name="confirm_disable" value="true"' in combined
     assert route.requested_model in combined

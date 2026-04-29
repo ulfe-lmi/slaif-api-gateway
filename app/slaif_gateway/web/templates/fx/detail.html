@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">FX Catalog</p>
       <h1 id="fx-rate-heading">{{ fx_rate.base_currency }} / {{ fx_rate.quote_currency }}</h1>
-      <p class="muted">Read-only FX metadata.</p>
+      <p class="muted">Local FX metadata for future EUR conversion.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/fx/{{ fx_rate.id }}/edit">Edit</a>
       <a class="button-link secondary" href="/admin/fx">FX rates</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,6 +19,10 @@
       </form>
     </div>
   </header>
+
+  {% if admin_status_message %}
+  <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
+  {% endif %}
 
   <div class="detail-grid">
     <section>
@@ -34,7 +39,8 @@
     </section>
     <section>
       <h2>Scope</h2>
-      <p>This page displays local configured FX metadata only. External rate-fetching and update workflows are not implemented in this dashboard slice.</p>
+      <p>This page manages local configured FX metadata only. External rate-fetching, imports, uploads, and scheduled refresh workflows are not implemented in this dashboard slice.</p>
+      <p>FX rates do not have enabled or disabled state in the current schema. Active status is controlled by valid-from and valid-until timestamps.</p>
     </section>
   </div>
 </section>

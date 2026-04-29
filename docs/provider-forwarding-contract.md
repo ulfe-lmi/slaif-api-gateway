@@ -18,6 +18,10 @@ Pricing rows are local metadata used by the existing pricing and FX estimate
 path before forwarding. They may also be managed from the admin dashboard, but
 that workflow does not change the Python pricing calculation or provider
 forwarding semantics described below.
+FX rows are local metadata used by the same estimate path for EUR conversion.
+They may be created and edited from the admin dashboard, but that workflow does
+not change the Python FX lookup, pricing calculation, or provider forwarding
+semantics described below.
 
 ## OpenAI Upstream Forwarding
 
