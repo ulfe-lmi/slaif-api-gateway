@@ -93,6 +93,30 @@ class FxRatesRepository:
     async def get_fx_rate_for_admin_detail(self, fx_rate_id: uuid.UUID) -> FxRate | None:
         return await self._session.get(FxRate, fx_rate_id)
 
+    async def update_fx_rate_metadata(
+        self,
+        fx_rate_id: uuid.UUID,
+        *,
+        base_currency: str,
+        quote_currency: str,
+        rate: Decimal,
+        valid_from: datetime,
+        valid_until: datetime | None,
+        source: str | None,
+    ) -> FxRate | None:
+        row = await self.get_fx_rate_by_id(fx_rate_id)
+        if row is None:
+            return None
+
+        row.base_currency = base_currency
+        row.quote_currency = quote_currency
+        row.rate = rate
+        row.valid_from = valid_from
+        row.valid_until = valid_until
+        row.source = source
+        await self._session.flush()
+        return row
+
     async def find_latest_rate(
         self,
         *,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -32,27 +33,80 @@ class FxRateService:
         valid_from: datetime,
         valid_until: datetime | None,
         source: str | None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> FxRate:
-        if rate <= 0:
-            raise ValueError("rate must be positive")
-        valid_from = _aware_time(valid_from)
-        valid_until = _aware_time(valid_until) if valid_until is not None else None
-        if valid_until is not None and valid_until <= valid_from:
-            raise ValueError("valid_until must be after valid_from")
-
-        row = await self._fx_rates.create_fx_rate(
-            base_currency=_normalize_currency(base_currency),
-            quote_currency=_normalize_currency(quote_currency),
+        normalized = _validate_fx_rate_metadata(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
             rate=rate,
             valid_from=valid_from,
             valid_until=valid_until,
-            source=_clean_optional(source),
+            source=source,
+        )
+        row = await self._fx_rates.create_fx_rate(
+            base_currency=normalized["base_currency"],
+            quote_currency=normalized["quote_currency"],
+            rate=normalized["rate"],
+            valid_from=normalized["valid_from"],
+            valid_until=normalized["valid_until"],
+            source=normalized["source"],
         )
         await self._audit.add_audit_log(
             action="fx_rate_created",
             entity_type="fx_rate",
+            admin_user_id=actor_admin_id,
             entity_id=row.id,
             new_values=_safe_audit_values(row),
+            note=reason,
+        )
+        return row
+
+    async def update_fx_rate(
+        self,
+        fx_rate_id: uuid.UUID | str,
+        *,
+        base_currency: str,
+        quote_currency: str,
+        rate: Decimal,
+        valid_from: datetime,
+        valid_until: datetime | None,
+        source: str | None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> FxRate:
+        parsed_id = _parse_fx_rate_id(fx_rate_id)
+        existing = await self._fx_rates.get_fx_rate_by_id(parsed_id)
+        if existing is None:
+            raise RecordNotFoundError("FX rate")
+        old_values = _safe_audit_values(existing)
+        normalized = _validate_fx_rate_metadata(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
+            rate=rate,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            source=source,
+        )
+        row = await self._fx_rates.update_fx_rate_metadata(
+            parsed_id,
+            base_currency=normalized["base_currency"],
+            quote_currency=normalized["quote_currency"],
+            rate=normalized["rate"],
+            valid_from=normalized["valid_from"],
+            valid_until=normalized["valid_until"],
+            source=normalized["source"],
+        )
+        if row is None:
+            raise RecordNotFoundError("FX rate")
+        await self._audit.add_audit_log(
+            action="fx_rate_updated",
+            entity_type="fx_rate",
+            admin_user_id=actor_admin_id,
+            entity_id=row.id,
+            old_values=old_values,
+            new_values=_safe_audit_values(row),
+            note=reason,
         )
         return row
 
@@ -90,6 +144,44 @@ def _normalize_currency(value: str) -> str:
     if len(normalized) != 3 or not normalized.isalpha():
         raise ValueError("Currency must be a 3-letter code")
     return normalized
+
+
+def _validate_fx_rate_metadata(
+    *,
+    base_currency: str,
+    quote_currency: str,
+    rate: Decimal,
+    valid_from: datetime,
+    valid_until: datetime | None,
+    source: str | None,
+) -> dict[str, object]:
+    normalized_base = _normalize_currency(base_currency)
+    normalized_quote = _normalize_currency(quote_currency)
+    if normalized_base == normalized_quote:
+        raise ValueError("base_currency and quote_currency must differ")
+    if rate <= 0:
+        raise ValueError("rate must be positive")
+    valid_from = _aware_time(valid_from)
+    valid_until = _aware_time(valid_until) if valid_until is not None else None
+    if valid_until is not None and valid_until <= valid_from:
+        raise ValueError("valid_until must be after valid_from")
+    return {
+        "base_currency": normalized_base,
+        "quote_currency": normalized_quote,
+        "rate": rate,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "source": _clean_optional(source),
+    }
+
+
+def _parse_fx_rate_id(value: uuid.UUID | str) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise RecordNotFoundError("FX rate") from exc
 
 
 def _aware_time(value: datetime) -> datetime:

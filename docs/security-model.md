@@ -120,7 +120,7 @@ explicit confirmation.
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
 institution, and cohort list/detail pages, provider config pages, model route
-pages, and read-only pricing and FX list/detail pages. The key pages display safe key metadata only:
+pages, pricing pages, and FX list/detail pages. The key pages display safe key metadata only:
 prefix, public key ID, hint, owner, status, computed validity state, quotas,
 counters, allowed policy summaries, and rate-limit policy. Key detail pages
 provide CSRF-protected POST actions to suspend, activate, and permanently revoke
@@ -142,7 +142,13 @@ currencies, validity windows, provider references, and safe metadata, and write
 safe audit rows through the pricing rule service. Pricing changes may affect
 future quota reservation and accounting, but the dashboard does not change the
 runtime pricing calculation semantics and does not accept provider secret
-values. FX catalog pages remain read-only. Read-only usage, audit, and email delivery pages display
+values. FX catalog pages provide CSRF-protected create and edit forms for local
+FX metadata only. FX forms parse Decimal rates from strings, validate currency
+pairs, positive rates, and validity windows, and write safe audit rows through
+the FX rate service. FX changes may affect future EUR conversion, quota
+reservation, and accounting, but the dashboard does not change runtime FX lookup
+semantics and does not call external FX services. The current FX schema has no
+enabled state; active status is controlled by validity windows. Read-only usage, audit, and email delivery pages display
 safe activity metadata only. Usage pages do not display prompts, completions, or
 raw request/response bodies. Email delivery pages do not display email bodies
 because key-delivery email bodies may contain plaintext gateway keys. Audit
@@ -215,8 +221,8 @@ never recover or send old plaintext keys.
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Owner, institution, cohort,
-  FX, usage, audit, and email-delivery mutation pages are not implemented yet.
-  Pricing import/upload and FX mutation workflows are future work.
+  usage, audit, and email-delivery mutation pages are not implemented yet.
+  Pricing import/upload and FX import/upload/external-refresh workflows are future work.
 - Docker/Nginx deployment packaging is not implemented yet.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.

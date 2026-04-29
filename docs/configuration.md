@@ -182,20 +182,24 @@ allow CSRF-protected metadata create/edit/enable/disable actions and may show
 catalog pages no longer share the same mutation status: model route pages allow
 CSRF-protected create/edit/enable/disable actions for local route rows, pricing
 pages allow CSRF-protected create/edit/enable/disable actions for local pricing
-rows, and FX pages remain read-only. Route rows affect future `/v1` model
+rows, and FX pages allow CSRF-protected create/edit actions for local FX rows.
+Route rows affect future `/v1` model
 resolution through the existing resolver; pricing rows affect future local cost
 estimates, quota reservation, and accounting through the existing pricing
-service. Unknown pricing still fails closed for cost-limited keys. Route and
-pricing forms reference provider config rows and env var names but never
-provider key values. Usage, audit, and
+service. FX rows affect future local EUR conversion through the existing FX
+lookup path, and unknown FX conversion still fails closed for cost-limited keys.
+The current FX schema has no enabled state; validity windows control whether an
+FX row is active. Route and pricing forms reference provider config rows and env
+var names but never provider key values. FX forms do not accept provider key
+values and do not call external FX APIs. Usage, audit, and
 email delivery pages show safe local metadata only; they do not show prompts,
 completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-pricing import/upload forms, and owner, institution, cohort, FX, usage, and
-audit dashboard mutation workflows are not implemented yet. Admin
+pricing import/upload forms, FX import/upload/external-refresh forms, and owner,
+institution, cohort, usage, and audit dashboard mutation workflows are not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.

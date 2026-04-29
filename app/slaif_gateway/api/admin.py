@@ -47,6 +47,7 @@ from slaif_gateway.services.admin_session_service import (
 from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
+from slaif_gateway.services.fx_rate_service import FxRateService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
@@ -151,6 +152,11 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
         "Enter an audit reason before changing pricing metadata.",
     ),
     "invalid_pricing_rule": ("error", "Enter valid pricing metadata."),
+    "fx_rate_created": ("success", "FX rate created."),
+    "fx_rate_updated": ("success", "FX rate updated."),
+    "fx_rate_failed": ("error", "FX rate action failed."),
+    "fx_rate_reason_required": ("error", "Enter an audit reason before changing FX metadata."),
+    "invalid_fx_rate": ("error", "Enter valid FX metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -2559,6 +2565,7 @@ async def list_admin_fx_rates(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "fx_rates": rows,
             "filters": {
                 "base_currency": base_currency or "",
@@ -2570,6 +2577,205 @@ async def list_admin_fx_rates(
             },
         },
     )
+
+
+@router.get("/fx/new", response_class=HTMLResponse)
+async def create_admin_fx_rate_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_fx_rate_form(
+        request,
+        template_name="fx/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_fx_rate_form(),
+    )
+
+
+@router.post("/fx/new", response_class=HTMLResponse)
+async def create_admin_fx_rate(
+    request: Request,
+    csrf_token: str = Form(""),
+    base_currency: str = Form(""),
+    quote_currency: str = Form("EUR"),
+    rate: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    source: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _fx_rate_form_from_values(
+        base_currency=base_currency,
+        quote_currency=quote_currency,
+        rate=rate,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        source=source,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_fx_rate_form(form, require_reason=True)
+    except ValueError:
+        return _render_fx_rate_form(
+            request,
+            template_name="fx/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
+            status_code=400,
+        )
+
+    try:
+        async with _admin_fx_rate_service_scope(request) as service:
+            created = await service.create_fx_rate(
+                base_currency=parsed["base_currency"],
+                quote_currency=parsed["quote_currency"],
+                rate=parsed["rate"],
+                valid_from=parsed["valid_from"],
+                valid_until=parsed["valid_until"],
+                source=parsed["source"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except ValueError:
+        return _render_fx_rate_form(
+            request,
+            template_name="fx/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_fx_rate(created.id, message="fx_rate_created")
+
+
+@router.get("/fx/{fx_rate_id}/edit", response_class=HTMLResponse)
+async def edit_admin_fx_rate_form(request: Request, fx_rate_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_fx_rate_id = uuid.UUID(fx_rate_id)
+    except ValueError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            fx_rate = await service.get_fx_rate_detail(parsed_fx_rate_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+
+    return _render_fx_rate_form(
+        request,
+        template_name="fx/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_fx_rate_form_from_detail(fx_rate),
+        fx_rate_id=parsed_fx_rate_id,
+    )
+
+
+@router.post("/fx/{fx_rate_id}/edit", response_class=HTMLResponse)
+async def update_admin_fx_rate(
+    request: Request,
+    fx_rate_id: str,
+    csrf_token: str = Form(""),
+    base_currency: str = Form(""),
+    quote_currency: str = Form("EUR"),
+    rate: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    source: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_fx_rate_id = uuid.UUID(fx_rate_id)
+    except ValueError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _fx_rate_form_from_values(
+        base_currency=base_currency,
+        quote_currency=quote_currency,
+        rate=rate,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        source=source,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_fx_rate_form(form, require_reason=True)
+    except ValueError:
+        return _render_fx_rate_form(
+            request,
+            template_name="fx/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            fx_rate_id=parsed_fx_rate_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
+            status_code=400,
+        )
+
+    try:
+        async with _admin_fx_rate_service_scope(request) as service:
+            updated = await service.update_fx_rate(
+                parsed_fx_rate_id,
+                base_currency=parsed["base_currency"],
+                quote_currency=parsed["quote_currency"],
+                rate=parsed["rate"],
+                valid_from=parsed["valid_from"],
+                valid_until=parsed["valid_until"],
+                source=parsed["source"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("FX rate not found.", status_code=404)
+    except ValueError:
+        return _render_fx_rate_form(
+            request,
+            template_name="fx/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            fx_rate_id=parsed_fx_rate_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_fx_rate(updated.id, message="fx_rate_updated")
 
 
 @router.get("/fx/{fx_rate_id}", response_class=HTMLResponse)
@@ -2600,6 +2806,7 @@ async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "fx_rate": fx_rate,
         },
     )
@@ -3244,6 +3451,17 @@ async def _admin_pricing_rule_service_scope(request: Request) -> AsyncIterator[P
 
 
 @asynccontextmanager
+async def _admin_fx_rate_service_scope(request: Request) -> AsyncIterator[FxRateService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield FxRateService(
+                fx_rates_repository=FxRatesRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -3362,6 +3580,11 @@ def _redirect_to_admin_route(route_id: uuid.UUID, *, message: str) -> RedirectRe
 def _redirect_to_admin_pricing_rule(pricing_rule_id: uuid.UUID, *, message: str) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/pricing/{pricing_rule_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_fx_rate(fx_rate_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/fx/{fx_rate_id}?{query}", status_code=303)
 
 
 def _set_no_store_headers(response: Response) -> None:
@@ -3711,6 +3934,122 @@ def _route_metadata_contains_secret(value: object) -> bool:
         lowered = value.strip().lower()
         return _looks_like_provider_secret_value(value) or lowered.startswith(("bearer ", "sk-"))
     return False
+
+
+def _render_fx_rate_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    fx_rate_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "fx_rate_id": fx_rate_id,
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _default_fx_rate_form() -> dict[str, str]:
+    return {
+        "base_currency": "",
+        "quote_currency": "EUR",
+        "rate": "",
+        "valid_from": "",
+        "valid_until": "",
+        "source": "",
+        "reason": "",
+    }
+
+
+def _fx_rate_form_from_detail(fx_rate: object) -> dict[str, str]:
+    valid_from = getattr(fx_rate, "valid_from")
+    valid_until = getattr(fx_rate, "valid_until")
+    return _fx_rate_form_from_values(
+        base_currency=str(getattr(fx_rate, "base_currency")),
+        quote_currency=str(getattr(fx_rate, "quote_currency")),
+        rate=_decimal_form_value(getattr(fx_rate, "rate")),
+        valid_from=valid_from.isoformat() if isinstance(valid_from, datetime) else "",
+        valid_until=valid_until.isoformat() if isinstance(valid_until, datetime) else "",
+        source=str(getattr(fx_rate, "source") or ""),
+        reason="",
+    )
+
+
+def _fx_rate_form_from_values(
+    *,
+    base_currency: str,
+    quote_currency: str,
+    rate: str,
+    valid_from: str,
+    valid_until: str,
+    source: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "base_currency": base_currency,
+        "quote_currency": quote_currency,
+        "rate": rate,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "source": source,
+        "reason": reason,
+    }
+
+
+def _parse_fx_rate_form(form: dict[str, str], *, require_reason: bool) -> dict[str, object]:
+    base_currency = _parse_pricing_currency(form.get("base_currency"))
+    quote_currency = _parse_pricing_currency(form.get("quote_currency"))
+    if base_currency == quote_currency:
+        raise ValueError("base_currency and quote_currency must differ.")
+    valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
+    valid_until = _parse_admin_datetime(form.get("valid_until"))
+    if valid_until is not None and valid_until <= valid_from:
+        raise ValueError("valid_until must be after valid_from.")
+    source = _clean_admin_reason(form.get("source"))
+    if source is not None and _looks_like_fx_secret_value(source):
+        raise ValueError("Source must not contain secret-looking values.")
+    reason = _clean_admin_reason(form.get("reason"))
+    if require_reason and reason is None:
+        raise ValueError(_ADMIN_STATUS_MESSAGES["fx_rate_reason_required"][1])
+    return {
+        "base_currency": base_currency,
+        "quote_currency": quote_currency,
+        "rate": _parse_required_positive_admin_decimal(form.get("rate"), field_name="rate"),
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "source": source,
+        "reason": reason,
+    }
+
+
+def _parse_required_positive_admin_decimal(value: str | None, *, field_name: str) -> Decimal:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} is required.")
+    try:
+        parsed = Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field_name} must be a decimal string.") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise ValueError(f"{field_name} must be positive.")
+    return parsed
+
+
+def _looks_like_fx_secret_value(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith(("bearer ", "sk-", "sk_", "sk-or-"))
 
 
 def _render_pricing_rule_form(
