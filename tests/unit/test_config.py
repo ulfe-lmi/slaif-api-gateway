@@ -56,6 +56,12 @@ def _clear_env(monkeypatch) -> None:
         "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS",
         "RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS",
         "RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED",
+        "ENABLE_RECONCILIATION_ALERTS",
+        "RECONCILIATION_ALERT_WEBHOOK_URL",
+        "RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+        "RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS",
+        "RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED",
+        "RECONCILIATION_ALERT_INCLUDE_IDS",
         "METRICS_REQUIRE_AUTH",
         "METRICS_ALLOWED_IPS",
         "REQUEST_ID_HEADER",
@@ -159,6 +165,12 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 0
     assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is False
     assert settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED is False
+    assert settings.ENABLE_RECONCILIATION_ALERTS is False
+    assert settings.RECONCILIATION_ALERT_WEBHOOK_URL is None
+    assert settings.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS == 10
+    assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 1
+    assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 1
+    assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is False
     assert settings.ENABLE_ADMIN_DASHBOARD is True
     assert settings.ADMIN_SESSION_COOKIE_NAME == "slaif_admin_session"
     assert settings.admin_session_cookie_secure() is False
@@ -423,6 +435,12 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "120")
     monkeypatch.setenv("RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS", "true")
     monkeypatch.setenv("RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED", "true")
+    monkeypatch.setenv("ENABLE_RECONCILIATION_ALERTS", "true")
+    monkeypatch.setenv("RECONCILIATION_ALERT_WEBHOOK_URL", "https://alerts.example/reconciliation")
+    monkeypatch.setenv("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "2")
+    monkeypatch.setenv("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "4")
+    monkeypatch.setenv("RECONCILIATION_ALERT_INCLUDE_IDS", "true")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -436,6 +454,12 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 120
     assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is True
     assert settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED is True
+    assert settings.ENABLE_RECONCILIATION_ALERTS is True
+    assert settings.RECONCILIATION_ALERT_WEBHOOK_URL == "https://alerts.example/reconciliation"
+    assert settings.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS == 3.5
+    assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 2
+    assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 4
+    assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is True
 
 
 def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
@@ -445,11 +469,34 @@ def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
         ("RECONCILIATION_PROVIDER_COMPLETED_LIMIT", "-1", "positive"),
         ("RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
         ("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
+        ("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS", "0", "positive"),
+        ("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "-1", "greater than or equal to 0"),
+        ("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "-1", "greater than or equal to 0"),
     )
 
     for name, value, message in invalid_cases:
         _clear_env(monkeypatch)
         monkeypatch.setenv(name, value)
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError) as exc:
+            get_settings()
+
+        assert message in str(exc.value)
+
+
+def test_reconciliation_alerts_require_valid_webhook_when_enabled(monkeypatch) -> None:
+    invalid_cases = (
+        ("", "RECONCILIATION_ALERT_WEBHOOK_URL is required"),
+        ("ftp://alerts.example/hook", "must be an http or https URL"),
+        ("https:///missing-host", "must be an http or https URL"),
+    )
+
+    for url, message in invalid_cases:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENABLE_RECONCILIATION_ALERTS", "true")
+        if url:
+            monkeypatch.setenv("RECONCILIATION_ALERT_WEBHOOK_URL", url)
         get_settings.cache_clear()
 
         with pytest.raises(ValidationError) as exc:

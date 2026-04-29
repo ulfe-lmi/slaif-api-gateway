@@ -6,6 +6,7 @@ import base64
 import os
 import re
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,6 +97,12 @@ class Settings(BaseSettings):
     RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS: int = 0
     RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS: bool = False
     RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED: bool = False
+    ENABLE_RECONCILIATION_ALERTS: bool = False
+    RECONCILIATION_ALERT_WEBHOOK_URL: str | None = None
+    RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS: float = 10
+    RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS: int = 1
+    RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED: int = 1
+    RECONCILIATION_ALERT_INCLUDE_IDS: bool = False
     ENABLE_METRICS: bool = True
     METRICS_REQUIRE_AUTH: bool | None = None
     METRICS_PUBLIC_IN_PRODUCTION: bool = False
@@ -219,6 +226,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS must be greater than or equal to 0"
             )
+        if self.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS <= 0:
+            raise ValueError("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS must be a positive number")
+        if self.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS < 0:
+            raise ValueError(
+                "RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS must be greater than or equal to 0"
+            )
+        if self.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED < 0:
+            raise ValueError(
+                "RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED must be greater than or equal to 0"
+            )
+        if self.ENABLE_RECONCILIATION_ALERTS:
+            if not self.RECONCILIATION_ALERT_WEBHOOK_URL:
+                raise ValueError(
+                    "RECONCILIATION_ALERT_WEBHOOK_URL is required when ENABLE_RECONCILIATION_ALERTS=true"
+                )
+            parsed = urlparse(self.RECONCILIATION_ALERT_WEBHOOK_URL)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("RECONCILIATION_ALERT_WEBHOOK_URL must be an http or https URL")
 
     def _validate_admin_session_settings(self) -> None:
         if self.ADMIN_SESSION_TTL_SECONDS <= 0:

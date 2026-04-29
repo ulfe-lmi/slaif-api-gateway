@@ -94,6 +94,15 @@ RECONCILIATION_ITEMS = Counter(
     "Reconciliation items handled by type, status, and dry-run mode.",
     ("type", "status", "dry_run"),
 )
+RECONCILIATION_ALERTS = Counter(
+    "gateway_reconciliation_alerts_total",
+    "Reconciliation alert delivery attempts by status.",
+    ("status",),
+)
+RECONCILIATION_ALERT_FAILURES = Counter(
+    "gateway_reconciliation_alert_failures_total",
+    "Failed reconciliation alert deliveries.",
+)
 
 
 def prometheus_response_body() -> bytes:
@@ -237,6 +246,13 @@ def add_reconciliation_items(
         status=status,
         dry_run=str(dry_run).lower(),
     ).inc(count)
+
+
+def increment_reconciliation_alert(*, status: str) -> None:
+    """Record a reconciliation alert result with low-cardinality status."""
+    RECONCILIATION_ALERTS.labels(status=status).inc()
+    if status == "failure":
+        RECONCILIATION_ALERT_FAILURES.inc()
 
 
 def add_tokens(*, provider: str, model: str, token_type: str, count: int | None) -> None:

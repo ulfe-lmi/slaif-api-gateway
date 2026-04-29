@@ -8,6 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -32,6 +33,7 @@ COMPLETION_TEXT = "sensitive scheduled reconciliation completion"
 @pytest.mark.asyncio
 async def test_postgres_reconciliation_tasks_inspect_dry_run_and_execute(
     migrated_postgres_url: str,
+    respx_mock,
 ) -> None:
     engine = create_async_engine(migrated_postgres_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -58,6 +60,39 @@ async def test_postgres_reconciliation_tasks_inspect_dry_run_and_execute(
 
         assert str(expired_reservation_id) in inspect_result["expired_reservations"]["reservation_ids"]
         assert str(provider_ledger_id) in inspect_result["provider_completed"]["usage_ledger_ids"]
+        assert inspect_result["alert"]["status"] == "skipped"
+        assert inspect_result["alert"]["reason"] == "alerts_disabled"
+
+        alert_route = respx_mock.post("https://alerts.example/reconciliation").mock(
+            return_value=httpx.Response(202, json={"ok": True})
+        )
+        alert_inspect_result = await tasks_reconciliation._inspect_reconciliation_backlog(
+            settings=Settings(
+                DATABASE_URL=migrated_postgres_url,
+                ENABLE_RECONCILIATION_ALERTS=True,
+                RECONCILIATION_ALERT_WEBHOOK_URL="https://alerts.example/reconciliation",
+                RECONCILIATION_ALERT_INCLUDE_IDS=True,
+            )
+        )
+        assert alert_route.called
+        assert alert_inspect_result["alert"]["status"] == "sent"
+        safe_alert_payload = alert_route.calls.last.request.content.decode()
+        assert str(expired_reservation_id) in safe_alert_payload
+        assert str(provider_ledger_id) in safe_alert_payload
+        assert PROMPT_TEXT not in safe_alert_payload
+        assert COMPLETION_TEXT not in safe_alert_payload
+        assert "token_hash" not in safe_alert_payload
+        assert "encrypted_payload" not in safe_alert_payload
+        assert "nonce" not in safe_alert_payload
+        assert "provider-key" not in safe_alert_payload
+
+        async with session_factory() as session:
+            expired_reservation = await QuotaReservationsRepository(session).get_reservation_by_id(
+                expired_reservation_id
+            )
+            provider_ledger = await UsageLedgerRepository(session).get_usage_record_by_id(provider_ledger_id)
+            assert expired_reservation.status == "pending"
+            assert provider_ledger.accounting_status == "failed"
 
         expired_dry_run = await tasks_reconciliation._reconcile_expired_reservations(
             settings=Settings(
@@ -154,7 +189,14 @@ async def test_postgres_reconciliation_tasks_inspect_dry_run_and_execute(
 
             safe_payload = json.dumps(
                 {
-                    "task_results": [inspect_result, expired_dry_run, provider_dry_run, expired_execute, provider_execute],
+                    "task_results": [
+                        inspect_result,
+                        alert_inspect_result,
+                        expired_dry_run,
+                        provider_dry_run,
+                        expired_execute,
+                        provider_execute,
+                    ],
                     "ledger_usage": provider_ledger.usage_raw,
                     "ledger_metadata": provider_ledger.response_metadata,
                     "audit_values": [

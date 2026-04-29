@@ -16,6 +16,7 @@ from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.session import create_engine_from_settings, create_sessionmaker_from_engine
 from slaif_gateway.metrics import (
     add_reconciliation_items,
+    increment_reconciliation_alert,
     increment_reconciliation_run,
     observe_reconciliation_backlog,
 )
@@ -27,6 +28,8 @@ from slaif_gateway.schemas.reconciliation import (
     ReservationReconciliationSummary,
     StaleReservationCandidate,
 )
+from slaif_gateway.services.alert_errors import AlertDeliveryError
+from slaif_gateway.services.alert_service import AlertService
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 from slaif_gateway.workers.celery_app import celery_app
 
@@ -117,11 +120,17 @@ async def _inspect_reconciliation_backlog(*, settings: Settings) -> dict[str, ob
                 status="success",
                 dry_run=True,
             )
+            alert_result = await _send_reconciliation_backlog_alert(
+                payload,
+                settings=settings,
+            )
+            payload["alert"] = alert_result
             logger.info(
                 "Reconciliation backlog inspected.",
                 expired_reservations=len(expired),
                 provider_completed=len(provider_completed),
                 dry_run=True,
+                alert_status=alert_result["status"],
             )
             return payload
     except Exception:
@@ -292,6 +301,34 @@ def _effective_limit(value: int | None, default: int) -> int:
     if limit <= 0:
         raise ValueError("reconciliation task limit must be positive")
     return limit
+
+
+async def _send_reconciliation_backlog_alert(
+    payload: dict[str, object],
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    try:
+        result = await AlertService().send_reconciliation_backlog_alert(
+            payload,
+            settings=settings,
+        )
+    except AlertDeliveryError as exc:
+        increment_reconciliation_alert(status="failure")
+        logger.warning(
+            "Reconciliation backlog alert failed.",
+            error=exc.safe_message,
+        )
+        return {
+            "status": "failed",
+            "event_type": "reconciliation_backlog",
+            "delivered": False,
+            "reason": exc.safe_message,
+        }
+
+    status = "success" if result.delivered else result.status
+    increment_reconciliation_alert(status=status)
+    return result.to_payload()
 
 
 def _expired_backlog_payload(rows: list[StaleReservationCandidate]) -> dict[str, object]:

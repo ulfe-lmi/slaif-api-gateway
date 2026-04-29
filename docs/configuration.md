@@ -294,6 +294,21 @@ operator reconciliation workflows:
 - `RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS=false` and
   `RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED=false` keep mutation disabled
   by default.
+- `ENABLE_RECONCILIATION_ALERTS=false` disables external alert delivery by
+  default.
+- `RECONCILIATION_ALERT_WEBHOOK_URL` configures an optional generic JSON
+  webhook. Treat this URL as a secret if it contains tokens. When alerts are
+  enabled, the URL must use `http` or `https`; production deployments should use
+  `https`.
+- `RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS=10` bounds the outbound webhook
+  request.
+- `RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS=1` and
+  `RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED=1` set the backlog thresholds for
+  sending an alert.
+- `RECONCILIATION_ALERT_INCLUDE_IDS=false` keeps alert payloads counts-only by
+  default. When enabled, payloads include only safe reservation/usage-ledger IDs,
+  never keys, provider secrets, prompts, completions, encrypted payloads, nonces,
+  or email bodies.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -304,6 +319,12 @@ plaintext gateway keys, provider keys, token hashes, encrypted payloads, nonces,
 prompts, completions, or email bodies in task payloads/results. Manual CLI
 reconciliation remains available and is still the operator review path for
 unexpected accounting failures.
+
+Optional reconciliation alerts are operator-visibility only. They are generated
+from the inspection task, do not call providers, do not send email, and do not
+change quota/accounting state. The first supported sink is a generic JSON
+webhook; Slack, PagerDuty, and other product-specific integrations can be wired
+through an operator-managed bridge.
 
 ## Production Notes
 

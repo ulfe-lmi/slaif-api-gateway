@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import httpx
 import pytest
 
 from slaif_gateway.config import Settings
@@ -169,6 +170,8 @@ async def test_inspect_reconciliation_backlog_lists_without_mutating(fake_task_d
     assert result["dry_run"] is True
     assert result["expired_reservations"]["candidate_count"] == 1
     assert result["provider_completed"]["candidate_count"] == 1
+    assert result["alert"]["status"] == "skipped"
+    assert result["alert"]["reason"] == "alerts_disabled"
     assert [name for name, _ in service.calls] == ["list_expired", "list_provider_completed"]
     assert engine.disposed is True
     serialized = str(result)
@@ -177,6 +180,82 @@ async def test_inspect_reconciliation_backlog_lists_without_mutating(fake_task_d
     assert "nonce" not in serialized
     assert "sk-slaif-" not in serialized
     assert "sensitive prompt" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_inspect_reconciliation_backlog_skips_alert_below_threshold(
+    fake_task_dependencies,
+    respx_mock,
+) -> None:
+    route = respx_mock.post("https://alerts.example/reconciliation").mock(
+        return_value=httpx.Response(202)
+    )
+
+    result = await tasks_reconciliation._inspect_reconciliation_backlog(
+        settings=Settings(
+            DATABASE_URL="postgresql+asyncpg://test/test",
+            ENABLE_RECONCILIATION_ALERTS=True,
+            RECONCILIATION_ALERT_WEBHOOK_URL="https://alerts.example/reconciliation",
+            RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS=2,
+            RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED=2,
+        ),
+    )
+
+    assert not route.called
+    assert result["alert"]["status"] == "skipped"
+    assert result["alert"]["reason"] == "below_threshold"
+
+
+@pytest.mark.asyncio
+async def test_inspect_reconciliation_backlog_sends_alert_when_threshold_met(
+    fake_task_dependencies,
+    respx_mock,
+) -> None:
+    route = respx_mock.post("https://alerts.example/reconciliation").mock(
+        return_value=httpx.Response(202)
+    )
+
+    result = await tasks_reconciliation._inspect_reconciliation_backlog(
+        settings=Settings(
+            DATABASE_URL="postgresql+asyncpg://test/test",
+            ENABLE_RECONCILIATION_ALERTS=True,
+            RECONCILIATION_ALERT_WEBHOOK_URL="https://alerts.example/reconciliation",
+        ),
+    )
+
+    assert route.called
+    assert result["alert"]["status"] == "sent"
+    assert result["alert"]["delivered"] is True
+    request_payload = route.calls.last.request.content.decode()
+    assert "req-safe" not in request_payload
+    assert "token_hash" not in request_payload
+    assert "encrypted_payload" not in request_payload
+    assert "provider-key" not in request_payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_reconciliation_backlog_alert_failure_is_safe_and_non_mutating(
+    fake_task_dependencies,
+    respx_mock,
+) -> None:
+    _, service = fake_task_dependencies
+    route = respx_mock.post("https://alerts.example/reconciliation").mock(
+        return_value=httpx.Response(500, text="provider-key secret body")
+    )
+
+    result = await tasks_reconciliation._inspect_reconciliation_backlog(
+        settings=Settings(
+            DATABASE_URL="postgresql+asyncpg://test/test",
+            ENABLE_RECONCILIATION_ALERTS=True,
+            RECONCILIATION_ALERT_WEBHOOK_URL="https://alerts.example/reconciliation",
+        ),
+    )
+
+    assert route.called
+    assert result["alert"]["status"] == "failed"
+    assert result["alert"]["reason"] == "alert webhook returned HTTP 500"
+    assert [name for name, _ in service.calls] == ["list_expired", "list_provider_completed"]
+    assert "provider-key secret body" not in str(result)
 
 
 @pytest.mark.asyncio
