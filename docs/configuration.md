@@ -153,7 +153,8 @@ The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
 `/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
 institution, and cohort list/detail pages, provider config list/detail/create/edit
 pages under `/admin/providers`, model route list/detail/create/edit pages under
-`/admin/routes`, and read-only pricing, FX, usage, audit, and email delivery
+`/admin/routes`, pricing list/detail/create/edit pages under `/admin/pricing`,
+and read-only FX, usage, audit, and email delivery
 list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
@@ -179,18 +180,22 @@ cohort pages show safe record metadata and key count summaries. Provider pages
 allow CSRF-protected metadata create/edit/enable/disable actions and may show
 `api_key_env_var` names, but never provider key values. Route, pricing, and FX
 catalog pages no longer share the same mutation status: model route pages allow
-CSRF-protected create/edit/enable/disable actions for local route rows, while
-pricing and FX pages remain read-only. Route rows affect future `/v1` model
-resolution through the existing resolver; route forms reference provider config
-rows and env var names but never provider key values. Usage, audit, and
+CSRF-protected create/edit/enable/disable actions for local route rows, pricing
+pages allow CSRF-protected create/edit/enable/disable actions for local pricing
+rows, and FX pages remain read-only. Route rows affect future `/v1` model
+resolution through the existing resolver; pricing rows affect future local cost
+estimates, quota reservation, and accounting through the existing pricing
+service. Unknown pricing still fails closed for cost-limited keys. Route and
+pricing forms reference provider config rows and env var names but never
+provider key values. Usage, audit, and
 email delivery pages show safe local metadata only; they do not show prompts,
 completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
-Arbitrary old-key dashboard email resend actions, bulk key creation forms, and
-owner, institution, cohort, pricing, FX, usage, and audit
-dashboard mutation workflows are not implemented yet. Admin
+Arbitrary old-key dashboard email resend actions, bulk key creation forms,
+pricing import/upload forms, and owner, institution, cohort, FX, usage, and
+audit dashboard mutation workflows are not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection.

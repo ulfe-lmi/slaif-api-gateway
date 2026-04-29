@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Create Pricing Rule{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-create-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Pricing Catalog</p>
+      <h1 id="pricing-create-heading">Create Pricing Rule</h1>
+      <p class="muted">Pricing rows affect future quota reservation and accounting. FX rows are managed separately.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/pricing/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="pricing-identity-heading">
+      <h2>Identity</h2>
+      <p class="warning-text">Provider choices may show env var names, never provider key values.</p>
+      <div class="form-grid">
+        <label>
+          Provider
+          <select name="provider" required>
+            <option value="">Select provider</option>
+            {% for provider in provider_choices %}
+            <option value="{{ provider.provider }}" {% if form.provider == provider.provider %}selected{% endif %}>
+              {{ provider.display_name }} ({{ provider.provider }}) / {{ provider.api_key_env_var }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Model<input name="upstream_model" value="{{ form.upstream_model }}" required autocomplete="off"></label>
+        <label>Endpoint<input name="endpoint" value="{{ form.endpoint }}" required autocomplete="off"></label>
+        <label>Currency<input name="currency" value="{{ form.currency }}" maxlength="3" required autocomplete="off"></label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+          <span>Enabled</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="pricing-prices-heading">
+      <h2>Prices</h2>
+      <div class="form-grid">
+        <label>Input / 1M<input name="input_price_per_1m" value="{{ form.input_price_per_1m }}" required inputmode="decimal" autocomplete="off"></label>
+        <label>Cached input / 1M<input name="cached_input_price_per_1m" value="{{ form.cached_input_price_per_1m }}" inputmode="decimal" autocomplete="off"></label>
+        <label>Output / 1M<input name="output_price_per_1m" value="{{ form.output_price_per_1m }}" required inputmode="decimal" autocomplete="off"></label>
+        <label>Reasoning / 1M<input name="reasoning_price_per_1m" value="{{ form.reasoning_price_per_1m }}" inputmode="decimal" autocomplete="off"></label>
+        <label>Request price<input name="request_price" value="{{ form.request_price }}" inputmode="decimal" autocomplete="off"></label>
+      </div>
+      <p class="muted small">Decimal strings are parsed without floats. Prices must be non-negative.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="pricing-validity-heading">
+      <h2>Validity</h2>
+      <div class="form-grid">
+        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" placeholder="2026-01-01T00:00:00+00:00"></label>
+        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" placeholder="Optional"></label>
+        <label>Source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off"></label>
+      </div>
+      <label>Metadata JSON<textarea name="pricing_metadata" rows="5">{{ form.pricing_metadata }}</textarea></label>
+    </section>
+
+    <section class="action-panel" aria-labelledby="pricing-audit-heading">
+      <h2>Audit</h2>
+      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <p class="muted small">Provider API key values are never entered here. Provider configs reference environment variable names only.</p>
+      <button type="submit">Create pricing rule</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

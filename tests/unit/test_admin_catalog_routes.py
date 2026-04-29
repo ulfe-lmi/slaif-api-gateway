@@ -169,6 +169,7 @@ def _pricing() -> AdminPricingRuleDetail:
         valid_until=None,
         source_url="https://pricing.example.org/openai",
         notes="safe pricing note",
+        pricing_metadata={"source": "manual"},
         metadata_summary="source",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),

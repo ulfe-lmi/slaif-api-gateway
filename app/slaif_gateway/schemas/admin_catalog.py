@@ -106,6 +106,7 @@ class AdminPricingRuleListRow:
     valid_until: datetime | None
     source_url: str | None
     notes: str | None
+    pricing_metadata: dict[str, object]
     metadata_summary: str
     created_at: datetime
     updated_at: datetime

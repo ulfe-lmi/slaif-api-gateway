@@ -50,6 +50,7 @@ from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
 from slaif_gateway.schemas.keys import (
@@ -136,6 +137,20 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
         "Enter an audit reason before changing model route metadata.",
     ),
     "invalid_model_route": ("error", "Enter valid model route metadata."),
+    "pricing_rule_created": ("success", "Pricing rule created."),
+    "pricing_rule_updated": ("success", "Pricing rule updated."),
+    "pricing_rule_enabled": ("success", "Pricing rule enabled."),
+    "pricing_rule_disabled": ("success", "Pricing rule disabled."),
+    "pricing_rule_failed": ("error", "Pricing rule action failed."),
+    "pricing_rule_disable_confirmation_required": (
+        "error",
+        "Confirm pricing rule disable before continuing.",
+    ),
+    "pricing_rule_reason_required": (
+        "error",
+        "Enter an audit reason before changing pricing metadata.",
+    ),
+    "invalid_pricing_rule": ("error", "Enter valid pricing metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -2092,6 +2107,7 @@ async def list_admin_pricing_rules(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "pricing_rules": rows,
             "filters": {
                 "provider": provider or "",
@@ -2104,6 +2120,373 @@ async def list_admin_pricing_rules(
                 "offset": offset,
             },
         },
+    )
+
+
+@router.get("/pricing/new", response_class=HTMLResponse)
+async def create_admin_pricing_rule_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_pricing_rule_form(
+        request,
+        template_name="pricing/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_pricing_rule_form(),
+        provider_choices=await _load_catalog_provider_choices(request),
+    )
+
+
+@router.post("/pricing/new", response_class=HTMLResponse)
+async def create_admin_pricing_rule(
+    request: Request,
+    csrf_token: str = Form(""),
+    provider: str = Form(""),
+    upstream_model: str = Form(""),
+    endpoint: str = Form(CHAT_COMPLETIONS_ENDPOINT),
+    currency: str = Form("EUR"),
+    input_price_per_1m: str = Form(""),
+    cached_input_price_per_1m: str = Form(""),
+    output_price_per_1m: str = Form(""),
+    reasoning_price_per_1m: str = Form(""),
+    request_price: str = Form(""),
+    pricing_metadata: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    enabled: str = Form(""),
+    source_url: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    provider_choices = await _load_catalog_provider_choices(request)
+    form = _pricing_rule_form_from_values(
+        provider=provider,
+        upstream_model=upstream_model,
+        endpoint=endpoint,
+        currency=currency,
+        input_price_per_1m=input_price_per_1m,
+        cached_input_price_per_1m=cached_input_price_per_1m,
+        output_price_per_1m=output_price_per_1m,
+        reasoning_price_per_1m=reasoning_price_per_1m,
+        request_price=request_price,
+        pricing_metadata=pricing_metadata,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        enabled=enabled,
+        source_url=source_url,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_pricing_rule_form(form, provider_choices=provider_choices, require_reason=True)
+    except ValueError:
+        return _render_pricing_rule_form(
+            request,
+            template_name="pricing/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
+            status_code=400,
+        )
+
+    try:
+        async with _admin_pricing_rule_service_scope(request) as service:
+            created = await service.create_pricing_rule(
+                provider=parsed["provider"],
+                model=parsed["upstream_model"],
+                endpoint=parsed["endpoint"],
+                currency=parsed["currency"],
+                input_price_per_1m=parsed["input_price_per_1m"],
+                cached_input_price_per_1m=parsed["cached_input_price_per_1m"],
+                output_price_per_1m=parsed["output_price_per_1m"],
+                reasoning_price_per_1m=parsed["reasoning_price_per_1m"],
+                request_price=parsed["request_price"],
+                pricing_metadata=parsed["pricing_metadata"],
+                valid_from=parsed["valid_from"],
+                valid_until=parsed["valid_until"],
+                source_url=parsed["source_url"],
+                notes=parsed["notes"],
+                enabled=parsed["enabled"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except ValueError:
+        return _render_pricing_rule_form(
+            request,
+            template_name="pricing/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_pricing_rule(created.id, message="pricing_rule_created")
+
+
+@router.get("/pricing/{pricing_rule_id}/edit", response_class=HTMLResponse)
+async def edit_admin_pricing_rule_form(request: Request, pricing_rule_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
+    except ValueError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            pricing_rule = await service.get_pricing_rule_detail(parsed_pricing_rule_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    return _render_pricing_rule_form(
+        request,
+        template_name="pricing/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_pricing_rule_form_from_detail(pricing_rule),
+        provider_choices=await _load_catalog_provider_choices(request),
+        pricing_rule_id=parsed_pricing_rule_id,
+    )
+
+
+@router.post("/pricing/{pricing_rule_id}/edit", response_class=HTMLResponse)
+async def update_admin_pricing_rule(
+    request: Request,
+    pricing_rule_id: str,
+    csrf_token: str = Form(""),
+    provider: str = Form(""),
+    upstream_model: str = Form(""),
+    endpoint: str = Form(CHAT_COMPLETIONS_ENDPOINT),
+    currency: str = Form("EUR"),
+    input_price_per_1m: str = Form(""),
+    cached_input_price_per_1m: str = Form(""),
+    output_price_per_1m: str = Form(""),
+    reasoning_price_per_1m: str = Form(""),
+    request_price: str = Form(""),
+    pricing_metadata: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    enabled: str = Form(""),
+    source_url: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
+    except ValueError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    provider_choices = await _load_catalog_provider_choices(request)
+    form = _pricing_rule_form_from_values(
+        provider=provider,
+        upstream_model=upstream_model,
+        endpoint=endpoint,
+        currency=currency,
+        input_price_per_1m=input_price_per_1m,
+        cached_input_price_per_1m=cached_input_price_per_1m,
+        output_price_per_1m=output_price_per_1m,
+        reasoning_price_per_1m=reasoning_price_per_1m,
+        request_price=request_price,
+        pricing_metadata=pricing_metadata,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        enabled=enabled,
+        source_url=source_url,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_pricing_rule_form(form, provider_choices=provider_choices, require_reason=True)
+    except ValueError:
+        return _render_pricing_rule_form(
+            request,
+            template_name="pricing/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            pricing_rule_id=parsed_pricing_rule_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
+            status_code=400,
+        )
+
+    try:
+        async with _admin_pricing_rule_service_scope(request) as service:
+            updated = await service.update_pricing_rule(
+                parsed_pricing_rule_id,
+                provider=parsed["provider"],
+                model=parsed["upstream_model"],
+                endpoint=parsed["endpoint"],
+                currency=parsed["currency"],
+                input_price_per_1m=parsed["input_price_per_1m"],
+                cached_input_price_per_1m=parsed["cached_input_price_per_1m"],
+                output_price_per_1m=parsed["output_price_per_1m"],
+                reasoning_price_per_1m=parsed["reasoning_price_per_1m"],
+                request_price=parsed["request_price"],
+                pricing_metadata=parsed["pricing_metadata"],
+                valid_from=parsed["valid_from"],
+                valid_until=parsed["valid_until"],
+                source_url=parsed["source_url"],
+                notes=parsed["notes"],
+                enabled=parsed["enabled"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+    except ValueError:
+        return _render_pricing_rule_form(
+            request,
+            template_name="pricing/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            pricing_rule_id=parsed_pricing_rule_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_pricing_rule(updated.id, message="pricing_rule_updated")
+
+
+@router.post("/pricing/{pricing_rule_id}/enable", response_class=HTMLResponse)
+async def enable_admin_pricing_rule(
+    request: Request,
+    pricing_rule_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    return await _set_admin_pricing_rule_enabled(
+        request,
+        pricing_rule_id=pricing_rule_id,
+        enabled=True,
+        csrf_token=csrf_token,
+        reason=reason,
+    )
+
+
+@router.post("/pricing/{pricing_rule_id}/disable", response_class=HTMLResponse)
+async def disable_admin_pricing_rule(
+    request: Request,
+    pricing_rule_id: str,
+    csrf_token: str = Form(""),
+    confirm_disable: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
+    except ValueError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if confirm_disable != "true":
+        return _redirect_to_admin_pricing_rule(
+            parsed_pricing_rule_id,
+            message="pricing_rule_disable_confirmation_required",
+        )
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_reason_required")
+
+    try:
+        async with _admin_pricing_rule_service_scope(request) as service:
+            await service.set_pricing_rule_enabled(
+                parsed_pricing_rule_id,
+                enabled=False,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_failed")
+
+    return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_disabled")
+
+
+async def _set_admin_pricing_rule_enabled(
+    request: Request,
+    *,
+    pricing_rule_id: str,
+    enabled: bool,
+    csrf_token: str,
+    reason: str,
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
+    except ValueError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_reason_required")
+
+    try:
+        async with _admin_pricing_rule_service_scope(request) as service:
+            await service.set_pricing_rule_enabled(
+                parsed_pricing_rule_id,
+                enabled=enabled,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Pricing rule not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_failed")
+
+    return _redirect_to_admin_pricing_rule(
+        parsed_pricing_rule_id,
+        message="pricing_rule_enabled" if enabled else "pricing_rule_disabled",
     )
 
 
@@ -2135,6 +2518,7 @@ async def admin_pricing_rule_detail(request: Request, pricing_rule_id: str) -> R
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "pricing_rule": pricing_rule,
         },
     )
@@ -2849,6 +3233,17 @@ async def _admin_model_route_service_scope(request: Request) -> AsyncIterator[Mo
 
 
 @asynccontextmanager
+async def _admin_pricing_rule_service_scope(request: Request) -> AsyncIterator[PricingRuleService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield PricingRuleService(
+                pricing_rules_repository=PricingRulesRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -2962,6 +3357,11 @@ def _redirect_to_admin_provider(provider_config_id: uuid.UUID, *, message: str) 
 def _redirect_to_admin_route(route_id: uuid.UUID, *, message: str) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/routes/{route_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_pricing_rule(pricing_rule_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/pricing/{pricing_rule_id}?{query}", status_code=303)
 
 
 def _set_no_store_headers(response: Response) -> None:
@@ -3105,6 +3505,10 @@ def _provider_config_form_from_values(
 
 
 async def _load_route_provider_choices(request: Request) -> list[object]:
+    return await _load_catalog_provider_choices(request)
+
+
+async def _load_catalog_provider_choices(request: Request) -> list[object]:
     async with _admin_catalog_dashboard_service_scope(request) as service:
         return await service.list_providers(limit=200)
 
@@ -3307,6 +3711,223 @@ def _route_metadata_contains_secret(value: object) -> bool:
         lowered = value.strip().lower()
         return _looks_like_provider_secret_value(value) or lowered.startswith(("bearer ", "sk-"))
     return False
+
+
+def _render_pricing_rule_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    provider_choices: list[object],
+    pricing_rule_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "pricing_rule_id": pricing_rule_id,
+            "form": form,
+            "provider_choices": provider_choices,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _default_pricing_rule_form() -> dict[str, str]:
+    return {
+        "provider": "",
+        "upstream_model": "",
+        "endpoint": CHAT_COMPLETIONS_ENDPOINT,
+        "currency": "EUR",
+        "input_price_per_1m": "",
+        "cached_input_price_per_1m": "",
+        "output_price_per_1m": "",
+        "reasoning_price_per_1m": "",
+        "request_price": "",
+        "pricing_metadata": "",
+        "valid_from": "",
+        "valid_until": "",
+        "enabled": "true",
+        "source_url": "",
+        "notes": "",
+        "reason": "",
+    }
+
+
+def _pricing_rule_form_from_detail(pricing_rule: object) -> dict[str, str]:
+    metadata = getattr(pricing_rule, "pricing_metadata", {}) or {}
+    valid_from = getattr(pricing_rule, "valid_from")
+    valid_until = getattr(pricing_rule, "valid_until")
+    return _pricing_rule_form_from_values(
+        provider=str(getattr(pricing_rule, "provider")),
+        upstream_model=str(getattr(pricing_rule, "upstream_model")),
+        endpoint=str(getattr(pricing_rule, "endpoint")),
+        currency=str(getattr(pricing_rule, "currency")),
+        input_price_per_1m=_decimal_form_value(getattr(pricing_rule, "input_price_per_1m")),
+        cached_input_price_per_1m=_decimal_form_value(getattr(pricing_rule, "cached_input_price_per_1m")),
+        output_price_per_1m=_decimal_form_value(getattr(pricing_rule, "output_price_per_1m")),
+        reasoning_price_per_1m=_decimal_form_value(getattr(pricing_rule, "reasoning_price_per_1m")),
+        request_price=_decimal_form_value(getattr(pricing_rule, "request_price")),
+        pricing_metadata=json.dumps(metadata, sort_keys=True) if metadata else "",
+        valid_from=valid_from.isoformat() if isinstance(valid_from, datetime) else "",
+        valid_until=valid_until.isoformat() if isinstance(valid_until, datetime) else "",
+        enabled="true" if bool(getattr(pricing_rule, "enabled")) else "",
+        source_url=str(getattr(pricing_rule, "source_url") or ""),
+        notes=str(getattr(pricing_rule, "notes") or ""),
+        reason="",
+    )
+
+
+def _pricing_rule_form_from_values(
+    *,
+    provider: str,
+    upstream_model: str,
+    endpoint: str,
+    currency: str,
+    input_price_per_1m: str,
+    cached_input_price_per_1m: str,
+    output_price_per_1m: str,
+    reasoning_price_per_1m: str,
+    request_price: str,
+    pricing_metadata: str,
+    valid_from: str,
+    valid_until: str,
+    enabled: str,
+    source_url: str,
+    notes: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "provider": provider,
+        "upstream_model": upstream_model,
+        "endpoint": endpoint,
+        "currency": currency,
+        "input_price_per_1m": input_price_per_1m,
+        "cached_input_price_per_1m": cached_input_price_per_1m,
+        "output_price_per_1m": output_price_per_1m,
+        "reasoning_price_per_1m": reasoning_price_per_1m,
+        "request_price": request_price,
+        "pricing_metadata": pricing_metadata,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "enabled": enabled,
+        "source_url": source_url,
+        "notes": notes,
+        "reason": reason,
+    }
+
+
+def _parse_pricing_rule_form(
+    form: dict[str, str],
+    *,
+    provider_choices: list[object],
+    require_reason: bool,
+) -> dict[str, object]:
+    provider = _parse_provider_slug(form.get("provider"))
+    known_providers = {str(getattr(choice, "provider")) for choice in provider_choices}
+    if provider not in known_providers:
+        raise ValueError("Select a known provider config.")
+    upstream_model = _parse_pricing_text(form.get("upstream_model"), field_name="Model")
+    endpoint = _parse_route_endpoint(form.get("endpoint"))
+    currency = _parse_pricing_currency(form.get("currency"))
+    valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
+    valid_until = _parse_admin_datetime(form.get("valid_until"))
+    if valid_until is not None and valid_until <= valid_from:
+        raise ValueError("valid_until must be after valid_from.")
+    pricing_metadata = _parse_pricing_metadata(form.get("pricing_metadata"))
+    reason = _clean_admin_reason(form.get("reason"))
+    if require_reason and reason is None:
+        raise ValueError(_ADMIN_STATUS_MESSAGES["pricing_rule_reason_required"][1])
+
+    return {
+        "provider": provider,
+        "upstream_model": upstream_model,
+        "endpoint": endpoint,
+        "currency": currency,
+        "input_price_per_1m": _parse_required_non_negative_admin_decimal(
+            form.get("input_price_per_1m"),
+            field_name="input_price_per_1m",
+        ),
+        "cached_input_price_per_1m": _parse_optional_non_negative_admin_decimal(
+            form.get("cached_input_price_per_1m"),
+            field_name="cached_input_price_per_1m",
+        ),
+        "output_price_per_1m": _parse_required_non_negative_admin_decimal(
+            form.get("output_price_per_1m"),
+            field_name="output_price_per_1m",
+        ),
+        "reasoning_price_per_1m": _parse_optional_non_negative_admin_decimal(
+            form.get("reasoning_price_per_1m"),
+            field_name="reasoning_price_per_1m",
+        ),
+        "request_price": _parse_optional_non_negative_admin_decimal(
+            form.get("request_price"),
+            field_name="request_price",
+        ),
+        "pricing_metadata": pricing_metadata,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "enabled": _is_checked(form.get("enabled")),
+        "source_url": _parse_pricing_source_url(form.get("source_url")),
+        "notes": _clean_admin_reason(form.get("notes")),
+        "reason": reason,
+    }
+
+
+def _parse_pricing_text(value: str | None, *, field_name: str) -> str:
+    cleaned = _clean_admin_reason(value)
+    if cleaned is None:
+        raise ValueError(f"{field_name} is required.")
+    if _looks_like_provider_secret_value(cleaned):
+        raise ValueError(f"{field_name} must not contain secret-looking values.")
+    return cleaned
+
+
+def _parse_pricing_currency(value: str | None) -> str:
+    currency = (value or "").strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError("Currency must be a safe 3-letter code.")
+    return currency
+
+
+def _parse_pricing_source_url(value: str | None) -> str | None:
+    source_url = _clean_admin_reason(value)
+    if source_url is None:
+        return None
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Source URL must be an absolute http or https URL.")
+    if parsed.username or parsed.password:
+        raise ValueError("Source URL must not contain credentials.")
+    if _looks_like_provider_secret_value(source_url):
+        raise ValueError("Source URL must not contain secret-looking values.")
+    return source_url
+
+
+def _parse_pricing_metadata(value: str | None) -> dict[str, object]:
+    raw = (value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Pricing metadata must be a JSON object.") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Pricing metadata must be a JSON object.")
+    if _route_metadata_contains_secret(parsed):
+        raise ValueError("Pricing metadata must not contain secret-looking values.")
+    return parsed
+
+
+def _decimal_form_value(value: object) -> str:
+    return str(value) if isinstance(value, Decimal) else ""
 
 
 def _parse_provider_config_form(
@@ -3646,6 +4267,28 @@ def _parse_optional_admin_decimal(value: str | None) -> tuple[bool, Decimal | No
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("invalid decimal") from exc
     return True, parsed
+
+
+def _parse_required_non_negative_admin_decimal(value: str | None, *, field_name: str) -> Decimal:
+    parsed = _parse_optional_non_negative_admin_decimal(value, field_name=field_name)
+    if parsed is None:
+        raise ValueError(f"{field_name} is required.")
+    return parsed
+
+
+def _parse_optional_non_negative_admin_decimal(value: str | None, *, field_name: str) -> Decimal | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = Decimal(normalized)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a decimal string.") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"{field_name} must be non-negative.")
+    return parsed
 
 
 def _parse_optional_admin_int(value: str | None) -> tuple[bool, int | None]:
