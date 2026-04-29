@@ -184,6 +184,15 @@ lockout messages are generic, do not reveal whether an account exists, and do
 not expose exact attempt counts. Redis is not required for this admin control.
 Plaintext passwords are never stored, logged, or written to audit metadata.
 
+Current v1 admin authorization treats all active admin users as full operators.
+`role=admin` and `role=superadmin` can use the implemented dashboard/operator
+actions; `superadmin` is metadata/future-proofing rather than an enforced RBAC
+boundary. Inactive admin accounts cannot log in, and revoked or expired
+server-side sessions cannot access admin routes. Operators should treat every
+active admin account as highly privileged. Future RBAC, superadmin-only
+permissions, and MFA may be added later, but they are not implemented in the
+current admin surface.
+
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,

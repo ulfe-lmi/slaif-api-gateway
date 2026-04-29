@@ -23,6 +23,8 @@ Examples of useful reports include:
 - accidental OpenAI/OpenRouter upstream calls in normal tests or local tooling
 - authentication, HMAC validation, or key parsing bypasses
 - admin authentication, CSRF, or session bugs
+- admin account privilege confusion or evidence that an inactive admin/session
+  can still access admin routes
 - email/Celery plaintext key payload leakage
 - logs or metrics exposing secrets
 
@@ -56,3 +58,8 @@ security-relevant pull requests are reviewed as part of normal development.
 External review documents in this repository are quality/security-oriented
 mid-development reviews. They are not formal certifications, compliance audits,
 or penetration tests.
+
+Current admin role policy: every active admin user is a full operator. The
+`superadmin` role is metadata/future-proofing and is not yet an enforced RBAC
+boundary. Treat every active admin account as highly privileged; inactive admins
+and revoked or expired admin sessions must not access admin routes.
