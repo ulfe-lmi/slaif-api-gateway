@@ -185,6 +185,14 @@ Automatic reconciliation mutation requires the matching
 Scheduled reconciliation tasks reuse existing service-layer logic, do not call
 providers, and return safe summaries only.
 
+Optional reconciliation alert webhooks are disabled by default. When
+`ENABLE_RECONCILIATION_ALERTS=true` is configured with a generic webhook URL,
+the scheduled backlog inspection task can send safe backlog counts to an
+operator-managed alerting bridge. Alert webhooks do not mutate quota/accounting,
+do not call providers, and do not send email. Payloads are counts-only by
+default; `RECONCILIATION_ALERT_INCLUDE_IDS=true` adds only safe reservation and
+usage-ledger IDs. Treat the webhook URL as a secret if it contains tokens.
+
 ## Backups
 
 Back up PostgreSQL. It is the source of truth for key metadata, HMAC digests,
@@ -212,5 +220,6 @@ plaintext.
 - No CI/CD system is required or added by this repository packaging.
 - Native Anthropic API, Responses API, embeddings, files, images, and audio
   endpoints remain unsupported unless separately implemented and documented.
-- Bulk import/upload workflows and external alert sinks are not implemented by
-  this deployment slice.
+- Bulk import/upload workflows are not implemented by this deployment slice.
+- Slack/PagerDuty-specific SDK integrations are not implemented; use the
+  optional generic reconciliation webhook with an operator-managed bridge.

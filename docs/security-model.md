@@ -75,6 +75,14 @@ IDs and statuses. They do not include plaintext gateway keys, token hashes,
 encrypted payloads, nonces, provider keys, prompts, completions, or email bodies
 in task payloads/results.
 
+Optional reconciliation alert webhooks are disabled by default and are emitted
+only from backlog inspection. Alerting is for operator visibility, not repair:
+it does not mutate quota/accounting, does not call providers, and does not send
+email. Payloads contain counts by default; when explicitly enabled they may also
+include safe reservation or usage-ledger IDs. Webhook URLs may contain bearer
+tokens or routing secrets and must be treated as secrets; logs and task results
+must not include the full webhook URL.
+
 ## Streaming Security And Accounting
 
 Streaming requests force `stream_options.include_usage=true` upstream so final
