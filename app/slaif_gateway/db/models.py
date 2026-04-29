@@ -41,7 +41,7 @@ KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
 PURPOSE_VALUES_ONE_TIME_SECRETS = ("gateway_key_email", "gateway_key_rotation_email")
 STATUS_VALUES_ONE_TIME_SECRETS = ("pending", "consumed", "expired", "revoked")
-STATUS_VALUES_EMAIL_DELIVERIES = ("pending", "sent", "failed", "cancelled")
+STATUS_VALUES_EMAIL_DELIVERIES = ("pending", "sending", "sent", "failed", "ambiguous", "cancelled")
 STATUS_VALUES_BACKGROUND_JOBS = ("queued", "running", "succeeded", "failed", "cancelled")
 
 

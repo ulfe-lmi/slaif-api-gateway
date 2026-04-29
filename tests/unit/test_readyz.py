@@ -97,8 +97,8 @@ def test_readyz_with_successful_database_check_reports_ready(monkeypatch) -> Non
         _ = connection
         return SchemaStatus(
             status="ok",
-            current_revision="0005_fix_gateway_key_prefix_default",
-            head_revision="0005_fix_gateway_key_prefix_default",
+            current_revision="0006_email_delivery_attempt_state",
+            head_revision="0006_email_delivery_attempt_state",
             message="current",
         )
 
@@ -121,8 +121,8 @@ def test_readyz_with_successful_database_check_reports_ready(monkeypatch) -> Non
         "status": "ok",
         "database": "ok",
         "schema": "ok",
-        "alembic_current": "0005_fix_gateway_key_prefix_default",
-        "alembic_head": "0005_fix_gateway_key_prefix_default",
+        "alembic_current": "0006_email_delivery_attempt_state",
+        "alembic_head": "0006_email_delivery_attempt_state",
         "redis": "not_required",
     }
     assert engine.connect_calls == 1

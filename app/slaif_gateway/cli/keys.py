@@ -798,7 +798,25 @@ async def _send_pending_key_email_now(
     actor_admin_id: uuid.UUID | None,
     reason: str | None,
 ) -> PendingKeyEmailResult:
-    async with _key_email_runtime() as (_, _, email_delivery_service):
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        email_delivery_service = EmailDeliveryService(
+            settings=settings,
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            email_deliveries_repository=EmailDeliveriesRepository(session),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            owners_repository=OwnersRepository(session),
+            audit_repository=AuditRepository(session),
+            email_service=EmailService(settings),
+            session=session,
+        )
         return await email_delivery_service.send_pending_key_email(
             one_time_secret_id=one_time_secret_id,
             email_delivery_id=email_delivery_id,

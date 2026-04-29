@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli import email as email_cli
 from slaif_gateway.cli.main import app
-from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
+from slaif_gateway.services.email_delivery_service import KeyEmailDeliverySendability, PendingKeyEmailResult
 from slaif_gateway.services.email_service import EmailSendResult
 
 runner = CliRunner()
@@ -94,6 +94,11 @@ def test_send_pending_key_enqueue_payload_ids_only(monkeypatch) -> None:
             return AsyncResult()
 
     monkeypatch.setattr(email_cli, "send_pending_key_email_task", FakeTask)
+    monkeypatch.setattr(
+        email_cli,
+        "_get_key_email_sendability",
+        lambda email_delivery_id: _sendable(email_delivery_id, secret_id),
+    )
 
     result = runner.invoke(
         app,
@@ -115,3 +120,56 @@ def test_send_pending_key_enqueue_payload_ids_only(monkeypatch) -> None:
     assert seen["args"] == (str(secret_id), str(delivery_id), None)
     assert "sk-slaif-" not in result.stdout
     assert "plaintext" not in result.stdout.lower()
+
+
+def test_send_pending_key_enqueue_refuses_ambiguous_delivery(monkeypatch) -> None:
+    secret_id = uuid.uuid4()
+    delivery_id = uuid.uuid4()
+
+    class FakeTask:
+        @staticmethod
+        def delay(*args):
+            raise AssertionError("Celery should not be called")
+
+    async def fake_blocked(email_delivery_id: uuid.UUID) -> KeyEmailDeliverySendability:
+        return KeyEmailDeliverySendability(
+            email_delivery_id=email_delivery_id,
+            one_time_secret_id=secret_id,
+            email_delivery_status="ambiguous",
+            one_time_secret_status="present",
+            can_send=False,
+            blocking_reason="SMTP may have accepted this email; rotate the key.",
+        )
+
+    monkeypatch.setattr(email_cli, "send_pending_key_email_task", FakeTask)
+    monkeypatch.setattr(email_cli, "_get_key_email_sendability", fake_blocked)
+
+    result = runner.invoke(
+        app,
+        [
+            "email",
+            "send-pending-key",
+            "--one-time-secret-id",
+            str(secret_id),
+            "--email-delivery-id",
+            str(delivery_id),
+            "--enqueue",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "rotate the key" in result.stdout
+    assert "sk-slaif-" not in result.stdout
+    assert "plaintext" not in result.stdout.lower()
+
+
+async def _sendable(email_delivery_id: uuid.UUID, secret_id: uuid.UUID) -> KeyEmailDeliverySendability:
+    return KeyEmailDeliverySendability(
+        email_delivery_id=email_delivery_id,
+        one_time_secret_id=secret_id,
+        email_delivery_status="pending",
+        one_time_secret_status="present",
+        can_send=True,
+        blocking_reason=None,
+    )

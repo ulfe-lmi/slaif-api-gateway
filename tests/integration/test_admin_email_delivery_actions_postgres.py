@@ -188,6 +188,24 @@ async def _mutate_secret(
         await engine.dispose()
 
 
+async def _mutate_delivery_status(
+    database_url: str,
+    email_delivery_id: uuid.UUID,
+    *,
+    status: str,
+) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                delivery = await session.get(EmailDelivery, email_delivery_id)
+                assert delivery is not None
+                delivery.status = status
+    finally:
+        await engine.dispose()
+
+
 async def _database_safety_text(database_url: str) -> str:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -253,6 +271,7 @@ def test_admin_email_delivery_actions_postgres(monkeypatch, migrated_postgres_ur
     enqueue_delivery = asyncio.run(_create_pending_delivery(migrated_postgres_url, settings, label="enqueue"))
     consumed_delivery = asyncio.run(_create_pending_delivery(migrated_postgres_url, settings, label="consumed"))
     expired_delivery = asyncio.run(_create_pending_delivery(migrated_postgres_url, settings, label="expired"))
+    ambiguous_delivery = asyncio.run(_create_pending_delivery(migrated_postgres_url, settings, label="ambiguous"))
     asyncio.run(
         _mutate_secret(
             migrated_postgres_url,
@@ -269,11 +288,19 @@ def test_admin_email_delivery_actions_postgres(monkeypatch, migrated_postgres_ur
             expired=True,
         )
     )
+    asyncio.run(
+        _mutate_delivery_status(
+            migrated_postgres_url,
+            ambiguous_delivery["email_delivery_id"],
+            status="ambiguous",
+        )
+    )
     plaintext_values = [
         str(send_delivery["plaintext_key"]),
         str(enqueue_delivery["plaintext_key"]),
         str(consumed_delivery["plaintext_key"]),
         str(expired_delivery["plaintext_key"]),
+        str(ambiguous_delivery["plaintext_key"]),
     ]
     fake_task = _FakeTask()
     _FakeEmailService.sent_bodies = []
@@ -381,6 +408,22 @@ def test_admin_email_delivery_actions_postgres(monkeypatch, migrated_postgres_ur
         assert len(fake_task.calls) == 1
         delivery, secret = asyncio.run(_delivery_state(migrated_postgres_url, expired_delivery["email_delivery_id"]))
         assert delivery.status == "pending"
+        assert secret.status == "pending"
+
+        ambiguous_detail = client.get(f"/admin/email-deliveries/{ambiguous_delivery['email_delivery_id']}")
+        assert "Do not retry" in ambiguous_detail.text
+        ambiguous = client.post(
+            f"/admin/email-deliveries/{ambiguous_delivery['email_delivery_id']}/send-now",
+            data={"csrf_token": _csrf_from_html(ambiguous_detail.text), "confirm_send": "true"},
+        )
+        assert ambiguous.status_code == 200
+        assert "cannot be sent" in ambiguous.text
+        _assert_html_safe(ambiguous.text, settings, plaintext_values)
+        assert len(_FakeEmailService.sent_bodies) == 1
+        delivery, secret = asyncio.run(
+            _delivery_state(migrated_postgres_url, ambiguous_delivery["email_delivery_id"])
+        )
+        assert delivery.status == "ambiguous"
         assert secret.status == "pending"
 
     database_text = asyncio.run(_database_safety_text(migrated_postgres_url))

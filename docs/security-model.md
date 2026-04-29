@@ -101,6 +101,15 @@ email is the intended one-time delivery channel. They are not stored in
 payloads. Send-now and enqueue CLI modes suppress plaintext key output because
 email/Celery is the selected secret delivery channel.
 
+Email delivery is not mathematically exactly-once because SMTP acceptance and
+database finalization are separate systems. The gateway fails closed around that
+boundary: before SMTP it persists a `sending` state, SMTP failure before
+acceptance records a retryable `failed` status with the one-time secret still
+pending, and SMTP success finalizes by consuming the one-time secret and marking
+the delivery `sent`. If SMTP may have accepted the message but database
+finalization fails, the row is left or marked `ambiguous`; automatic retry is
+blocked and operators should rotate the key if receipt cannot be confirmed.
+
 ## Redaction And Logging
 
 Structured logging redacts configured/custom gateway key prefixes, bearer keys,
@@ -209,9 +218,10 @@ email-delivery modes:
   key exactly once.
 - `pending` creates a pending `email_deliveries` row linked to the encrypted
   one-time secret and still shows the plaintext key exactly once.
-- `send-now` sends through `EmailDeliveryService`, consumes the one-time secret
-  only after SMTP success, records delivery status, and suppresses browser
-  plaintext display.
+- `send-now` sends through `EmailDeliveryService`, records `sending` before
+  SMTP, consumes the one-time secret only after SMTP success, records delivery
+  status, and suppresses browser plaintext display. Possible SMTP-accepted
+  finalization failures become `ambiguous` and are not retried automatically.
 - `enqueue` creates a pending delivery row, enqueues the Celery task with IDs
   only, and suppresses browser plaintext display.
 
@@ -222,7 +232,9 @@ require CSRF plus explicit confirmation, never accept plaintext key input, never
 display plaintext keys in the browser, and use the same `EmailDeliveryService`
 or ID-only Celery task path as the CLI. Consumed, expired, missing, or
 wrong-purpose one-time secrets fail safely; the operator must rotate the key and
-create a new delivery instead of resending an old plaintext key.
+create a new delivery instead of resending an old plaintext key. Deliveries in
+`sending` or `ambiguous` state also fail closed; operators should confirm receipt
+out of band or rotate the key.
 
 Revoke and rotation also require an explicit confirmation field and
 dashboard-side audit reason before the key service is called. Validity, hard

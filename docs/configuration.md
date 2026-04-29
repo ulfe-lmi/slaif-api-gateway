@@ -188,7 +188,10 @@ only and suppresses browser plaintext display. Existing pending/failed key email
 deliveries can be sent now or enqueued from the email delivery detail page only
 when a valid unconsumed one-time secret is still available. Those actions require
 CSRF plus explicit confirmation, never accept plaintext key input, and enqueue
-IDs only. Key detail pages include
+IDs only. Email delivery persists an in-progress state before SMTP. SMTP failure
+before acceptance leaves the secret retryable, but possible SMTP acceptance
+followed by database finalization failure is marked `ambiguous` and is not
+automatically retried; rotate the key if receipt cannot be confirmed. Key detail pages include
 CSRF-protected POST actions to suspend, activate, and permanently revoke keys,
 update validity windows, update PostgreSQL-backed hard quota limits, reset usage
 counters, and rotate keys through the existing key service and audit behavior.
@@ -249,7 +252,9 @@ or MFA hardening is implemented and documented.
 
 Use Mailpit or another fake/local SMTP service for development and tests. Celery
 task payloads contain IDs only, never plaintext gateway keys. Lost keys cannot
-be resent; rotate and send a replacement key.
+be resent; rotate and send a replacement key. In-progress or ambiguous delivery
+rows are not retried automatically, preventing duplicate key emails after
+possible SMTP acceptance.
 
 ## Production Notes
 

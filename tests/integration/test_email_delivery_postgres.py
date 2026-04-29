@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import AuditLog, EmailDelivery, GatewayKey, OneTimeSecret
@@ -36,6 +36,21 @@ class _FakeEmailService:
             accepted_recipients=(to,),
             provider_status="250 queued",
         )
+
+
+class _CommitFailsAfterSmtpFinalization:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self.commit_count = 0
+
+    async def commit(self) -> None:
+        self.commit_count += 1
+        if self.commit_count == 2:
+            raise RuntimeError("simulated finalization commit failure")
+        await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
 
 
 def _settings() -> Settings:
@@ -91,6 +106,24 @@ def _service(session: AsyncSession, settings: Settings, email_service: _FakeEmai
         owners_repository=OwnersRepository(session),
         audit_repository=AuditRepository(session),
         email_service=email_service,
+    )
+
+
+def _service_with_session_control(
+    session: AsyncSession,
+    settings: Settings,
+    email_service: _FakeEmailService,
+    session_control: object,
+):
+    return EmailDeliveryService(
+        settings=settings,
+        one_time_secrets_repository=OneTimeSecretsRepository(session),
+        email_deliveries_repository=EmailDeliveriesRepository(session),
+        gateway_keys_repository=GatewayKeysRepository(session),
+        owners_repository=OwnersRepository(session),
+        audit_repository=AuditRepository(session),
+        email_service=email_service,
+        session=session_control,  # type: ignore[arg-type]
     )
 
 
@@ -194,3 +227,65 @@ async def test_email_delivery_failed_smtp_records_failure_without_consuming(
     assert secret.consumed_at is None
     assert email_row is not None and email_row.status == "failed"
     assert created.plaintext_key not in (email_row.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_smtp_success_then_finalization_failure_becomes_ambiguous(
+    migrated_postgres_url: str,
+) -> None:
+    settings = _settings()
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                _owner, created, delivery = await _create_key_delivery(session, settings)
+
+        fake_smtp = _FakeEmailService()
+        async with session_factory() as session:
+            session_control = _CommitFailsAfterSmtpFinalization(session)
+            result = await _service_with_session_control(
+                session,
+                settings,
+                fake_smtp,
+                session_control,
+            ).send_pending_key_email(
+                one_time_secret_id=created.one_time_secret_id,
+                email_delivery_id=delivery.id,
+            )
+
+        async with session_factory() as session:
+            secret = await session.get(OneTimeSecret, created.one_time_secret_id)
+            email_row = await session.get(EmailDelivery, delivery.id)
+            audits = (
+                await session.execute(select(AuditLog).where(AuditLog.action == "email_key_ambiguous"))
+            ).scalars().all()
+
+        assert result.status == "ambiguous"
+        assert result.error_code == "email_delivery_finalization_failed"
+        assert len(fake_smtp.sent_bodies) == 1
+        assert created.plaintext_key in fake_smtp.sent_bodies[0]
+        assert secret is not None and secret.status == "pending"
+        assert secret.consumed_at is None
+        assert email_row is not None and email_row.status == "ambiguous"
+        assert created.plaintext_key not in (email_row.error_message or "")
+        serialized_audit = json.dumps([audit.new_values for audit in audits], default=str)
+        assert created.plaintext_key not in serialized_audit
+
+        retry_smtp = _FakeEmailService()
+        async with session_factory() as session:
+            retry = await _service_with_session_control(
+                session,
+                settings,
+                retry_smtp,
+                session,
+            ).send_pending_key_email(
+                one_time_secret_id=created.one_time_secret_id,
+                email_delivery_id=delivery.id,
+            )
+
+        assert retry.status == "ambiguous"
+        assert retry.error_code == "email_delivery_ambiguous"
+        assert retry_smtp.sent_bodies == []
+    finally:
+        await engine.dispose()

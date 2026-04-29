@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 
 from slaif_gateway.cli.common import (
-    cli_db_session,
+    CliDatabaseConfigError,
     echo_kv,
     emit_json,
     handle_cli_error,
@@ -21,6 +21,7 @@ from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.session import get_sessionmaker
 from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
@@ -70,6 +71,13 @@ def send_pending_key(
         if enqueue and send_now:
             raise typer.BadParameter("Use either --enqueue or --send-now, not both")
         if enqueue:
+            if delivery_uuid is not None:
+                sendability = run_async(_get_key_email_sendability(delivery_uuid))
+                if not sendability.can_send:
+                    raise typer.BadParameter(
+                        sendability.blocking_reason
+                        or "This key email delivery cannot be safely queued; rotate the key if needed."
+                    )
             async_result = send_pending_key_email_task.delay(
                 str(secret_uuid),
                 str(delivery_uuid) if delivery_uuid else None,
@@ -96,7 +104,7 @@ def send_pending_key(
         return
 
     emit_json(payload) if json_output else echo_kv(payload)
-    if payload.get("status") == "failed":
+    if payload.get("status") in {"failed", "ambiguous"}:
         raise typer.Exit(code=1)
 
 
@@ -116,7 +124,14 @@ async def _send_pending_key_now(
     actor_admin_id: uuid.UUID | None,
     reason: str | None,
 ) -> PendingKeyEmailResult:
-    async with cli_db_session() as (settings, session):
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+    async with session_factory() as session:
         service = EmailDeliveryService(
             settings=settings,
             one_time_secrets_repository=OneTimeSecretsRepository(session),
@@ -125,6 +140,7 @@ async def _send_pending_key_now(
             owners_repository=OwnersRepository(session),
             audit_repository=AuditRepository(session),
             email_service=EmailService(settings),
+            session=session,
         )
         return await service.send_pending_key_email(
             one_time_secret_id=one_time_secret_id,
@@ -132,6 +148,29 @@ async def _send_pending_key_now(
             actor_admin_id=actor_admin_id,
             reason=reason,
         )
+
+
+async def _get_key_email_sendability(email_delivery_id: uuid.UUID):
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        service = EmailDeliveryService(
+            settings=settings,
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            email_deliveries_repository=EmailDeliveriesRepository(session),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            owners_repository=OwnersRepository(session),
+            audit_repository=AuditRepository(session),
+            email_service=EmailService(settings),
+            session=session,
+        )
+        return await service.get_key_email_delivery_sendability(email_delivery_id)
 
 
 def _result_payload(result: PendingKeyEmailResult) -> dict[str, object]:

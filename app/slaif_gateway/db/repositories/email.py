@@ -67,6 +67,26 @@ class EmailDeliveriesRepository:
     async def get_email_delivery_by_id(self, email_delivery_id: uuid.UUID) -> EmailDelivery | None:
         return await self._session.get(EmailDelivery, email_delivery_id)
 
+    async def get_email_delivery_for_update(self, email_delivery_id: uuid.UUID) -> EmailDelivery | None:
+        statement = select(EmailDelivery).where(EmailDelivery.id == email_delivery_id).with_for_update()
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def mark_sending(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        started_at: datetime,
+    ) -> bool:
+        return await self.update_email_delivery_status(
+            email_delivery_id,
+            status="sending",
+            provider_message_id=None,
+            error_message=None,
+            sent_at=None,
+            failed_at=started_at,
+        )
+
     async def mark_sent(
         self,
         email_delivery_id: uuid.UUID,
@@ -81,6 +101,23 @@ class EmailDeliveriesRepository:
             error_message=None,
             sent_at=sent_at,
             failed_at=None,
+        )
+
+    async def mark_ambiguous(
+        self,
+        email_delivery_id: uuid.UUID,
+        *,
+        failed_at: datetime,
+        error_message: str,
+        provider_message_id: str | None = None,
+    ) -> bool:
+        return await self.update_email_delivery_status(
+            email_delivery_id,
+            status="ambiguous",
+            provider_message_id=provider_message_id,
+            error_message=error_message,
+            sent_at=None,
+            failed_at=failed_at,
         )
 
     async def mark_failed(
