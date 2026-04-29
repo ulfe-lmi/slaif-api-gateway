@@ -35,6 +35,14 @@ not secret values. Admin provider config forms accept `api_key_env_var` names
 only and reject provider-secret-looking values; they never accept, store, or
 display provider key values.
 
+In production, enabled built-in OpenAI/OpenRouter providers require configured,
+non-placeholder upstream provider secrets. The server treats `OPENAI_API_KEY` as
+a client-facing gateway-key variable, not as the upstream OpenAI provider secret;
+likely provider-key values in `OPENAI_API_KEY` fail configuration validation
+with a safe message that names `OPENAI_UPSTREAM_API_KEY` but never logs the
+value. Production `/readyz` checks enabled DB provider config env-var references
+and reports only env var names, never secret values.
+
 Client `Authorization` headers contain gateway-issued keys and are never
 forwarded upstream. Provider adapters construct a new upstream `Authorization`
 header from the server-side provider secret and use an outbound header allowlist.

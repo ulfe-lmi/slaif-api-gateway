@@ -111,4 +111,7 @@ def _provider_api_key(api_key_env_var: str | None, *, settings: Settings, provid
     if isinstance(settings_value, str) and settings_value:
         return settings_value
 
-    raise MissingProviderApiKeyError(provider=provider)
+    raise MissingProviderApiKeyError(
+        f"Provider API key is not configured for environment variable {api_key_env_var}",
+        provider=provider,
+    )

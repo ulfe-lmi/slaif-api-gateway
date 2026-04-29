@@ -27,6 +27,7 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 | Provider errors | Implemented | OpenAI, OpenRouter | Client errors are safe; diagnostics are sanitized and bounded | Provider error and PostgreSQL diagnostic tests |
 | Provider usage parsing | Implemented | OpenAI, OpenRouter | Supports `prompt_tokens`/`completion_tokens`/`total_tokens` and input/output aliases | Unit and integration accounting tests |
 | Provider cost metadata | Partial | OpenRouter | Captures OpenRouter `usage.cost`/`cost_usd` as provider-reported native metadata; hard quota finalization still uses configured pricing/FX | Provider adapter and accounting tests |
+| Production provider-secret validation | Implemented | OpenAI, OpenRouter | Production startup requires non-placeholder upstream secrets for enabled built-in providers, keeps `OPENAI_API_KEY` reserved for client gateway keys, and production `/readyz` checks enabled DB provider config env-var references without exposing values | Config, startup warning, provider factory, readiness, and PostgreSQL readiness tests |
 | Gateway key HMAC storage | Implemented | Not provider-specific | PostgreSQL stores HMAC digest, not plaintext key | Crypto/key service tests |
 | Client Authorization isolation | Implemented | OpenAI, OpenRouter | Client gateway key is replaced by provider key upstream | Provider header tests |
 | Provider key isolation | Implemented | OpenAI, OpenRouter | Provider keys come from server-side env/config and are redacted from diagnostics/logs | Provider/header/redaction tests |

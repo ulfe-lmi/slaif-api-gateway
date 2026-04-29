@@ -1,5 +1,7 @@
 """Health and readiness API routes."""
 
+import os
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -44,6 +46,11 @@ async def readyz(request: Request) -> JSONResponse:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
             schema_status = await check_schema_current(connection)
+            provider_secret_status = (
+                await _provider_secret_status(connection, settings, schema_status.is_current)
+                if settings is not None and settings.APP_ENV.lower() == "production"
+                else None
+            )
     except Exception:  # noqa: BLE001
         return JSONResponse(
             status_code=503,
@@ -65,19 +72,22 @@ async def readyz(request: Request) -> JSONResponse:
                 settings=settings,
                 current_revision=schema_status.current_revision,
                 head_revision=schema_status.head_revision,
+                provider_secret_status=None,
             ),
         )
 
+    ready = provider_secret_status is None or provider_secret_status.status != "missing"
     return JSONResponse(
-        status_code=200,
+        status_code=200 if ready else 503,
         content=_readyz_database_content(
-            status="ok",
+            status="ok" if ready else "not_ready",
             database="ok",
             schema="ok",
             redis=redis_status,
             settings=settings,
             current_revision=schema_status.current_revision,
             head_revision=schema_status.head_revision,
+            provider_secret_status=provider_secret_status,
         ),
     )
 
@@ -106,6 +116,7 @@ def _readyz_database_content(
     settings: Settings | None,
     current_revision: str | None,
     head_revision: str | None,
+    provider_secret_status: "ProviderSecretReadiness | None" = None,
 ) -> dict[str, str | None]:
     content: dict[str, str | None] = {
         "status": status,
@@ -116,4 +127,51 @@ def _readyz_database_content(
     if settings is not None and settings.readyz_include_details():
         content["alembic_current"] = current_revision
         content["alembic_head"] = head_revision
+    if provider_secret_status is not None:
+        content["provider_secrets"] = provider_secret_status.status
+        if settings is not None and settings.readyz_include_details() and provider_secret_status.missing_env_vars:
+            content["missing_provider_secret_env_vars"] = ",".join(provider_secret_status.missing_env_vars)
     return content
+
+
+class ProviderSecretReadiness:
+    def __init__(self, *, status: str, missing_env_vars: tuple[str, ...] = ()) -> None:
+        self.status = status
+        self.missing_env_vars = missing_env_vars
+
+
+async def _provider_secret_status(
+    connection,
+    settings: Settings | None,
+    schema_is_current: bool,
+) -> ProviderSecretReadiness:
+    if not schema_is_current:
+        return ProviderSecretReadiness(status="not_checked")
+
+    result = await connection.execute(
+        text(
+            "SELECT api_key_env_var FROM provider_configs "
+            "WHERE enabled = true ORDER BY provider ASC"
+        )
+    )
+    rows = result.mappings().all()
+    missing_env_vars = tuple(
+        sorted(
+            {
+                str(row["api_key_env_var"])
+                for row in rows
+                if row.get("api_key_env_var")
+                and not _provider_secret_env_var_is_configured(str(row["api_key_env_var"]), settings)
+            }
+        )
+    )
+    if missing_env_vars:
+        return ProviderSecretReadiness(status="missing", missing_env_vars=missing_env_vars)
+    return ProviderSecretReadiness(status="ok")
+
+
+def _provider_secret_env_var_is_configured(env_var: str, settings: Settings | None) -> bool:
+    if os.getenv(env_var):
+        return True
+    settings_value = getattr(settings, env_var, None) if settings is not None else None
+    return isinstance(settings_value, str) and bool(settings_value.strip())
