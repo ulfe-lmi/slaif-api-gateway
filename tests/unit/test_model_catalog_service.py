@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import inspect
@@ -44,7 +45,7 @@ class _FakeProviderConfigsRepository:
 def _auth_key(
     *,
     allow_all_models: bool = True,
-    allowed_models: tuple[str, ...] = (),
+    allowed_models: Sequence[str] = (),
     allowed_providers: tuple[str, ...] | None = None,
 ) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
@@ -57,7 +58,7 @@ def _auth_key(
         valid_from=now - timedelta(minutes=1),
         valid_until=now + timedelta(minutes=1),
         allow_all_models=allow_all_models,
-        allowed_models=allowed_models,
+        allowed_models=tuple(allowed_models),
         allow_all_endpoints=True,
         allowed_endpoints=(),
         allowed_providers=allowed_providers,
@@ -132,7 +133,7 @@ async def test_returns_client_facing_model_ids_and_applies_allowed_models_filter
 
 
 @pytest.mark.asyncio
-async def test_empty_allowed_models_is_treated_as_no_restriction() -> None:
+async def test_empty_allowed_models_returns_no_models() -> None:
     service = ModelCatalogService(
         model_routes_repository=_FakeModelRoutesRepository(
             [
@@ -150,7 +151,23 @@ async def test_empty_allowed_models_is_treated_as_no_restriction() -> None:
 
     result = await service.list_visible_models(_auth_key(allow_all_models=False, allowed_models=()))
 
-    assert [model.id for model in result] == ["gpt-4.1-mini", "openai/gpt-4.1-mini"]
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_empty_allowed_models_list_returns_no_models() -> None:
+    service = ModelCatalogService(
+        model_routes_repository=_FakeModelRoutesRepository(
+            [_FakeModelRoute(requested_model="gpt-4.1-mini", provider="openai")]
+        ),
+        provider_configs_repository=_FakeProviderConfigsRepository(
+            [_FakeProviderConfig(provider="openai", enabled=True)]
+        ),
+    )
+
+    result = await service.list_visible_models(_auth_key(allow_all_models=False, allowed_models=[]))
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -163,6 +180,44 @@ async def test_applies_allowed_provider_filtering_and_handles_empty_routes() -> 
     )
 
     result = await service.list_visible_models(_auth_key(allowed_providers=("openai",)))
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_applies_allowed_provider_filtering_to_visible_routes() -> None:
+    service = ModelCatalogService(
+        model_routes_repository=_FakeModelRoutesRepository(
+            [
+                _FakeModelRoute(requested_model="gpt-4.1-mini", provider="openai"),
+                _FakeModelRoute(requested_model="openai/gpt-4.1-mini", provider="openrouter"),
+            ]
+        ),
+        provider_configs_repository=_FakeProviderConfigsRepository(
+            [
+                _FakeProviderConfig(provider="openai", enabled=True),
+                _FakeProviderConfig(provider="openrouter", enabled=True),
+            ]
+        ),
+    )
+
+    result = await service.list_visible_models(_auth_key(allowed_providers=("openrouter",)))
+
+    assert [model.id for model in result] == ["openai/gpt-4.1-mini"]
+
+
+@pytest.mark.asyncio
+async def test_empty_allowed_providers_returns_no_models_when_provider_policy_is_present() -> None:
+    service = ModelCatalogService(
+        model_routes_repository=_FakeModelRoutesRepository(
+            [_FakeModelRoute(requested_model="gpt-4.1-mini", provider="openai")]
+        ),
+        provider_configs_repository=_FakeProviderConfigsRepository(
+            [_FakeProviderConfig(provider="openai", enabled=True)]
+        ),
+    )
+
+    result = await service.list_visible_models(_auth_key(allowed_providers=()))
 
     assert result == []
 

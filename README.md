@@ -24,7 +24,7 @@ For exact reviewer-facing behavior, see:
 Implemented:
 
 - `GET /healthz` and `GET /readyz`.
-- Authenticated `GET /v1/models` backed by local provider and route metadata.
+- Authenticated `GET /v1/models` backed by local provider and route metadata, filtered by the gateway key's effective model allow-list.
 - Non-streaming and SSE streaming `POST /v1/chat/completions` with request policy checks, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.

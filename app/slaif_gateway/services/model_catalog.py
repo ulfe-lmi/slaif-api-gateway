@@ -21,20 +21,19 @@ class ModelCatalogService:
         self._provider_configs_repository = provider_configs_repository
 
     async def list_visible_models(self, authenticated_key: AuthenticatedGatewayKey) -> list[OpenAIModel]:
+        if not authenticated_key.allow_all_models and not authenticated_key.allowed_models:
+            return []
+
         routes = await self._model_routes_repository.list_visible_model_routes()
         provider_configs = await self._provider_configs_repository.list_provider_configs()
         enabled_provider_names = {
             provider_config.provider for provider_config in provider_configs if provider_config.enabled
         }
 
-        restrict_models = (
-            not authenticated_key.allow_all_models and len(authenticated_key.allowed_models) > 0
-        )
+        restrict_models = not authenticated_key.allow_all_models
         allowed_models = set(authenticated_key.allowed_models)
 
-        restrict_providers = authenticated_key.allowed_providers is not None and len(
-            authenticated_key.allowed_providers
-        ) > 0
+        restrict_providers = authenticated_key.allowed_providers is not None
         allowed_providers = set(authenticated_key.allowed_providers or ())
 
         models: list[OpenAIModel] = []

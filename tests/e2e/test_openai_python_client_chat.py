@@ -78,6 +78,8 @@ async def _create_test_data(
     *,
     provider: str = "openai",
     model: str = TEST_MODEL,
+    allowed_models: list[str] | None = None,
+    allowed_endpoints: list[str] | None = None,
     base_url: str = "https://api.openai.com/v1",
     api_key_env_var: str = "OPENAI_UPSTREAM_API_KEY",
     owner_label: str = "OpenAI",
@@ -202,8 +204,10 @@ async def _create_test_data(
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
                     request_limit_total=100,
-                    allowed_models=[model],
-                    allowed_endpoints=[CHAT_COMPLETIONS_ENDPOINT],
+                    allowed_models=[model] if allowed_models is None else allowed_models,
+                    allowed_endpoints=[CHAT_COMPLETIONS_ENDPOINT]
+                    if allowed_endpoints is None
+                    else allowed_endpoints,
                     note=f"{notes_prefix} key",
                 )
             )
@@ -470,6 +474,38 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
     )
     assert FAKE_OPENAI_UPSTREAM_KEY not in provider_config_text
     assert state.provider_config.api_key_env_var == "OPENAI_UPSTREAM_API_KEY"
+
+
+@pytest.mark.e2e
+def test_openai_python_client_models_list_empty_for_no_allowed_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_test_data(database_url, allowed_models=[], allowed_endpoints=["/v1/models"])
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            router.route(host="127.0.0.1").pass_through()
+
+            client = OpenAI()
+            models = client.models.list()
+
+    assert models.object == "list"
+    assert models.data == []
 
 
 @pytest.mark.e2e

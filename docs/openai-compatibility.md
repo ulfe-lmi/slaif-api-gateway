@@ -26,6 +26,18 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 
 Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error handlers. The gateway does not claim 100% OpenAI platform compatibility outside the rows marked implemented.
 
+## Model Catalog Visibility
+
+`GET /v1/models` returns an OpenAI-shaped list containing only enabled, visible route metadata allowed for the authenticated gateway key. The endpoint does not call upstream providers and does not create usage or quota records.
+
+Model access follows the same key policy used by chat authorization:
+
+- `allow_all_models=true` exposes otherwise enabled and visible model routes.
+- `allow_all_models=false` with a non-empty `allowed_models` list exposes only those allowed model IDs when they are otherwise enabled and visible.
+- `allow_all_models=false` with an empty `allowed_models` list returns `{"object": "list", "data": []}`.
+
+This avoids exposing local model catalog entries to keys that cannot use any model.
+
 ## Chat Completions Request Fields
 
 `ChatCompletionRequest` requires:
