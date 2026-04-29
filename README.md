@@ -35,6 +35,7 @@ Implemented:
 - Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
 - Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, key list/detail pages with CSRF-protected create, suspend/activate/revoke, validity-window, PostgreSQL hard quota limit, usage-counter reset, rotation, and create/rotate email-delivery mode actions, read-only owner/institution/cohort pages, provider config pages with CSRF-protected create/edit/enable/disable metadata actions, model route pages with CSRF-protected create/edit/enable/disable metadata actions, pricing pages with CSRF-protected create/edit/enable/disable metadata actions, FX pages with CSRF-protected create/edit metadata actions, usage/audit activity pages, and email delivery pages with CSRF-protected send-now/enqueue actions for valid pending key deliveries, secure cookie settings, server-side session rows, and CSRF-protected forms.
 - Explicit CLI/dashboard-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, and Celery task payloads that carry IDs only.
+- Admin role semantics are explicit for the current implementation: every active admin account is a full operator, and `superadmin` is metadata/future-proofing rather than an enforced RBAC boundary.
 - Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
 
 Not implemented yet:
@@ -185,6 +186,14 @@ The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/lo
 Arbitrary old-key dashboard email resend actions, bulk key creation forms, pricing import/upload forms, FX import/upload/external-refresh forms, and owner, institution, cohort, usage, and audit mutation pages are not implemented yet.
 
 Admin passwords are verified with the existing Argon2id utilities. Login has DB/audit-backed failed-attempt rate limiting by normalized email and client IP; failed attempts and temporary lockout events are audited, messages remain generic, and Redis is not required. Login creates a server-side `admin_sessions` row and stores only HMAC-hashed session and CSRF tokens in PostgreSQL. The browser receives a session cookie named by `ADMIN_SESSION_COOKIE_NAME`; it is `HttpOnly`, `SameSite=Lax` by default, and `Secure` by default in production. State-changing admin forms use CSRF tokens. This foundation uses local Jinja2 templates and static CSS only; it does not use CDN Tailwind or CDN HTMX.
+
+All active admin users are currently full operators. The `role` field and the
+CLI `--superadmin` flag are preserved as metadata/future-proofing for later
+RBAC work, but the current dashboard and admin CLI do not enforce per-role
+permissions or superadmin-only actions. Inactive admin accounts cannot log in,
+and revoked or expired admin sessions cannot access admin routes. Protect every
+active admin account as highly privileged; MFA and role-gated permissions remain
+future hardening options.
 
 Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
 failure ledger metadata for operator troubleshooting. Raw provider response
