@@ -273,7 +273,11 @@ never recover or send old plaintext keys.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
   Pricing import/upload and FX import/upload/external-refresh workflows are future work.
-- Docker/Nginx deployment packaging is not implemented yet.
+- Docker Compose packaging and an optional Nginx example are included for
+  local/development service layout and reverse-proxy guidance. They are not a
+  production certification; production operators must replace all secrets, run
+  migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
+  or allowlisted.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.
 - External Slack/PagerDuty/webhook alert integrations are not implemented yet.

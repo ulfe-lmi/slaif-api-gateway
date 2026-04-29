@@ -154,9 +154,10 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
 - Bulk/import dashboard workflows, owner/institution/cohort mutation pages,
-  usage/audit mutation pages, MFA, and deployment packaging remain outside the
-  current admin surface. The implemented dashboard and key-email delivery
-  workflows are summarized in `docs/compatibility-matrix.md` and
+  usage/audit mutation pages, and MFA remain outside the current admin surface.
+  Docker/Nginx packaging is deployment documentation and service layout only; it
+  does not change `/v1` compatibility. The implemented dashboard and key-email
+  delivery workflows are summarized in `docs/compatibility-matrix.md` and
   `docs/security-model.md`.
 - Automatic key-email sending by default. Key email delivery is explicit through
   create/rotate email modes, CLI commands, or the one-time-secret-backed email
