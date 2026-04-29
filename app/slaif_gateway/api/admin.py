@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -48,6 +49,7 @@ from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
 from slaif_gateway.schemas.keys import (
@@ -120,6 +122,20 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
         "Enter an audit reason before changing provider config metadata.",
     ),
     "invalid_provider_config": ("error", "Enter valid provider config metadata."),
+    "model_route_created": ("success", "Model route created."),
+    "model_route_updated": ("success", "Model route updated."),
+    "model_route_enabled": ("success", "Model route enabled."),
+    "model_route_disabled": ("success", "Model route disabled."),
+    "model_route_failed": ("error", "Model route action failed."),
+    "model_route_disable_confirmation_required": (
+        "error",
+        "Confirm model route disable before continuing.",
+    ),
+    "model_route_reason_required": (
+        "error",
+        "Enter an audit reason before changing model route metadata.",
+    ),
+    "invalid_model_route": ("error", "Enter valid model route metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -1647,6 +1663,7 @@ async def list_admin_routes(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "routes": rows,
             "filters": {
                 "provider": provider or "",
@@ -1658,6 +1675,347 @@ async def list_admin_routes(
                 "offset": offset,
             },
         },
+    )
+
+
+@router.get("/routes/new", response_class=HTMLResponse)
+async def create_admin_route_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_route_form(
+        request,
+        template_name="routes/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_route_form(),
+        provider_choices=await _load_route_provider_choices(request),
+    )
+
+
+@router.post("/routes/new", response_class=HTMLResponse)
+async def create_admin_route(
+    request: Request,
+    csrf_token: str = Form(""),
+    requested_model: str = Form(""),
+    match_type: str = Form("exact"),
+    endpoint: str = Form(CHAT_COMPLETIONS_ENDPOINT),
+    provider: str = Form(""),
+    upstream_model: str = Form(""),
+    priority: str = Form("100"),
+    enabled: str = Form(""),
+    visible_in_models: str = Form(""),
+    supports_streaming: str = Form(""),
+    capabilities: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    provider_choices = await _load_route_provider_choices(request)
+    form = _route_form_from_values(
+        requested_model=requested_model,
+        match_type=match_type,
+        endpoint=endpoint,
+        provider=provider,
+        upstream_model=upstream_model,
+        priority=priority,
+        enabled=enabled,
+        visible_in_models=visible_in_models,
+        supports_streaming=supports_streaming,
+        capabilities=capabilities,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_model_route_form(form, provider_choices=provider_choices, require_reason=True)
+    except ValueError as exc:
+        return _render_route_form(
+            request,
+            template_name="routes/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_model_route_service_scope(request) as service:
+            created = await service.create_model_route(
+                requested_model=parsed["requested_model"],
+                match_type=parsed["match_type"],
+                endpoint=parsed["endpoint"],
+                provider=parsed["provider"],
+                upstream_model=parsed["upstream_model"],
+                priority=parsed["priority"],
+                enabled=parsed["enabled"],
+                visible_in_models=parsed["visible_in_models"],
+                supports_streaming=parsed["supports_streaming"],
+                capabilities=parsed["capabilities"],
+                notes=parsed["notes"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except ValueError:
+        return _render_route_form(
+            request,
+            template_name="routes/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            error=_ADMIN_STATUS_MESSAGES["invalid_model_route"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_route(created.id, message="model_route_created")
+
+
+@router.get("/routes/{route_id}/edit", response_class=HTMLResponse)
+async def edit_admin_route_form(request: Request, route_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_catalog_dashboard_service_scope(request) as service:
+            route = await service.get_route_detail(parsed_route_id)
+    except AdminCatalogNotFoundError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    return _render_route_form(
+        request,
+        template_name="routes/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_route_form_from_detail(route),
+        provider_choices=await _load_route_provider_choices(request),
+        route_id=parsed_route_id,
+    )
+
+
+@router.post("/routes/{route_id}/edit", response_class=HTMLResponse)
+async def update_admin_route(
+    request: Request,
+    route_id: str,
+    csrf_token: str = Form(""),
+    requested_model: str = Form(""),
+    match_type: str = Form("exact"),
+    endpoint: str = Form(CHAT_COMPLETIONS_ENDPOINT),
+    provider: str = Form(""),
+    upstream_model: str = Form(""),
+    priority: str = Form("100"),
+    enabled: str = Form(""),
+    visible_in_models: str = Form(""),
+    supports_streaming: str = Form(""),
+    capabilities: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    provider_choices = await _load_route_provider_choices(request)
+    form = _route_form_from_values(
+        requested_model=requested_model,
+        match_type=match_type,
+        endpoint=endpoint,
+        provider=provider,
+        upstream_model=upstream_model,
+        priority=priority,
+        enabled=enabled,
+        visible_in_models=visible_in_models,
+        supports_streaming=supports_streaming,
+        capabilities=capabilities,
+        notes=notes,
+        reason=reason,
+    )
+    try:
+        parsed = _parse_model_route_form(form, provider_choices=provider_choices, require_reason=True)
+    except ValueError as exc:
+        return _render_route_form(
+            request,
+            template_name="routes/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            route_id=parsed_route_id,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_model_route_service_scope(request) as service:
+            updated = await service.update_model_route(
+                parsed_route_id,
+                requested_model=parsed["requested_model"],
+                match_type=parsed["match_type"],
+                endpoint=parsed["endpoint"],
+                provider=parsed["provider"],
+                upstream_model=parsed["upstream_model"],
+                priority=parsed["priority"],
+                enabled=parsed["enabled"],
+                visible_in_models=parsed["visible_in_models"],
+                supports_streaming=parsed["supports_streaming"],
+                capabilities=parsed["capabilities"],
+                notes=parsed["notes"],
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed["reason"],
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Model route not found.", status_code=404)
+    except ValueError:
+        return _render_route_form(
+            request,
+            template_name="routes/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            route_id=parsed_route_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_model_route"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_route(updated.id, message="model_route_updated")
+
+
+@router.post("/routes/{route_id}/enable", response_class=HTMLResponse)
+async def enable_admin_route(
+    request: Request,
+    route_id: str,
+    csrf_token: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    return await _set_admin_route_enabled(
+        request,
+        route_id=route_id,
+        csrf_token=csrf_token,
+        enabled=True,
+        reason=reason,
+    )
+
+
+@router.post("/routes/{route_id}/disable", response_class=HTMLResponse)
+async def disable_admin_route(
+    request: Request,
+    route_id: str,
+    csrf_token: str = Form(""),
+    confirm_disable: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if not _is_checked(confirm_disable):
+        return _redirect_to_admin_route(parsed_route_id, message="model_route_disable_confirmation_required")
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_route(parsed_route_id, message="model_route_reason_required")
+
+    try:
+        async with _admin_model_route_service_scope(request) as service:
+            await service.set_model_route_enabled(
+                parsed_route_id,
+                enabled=False,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Model route not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_route(parsed_route_id, message="model_route_failed")
+
+    return _redirect_to_admin_route(parsed_route_id, message="model_route_disabled")
+
+
+async def _set_admin_route_enabled(
+    request: Request,
+    *,
+    route_id: str,
+    csrf_token: str,
+    enabled: bool,
+    reason: str,
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Model route not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_route(parsed_route_id, message="model_route_reason_required")
+
+    try:
+        async with _admin_model_route_service_scope(request) as service:
+            await service.set_model_route_enabled(
+                parsed_route_id,
+                enabled=enabled,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Model route not found.", status_code=404)
+    except ValueError:
+        return _redirect_to_admin_route(parsed_route_id, message="model_route_failed")
+
+    return _redirect_to_admin_route(
+        parsed_route_id,
+        message="model_route_enabled" if enabled else "model_route_disabled",
     )
 
 
@@ -1689,6 +2047,7 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "route": route,
         },
     )
@@ -2479,6 +2838,17 @@ async def _admin_provider_config_service_scope(request: Request) -> AsyncIterato
 
 
 @asynccontextmanager
+async def _admin_model_route_service_scope(request: Request) -> AsyncIterator[ModelRouteService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield ModelRouteService(
+                model_routes_repository=ModelRoutesRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -2587,6 +2957,11 @@ def _redirect_to_admin_email_delivery(email_delivery_id: uuid.UUID, *, message: 
 def _redirect_to_admin_provider(provider_config_id: uuid.UUID, *, message: str) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/providers/{provider_config_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_route(route_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/routes/{route_id}?{query}", status_code=303)
 
 
 def _set_no_store_headers(response: Response) -> None:
@@ -2727,6 +3102,211 @@ def _provider_config_form_from_values(
         "notes": notes,
         "reason": reason,
     }
+
+
+async def _load_route_provider_choices(request: Request) -> list[object]:
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        return await service.list_providers(limit=200)
+
+
+def _render_route_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    provider_choices: list[object],
+    route_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "route_id": route_id,
+            "form": form,
+            "provider_choices": provider_choices,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _default_route_form() -> dict[str, str]:
+    return {
+        "requested_model": "",
+        "match_type": "exact",
+        "endpoint": CHAT_COMPLETIONS_ENDPOINT,
+        "provider": "",
+        "upstream_model": "",
+        "priority": "100",
+        "enabled": "true",
+        "visible_in_models": "true",
+        "supports_streaming": "true",
+        "capabilities": "",
+        "notes": "",
+        "reason": "",
+    }
+
+
+def _route_form_from_detail(route: object) -> dict[str, str]:
+    capabilities = getattr(route, "capabilities", {}) or {}
+    return _route_form_from_values(
+        requested_model=str(getattr(route, "requested_model")),
+        match_type=str(getattr(route, "match_type")),
+        endpoint=str(getattr(route, "endpoint")),
+        provider=str(getattr(route, "provider")),
+        upstream_model=str(getattr(route, "upstream_model")),
+        priority=str(getattr(route, "priority")),
+        enabled="true" if bool(getattr(route, "enabled")) else "",
+        visible_in_models="true" if bool(getattr(route, "visible_in_models")) else "",
+        supports_streaming="true" if bool(getattr(route, "supports_streaming")) else "",
+        capabilities=json.dumps(capabilities, sort_keys=True) if capabilities else "",
+        notes=str(getattr(route, "notes") or ""),
+        reason="",
+    )
+
+
+def _route_form_from_values(
+    *,
+    requested_model: str,
+    match_type: str,
+    endpoint: str,
+    provider: str,
+    upstream_model: str,
+    priority: str,
+    enabled: str,
+    visible_in_models: str,
+    supports_streaming: str,
+    capabilities: str,
+    notes: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "requested_model": requested_model,
+        "match_type": match_type,
+        "endpoint": endpoint,
+        "provider": provider,
+        "upstream_model": upstream_model,
+        "priority": priority,
+        "enabled": enabled,
+        "visible_in_models": visible_in_models,
+        "supports_streaming": supports_streaming,
+        "capabilities": capabilities,
+        "notes": notes,
+        "reason": reason,
+    }
+
+
+def _parse_model_route_form(
+    form: dict[str, str],
+    *,
+    provider_choices: list[object],
+    require_reason: bool,
+) -> dict[str, object]:
+    requested_model = _parse_route_text(form.get("requested_model"), field_name="Requested model")
+    match_type = (form.get("match_type") or "exact").strip()
+    if match_type not in {"exact", "prefix", "glob"}:
+        raise ValueError("Match type must be exact, prefix, or glob.")
+    endpoint = _parse_route_endpoint(form.get("endpoint"))
+    provider = _parse_provider_slug(form.get("provider"))
+    known_providers = {str(getattr(choice, "provider")) for choice in provider_choices}
+    if provider not in known_providers:
+        raise ValueError("Select a known provider config.")
+    upstream_model = _clean_admin_reason(form.get("upstream_model")) or requested_model
+    priority = _parse_required_non_negative_admin_int(form.get("priority"), field_name="priority")
+    capabilities = _parse_route_capabilities(form.get("capabilities"))
+    reason = _clean_admin_reason(form.get("reason"))
+    if require_reason and reason is None:
+        raise ValueError(_ADMIN_STATUS_MESSAGES["model_route_reason_required"][1])
+
+    return {
+        "requested_model": requested_model,
+        "match_type": match_type,
+        "endpoint": endpoint,
+        "provider": provider,
+        "upstream_model": upstream_model,
+        "priority": priority,
+        "enabled": _is_checked(form.get("enabled")),
+        "visible_in_models": _is_checked(form.get("visible_in_models")),
+        "supports_streaming": _is_checked(form.get("supports_streaming")),
+        "capabilities": capabilities,
+        "notes": _clean_admin_reason(form.get("notes")),
+        "reason": reason,
+    }
+
+
+def _parse_route_text(value: str | None, *, field_name: str) -> str:
+    cleaned = _clean_admin_reason(value)
+    if cleaned is None:
+        raise ValueError(f"{field_name} is required.")
+    if any(ch.isspace() for ch in cleaned):
+        raise ValueError(f"{field_name} must not contain whitespace.")
+    if _looks_like_provider_secret_value(cleaned):
+        raise ValueError(f"{field_name} must not contain secret-looking values.")
+    return cleaned
+
+
+def _parse_route_endpoint(value: str | None) -> str:
+    endpoint = _parse_route_text(value, field_name="Endpoint")
+    if endpoint == "chat.completions":
+        return CHAT_COMPLETIONS_ENDPOINT
+    if not endpoint.startswith("/v1/"):
+        raise ValueError("Endpoint must be a /v1 path or chat.completions.")
+    parsed = urlparse(endpoint)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Endpoint must be a safe path without query parameters.")
+    return endpoint
+
+
+def _parse_route_capabilities(value: str | None) -> dict[str, object]:
+    raw = (value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Capabilities must be a JSON object.") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Capabilities must be a JSON object.")
+    if _route_metadata_contains_secret(parsed):
+        raise ValueError("Route metadata must not contain secret-looking values.")
+    return parsed
+
+
+def _route_metadata_contains_secret(value: object) -> bool:
+    secret_key_names = {
+        "api_key",
+        "api_key_value",
+        "authorization",
+        "encrypted_payload",
+        "nonce",
+        "password",
+        "password_hash",
+        "provider_key",
+        "secret",
+        "session_token",
+        "token",
+        "token_hash",
+    }
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key).strip().lower()
+            if key_text in secret_key_names or "secret" in key_text:
+                return True
+            if _route_metadata_contains_secret(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_route_metadata_contains_secret(item) for item in value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        return _looks_like_provider_secret_value(value) or lowered.startswith(("bearer ", "sk-"))
+    return False
 
 
 def _parse_provider_config_form(

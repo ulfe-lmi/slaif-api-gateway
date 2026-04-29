@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Model Route{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-edit-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-edit-heading">Edit Model Route</h1>
+      <p class="muted">Update local route metadata without changing provider adapter behavior.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes/{{ route_id }}">Route detail</a>
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/routes/{{ route_id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="route-edit-match-heading">
+      <h2 id="route-edit-match-heading">Match</h2>
+      <div class="form-grid">
+        <label>
+          Requested model or pattern
+          <input name="requested_model" value="{{ form.requested_model }}" required autocomplete="off">
+        </label>
+        <label>
+          Match type
+          <select name="match_type">
+            <option value="exact" {% if form.match_type == "exact" %}selected{% endif %}>Exact</option>
+            <option value="prefix" {% if form.match_type == "prefix" %}selected{% endif %}>Prefix</option>
+            <option value="glob" {% if form.match_type == "glob" %}selected{% endif %}>Glob</option>
+          </select>
+        </label>
+        <label>
+          Endpoint
+          <input name="endpoint" value="{{ form.endpoint }}" required autocomplete="off">
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-edit-target-heading">
+      <h2 id="route-edit-target-heading">Target</h2>
+      <p class="warning-text">Provider config choices expose environment variable names only. Do not enter provider key values in route metadata.</p>
+      <div class="form-grid">
+        <label>
+          Provider config
+          <select name="provider" required>
+            <option value="">Select provider</option>
+            {% for provider in provider_choices %}
+            <option value="{{ provider.provider }}" {% if form.provider == provider.provider %}selected{% endif %}>
+              {{ provider.display_name }} ({{ provider.provider }}) / {{ provider.api_key_env_var }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Upstream model
+          <input name="upstream_model" value="{{ form.upstream_model }}" autocomplete="off">
+        </label>
+        <label>
+          Priority
+          <input name="priority" value="{{ form.priority }}" inputmode="numeric" required>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-edit-flags-heading">
+      <h2 id="route-edit-flags-heading">Flags</h2>
+      <div class="form-grid">
+        <label class="checkbox-row">
+          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+          <span>Enabled</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="visible_in_models" value="true" {% if form.visible_in_models %}checked{% endif %}>
+          <span>Visible in /v1/models</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="supports_streaming" value="true" {% if form.supports_streaming %}checked{% endif %}>
+          <span>Supports streaming</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-edit-metadata-heading">
+      <h2 id="route-edit-metadata-heading">Metadata</h2>
+      <label>
+        Capabilities JSON
+        <textarea name="capabilities">{{ form.capabilities }}</textarea>
+      </label>
+      <label>
+        Notes
+        <textarea name="notes">{{ form.notes }}</textarea>
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+      </label>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-edit-submit-heading">
+      <h2 id="route-edit-submit-heading">Save</h2>
+      <p class="muted">This updates route metadata only. Pricing, FX, provider configs, forwarding, and adapter behavior are unchanged.</p>
+      <button type="submit">Save route</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

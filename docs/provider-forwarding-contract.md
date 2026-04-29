@@ -11,6 +11,10 @@ This document describes exactly how implemented `/v1/chat/completions` requests 
 
 Anthropic-family, Google, Meta, Mistral, Qwen, and other non-OpenAI model names are supported only when a route sends them to OpenRouter's OpenAI-compatible interface. There is no native Anthropic adapter in this implementation.
 
+Model route rows are local metadata used by the existing route resolver. They
+may be managed from the admin dashboard, but that dashboard workflow does not
+change the forwarding contract or provider adapter semantics described below.
+
 ## OpenAI Upstream Forwarding
 
 | Area | Contract |
