@@ -37,6 +37,10 @@ class ModelRouteService:
         enabled: bool,
         notes: str | None,
         endpoint: str = CHAT_COMPLETIONS_ENDPOINT,
+        supports_streaming: bool = True,
+        capabilities: dict[str, object] | None = None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> ModelRoute:
         normalized_requested_model = _required_text(requested_model, "Requested model")
         normalized_match_type = _normalize_match_type(match_type)
@@ -52,13 +56,17 @@ class ModelRouteService:
             priority=priority,
             enabled=enabled,
             visible_in_models=visible_in_models,
+            supports_streaming=supports_streaming,
+            capabilities=capabilities,
             notes=_clean_optional(notes),
         )
         await self._audit.add_audit_log(
+            admin_user_id=actor_admin_id,
             action="model_route_created",
             entity_type="model_route",
             entity_id=row.id,
             new_values=_safe_audit_values(row),
+            note=_clean_optional(reason),
         )
         return row
 
@@ -86,7 +94,14 @@ class ModelRouteService:
             raise RecordNotFoundError("Model route")
         return row
 
-    async def set_model_route_enabled(self, route_id: uuid.UUID, *, enabled: bool) -> ModelRoute:
+    async def set_model_route_enabled(
+        self,
+        route_id: uuid.UUID,
+        *,
+        enabled: bool,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> ModelRoute:
         row = await self.get_model_route(route_id)
         old_enabled = row.enabled
         updated = await self._routes.set_model_route_enabled(route_id, enabled=enabled)
@@ -94,11 +109,69 @@ class ModelRouteService:
             raise RecordNotFoundError("Model route")
         row.enabled = enabled
         await self._audit.add_audit_log(
+            admin_user_id=actor_admin_id,
             action="model_route_enabled" if enabled else "model_route_disabled",
             entity_type="model_route",
             entity_id=row.id,
             old_values={"enabled": old_enabled},
             new_values={"enabled": enabled},
+            note=_clean_optional(reason),
+        )
+        return row
+
+    async def update_model_route(
+        self,
+        route_id: uuid.UUID | str,
+        *,
+        requested_model: str,
+        match_type: str,
+        provider: str,
+        upstream_model: str | None,
+        priority: int,
+        visible_in_models: bool,
+        enabled: bool,
+        supports_streaming: bool,
+        capabilities: dict[str, object] | None,
+        notes: str | None,
+        endpoint: str = CHAT_COMPLETIONS_ENDPOINT,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str | None = None,
+    ) -> ModelRoute:
+        parsed_route_id = _parse_route_id(route_id)
+        existing = await self.get_model_route(parsed_route_id)
+        old_values = _safe_audit_values(existing)
+
+        normalized_requested_model = _required_text(requested_model, "Requested model")
+        normalized_match_type = _normalize_match_type(match_type)
+        if priority < 0:
+            raise ValueError("Priority must be non-negative")
+
+        updated = await self._routes.update_model_route_metadata(
+            parsed_route_id,
+            requested_model=normalized_requested_model,
+            match_type=normalized_match_type,
+            endpoint=normalize_endpoint(endpoint),
+            provider=_required_text(provider, "Provider"),
+            upstream_model=_clean_optional(upstream_model) or normalized_requested_model,
+            priority=priority,
+            enabled=enabled,
+            visible_in_models=visible_in_models,
+            supports_streaming=supports_streaming,
+            capabilities=capabilities or {},
+            notes=_clean_optional(notes),
+        )
+        if not updated:
+            raise RecordNotFoundError("Model route")
+
+        row = await self.get_model_route(parsed_route_id)
+        await self._audit.add_audit_log(
+            admin_user_id=actor_admin_id,
+            action="model_route_updated",
+            entity_type="model_route",
+            entity_id=row.id,
+            old_values=old_values,
+            new_values=_safe_audit_values(row),
+            note=_clean_optional(reason),
         )
         return row
 
@@ -108,6 +181,15 @@ def normalize_endpoint(value: str) -> str:
     if endpoint == "chat.completions":
         return CHAT_COMPLETIONS_ENDPOINT
     return endpoint
+
+
+def _parse_route_id(route_id: uuid.UUID | str) -> uuid.UUID:
+    if isinstance(route_id, uuid.UUID):
+        return route_id
+    try:
+        return uuid.UUID(route_id)
+    except ValueError as exc:
+        raise RecordNotFoundError("Model route") from exc
 
 
 def _normalize_match_type(value: str) -> str:

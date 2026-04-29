@@ -132,6 +132,7 @@ def _route() -> AdminRouteDetail:
         enabled=True,
         visible_in_models=True,
         supports_streaming=True,
+        capabilities={"vision": False},
         capabilities_summary="vision",
         notes="safe route note",
         created_at=datetime.now(UTC),

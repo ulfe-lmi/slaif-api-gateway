@@ -280,6 +280,7 @@ def _to_route_list_row(row: ModelRoute) -> AdminRouteListRow:
         enabled=row.enabled,
         visible_in_models=row.visible_in_models,
         supports_streaming=row.supports_streaming,
+        capabilities=row.capabilities or {},
         capabilities_summary=_json_summary(row.capabilities),
         notes=row.notes,
         created_at=row.created_at,

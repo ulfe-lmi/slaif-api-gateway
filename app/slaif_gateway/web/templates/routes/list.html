@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Routing Catalog</p>
       <h1 id="routes-heading">Model Routes</h1>
-      <p class="muted">Read-only routing metadata. Enable/disable and priority edits are not implemented here.</p>
+      <p class="muted">Local routing metadata for future /v1 model resolution.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/routes/new">Create route</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,6 +19,10 @@
       </form>
     </div>
   </header>
+
+  {% if admin_status_message %}
+  <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
+  {% endif %}
 
   <form class="filter-bar" method="get" action="/admin/routes">
     <label>Provider<input name="provider" value="{{ filters.provider }}" autocomplete="off"></label>

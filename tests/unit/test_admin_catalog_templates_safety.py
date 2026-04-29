@@ -75,6 +75,7 @@ def _catalog_records():
         enabled=True,
         visible_in_models=True,
         supports_streaming=True,
+        capabilities={"vision": False},
         capabilities_summary="vision",
         notes="safe route note",
         created_at=datetime.now(UTC),
@@ -224,7 +225,9 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
             client.get(f"/admin/providers/{provider.id}").text,
             client.get(f"/admin/providers/{provider.id}/edit").text,
             client.get("/admin/routes").text,
+            client.get("/admin/routes/new").text,
             client.get(f"/admin/routes/{route.id}").text,
+            client.get(f"/admin/routes/{route.id}/edit").text,
             client.get("/admin/pricing").text,
             client.get(f"/admin/pricing/{pricing.id}").text,
             client.get("/admin/fx").text,
@@ -237,6 +240,9 @@ def test_admin_catalog_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "/admin/providers/new" in combined
     assert f"/admin/providers/{provider.id}/edit" in combined
     assert f"/admin/providers/{provider.id}/disable" in combined
+    assert "/admin/routes/new" in combined
+    assert f"/admin/routes/{route.id}/edit" in combined
+    assert f"/admin/routes/{route.id}/disable" in combined
     assert 'name="csrf_token" value="rendered-csrf-token"' in combined
     assert 'name="confirm_disable" value="true"' in combined
     assert route.requested_model in combined

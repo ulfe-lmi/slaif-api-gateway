@@ -143,6 +143,52 @@ class ModelRoutesRepository:
         await self._session.flush()
         return True
 
+    async def update_model_route_metadata(
+        self,
+        route_id: uuid.UUID,
+        *,
+        requested_model: str | None = None,
+        match_type: str | None = None,
+        endpoint: str | None = None,
+        provider: str | None = None,
+        upstream_model: str | None = None,
+        priority: int | None = None,
+        enabled: bool | None = None,
+        visible_in_models: bool | None = None,
+        supports_streaming: bool | None = None,
+        capabilities: dict[str, object] | None = None,
+        notes: str | None = None,
+    ) -> bool:
+        row = await self.get_model_route_by_id(route_id)
+        if row is None:
+            return False
+
+        if requested_model is not None:
+            row.requested_model = requested_model
+        if match_type is not None:
+            row.match_type = match_type
+        if endpoint is not None:
+            row.endpoint = endpoint
+        if provider is not None:
+            row.provider = provider
+        if upstream_model is not None:
+            row.upstream_model = upstream_model
+        if priority is not None:
+            row.priority = priority
+        if enabled is not None:
+            row.enabled = enabled
+        if visible_in_models is not None:
+            row.visible_in_models = visible_in_models
+        if supports_streaming is not None:
+            row.supports_streaming = supports_streaming
+        if capabilities is not None:
+            row.capabilities = capabilities
+        if notes is not None:
+            row.notes = notes
+
+        await self._session.flush()
+        return True
+
     async def find_candidate_routes_for_model(self, requested_model: str) -> list[ModelRoute]:
         statement: Select[tuple[ModelRoute]] = (
             select(ModelRoute)

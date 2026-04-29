@@ -77,6 +77,7 @@ class AdminRouteListRow:
     enabled: bool
     visible_in_models: bool
     supports_streaming: bool
+    capabilities: dict[str, object]
     capabilities_summary: str
     notes: str | None
     created_at: datetime
