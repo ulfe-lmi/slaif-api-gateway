@@ -246,6 +246,19 @@ async def test_allowed_models_restriction_is_respected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_allowed_models_rejects_all_models() -> None:
+    service = RouteResolutionService(
+        model_routes_repository=FakeModelRoutesRepository([_route("gpt-4.1-mini")]),
+        provider_configs_repository=FakeProviderConfigsRepository([_provider("openai")]),
+    )
+
+    with pytest.raises(ModelNotAllowedForKeyError):
+        await service.resolve_model(
+            "gpt-4.1-mini", _make_key(allow_all_models=False, allowed_models=())
+        )
+
+
+@pytest.mark.asyncio
 async def test_allowed_providers_restriction_is_respected() -> None:
     service = RouteResolutionService(
         model_routes_repository=FakeModelRoutesRepository([_route("gpt-4.1-mini", provider="openai")]),

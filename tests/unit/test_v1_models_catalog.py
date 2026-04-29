@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -11,7 +12,12 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import OpenAIModel
 
 
-def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
+def _fake_authenticated_gateway_key(
+    *,
+    allow_all_models: bool = True,
+    allowed_models: tuple[str, ...] = (),
+    allowed_providers: tuple[str, ...] | None = None,
+) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
     return AuthenticatedGatewayKey(
         gateway_key_id=uuid.uuid4(),
@@ -21,11 +27,11 @@ def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
         status="active",
         valid_from=now - timedelta(minutes=5),
         valid_until=now + timedelta(minutes=30),
-        allow_all_models=True,
-        allowed_models=(),
+        allow_all_models=allow_all_models,
+        allowed_models=allowed_models,
         allow_all_endpoints=True,
         allowed_endpoints=(),
-        allowed_providers=None,
+        allowed_providers=allowed_providers,
         cost_limit_eur=None,
         token_limit_total=None,
         request_limit_total=None,
@@ -35,6 +41,20 @@ def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
             "max_concurrent_requests": None,
         },
     )
+
+
+@dataclass
+class _FakeModelRoute:
+    requested_model: str
+    provider: str
+    enabled: bool = True
+    visible_in_models: bool = True
+
+
+@dataclass
+class _FakeProviderConfig:
+    provider: str
+    enabled: bool = True
 
 
 def test_unauthenticated_request_returns_openai_shaped_401() -> None:
@@ -70,6 +90,46 @@ def test_authenticated_request_returns_empty_catalog_without_provider_calls(monk
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module.ModelCatalogService, "list_visible_models", _fake_list_visible_models)
+
+    client = TestClient(app)
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json() == {"object": "list", "data": []}
+
+
+def test_authenticated_empty_allowed_models_returns_openai_empty_list(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependencies_module
+    from slaif_gateway.api.dependencies import get_authenticated_gateway_key
+    import slaif_gateway.api.openai_compat as main_module
+
+    app = create_app()
+
+    async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
+        return _fake_authenticated_gateway_key(allow_all_models=False, allowed_models=())
+
+    async def _dummy_db_session():
+        yield object()
+
+    class _FakeModelRoutesRepository:
+        def __init__(self, session) -> None:
+            _ = session
+
+        async def list_visible_model_routes(self) -> list[_FakeModelRoute]:
+            return [_FakeModelRoute(requested_model="gpt-4.1-mini", provider="openai")]
+
+    class _FakeProviderConfigsRepository:
+        def __init__(self, session) -> None:
+            _ = session
+
+        async def list_provider_configs(self) -> list[_FakeProviderConfig]:
+            return [_FakeProviderConfig(provider="openai", enabled=True)]
+
+    app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
+    monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
+    monkeypatch.setattr(main_module, "ModelRoutesRepository", _FakeModelRoutesRepository)
+    monkeypatch.setattr(main_module, "ProviderConfigsRepository", _FakeProviderConfigsRepository)
 
     client = TestClient(app)
     response = client.get("/v1/models")

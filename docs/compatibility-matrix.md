@@ -4,7 +4,7 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 
 | Feature / endpoint / field | Current support | Provider coverage | Notes | Test coverage |
 | --- | --- | --- | --- | --- |
-| `GET /v1/models` | Implemented | Local route/provider metadata | Returns enabled, visible routes allowed for the authenticated key | Unit and integration model catalog tests |
+| `GET /v1/models` | Implemented | Local route/provider metadata | Returns enabled, visible routes allowed for the authenticated key; `allow_all_models=false` with empty `allowed_models` returns an empty OpenAI-shaped list | Unit, API route, integration, and mocked official-client E2E model catalog tests |
 | `POST /v1/chat/completions` non-streaming | Implemented | OpenAI, OpenRouter | Full auth, policy, routing, pricing, PostgreSQL reservation, provider forwarding, accounting finalization | Unit, integration, mocked official-client E2E |
 | `POST /v1/chat/completions` streaming | Implemented | OpenAI, OpenRouter | SSE streaming, final usage requested, missing usage emits stream error instead of successful `[DONE]`, durable finalization recovery | Unit, integration, ASGI disconnect, mocked official-client E2E |
 | `/v1/responses` | Not implemented | None | Unsupported endpoint; no Responses API translation | Error handling only |
