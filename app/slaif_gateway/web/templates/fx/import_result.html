@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}FX Import Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-import-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-import-result-heading">FX Import Result</h1>
+      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx/import">Import more FX rates</a>
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="summary-grid" aria-label="FX import execution summary">
+    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ result.total_rows }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Created rows</span><strong>{{ result.created_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Updated rows</span><strong>{{ result.updated_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Errors</span><strong>{{ result.error_count }}</strong></div>
+  </section>
+
+  {% if result.error_count %}
+  <div class="admin-flash admin-flash-error" role="status">
+    Import blocked. No FX rows were written because the execution workflow is all-or-nothing.
+  </div>
+  {% else %}
+  <div class="admin-flash admin-flash-success" role="status">
+    FX import completed. Created rows were written through the FX service and audited.
+  </div>
+  {% endif %}
+
+  <p class="muted small">{{ result.audit_summary }}</p>
+  {% if source_label %}
+  <p class="muted small">Source label: {{ source_label }}</p>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="fx-import-result-details-heading">
+    <h2 id="fx-import-result-details-heading">Result Details</h2>
+    <p class="muted small">External FX APIs and providers were not called. Uploaded raw content was not stored.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Status</th>
+            <th>Action</th>
+            <th>FX rate</th>
+            <th>Pair</th>
+            <th>Rate</th>
+            <th>Validity</th>
+            <th>Source</th>
+            <th>Metadata</th>
+            <th>Notes</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in result.rows %}
+          <tr>
+            <td>{{ row.row_number }}</td>
+            <td>{{ row.status }}</td>
+            <td>{{ row.action }}</td>
+            <td>
+              {% if row.fx_rate_id %}
+              <a href="/admin/fx/{{ row.fx_rate_id }}">{{ row.fx_rate_id }}</a>
+              {% else %}
+              <span class="muted small">n/a</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.base_currency and row.quote_currency %}
+              {{ row.base_currency }} / {{ row.quote_currency }}
+              {% else %}
+              <span class="muted small">n/a</span>
+              {% endif %}
+            </td>
+            <td>{{ row.rate or "n/a" }}</td>
+            <td>
+              <div>{{ row.valid_from.isoformat() if row.valid_from else "n/a" }}</div>
+              <div class="muted small">until {{ row.valid_until.isoformat() if row.valid_until else "open" }}</div>
+            </td>
+            <td>{{ row.source or "n/a" }}</td>
+            <td>{{ row.metadata_summary }}</td>
+            <td>{{ row.notes or "n/a" }}</td>
+            <td>
+              {% if row.errors %}
+              <ul class="compact-list">
+                {% for error in row.errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <span class="muted small">None</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="11" class="empty-state">No rows were processed.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}

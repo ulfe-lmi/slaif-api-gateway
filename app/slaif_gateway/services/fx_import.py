@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import csv
 import json
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 
+from slaif_gateway.services.fx_rate_service import FxRateService
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 FX_IMPORT_ALLOWED_FIELDS = {
@@ -57,6 +59,58 @@ class FxImportPreview:
     valid_count: int
     invalid_count: int
     rows: tuple[FxImportRowPreview, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FxImportExecutionRow:
+    """Safe row-level result for an FX import execution."""
+
+    row_number: int
+    action: str
+    status: str
+    fx_rate_id: uuid.UUID | None = None
+    base_currency: str | None = None
+    quote_currency: str | None = None
+    rate: str | None = None
+    source: str | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    metadata: dict[str, object] | None = None
+    notes: str | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def metadata_summary(self) -> str:
+        if not self.metadata:
+            return "none"
+        return ", ".join(sorted(str(key) for key in self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class FxImportExecutionPlan:
+    """All-or-nothing execution plan for validated FX import rows."""
+
+    total_rows: int
+    executable_count: int
+    blocked_count: int
+    rows: tuple[FxImportExecutionRow, ...]
+
+    @property
+    def executable(self) -> bool:
+        return self.total_rows > 0 and self.blocked_count == 0
+
+
+@dataclass(frozen=True, slots=True)
+class FxImportExecutionResult:
+    """Safe aggregate result for an FX import execution."""
+
+    total_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int
+    error_count: int
+    rows: tuple[FxImportExecutionRow, ...]
+    audit_summary: str
 
 
 def parse_fx_import_csv(text: str) -> list[dict[str, object]]:
@@ -192,6 +246,137 @@ def fx_import_preview_to_dict(preview: FxImportPreview) -> dict[str, object]:
     }
 
 
+def build_fx_import_execution_plan(preview: FxImportPreview) -> FxImportExecutionPlan:
+    """Build a create-only execution plan from a classified FX import preview."""
+    plan_rows: list[FxImportExecutionRow] = []
+    for row in preview.rows:
+        if row.status != "valid":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="invalid",
+                    status="blocked",
+                    errors=row.errors or ("row is invalid",),
+                )
+            )
+            continue
+        if row.classification != "create":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="skipped",
+                    status="blocked",
+                    errors=(
+                        "FX import execution only creates new rows; "
+                        f"{row.classification} rows are not supported in this workflow",
+                    ),
+                )
+            )
+            continue
+        plan_rows.append(_execution_row_from_preview(row, action="create", status="ready"))
+
+    blocked_count = sum(1 for row in plan_rows if row.status == "blocked")
+    return FxImportExecutionPlan(
+        total_rows=len(plan_rows),
+        executable_count=len(plan_rows) - blocked_count,
+        blocked_count=blocked_count,
+        rows=tuple(plan_rows),
+    )
+
+
+async def execute_fx_import_plan(
+    plan: FxImportExecutionPlan,
+    *,
+    fx_rate_service: FxRateService,
+    actor_admin_id: uuid.UUID,
+    reason: str,
+) -> FxImportExecutionResult:
+    """Apply a validated create-only FX import plan using the FX service."""
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise ValueError("audit reason is required")
+    if not plan.executable:
+        return FxImportExecutionResult(
+            total_rows=plan.total_rows,
+            created_count=0,
+            updated_count=0,
+            skipped_count=sum(1 for row in plan.rows if row.status == "blocked"),
+            error_count=plan.blocked_count,
+            rows=plan.rows,
+            audit_summary="No FX rows were written.",
+        )
+
+    created_rows: list[FxImportExecutionRow] = []
+    for row in plan.rows:
+        created = await fx_rate_service.create_fx_rate(
+            base_currency=_required_plan_text(
+                row.base_currency,
+                field_name="base_currency",
+                row_number=row.row_number,
+            ),
+            quote_currency=_required_plan_text(
+                row.quote_currency,
+                field_name="quote_currency",
+                row_number=row.row_number,
+            ),
+            rate=_required_plan_decimal(row.rate, field_name="rate", row_number=row.row_number),
+            valid_from=row.valid_from or datetime.now(UTC),
+            valid_until=row.valid_until,
+            source=row.source,
+            actor_admin_id=actor_admin_id,
+            reason=cleaned_reason,
+        )
+        created_rows.append(
+            replace(
+                row,
+                action="created",
+                status="created",
+                fx_rate_id=created.id,
+                errors=(),
+            )
+        )
+
+    return FxImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=len(created_rows),
+        updated_count=0,
+        skipped_count=0,
+        error_count=0,
+        rows=tuple(created_rows),
+        audit_summary="Created FX rows were audited individually.",
+    )
+
+
+def fx_import_execution_result_to_dict(result: FxImportExecutionResult) -> dict[str, object]:
+    """Convert execution result DTOs to safe serializable values for tests or JSON-like rendering."""
+    return {
+        "total_rows": result.total_rows,
+        "created_count": result.created_count,
+        "updated_count": result.updated_count,
+        "skipped_count": result.skipped_count,
+        "error_count": result.error_count,
+        "audit_summary": result.audit_summary,
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "action": row.action,
+                "status": row.status,
+                "fx_rate_id": str(row.fx_rate_id) if row.fx_rate_id else None,
+                "base_currency": row.base_currency,
+                "quote_currency": row.quote_currency,
+                "rate": row.rate,
+                "source": row.source,
+                "valid_from": row.valid_from.isoformat() if row.valid_from else None,
+                "valid_until": row.valid_until.isoformat() if row.valid_until else None,
+                "metadata": row.metadata,
+                "notes": row.notes,
+                "errors": list(row.errors),
+            }
+            for row in result.rows
+        ],
+    }
+
+
 def _validate_one_row(row: Mapping[str, object], *, index: int, now: datetime) -> FxImportRowPreview:
     unknown_fields = {str(field) for field in row if field not in FX_IMPORT_ALLOWED_FIELDS}
     if unknown_fields:
@@ -224,6 +409,47 @@ def _validate_one_row(row: Mapping[str, object], *, index: int, now: datetime) -
         metadata=metadata,
         notes=notes,
     )
+
+
+def _execution_row_from_preview(
+    row: FxImportRowPreview,
+    *,
+    action: str,
+    status: str,
+    errors: tuple[str, ...] = (),
+) -> FxImportExecutionRow:
+    return FxImportExecutionRow(
+        row_number=row.row_number,
+        action=action,
+        status=status,
+        base_currency=row.base_currency,
+        quote_currency=row.quote_currency,
+        rate=row.rate,
+        source=row.source,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        metadata=row.metadata,
+        notes=row.notes,
+        errors=errors,
+    )
+
+
+def _required_plan_text(value: str | None, *, field_name: str, row_number: int) -> str:
+    if value is None or not value.strip():
+        raise ValueError(f"FX import row {row_number} is missing {field_name}")
+    return value
+
+
+def _required_plan_decimal(value: str | None, *, field_name: str, row_number: int) -> Decimal:
+    if value is None or value == "":
+        raise ValueError(f"FX import row {row_number} is missing {field_name}")
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"FX import row {row_number} field {field_name} must be a decimal string") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise ValueError(f"FX import row {row_number} field {field_name} must be positive")
+    return parsed
 
 
 def _required_import_text(value: object, *, field_name: str) -> str:

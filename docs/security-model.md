@@ -181,7 +181,10 @@ runtime pricing calculation semantics and does not accept provider secret
 values. FX catalog pages provide CSRF-protected create and edit forms for local
 FX metadata only. FX forms parse Decimal rates from strings, validate currency
 pairs, positive rates, and validity windows, and write safe audit rows through
-the FX rate service. FX changes may affect future EUR conversion, quota
+the FX rate service. FX import preview validates CSV/JSON without mutation, and
+confirmed FX import execution re-parses and re-validates server-side, requires
+explicit confirmation plus an audit reason, and creates rows only when every row
+is a valid supported create. FX changes may affect future EUR conversion, quota
 reservation, and accounting, but the dashboard does not change runtime FX lookup
 semantics and does not call external FX services. The current FX schema has no
 enabled state; active status is controlled by validity windows. Read-only usage, audit, and email delivery pages display
@@ -256,9 +259,16 @@ FX import preview form requires CSRF, validates CSV/JSON rows with Decimal
 rates parsed from strings, rejects unknown fields, invalid currency pairs,
 same-currency pairs, invalid validity windows, non-positive rates, and
 secret-looking source/note/metadata values, and does not write `fx_rates`, audit
-rows, or uploaded content. FX import preview does not call external FX APIs or
-providers, does not accept provider keys, and does not change FX lookup runtime
-behavior. FX import execution remains future work. Dashboard key creation
+rows, or uploaded content. Dashboard FX import execution requires CSRF, explicit
+confirmation, and a non-empty audit reason. It re-parses and re-validates the
+submitted upload or pasted content server-side, does not trust preview HTML or
+client-side classification, and writes FX rows only after all rows validate as
+supported create rows. Invalid, duplicate, conflict, or update-classified rows
+block the entire import with no mutation. Successful creates are audited through
+the FX service. FX import preview/execution does not call external FX APIs or
+providers, does not accept provider keys, does not store raw uploaded content,
+and changes future EUR conversion only after confirmed local FX rows are
+created. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -311,7 +321,7 @@ never recover or send old plaintext keys.
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
-  FX import execution/upload/external-refresh workflows are future work.
+  external FX refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run

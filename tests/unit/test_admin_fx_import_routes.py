@@ -167,3 +167,153 @@ def test_fx_import_preview_does_not_call_external_fx_or_providers(monkeypatch) -
 
     assert response.status_code == 200
     assert "External FX APIs and providers were not called" in response.text
+
+
+def test_fx_import_execute_requires_confirmation_and_reason(monkeypatch) -> None:
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    missing_confirmation = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+            "reason": "safe audit reason",
+        },
+    )
+    missing_reason = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+            "confirm_import": "true",
+        },
+    )
+
+    assert missing_confirmation.status_code == 400
+    assert "Confirm FX import execution" in missing_confirmation.text
+    assert missing_reason.status_code == 400
+    assert "Enter an audit reason before importing FX rows" in missing_reason.text
+
+
+def test_fx_import_execute_requires_csrf(monkeypatch) -> None:
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+            "confirm_import": "true",
+            "reason": "safe audit reason",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid CSRF token." in response.text
+
+
+def test_fx_import_execute_invalid_content_blocks_without_mutation(monkeypatch) -> None:
+    called = False
+
+    async def create_fx_rate(self, **kwargs):
+        nonlocal called
+        called = True
+
+    async def classify(request, preview):
+        return preview
+
+    monkeypatch.setattr("slaif_gateway.services.fx_rate_service.FxRateService.create_fx_rate", create_fx_rate)
+    monkeypatch.setattr("slaif_gateway.api.admin._classify_fx_import_preview", classify)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "json",
+            "import_text": '[{"base_currency":"USD","quote_currency":"EUR","rate":0.92}]',
+            "confirm_import": "true",
+            "reason": "safe audit reason",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Import blocked" in response.text
+    assert "No FX rows were written" in response.text
+    assert "rate must be a decimal string" in response.text
+    assert called is False
+
+
+def test_fx_import_execute_valid_content_calls_service(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def create_fx_rate(self, **kwargs):
+        calls.append(kwargs)
+
+        class Created:
+            id = "00000000-0000-0000-0000-000000000001"
+
+        return Created()
+
+    async def classify(request, preview):
+        return preview
+
+    monkeypatch.setattr("slaif_gateway.services.fx_rate_service.FxRateService.create_fx_rate", create_fx_rate)
+    monkeypatch.setattr("slaif_gateway.api.admin._classify_fx_import_preview", classify)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(notes="<script>alert(1)</script>"),
+            "confirm_import": "true",
+            "reason": "safe audit reason",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "FX Import Result" in response.text
+    assert "FX import completed" in response.text
+    assert "Created rows" in response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "provider key values" not in response.text.lower()
+    assert calls
+    assert calls[0]["base_currency"] == "USD"
+    assert calls[0]["reason"] == "safe audit reason"
+
+
+def test_fx_import_execute_conflicting_input_fails_before_service(monkeypatch) -> None:
+    called = False
+
+    async def create_fx_rate(self, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("slaif_gateway.services.fx_rate_service.FxRateService.create_fx_rate", create_fx_rate)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+            "confirm_import": "true",
+            "reason": "safe audit reason",
+        },
+        files={"import_file": ("fx.csv", _valid_csv(), "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "Use either a file upload or pasted content" in response.text
+    assert called is False

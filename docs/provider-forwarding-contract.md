@@ -18,16 +18,20 @@ route, pricing, and FX metadata where described in the compatibility matrix, but
 those dashboard workflows do not change the forwarding contract, provider
 adapter semantics, route-resolution algorithm, pricing algorithm, or FX lookup
 semantics described below. Provider config rows store environment variable names
-only, never provider key values. Dashboard route import currently has a
-preview/dry-run workflow plus confirmed create-only execution. Execution
-re-parses and re-validates CSV/JSON metadata server-side, requires CSRF,
-explicit confirmation, and an audit reason, writes only valid new local
-`model_routes`, and does not call providers. Confirmed imports can affect
-future route resolution through the existing route-resolution algorithm; they do
-not change provider forwarding or adapter semantics. Dashboard FX import is
-preview/dry-run only; it validates CSV/JSON local FX metadata without writing
-`fx_rates`, calling external FX APIs, calling providers, or changing FX lookup
-semantics.
+only, never provider key values. Dashboard route import has a preview/dry-run
+workflow plus confirmed create-only execution. Execution re-parses and
+re-validates CSV/JSON metadata server-side, requires CSRF, explicit
+confirmation, and an audit reason, writes only valid new local `model_routes`,
+and does not call providers. Confirmed imports can affect future route
+resolution through the existing route-resolution algorithm; they do not change
+provider forwarding or adapter semantics. Dashboard FX import has the same
+preview plus confirmed create-only execution shape for local FX metadata.
+Preview does not write `fx_rates`; execution re-parses and re-validates
+server-side, requires CSRF, explicit confirmation, and an audit reason, writes
+only valid new local `fx_rates`, and does not call external FX APIs or
+providers. Confirmed FX imports can affect future EUR conversion through the
+existing FX lookup path; they do not change provider forwarding, adapter
+semantics, or FX lookup semantics.
 
 ## OpenAI Upstream Forwarding
 
