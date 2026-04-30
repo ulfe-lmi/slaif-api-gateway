@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +52,14 @@ from slaif_gateway.services.fx_rate_service import FxRateService
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.pricing_import import (
+    PricingImportPreview,
+    classify_pricing_import_preview,
+    detect_pricing_import_format,
+    parse_pricing_import_csv,
+    parse_pricing_import_json,
+    validate_pricing_import_rows,
+)
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
@@ -67,6 +75,7 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
+from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
@@ -2189,6 +2198,92 @@ async def list_admin_pricing_rules(
     )
 
 
+@router.get("/pricing/import", response_class=HTMLResponse)
+async def admin_pricing_import_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_pricing_import_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+    )
+
+
+@router.post("/pricing/import/preview", response_class=HTMLResponse)
+async def admin_pricing_import_preview(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+    import_file: UploadFile | None = File(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_pricing_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.PRICING_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_pricing_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = (
+            parse_pricing_import_json(text)
+            if detected_format == "json"
+            else parse_pricing_import_csv(text)
+        )
+        preview = validate_pricing_import_rows(
+            raw_rows,
+            max_rows=settings.PRICING_IMPORT_MAX_ROWS,
+        )
+        preview = await _classify_pricing_import_preview(request, preview)
+    except ValueError as exc:
+        return _render_pricing_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": import_text,
+                "source_label": source_label,
+            },
+            error=str(exc),
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "pricing/import_preview.html",
+        {
+            "admin": action_context.admin_user,
+            "csrf_token": csrf_token,
+            "preview": preview,
+            "import_format": detected_format,
+            "source_label": source_label.strip(),
+            "max_rows": settings.PRICING_IMPORT_MAX_ROWS,
+            "max_bytes": settings.PRICING_IMPORT_MAX_BYTES,
+        },
+    )
+
+
 @router.get("/pricing/new", response_class=HTMLResponse)
 async def create_admin_pricing_rule_form(request: Request) -> Response:
     settings = _settings(request)
@@ -3734,6 +3829,29 @@ def _render_provider_config_form(
     )
 
 
+def _render_pricing_import_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str] | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "pricing/import.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "form": form or {"format": "auto", "import_text": "", "source_label": ""},
+            "error": error,
+            "settings": _settings(request),
+        },
+        status_code=status_code,
+    )
+
+
 def _default_provider_config_form() -> dict[str, str]:
     return {
         "provider": "",
@@ -4327,6 +4445,72 @@ def _parse_pricing_metadata(value: str | None) -> dict[str, object]:
     if _route_metadata_contains_secret(parsed):
         raise ValueError("Pricing metadata must not contain secret-looking values.")
     return parsed
+
+
+async def _read_pricing_import_input(
+    *,
+    import_file: UploadFile | None,
+    import_text: str,
+    max_bytes: int,
+) -> tuple[str | None, str]:
+    text_supplied = bool(import_text.strip())
+    file_supplied = import_file is not None and bool(import_file.filename)
+    if text_supplied and file_supplied:
+        raise ValueError("Use either a file upload or pasted content, not both.")
+    if not text_supplied and not file_supplied:
+        raise ValueError("Paste pricing content or upload a pricing file.")
+
+    if text_supplied:
+        encoded = import_text.encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ValueError(f"Pricing import content must be at most {max_bytes} bytes.")
+        return None, import_text
+
+    assert import_file is not None
+    content = await import_file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise ValueError(f"Pricing import content must be at most {max_bytes} bytes.")
+    if not content:
+        raise ValueError("Pricing import file is empty.")
+    try:
+        return import_file.filename, content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Pricing import content must be UTF-8 text.") from exc
+
+
+def _parse_optional_import_source_label(value: str | None) -> str | None:
+    source_label = _clean_admin_reason(value)
+    if source_label is None:
+        return None
+    lowered = source_label.lower()
+    if lowered.startswith(("bearer ", "sk-", "sk_", "sk-or-")) or redact_text(source_label) != source_label:
+        raise ValueError("Source label must not contain secret-looking values.")
+    return source_label
+
+
+async def _classify_pricing_import_preview(
+    request: Request,
+    preview: PricingImportPreview,
+) -> PricingImportPreview:
+    valid_rows = [row for row in preview.rows if row.status == "valid"]
+    if not valid_rows:
+        return preview
+
+    existing_by_row: dict[int, list[object]] = {}
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            repository = PricingRulesRepository(session)
+            for row in valid_rows:
+                if not row.provider or not row.model or not row.endpoint:
+                    continue
+                existing_by_row[row.row_number] = await repository.list_pricing_rules(
+                    provider=row.provider,
+                    upstream_model=row.model,
+                    endpoint=row.endpoint,
+                    limit=200,
+                )
+    return classify_pricing_import_preview(preview, existing_rules_by_row=existing_by_row)
 
 
 def _decimal_form_value(value: object) -> str:

@@ -227,7 +227,11 @@ pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
 quota limit update, usage-counter reset, rotation, provider config, route,
 pricing, and FX metadata mutation forms require a valid authenticated session
-plus the per-session CSRF token. Dashboard key creation
+plus the per-session CSRF token. The dashboard pricing import preview form also
+requires CSRF, validates CSV/JSON rows with Decimal money values parsed from
+strings, rejects unknown fields and secret-looking source/metadata values, and
+does not write `pricing_rules`, audit rows, or uploaded content. It does not
+call external pricing APIs or providers. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing Import Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-import-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Pricing Catalog</p>
+      <h1 id="pricing-import-heading">Pricing Import Preview</h1>
+      <p class="muted">Validate CSV or JSON pricing rows without writing pricing rules.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <a class="button-link secondary" href="/admin/pricing/new">Create pricing rule</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/pricing/import/preview" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="pricing-import-source-heading">
+      <h2>Source</h2>
+      <p class="warning-text">Dry-run only. This preview validates rows but does not create, update, disable, or audit pricing rules.</p>
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,text/csv,application/json"></label>
+      </div>
+      <label>Paste CSV or JSON<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
+      <p class="muted small">Use either upload or pasted content. Maximum {{ settings.PRICING_IMPORT_MAX_BYTES }} bytes and {{ settings.PRICING_IMPORT_MAX_ROWS }} rows. Money fields must be decimal strings.</p>
+      <button type="submit">Preview import</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

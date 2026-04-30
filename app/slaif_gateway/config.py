@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS: int = 1
     RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED: int = 1
     RECONCILIATION_ALERT_INCLUDE_IDS: bool = False
+    PRICING_IMPORT_MAX_BYTES: int = 1048576
+    PRICING_IMPORT_MAX_ROWS: int = 1000
     ENABLE_METRICS: bool = True
     METRICS_REQUIRE_AUTH: bool | None = None
     METRICS_PUBLIC_IN_PRODUCTION: bool = False
@@ -244,6 +246,10 @@ class Settings(BaseSettings):
             parsed = urlparse(self.RECONCILIATION_ALERT_WEBHOOK_URL)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 raise ValueError("RECONCILIATION_ALERT_WEBHOOK_URL must be an http or https URL")
+        if self.PRICING_IMPORT_MAX_BYTES <= 0:
+            raise ValueError("PRICING_IMPORT_MAX_BYTES must be a positive integer")
+        if self.PRICING_IMPORT_MAX_ROWS <= 0:
+            raise ValueError("PRICING_IMPORT_MAX_ROWS must be a positive integer")
 
     def _validate_admin_session_settings(self) -> None:
         if self.ADMIN_SESSION_TTL_SECONDS <= 0:

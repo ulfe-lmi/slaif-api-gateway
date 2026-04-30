@@ -352,6 +352,33 @@ td a {
   padding-top: 24px;
 }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding: 24px 28px;
+}
+
+.summary-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.summary-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.summary-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.45rem;
+}
+
 .action-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -405,6 +432,11 @@ td a {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
+.compact-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .checkbox-row {
   display: flex;
   align-items: flex-start;
@@ -450,9 +482,10 @@ dd {
 
   .header-actions,
   .filter-bar,
-  .filter-bar.compact,
-  .detail-grid,
-  .action-grid,
+    .filter-bar.compact,
+    .detail-grid,
+    .summary-grid,
+    .action-grid,
   .management-grid,
   .form-grid {
     grid-template-columns: 1fr;
