@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from io import StringIO
 from urllib.parse import urlparse
 
 from slaif_gateway.services.model_route_service import normalize_endpoint
+from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 PRICING_IMPORT_ALLOWED_FIELDS = {
@@ -67,6 +69,59 @@ class PricingImportPreview:
     valid_count: int
     invalid_count: int
     rows: tuple[PricingImportRowPreview, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PricingImportExecutionRow:
+    """Safe row-level result for a pricing import execution."""
+
+    row_number: int
+    action: str
+    status: str
+    pricing_rule_id: uuid.UUID | None = None
+    provider: str | None = None
+    model: str | None = None
+    endpoint: str | None = None
+    currency: str | None = None
+    input_price_per_1m: str | None = None
+    cached_input_price_per_1m: str | None = None
+    output_price_per_1m: str | None = None
+    reasoning_price_per_1m: str | None = None
+    request_price: str | None = None
+    pricing_metadata: dict[str, object] | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    source_url: str | None = None
+    notes: str | None = None
+    enabled: bool | None = None
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PricingImportExecutionPlan:
+    """All-or-nothing execution plan for validated pricing import rows."""
+
+    total_rows: int
+    executable_count: int
+    blocked_count: int
+    rows: tuple[PricingImportExecutionRow, ...]
+
+    @property
+    def executable(self) -> bool:
+        return self.total_rows > 0 and self.blocked_count == 0
+
+
+@dataclass(frozen=True, slots=True)
+class PricingImportExecutionResult:
+    """Safe aggregate result for a pricing import execution."""
+
+    total_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int
+    error_count: int
+    rows: tuple[PricingImportExecutionRow, ...]
+    audit_summary: str
 
 
 def parse_pricing_import_csv(text: str) -> list[dict[str, object]]:
@@ -211,6 +266,165 @@ def pricing_import_preview_to_dict(preview: PricingImportPreview) -> dict[str, o
     }
 
 
+def build_pricing_import_execution_plan(preview: PricingImportPreview) -> PricingImportExecutionPlan:
+    """Build a create-only execution plan from a classified preview."""
+    plan_rows: list[PricingImportExecutionRow] = []
+    for row in preview.rows:
+        if row.status != "valid":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="invalid",
+                    status="blocked",
+                    errors=row.errors or ("row is invalid",),
+                )
+            )
+            continue
+        if row.classification != "create":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="skipped",
+                    status="blocked",
+                    errors=(
+                        "pricing import execution only creates new rows; "
+                        f"{row.classification} rows are not supported in this workflow",
+                    ),
+                )
+            )
+            continue
+        plan_rows.append(_execution_row_from_preview(row, action="create", status="ready"))
+
+    blocked_count = sum(1 for row in plan_rows if row.status == "blocked")
+    return PricingImportExecutionPlan(
+        total_rows=len(plan_rows),
+        executable_count=len(plan_rows) - blocked_count,
+        blocked_count=blocked_count,
+        rows=tuple(plan_rows),
+    )
+
+
+async def execute_pricing_import_plan(
+    plan: PricingImportExecutionPlan,
+    *,
+    pricing_rule_service: PricingRuleService,
+    actor_admin_id: uuid.UUID,
+    reason: str,
+) -> PricingImportExecutionResult:
+    """Apply a validated create-only pricing import plan using the pricing service."""
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise ValueError("audit reason is required")
+    if not plan.executable:
+        return PricingImportExecutionResult(
+            total_rows=plan.total_rows,
+            created_count=0,
+            updated_count=0,
+            skipped_count=sum(1 for row in plan.rows if row.status == "blocked"),
+            error_count=plan.blocked_count,
+            rows=plan.rows,
+            audit_summary="No pricing rows were written.",
+        )
+
+    created_rows: list[PricingImportExecutionRow] = []
+    for row in plan.rows:
+        created = await pricing_rule_service.create_pricing_rule(
+            provider=_required_plan_text(row.provider, field_name="provider", row_number=row.row_number),
+            model=_required_plan_text(row.model, field_name="model", row_number=row.row_number),
+            endpoint=_required_plan_text(row.endpoint, field_name="endpoint", row_number=row.row_number),
+            currency=_required_plan_text(row.currency, field_name="currency", row_number=row.row_number),
+            input_price_per_1m=_required_plan_decimal(
+                row.input_price_per_1m,
+                field_name="input_price_per_1m",
+                row_number=row.row_number,
+            ),
+            cached_input_price_per_1m=_optional_plan_decimal(
+                row.cached_input_price_per_1m,
+                field_name="cached_input_price_per_1m",
+                row_number=row.row_number,
+            ),
+            output_price_per_1m=_required_plan_decimal(
+                row.output_price_per_1m,
+                field_name="output_price_per_1m",
+                row_number=row.row_number,
+            ),
+            reasoning_price_per_1m=_optional_plan_decimal(
+                row.reasoning_price_per_1m,
+                field_name="reasoning_price_per_1m",
+                row_number=row.row_number,
+            ),
+            request_price=_optional_plan_decimal(
+                row.request_price,
+                field_name="request_price",
+                row_number=row.row_number,
+            ),
+            pricing_metadata=row.pricing_metadata or {},
+            valid_from=row.valid_from or datetime.now(UTC),
+            valid_until=row.valid_until,
+            source_url=row.source_url,
+            notes=row.notes,
+            enabled=True if row.enabled is None else row.enabled,
+            actor_admin_id=actor_admin_id,
+            reason=cleaned_reason,
+        )
+        created_rows.append(
+            replace(
+                row,
+                action="created",
+                status="created",
+                pricing_rule_id=created.id,
+                errors=(),
+            )
+        )
+
+    return PricingImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=len(created_rows),
+        updated_count=0,
+        skipped_count=0,
+        error_count=0,
+        rows=tuple(created_rows),
+        audit_summary="Created pricing rules were audited individually.",
+    )
+
+
+def pricing_import_execution_result_to_dict(result: PricingImportExecutionResult) -> dict[str, object]:
+    """Convert execution result DTOs to safe serializable values for tests or JSON-like rendering."""
+    return {
+        "total_rows": result.total_rows,
+        "created_count": result.created_count,
+        "updated_count": result.updated_count,
+        "skipped_count": result.skipped_count,
+        "error_count": result.error_count,
+        "audit_summary": result.audit_summary,
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "action": row.action,
+                "status": row.status,
+                "pricing_rule_id": str(row.pricing_rule_id) if row.pricing_rule_id else None,
+                "provider": row.provider,
+                "model": row.model,
+                "endpoint": row.endpoint,
+                "currency": row.currency,
+                "input_price_per_1m": row.input_price_per_1m,
+                "cached_input_price_per_1m": row.cached_input_price_per_1m,
+                "output_price_per_1m": row.output_price_per_1m,
+                "reasoning_price_per_1m": row.reasoning_price_per_1m,
+                "request_price": row.request_price,
+                "pricing_metadata": row.pricing_metadata,
+                "valid_from": row.valid_from.isoformat() if row.valid_from else None,
+                "valid_until": row.valid_until.isoformat() if row.valid_until else None,
+                "source_url": row.source_url,
+                "notes": row.notes,
+                "enabled": row.enabled,
+                "errors": list(row.errors),
+            }
+            for row in result.rows
+        ],
+    }
+
+
 def _validate_one_row(row: Mapping[str, object], *, index: int, now: datetime) -> PricingImportRowPreview:
     unknown_fields = {str(field) for field in row if field not in PRICING_IMPORT_ALLOWED_FIELDS}
     if unknown_fields:
@@ -252,6 +466,61 @@ def _validate_one_row(row: Mapping[str, object], *, index: int, now: datetime) -
         notes=_optional_import_text(row.get("notes"), field_name="notes"),
         enabled=_optional_import_bool(row.get("enabled"), field_name="enabled", default=True),
     )
+
+
+def _execution_row_from_preview(
+    row: PricingImportRowPreview,
+    *,
+    action: str,
+    status: str,
+    errors: tuple[str, ...] = (),
+) -> PricingImportExecutionRow:
+    return PricingImportExecutionRow(
+        row_number=row.row_number,
+        action=action,
+        status=status,
+        provider=row.provider,
+        model=row.model,
+        endpoint=row.endpoint,
+        currency=row.currency,
+        input_price_per_1m=row.input_price_per_1m,
+        cached_input_price_per_1m=row.cached_input_price_per_1m,
+        output_price_per_1m=row.output_price_per_1m,
+        reasoning_price_per_1m=row.reasoning_price_per_1m,
+        request_price=row.request_price,
+        pricing_metadata=row.pricing_metadata,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        source_url=row.source_url,
+        notes=row.notes,
+        enabled=row.enabled,
+        errors=errors,
+    )
+
+
+def _required_plan_text(value: str | None, *, field_name: str, row_number: int) -> str:
+    if value is None or not value.strip():
+        raise ValueError(f"Pricing import row {row_number} is missing {field_name}")
+    return value
+
+
+def _required_plan_decimal(value: str | None, *, field_name: str, row_number: int) -> Decimal:
+    parsed = _optional_plan_decimal(value, field_name=field_name, row_number=row_number)
+    if parsed is None:
+        raise ValueError(f"Pricing import row {row_number} is missing {field_name}")
+    return parsed
+
+
+def _optional_plan_decimal(value: str | None, *, field_name: str, row_number: int) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Pricing import row {row_number} field {field_name} must be a decimal string") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"Pricing import row {row_number} field {field_name} must be non-negative")
+    return parsed
 
 
 def _required_import_text(value: object, *, field_name: str) -> str:

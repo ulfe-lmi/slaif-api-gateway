@@ -47,5 +47,34 @@
       <button type="submit">Preview import</button>
     </section>
   </form>
+
+  <form class="create-form" method="post" action="/admin/pricing/import/execute" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel danger-zone" aria-labelledby="pricing-import-execute-heading">
+      <h2 id="pricing-import-execute-heading">Execute Import</h2>
+      <p class="warning-text">This writes pricing rows after server-side re-validation. The import is all-or-nothing: any invalid, duplicate, overlapping, disabled, or update-classified row blocks the entire import.</p>
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,text/csv,application/json"></label>
+      </div>
+      <label>Paste CSV or JSON<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
+      <label>Audit reason<input name="reason" value="{{ form.get('reason', '') }}" required autocomplete="off"></label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="confirm_import" value="true">
+        I understand this will create pricing rows if every row validates.
+      </label>
+      <p class="muted small">Execution re-parses this uploaded or pasted content server-side. Preview results, hidden normalized rows, and client-side classification are not trusted.</p>
+      <button type="submit">Execute import</button>
+    </section>
+  </form>
 </section>
 {% endblock %}

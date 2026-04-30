@@ -153,8 +153,10 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
-- Bulk/import dashboard workflows, owner/institution/cohort mutation pages,
-  usage/audit mutation pages, and MFA remain outside the current admin surface.
+- Bulk key creation, route import, FX import, owner/institution/cohort mutation
+  pages, usage/audit mutation pages, and MFA remain outside the current admin
+  surface. Pricing import preview and confirmed execution are admin metadata
+  workflows and do not change `/v1` compatibility.
   Docker/Nginx packaging is deployment documentation and service layout only; it
   does not change `/v1` compatibility. The implemented dashboard and key-email
   delivery workflows are summarized in `docs/compatibility-matrix.md` and
