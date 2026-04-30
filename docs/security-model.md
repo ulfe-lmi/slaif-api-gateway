@@ -230,9 +230,17 @@ pricing, and FX metadata mutation forms require a valid authenticated session
 plus the per-session CSRF token. The dashboard route import preview form
 requires CSRF, validates CSV/JSON rows, verifies provider references against
 provider config rows, rejects unknown fields and secret-looking
-capabilities/metadata values, and does not write `model_routes`, audit rows, or
-uploaded content. Route import preview does not call providers and does not
-change route resolution runtime behavior. The dashboard pricing import preview form also
+capabilities/metadata/source values, and does not write `model_routes`, audit
+rows, or uploaded content. Route import execution also requires CSRF, explicit
+confirmation, and a non-empty audit reason. It re-parses and re-validates the
+submitted upload or pasted content server-side, does not trust preview HTML or
+client-side classification, and writes model route rows only after all rows
+validate as supported create rows. Invalid, duplicate, conflict, or
+update-classified rows block the entire import with no mutation. Successful
+creates are audited through the route service. Route import preview/execution
+does not call providers, does not store raw uploaded content, and changes future
+model resolution only after confirmed local route rows are created. The
+dashboard pricing import preview form also
 requires CSRF, validates CSV/JSON rows with Decimal money values parsed from
 strings, rejects unknown fields and secret-looking source/metadata values, and
 does not write `pricing_rules`, audit rows, or uploaded content. Dashboard
@@ -296,8 +304,7 @@ never recover or send old plaintext keys.
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
-  Route import execution and FX import/upload/external-refresh workflows are
-  future work.
+  FX import/upload/external-refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run

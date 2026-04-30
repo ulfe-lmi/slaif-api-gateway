@@ -11,7 +11,7 @@ from io import StringIO
 from urllib.parse import urlparse
 
 from slaif_gateway.db.models import MATCH_TYPE_VALUES_MODEL_ROUTES
-from slaif_gateway.services.model_route_service import normalize_endpoint
+from slaif_gateway.services.model_route_service import ModelRouteService, normalize_endpoint
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 ROUTE_IMPORT_ALLOWED_FIELDS = {
@@ -78,6 +78,62 @@ class RouteImportPreview:
     valid_count: int
     invalid_count: int
     rows: tuple[RouteImportRowPreview, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RouteImportExecutionRow:
+    """Safe row-level result for a model route import execution."""
+
+    row_number: int
+    action: str
+    status: str
+    route_id: uuid.UUID | None = None
+    requested_model: str | None = None
+    match_type: str | None = None
+    endpoint: str | None = None
+    provider: str | None = None
+    provider_config_id: uuid.UUID | None = None
+    upstream_model: str | None = None
+    priority: int | None = None
+    enabled: bool | None = None
+    visible_in_models: bool | None = None
+    supports_streaming: bool | None = None
+    capabilities: dict[str, object] | None = None
+    notes: str | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def capabilities_summary(self) -> str:
+        if not self.capabilities:
+            return "none"
+        return ", ".join(sorted(str(key) for key in self.capabilities))
+
+
+@dataclass(frozen=True, slots=True)
+class RouteImportExecutionPlan:
+    """All-or-nothing execution plan for validated route import rows."""
+
+    total_rows: int
+    executable_count: int
+    blocked_count: int
+    rows: tuple[RouteImportExecutionRow, ...]
+
+    @property
+    def executable(self) -> bool:
+        return self.total_rows > 0 and self.blocked_count == 0
+
+
+@dataclass(frozen=True, slots=True)
+class RouteImportExecutionResult:
+    """Safe aggregate result for a model route import execution."""
+
+    total_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int
+    error_count: int
+    rows: tuple[RouteImportExecutionRow, ...]
+    audit_summary: str
 
 
 def parse_route_import_csv(text: str) -> list[dict[str, object]]:
@@ -229,6 +285,138 @@ def route_import_preview_to_dict(preview: RouteImportPreview) -> dict[str, objec
     }
 
 
+def build_route_import_execution_plan(preview: RouteImportPreview) -> RouteImportExecutionPlan:
+    """Build a create-only execution plan from a classified route import preview."""
+    plan_rows: list[RouteImportExecutionRow] = []
+    for row in preview.rows:
+        if row.status != "valid":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="invalid",
+                    status="blocked",
+                    errors=row.errors or ("row is invalid",),
+                )
+            )
+            continue
+        if row.classification != "create":
+            plan_rows.append(
+                _execution_row_from_preview(
+                    row,
+                    action="skipped",
+                    status="blocked",
+                    errors=(
+                        "route import execution only creates new rows; "
+                        f"{row.classification} rows are not supported in this workflow",
+                    ),
+                )
+            )
+            continue
+        plan_rows.append(_execution_row_from_preview(row, action="create", status="ready"))
+
+    blocked_count = sum(1 for row in plan_rows if row.status == "blocked")
+    return RouteImportExecutionPlan(
+        total_rows=len(plan_rows),
+        executable_count=len(plan_rows) - blocked_count,
+        blocked_count=blocked_count,
+        rows=tuple(plan_rows),
+    )
+
+
+async def execute_route_import_plan(
+    plan: RouteImportExecutionPlan,
+    *,
+    model_route_service: ModelRouteService,
+    actor_admin_id: uuid.UUID,
+    reason: str,
+) -> RouteImportExecutionResult:
+    """Apply a validated create-only route import plan using the route service."""
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise ValueError("audit reason is required")
+    if not plan.executable:
+        return RouteImportExecutionResult(
+            total_rows=plan.total_rows,
+            created_count=0,
+            updated_count=0,
+            skipped_count=sum(1 for row in plan.rows if row.status == "blocked"),
+            error_count=plan.blocked_count,
+            rows=plan.rows,
+            audit_summary="No model route rows were written.",
+        )
+
+    created_rows: list[RouteImportExecutionRow] = []
+    for row in plan.rows:
+        created = await model_route_service.create_model_route(
+            requested_model=_required_plan_text(row.requested_model, field_name="requested_model", row_number=row.row_number),
+            match_type=_required_plan_text(row.match_type, field_name="match_type", row_number=row.row_number),
+            endpoint=_required_plan_text(row.endpoint, field_name="endpoint", row_number=row.row_number),
+            provider=_required_plan_text(row.provider, field_name="provider", row_number=row.row_number),
+            upstream_model=_required_plan_text(row.upstream_model, field_name="upstream_model", row_number=row.row_number),
+            priority=_required_plan_int(row.priority, field_name="priority", row_number=row.row_number),
+            enabled=True if row.enabled is None else row.enabled,
+            visible_in_models=True if row.visible_in_models is None else row.visible_in_models,
+            supports_streaming=True if row.supports_streaming is None else row.supports_streaming,
+            capabilities=row.capabilities or {},
+            notes=row.notes,
+            actor_admin_id=actor_admin_id,
+            reason=cleaned_reason,
+        )
+        created_rows.append(
+            replace(
+                row,
+                action="created",
+                status="created",
+                route_id=created.id,
+                errors=(),
+            )
+        )
+
+    return RouteImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=len(created_rows),
+        updated_count=0,
+        skipped_count=0,
+        error_count=0,
+        rows=tuple(created_rows),
+        audit_summary="Created model route rows were audited individually.",
+    )
+
+
+def route_import_execution_result_to_dict(result: RouteImportExecutionResult) -> dict[str, object]:
+    """Convert execution result DTOs to safe serializable values for tests or JSON-like rendering."""
+    return {
+        "total_rows": result.total_rows,
+        "created_count": result.created_count,
+        "updated_count": result.updated_count,
+        "skipped_count": result.skipped_count,
+        "error_count": result.error_count,
+        "audit_summary": result.audit_summary,
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "action": row.action,
+                "status": row.status,
+                "route_id": str(row.route_id) if row.route_id else None,
+                "requested_model": row.requested_model,
+                "match_type": row.match_type,
+                "endpoint": row.endpoint,
+                "provider": row.provider,
+                "provider_config_id": str(row.provider_config_id) if row.provider_config_id else None,
+                "upstream_model": row.upstream_model,
+                "priority": row.priority,
+                "enabled": row.enabled,
+                "visible_in_models": row.visible_in_models,
+                "supports_streaming": row.supports_streaming,
+                "capabilities": row.capabilities,
+                "notes": row.notes,
+                "errors": list(row.errors),
+            }
+            for row in result.rows
+        ],
+    }
+
+
 def _validate_one_row(
     row: Mapping[str, object],
     *,
@@ -309,6 +497,47 @@ def _resolve_provider_ref(
     if provider_ref is None:
         raise ValueError("provider or provider_config_id is required")
     return provider_ref
+
+
+def _execution_row_from_preview(
+    row: RouteImportRowPreview,
+    *,
+    action: str,
+    status: str,
+    errors: tuple[str, ...] = (),
+) -> RouteImportExecutionRow:
+    return RouteImportExecutionRow(
+        row_number=row.row_number,
+        action=action,
+        status=status,
+        requested_model=row.requested_model,
+        match_type=row.match_type,
+        endpoint=row.endpoint,
+        provider=row.provider,
+        provider_config_id=row.provider_config_id,
+        upstream_model=row.upstream_model,
+        priority=row.priority,
+        enabled=row.enabled,
+        visible_in_models=row.visible_in_models,
+        supports_streaming=row.supports_streaming,
+        capabilities=row.capabilities,
+        notes=row.notes,
+        errors=errors,
+    )
+
+
+def _required_plan_text(value: str | None, *, field_name: str, row_number: int) -> str:
+    if value is None or not value.strip():
+        raise ValueError(f"Route import row {row_number} is missing {field_name}")
+    return value
+
+
+def _required_plan_int(value: int | None, *, field_name: str, row_number: int) -> int:
+    if value is None:
+        raise ValueError(f"Route import row {row_number} is missing {field_name}")
+    if value < 0:
+        raise ValueError(f"Route import row {row_number} field {field_name} must be non-negative")
+    return value
 
 
 def _parse_endpoint(value: object) -> str:

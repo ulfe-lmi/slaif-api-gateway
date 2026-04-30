@@ -68,9 +68,13 @@ from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
 from slaif_gateway.services.route_import import (
+    RouteImportExecutionPlan,
+    RouteImportExecutionResult,
     RouteImportPreview,
+    build_route_import_execution_plan,
     classify_route_import_preview,
     detect_route_import_format,
+    execute_route_import_plan,
     parse_route_import_csv,
     parse_route_import_json,
     provider_refs_from_rows,
@@ -1864,6 +1868,134 @@ async def admin_route_import_preview(
             "max_rows": settings.ROUTE_IMPORT_MAX_ROWS,
             "max_bytes": settings.ROUTE_IMPORT_MAX_BYTES,
         },
+    )
+
+
+@router.post("/routes/import/execute", response_class=HTMLResponse)
+async def admin_route_import_execute(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+    reason: str = Form(""),
+    confirm_import: str = Form(""),
+    import_file: UploadFile | None = File(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if confirm_import != "true":
+        return _render_route_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": "",
+                "source_label": "",
+                "reason": reason,
+            },
+            error="Confirm route import execution before continuing.",
+            status_code=400,
+        )
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _render_route_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": "",
+                "source_label": "",
+                "reason": reason,
+            },
+            error="Enter an audit reason before importing model route rows.",
+            status_code=400,
+        )
+
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_route_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.ROUTE_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_route_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = (
+            parse_route_import_json(text)
+            if detected_format == "json"
+            else parse_route_import_csv(text)
+        )
+        preview = await _build_route_import_preview(
+            request,
+            raw_rows,
+            max_rows=settings.ROUTE_IMPORT_MAX_ROWS,
+        )
+        plan = build_route_import_execution_plan(preview)
+    except ValueError as exc:
+        return _render_route_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": "",
+                "source_label": "",
+                "reason": reason,
+            },
+            error=str(exc),
+            status_code=400,
+        )
+
+    if not plan.executable:
+        return _render_route_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=_blocked_route_import_result(plan),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_model_route_service_scope(request) as service:
+            result = await execute_route_import_plan(
+                plan,
+                model_route_service=service,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except ValueError:
+        return _render_route_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=_blocked_route_import_result(plan),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            error="Route import execution failed validation. No rows were written.",
+            status_code=400,
+        )
+
+    return _render_route_import_result(
+        request,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        result=result,
+        import_format=detected_format,
+        source_label=source_label.strip(),
     )
 
 
@@ -4213,9 +4345,35 @@ def _render_route_import_form(
         {
             "admin": admin,
             "csrf_token": csrf_token,
-            "form": form or {"format": "auto", "import_text": "", "source_label": ""},
+            "form": form or {"format": "auto", "import_text": "", "source_label": "", "reason": ""},
             "error": error,
             "settings": _settings(request),
+        },
+        status_code=status_code,
+    )
+
+
+def _render_route_import_result(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    result: RouteImportExecutionResult,
+    import_format: str,
+    source_label: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "routes/import_result.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "result": result,
+            "import_format": import_format,
+            "source_label": source_label,
+            "error": error,
         },
         status_code=status_code,
     )
@@ -4860,6 +5018,18 @@ def _blocked_pricing_import_result(plan: PricingImportExecutionPlan) -> PricingI
         error_count=plan.blocked_count,
         rows=plan.rows,
         audit_summary="No pricing rows were written.",
+    )
+
+
+def _blocked_route_import_result(plan: RouteImportExecutionPlan) -> RouteImportExecutionResult:
+    return RouteImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=0,
+        updated_count=0,
+        skipped_count=sum(1 for row in plan.rows if row.action == "skipped"),
+        error_count=plan.blocked_count,
+        rows=plan.rows,
+        audit_summary="No model route rows were written.",
     )
 
 

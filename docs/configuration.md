@@ -234,7 +234,7 @@ token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-route import execution, FX import/upload/external-refresh forms, standalone
+FX import/upload/external-refresh forms, standalone
 email-delivery mutation pages beyond the existing send-now/enqueue actions, and
 owner, institution, cohort, usage, and audit dashboard mutation workflows are
 not implemented yet. Admin
@@ -313,9 +313,10 @@ operator reconciliation workflows:
   execution uploads/pasted content.
 - `PRICING_IMPORT_MAX_ROWS=1000` caps dashboard pricing import preview and
   execution row counts.
-- `ROUTE_IMPORT_MAX_BYTES=1048576` caps dashboard route import preview
-  uploads/pasted content.
-- `ROUTE_IMPORT_MAX_ROWS=1000` caps dashboard route import preview row counts.
+- `ROUTE_IMPORT_MAX_BYTES=1048576` caps dashboard route import preview and
+  execution uploads/pasted content.
+- `ROUTE_IMPORT_MAX_ROWS=1000` caps dashboard route import preview and
+  execution row counts.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -340,16 +341,26 @@ content server-side instead of trusting preview HTML or client-side
 classification. The current dashboard execution workflow is all-or-nothing and
 create-only: if any row is invalid, duplicated, overlapping, disabled, or would
 require an update/replace decision, no rows are written. Successful creates go
-through the pricing service and write safe audit rows. Route imports and FX
-imports remain separate future work.
+through the pricing service and write safe audit rows. FX imports remain
+separate future work.
 
 Dashboard route import preview is CSRF-protected and dry-run only. It accepts
 CSV or JSON content, validates every row, verifies provider references against
 provider config rows, and rejects unknown fields, invalid match types, invalid
-endpoints, negative priorities, and secret-looking capabilities/metadata values.
-It does not write `model_routes`, does not create audit rows, does not call
-providers, and does not change route resolution runtime behavior. Route import
-execution remains future work.
+endpoints, negative priorities, and secret-looking capabilities/metadata/source
+values. It does not write `model_routes`, does not create audit rows, does not
+call providers, and does not change route resolution runtime behavior.
+
+Dashboard route import execution is also CSRF-protected and uses the same
+parser/validation rules as preview. Execution requires explicit confirmation
+and a non-empty audit reason, then re-parses the submitted upload or pasted
+content server-side instead of trusting preview HTML or client-side
+classification. The current dashboard execution workflow is all-or-nothing and
+create-only: if any row is invalid, duplicated, conflicting, or would require an
+update/replace decision, no rows are written. Successful creates go through the
+route service and write safe audit rows. Confirmed imports can affect future
+model resolution through the existing resolver; route resolution runtime
+semantics are otherwise unchanged.
 
 Optional reconciliation alerts are operator-visibility only. They are generated
 from the inspection task, do not call providers, do not send email, and do not
