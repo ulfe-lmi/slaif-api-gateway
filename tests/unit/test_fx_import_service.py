@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -7,7 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.services.fx_import import (
+    FxImportExecutionResult,
+    build_fx_import_execution_plan,
     classify_fx_import_preview,
+    execute_fx_import_plan,
+    fx_import_execution_result_to_dict,
     fx_import_preview_to_dict,
     parse_fx_import_csv,
     parse_fx_import_json,
@@ -153,3 +158,143 @@ def test_preview_dict_does_not_include_raw_content() -> None:
     assert "encrypted_payload" not in str(payload)
     assert "nonce" not in str(payload)
     assert "password_hash" not in str(payload)
+
+
+def test_valid_csv_execution_plan_builds() -> None:
+    preview = _preview([_valid_row()])
+
+    plan = build_fx_import_execution_plan(preview)
+
+    assert plan.executable is True
+    assert plan.executable_count == 1
+    assert plan.blocked_count == 0
+    assert plan.rows[0].action == "create"
+    assert plan.rows[0].status == "ready"
+
+
+def test_valid_json_execution_plan_builds() -> None:
+    rows = parse_fx_import_json(
+        '[{"base_currency":"GBP","quote_currency":"EUR","rate":"1.160000000",'
+        '"valid_from":"2026-01-01T00:00:00+00:00"}]'
+    )
+    preview = _preview(rows)
+
+    plan = build_fx_import_execution_plan(preview)
+
+    assert plan.executable is True
+    assert plan.rows[0].base_currency == "GBP"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _valid_row(unknown="value"),
+        _valid_row(base_currency="USDX"),
+        _valid_row(quote_currency="USD"),
+        _valid_row(rate="bad-decimal"),
+        _valid_row(rate="0"),
+        _valid_row(valid_until="2025-01-01T00:00:00+00:00"),
+        _valid_row(source="sk-provider-secret"),
+        _valid_row(metadata='{"api_key":"sk-provider-secret"}'),
+    ],
+)
+def test_invalid_row_blocks_whole_execution_plan(row: dict[str, object]) -> None:
+    preview = _preview([row])
+
+    plan = build_fx_import_execution_plan(preview)
+
+    assert plan.executable is False
+    assert plan.blocked_count == 1
+    assert plan.rows[0].status == "blocked"
+    assert plan.rows[0].action == "invalid"
+
+
+def test_json_numeric_rate_blocks_execution_plan() -> None:
+    preview = _preview(parse_fx_import_json('[{"base_currency":"USD","quote_currency":"EUR","rate":0.92}]'))
+
+    plan = build_fx_import_execution_plan(preview)
+
+    assert plan.executable is False
+    assert "rate must be a decimal string" in plan.rows[0].errors[0]
+
+
+def test_duplicate_or_existing_conflict_blocks_execution_plan() -> None:
+    preview = _preview([_valid_row(), _valid_row()])
+    plan = build_fx_import_execution_plan(preview)
+
+    assert plan.executable is False
+    assert plan.blocked_count == 1
+    assert plan.rows[1].action == "skipped"
+    assert "duplicate rows are not supported" in plan.rows[1].errors[0]
+
+
+def test_execution_result_dict_does_not_include_raw_content() -> None:
+    preview = _preview([_valid_row(notes="<script>alert(1)</script>")])
+    row = build_fx_import_execution_plan(preview).rows[0]
+    result = FxImportExecutionResult(
+        total_rows=1,
+        created_count=0,
+        updated_count=0,
+        skipped_count=1,
+        error_count=1,
+        rows=(row,),
+        audit_summary="No FX rows were written.",
+    )
+    payload = fx_import_execution_result_to_dict(result)
+
+    assert payload["rows"][0]["base_currency"] == "USD"
+    assert "base_currency,quote_currency" not in str(payload)
+    assert "token_hash" not in str(payload)
+    assert "encrypted_payload" not in str(payload)
+    assert "nonce" not in str(payload)
+    assert "password_hash" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_uses_service_after_validation() -> None:
+    preview = _preview([_valid_row()])
+    plan = build_fx_import_execution_plan(preview)
+
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def create_fx_rate(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    service = FakeService()
+
+    result = await execute_fx_import_plan(
+        plan,
+        fx_rate_service=service,  # type: ignore[arg-type]
+        actor_admin_id=uuid.uuid4(),
+        reason="safe audit reason",
+    )
+
+    assert result.created_count == 1
+    assert result.rows[0].status == "created"
+    assert service.calls[0]["base_currency"] == "USD"
+    assert service.calls[0]["rate"] == Decimal("0.920000000")
+
+
+@pytest.mark.asyncio
+async def test_execute_blocked_plan_does_not_mutate() -> None:
+    preview = _preview([_valid_row(rate="0")])
+    plan = build_fx_import_execution_plan(preview)
+
+    class FakeService:
+        async def create_fx_rate(self, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("create_fx_rate should not be called")
+
+    result = fx_import_execution_result_to_dict(
+        await execute_fx_import_plan(
+            plan,
+            fx_rate_service=FakeService(),  # type: ignore[arg-type]
+            actor_admin_id=uuid.uuid4(),
+            reason="safe audit reason",
+        )
+    )
+
+    assert result["created_count"] == 0
+    assert result["error_count"] == 1

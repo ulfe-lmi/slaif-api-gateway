@@ -16,6 +16,9 @@ def test_fx_import_template_includes_dry_run_limits_and_csrf(monkeypatch) -> Non
     assert "1048576 bytes" in response.text
     assert "1000 rows" in response.text
     assert 'name="csrf_token" value="dashboard-csrf"' in response.text
+    assert "/admin/fx/import/execute" in response.text
+    assert "Audit reason" in response.text
+    assert "I understand this will create FX rows" in response.text
     assert "external FX services" in response.text
     assert "provider key values" not in response.text.lower()
 
@@ -48,6 +51,50 @@ def test_fx_import_preview_template_is_no_mutation_and_safe(monkeypatch) -> None
     assert "<script>alert(1)</script>" not in response.text
     assert "provider key values" not in response.text.lower()
     assert "base_currency,quote_currency,rate" not in response.text
+    assert "token_hash" not in response.text
+    assert "encrypted_payload" not in response.text
+    assert "nonce" not in response.text
+    assert "password_hash" not in response.text
+    assert "slaif_admin_session" not in response.text
+
+
+def test_fx_import_result_template_is_no_raw_content_and_safe(monkeypatch) -> None:
+    async def classify(request, preview):
+        return preview
+
+    async def create_fx_rate(self, **kwargs):
+        class Created:
+            id = "00000000-0000-0000-0000-000000000002"
+
+        return Created()
+
+    monkeypatch.setattr("slaif_gateway.api.admin._classify_fx_import_preview", classify)
+    monkeypatch.setattr("slaif_gateway.services.fx_rate_service.FxRateService.create_fx_rate", create_fx_rate)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/fx/import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": (
+                "base_currency,quote_currency,rate,valid_from,notes\n"
+                "USD,EUR,0.920000000,2026-01-01T00:00:00+00:00,<script>alert(1)</script>\n"
+            ),
+            "confirm_import": "true",
+            "reason": "safe audit reason",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "FX Import Result" in response.text
+    assert "FX import completed" in response.text
+    assert "Created rows were written through the FX service and audited" in response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "base_currency,quote_currency,rate" not in response.text
+    assert "provider key values" not in response.text.lower()
     assert "token_hash" not in response.text
     assert "encrypted_payload" not in response.text
     assert "nonce" not in response.text
