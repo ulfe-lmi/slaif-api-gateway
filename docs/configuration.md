@@ -234,7 +234,7 @@ token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-pricing import/upload forms, FX import/upload/external-refresh forms, standalone
+pricing import execution, FX import/upload/external-refresh forms, standalone
 email-delivery mutation pages beyond the existing send-now/enqueue actions, and
 owner, institution, cohort, usage, and audit dashboard mutation workflows are
 not implemented yet. Admin
@@ -309,6 +309,10 @@ operator reconciliation workflows:
   default. When enabled, payloads include only safe reservation/usage-ledger IDs,
   never keys, provider secrets, prompts, completions, encrypted payloads, nonces,
   or email bodies.
+- `PRICING_IMPORT_MAX_BYTES=1048576` caps dashboard pricing import preview
+  uploads/pasted content.
+- `PRICING_IMPORT_MAX_ROWS=1000` caps dashboard pricing import preview row
+  counts.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -319,6 +323,13 @@ plaintext gateway keys, provider keys, token hashes, encrypted payloads, nonces,
 prompts, completions, or email bodies in task payloads/results. Manual CLI
 reconciliation remains available and is still the operator review path for
 unexpected accounting failures.
+
+Dashboard pricing import preview is CSRF-protected and dry-run only. It accepts
+CSV or JSON content, validates every row, parses money values from strings, and
+rejects unknown fields or secret-looking source/metadata values. It does not
+write `pricing_rules`, does not create audit rows, and does not call external
+pricing or provider APIs. Actual pricing import execution remains a CLI workflow
+or future dashboard work.
 
 Optional reconciliation alerts are operator-visibility only. They are generated
 from the inspection task, do not call providers, do not send email, and do not

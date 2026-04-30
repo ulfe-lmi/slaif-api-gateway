@@ -62,6 +62,8 @@ def _clear_env(monkeypatch) -> None:
         "RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS",
         "RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED",
         "RECONCILIATION_ALERT_INCLUDE_IDS",
+        "PRICING_IMPORT_MAX_BYTES",
+        "PRICING_IMPORT_MAX_ROWS",
         "METRICS_REQUIRE_AUTH",
         "METRICS_ALLOWED_IPS",
         "REQUEST_ID_HEADER",
@@ -171,6 +173,8 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 1
     assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 1
     assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is False
+    assert settings.PRICING_IMPORT_MAX_BYTES == 1048576
+    assert settings.PRICING_IMPORT_MAX_ROWS == 1000
     assert settings.ENABLE_ADMIN_DASHBOARD is True
     assert settings.ADMIN_SESSION_COOKIE_NAME == "slaif_admin_session"
     assert settings.admin_session_cookie_secure() is False
@@ -441,6 +445,8 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "2")
     monkeypatch.setenv("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "4")
     monkeypatch.setenv("RECONCILIATION_ALERT_INCLUDE_IDS", "true")
+    monkeypatch.setenv("PRICING_IMPORT_MAX_BYTES", "2048")
+    monkeypatch.setenv("PRICING_IMPORT_MAX_ROWS", "25")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -460,6 +466,8 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 2
     assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 4
     assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is True
+    assert settings.PRICING_IMPORT_MAX_BYTES == 2048
+    assert settings.PRICING_IMPORT_MAX_ROWS == 25
 
 
 def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
@@ -472,6 +480,8 @@ def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
         ("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS", "0", "positive"),
         ("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "-1", "greater than or equal to 0"),
         ("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "-1", "greater than or equal to 0"),
+        ("PRICING_IMPORT_MAX_BYTES", "0", "positive"),
+        ("PRICING_IMPORT_MAX_ROWS", "-1", "positive"),
     )
 
     for name, value, message in invalid_cases:

@@ -372,6 +372,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 (f"/admin/routes/{data['route_id']}/edit", "Edit Model Route", 2),
                 ("/admin/pricing", "Pricing Rules", 1),
                 ("/admin/pricing/new", "Create Pricing Rule", 2),
+                ("/admin/pricing/import", "Pricing Import Preview", 2),
                 (f"/admin/pricing/{data['pricing_id']}", "browser-upstream", 2),
                 (f"/admin/pricing/{data['pricing_id']}/edit", "Edit Pricing Rule", 2),
                 ("/admin/fx", "FX Rates", 1),

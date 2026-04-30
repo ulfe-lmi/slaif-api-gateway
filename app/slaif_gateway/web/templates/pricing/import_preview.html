@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing Import Preview Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-import-preview-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Pricing Catalog</p>
+      <h1 id="pricing-import-preview-heading">Pricing Import Preview Result</h1>
+      <p class="muted">Validated {{ preview.total_rows }} {{ "row" if preview.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing/import">Preview another import</a>
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="summary-grid" aria-label="Pricing import summary">
+    <div class="summary-card">
+      <span>Total rows</span>
+      <strong>{{ preview.total_rows }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Valid rows</span>
+      <strong>{{ preview.valid_count }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Invalid rows</span>
+      <strong>{{ preview.invalid_count }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Database writes</span>
+      <strong>0</strong>
+    </div>
+  </section>
+
+  <div class="admin-flash admin-flash-error" role="status">
+    Dry-run only. No pricing rows were written, no audit rows were created, and no external pricing or provider APIs were called.
+  </div>
+
+  {% if source_label %}
+  <p class="muted small">Source label: {{ source_label }}</p>
+  {% endif %}
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Status</th>
+          <th>Class</th>
+          <th>Provider / model</th>
+          <th>Currency</th>
+          <th>Prices per 1M</th>
+          <th>Validity</th>
+          <th>Source</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in preview.rows %}
+        <tr>
+          <td>{{ row.row_number }}</td>
+          <td>{{ row.status }}</td>
+          <td>{{ row.classification }}</td>
+          <td>
+            <div>{{ row.provider or "n/a" }}</div>
+            <div class="muted small">{{ row.model or "n/a" }}</div>
+            <div class="muted small">{{ row.endpoint or "n/a" }}</div>
+          </td>
+          <td>{{ row.currency or "n/a" }}</td>
+          <td>
+            <div>input {{ row.input_price_per_1m if row.input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">cached {{ row.cached_input_price_per_1m if row.cached_input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">output {{ row.output_price_per_1m if row.output_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">reasoning {{ row.reasoning_price_per_1m if row.reasoning_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">request {{ row.request_price if row.request_price is not none else "n/a" }}</div>
+          </td>
+          <td>
+            <div>{{ row.valid_from.isoformat() if row.valid_from else "n/a" }}</div>
+            <div class="muted small">until {{ row.valid_until.isoformat() if row.valid_until else "open" }}</div>
+          </td>
+          <td>
+            <div>{{ row.source_url or "n/a" }}</div>
+            <div class="muted small">{{ row.notes or "" }}</div>
+          </td>
+          <td>
+            {% if row.errors %}
+            <ul class="compact-list">
+              {% for error in row.errors %}
+              <li>{{ error }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <span class="muted small">None</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty-state">No rows were found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
