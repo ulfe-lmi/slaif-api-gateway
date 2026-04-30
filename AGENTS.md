@@ -993,6 +993,22 @@ code changes:
 - `README.md`, for top-level current status, quickstart, and operator-facing
   truth
 
+#### README brand header preservation
+
+`README.md` currently starts with a SLAIF-branded logo/link header. Codex and
+other coding agents must preserve that top README logo/link block whenever
+`README.md` is modified.
+
+Rules:
+
+- Do not remove the SLAIF logo.
+- Do not remove or replace the SLAIF link.
+- Do not move the logo/link block away from the top of `README.md` unless the
+  maintainer explicitly requests it.
+- Do not rewrite the README in a way that drops the branding header.
+- When editing `README.md`, inspect the first lines before and after the edit to
+  confirm the SLAIF logo/link block is still present.
+
 Documentation must be checked and updated in the same PR as the code change
 whenever that change affects the documented behavior below. If Codex finds
 that a required document is absent, it must either create it when that is in
