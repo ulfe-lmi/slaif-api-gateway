@@ -227,14 +227,15 @@ lookup path, and unknown FX conversion still fails closed for cost-limited keys.
 The current FX schema has no enabled state; validity windows control whether an
 FX row is active. Route and pricing forms reference provider config rows and env
 var names but never provider key values. FX forms do not accept provider key
-values and do not call external FX APIs. Usage, audit, and
+values and do not call external FX APIs. The FX import preview page validates
+CSV/JSON FX metadata without writing rows. Usage, audit, and
 email delivery pages show safe local metadata only; they do not show prompts,
 completions, raw request/response bodies, email bodies, plaintext key material,
 token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-FX import/upload/external-refresh forms, standalone
+FX import execution/upload/external-refresh forms, standalone
 email-delivery mutation pages beyond the existing send-now/enqueue actions, and
 owner, institution, cohort, usage, and audit dashboard mutation workflows are
 not implemented yet. Admin
@@ -317,6 +318,9 @@ operator reconciliation workflows:
   execution uploads/pasted content.
 - `ROUTE_IMPORT_MAX_ROWS=1000` caps dashboard route import preview and
   execution row counts.
+- `FX_IMPORT_MAX_BYTES=1048576` caps dashboard FX import preview uploads/pasted
+  content.
+- `FX_IMPORT_MAX_ROWS=1000` caps dashboard FX import preview row counts.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -341,8 +345,15 @@ content server-side instead of trusting preview HTML or client-side
 classification. The current dashboard execution workflow is all-or-nothing and
 create-only: if any row is invalid, duplicated, overlapping, disabled, or would
 require an update/replace decision, no rows are written. Successful creates go
-through the pricing service and write safe audit rows. FX imports remain
-separate future work.
+through the pricing service and write safe audit rows.
+
+Dashboard FX import preview is CSRF-protected and dry-run only. It accepts CSV
+or JSON content, validates every row, parses rate values from Decimal strings,
+normalizes three-letter currency pairs, and rejects unknown fields, same-currency
+pairs, invalid validity windows, non-positive rates, and secret-looking
+source/note/metadata values. It does not write `fx_rates`, does not create audit
+rows, does not call external FX APIs or providers, and does not change FX lookup
+runtime behavior. FX import execution remains separate future work.
 
 Dashboard route import preview is CSRF-protected and dry-run only. It accepts
 CSV or JSON content, validates every row, verifies provider references against

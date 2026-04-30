@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}FX Import Preview Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-import-preview-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-import-preview-heading">FX Import Preview Result</h1>
+      <p class="muted">Dry-run only. No fx_rates rows were written.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx/import">Preview another import</a>
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="summary-grid" aria-label="FX import preview summary">
+    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ preview.total_rows }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Valid rows</span><strong>{{ preview.valid_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Invalid rows</span><strong>{{ preview.invalid_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Database writes</span><strong>0</strong></div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="fx-import-details-heading">
+    <h2 id="fx-import-details-heading">Preview Details</h2>
+    <p class="muted small">Format: {{ import_format }}{% if source_label %}; source label: {{ source_label }}{% endif %}. External FX APIs and providers were not called. Uploaded content was not stored.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Status</th>
+            <th>Classification</th>
+            <th>Pair</th>
+            <th>Rate</th>
+            <th>Validity</th>
+            <th>Source</th>
+            <th>Metadata</th>
+            <th>Notes</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in preview.rows %}
+          <tr>
+            <td>{{ row.row_number }}</td>
+            <td>{{ row.status }}</td>
+            <td>{{ row.classification }}</td>
+            <td>
+              {% if row.base_currency and row.quote_currency %}
+              {{ row.base_currency }} / {{ row.quote_currency }}
+              {% else %}
+              <span class="muted">Invalid</span>
+              {% endif %}
+            </td>
+            <td>{{ row.rate or "Invalid" }}</td>
+            <td>
+              {% if row.valid_from %}
+              <div>{{ row.valid_from.isoformat() }}</div>
+              <div class="muted small">until {{ row.valid_until.isoformat() if row.valid_until else "open" }}</div>
+              {% else %}
+              <span class="muted">Invalid</span>
+              {% endif %}
+            </td>
+            <td>{{ row.source or "Not set" }}</td>
+            <td>{{ row.metadata_summary }}</td>
+            <td>{{ row.notes or "Not set" }}</td>
+            <td>
+              {% if row.errors %}
+              <ul class="compact-list">
+                {% for error in row.errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <span class="muted">None</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="empty-state">No rows found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}

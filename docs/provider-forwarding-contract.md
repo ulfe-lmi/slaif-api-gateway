@@ -24,7 +24,10 @@ re-parses and re-validates CSV/JSON metadata server-side, requires CSRF,
 explicit confirmation, and an audit reason, writes only valid new local
 `model_routes`, and does not call providers. Confirmed imports can affect
 future route resolution through the existing route-resolution algorithm; they do
-not change provider forwarding or adapter semantics.
+not change provider forwarding or adapter semantics. Dashboard FX import is
+preview/dry-run only; it validates CSV/JSON local FX metadata without writing
+`fx_rates`, calling external FX APIs, calling providers, or changing FX lookup
+semantics.
 
 ## OpenAI Upstream Forwarding
 
