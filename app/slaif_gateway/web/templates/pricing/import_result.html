@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 
-{% block title %}Pricing Import Preview Result{% endblock %}
+{% block title %}Pricing Import Result{% endblock %}
 
 {% block body %}
-<section class="dashboard-shell wide" aria-labelledby="pricing-import-preview-heading">
+<section class="dashboard-shell wide" aria-labelledby="pricing-import-result-heading">
   <header class="dashboard-header">
     <div>
       <p class="eyebrow">Pricing Catalog</p>
-      <h1 id="pricing-import-preview-heading">Pricing Import Preview Result</h1>
-      <p class="muted">Validated {{ preview.total_rows }} {{ "row" if preview.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <h1 id="pricing-import-result-heading">Pricing Import Result</h1>
+      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link secondary" href="/admin/pricing/import">Preview another import</a>
+      <a class="button-link secondary" href="/admin/pricing/import">Import more pricing</a>
       <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -20,30 +20,40 @@
     </div>
   </header>
 
-  <section class="summary-grid" aria-label="Pricing import summary">
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="summary-grid" aria-label="Pricing import execution summary">
     <div class="summary-card">
       <span>Total rows</span>
-      <strong>{{ preview.total_rows }}</strong>
+      <strong>{{ result.total_rows }}</strong>
     </div>
     <div class="summary-card">
-      <span>Valid rows</span>
-      <strong>{{ preview.valid_count }}</strong>
+      <span>Created rows</span>
+      <strong>{{ result.created_count }}</strong>
     </div>
     <div class="summary-card">
-      <span>Invalid rows</span>
-      <strong>{{ preview.invalid_count }}</strong>
+      <span>Updated rows</span>
+      <strong>{{ result.updated_count }}</strong>
     </div>
     <div class="summary-card">
-      <span>Database writes</span>
-      <strong>0</strong>
+      <span>Errors</span>
+      <strong>{{ result.error_count }}</strong>
     </div>
   </section>
 
+  {% if result.error_count %}
   <div class="admin-flash admin-flash-error" role="status">
-    Dry-run only. No pricing rows were written, no audit rows were created, and no external pricing or provider APIs were called.
-    To execute, return to the import page and resubmit the original file or pasted content with confirmation and an audit reason.
+    Import blocked. No pricing rows were written because the execution workflow is all-or-nothing.
   </div>
+  {% else %}
+  <div class="admin-flash admin-flash-success" role="status">
+    Pricing import completed. Created rows were written through the pricing service and audited.
+  </div>
+  {% endif %}
 
+  <p class="muted small">{{ result.audit_summary }}</p>
   {% if source_label %}
   <p class="muted small">Source label: {{ source_label }}</p>
   {% endif %}
@@ -54,7 +64,8 @@
         <tr>
           <th>Row</th>
           <th>Status</th>
-          <th>Class</th>
+          <th>Action</th>
+          <th>Pricing rule</th>
           <th>Provider / model</th>
           <th>Currency</th>
           <th>Prices per 1M</th>
@@ -64,11 +75,18 @@
         </tr>
       </thead>
       <tbody>
-        {% for row in preview.rows %}
+        {% for row in result.rows %}
         <tr>
           <td>{{ row.row_number }}</td>
           <td>{{ row.status }}</td>
-          <td>{{ row.classification }}</td>
+          <td>{{ row.action }}</td>
+          <td>
+            {% if row.pricing_rule_id %}
+            <a href="/admin/pricing/{{ row.pricing_rule_id }}">{{ row.pricing_rule_id }}</a>
+            {% else %}
+            <span class="muted small">n/a</span>
+            {% endif %}
+          </td>
           <td>
             <div>{{ row.provider or "n/a" }}</div>
             <div class="muted small">{{ row.model or "n/a" }}</div>
@@ -103,7 +121,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="empty-state">No rows were found.</td></tr>
+        <tr><td colspan="10" class="empty-state">No rows were processed.</td></tr>
         {% endfor %}
       </tbody>
     </table>

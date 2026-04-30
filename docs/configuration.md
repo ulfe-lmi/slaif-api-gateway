@@ -234,7 +234,7 @@ token hashes, one-time-secret material, provider key values, password hashes, or
 session tokens.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
-pricing import execution, FX import/upload/external-refresh forms, standalone
+route imports, FX import/upload/external-refresh forms, standalone
 email-delivery mutation pages beyond the existing send-now/enqueue actions, and
 owner, institution, cohort, usage, and audit dashboard mutation workflows are
 not implemented yet. Admin
@@ -309,10 +309,10 @@ operator reconciliation workflows:
   default. When enabled, payloads include only safe reservation/usage-ledger IDs,
   never keys, provider secrets, prompts, completions, encrypted payloads, nonces,
   or email bodies.
-- `PRICING_IMPORT_MAX_BYTES=1048576` caps dashboard pricing import preview
-  uploads/pasted content.
-- `PRICING_IMPORT_MAX_ROWS=1000` caps dashboard pricing import preview row
-  counts.
+- `PRICING_IMPORT_MAX_BYTES=1048576` caps dashboard pricing import preview and
+  execution uploads/pasted content.
+- `PRICING_IMPORT_MAX_ROWS=1000` caps dashboard pricing import preview and
+  execution row counts.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -328,8 +328,17 @@ Dashboard pricing import preview is CSRF-protected and dry-run only. It accepts
 CSV or JSON content, validates every row, parses money values from strings, and
 rejects unknown fields or secret-looking source/metadata values. It does not
 write `pricing_rules`, does not create audit rows, and does not call external
-pricing or provider APIs. Actual pricing import execution remains a CLI workflow
-or future dashboard work.
+pricing or provider APIs.
+
+Dashboard pricing import execution is also CSRF-protected and uses the same
+parser/validation rules as preview. Execution requires explicit confirmation
+and a non-empty audit reason, then re-parses the submitted upload or pasted
+content server-side instead of trusting preview HTML or client-side
+classification. The current dashboard execution workflow is all-or-nothing and
+create-only: if any row is invalid, duplicated, overlapping, disabled, or would
+require an update/replace decision, no rows are written. Successful creates go
+through the pricing service and write safe audit rows. Route imports and FX
+imports remain separate future work.
 
 Optional reconciliation alerts are operator-visibility only. They are generated
 from the inspection task, do not call providers, do not send email, and do not

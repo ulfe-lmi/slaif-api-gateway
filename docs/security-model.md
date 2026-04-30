@@ -230,8 +230,15 @@ pricing, and FX metadata mutation forms require a valid authenticated session
 plus the per-session CSRF token. The dashboard pricing import preview form also
 requires CSRF, validates CSV/JSON rows with Decimal money values parsed from
 strings, rejects unknown fields and secret-looking source/metadata values, and
-does not write `pricing_rules`, audit rows, or uploaded content. It does not
-call external pricing APIs or providers. Dashboard key creation
+does not write `pricing_rules`, audit rows, or uploaded content. Dashboard
+pricing import execution requires CSRF, explicit confirmation, and a non-empty
+audit reason. It re-parses and re-validates the submitted upload or pasted
+content server-side, does not trust preview HTML or client-side classification,
+and writes pricing rows only after all rows validate as supported create rows.
+Invalid, duplicate, overlapping, disabled, or update-classified rows block the
+entire import with no mutation. Successful creates are audited through the
+pricing service. Neither preview nor execution calls external pricing APIs or
+providers, stores raw uploaded content, or accepts provider keys. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -284,7 +291,7 @@ never recover or send old plaintext keys.
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
-  Pricing import/upload and FX import/upload/external-refresh workflows are future work.
+  Route import and FX import/upload/external-refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run
@@ -292,6 +299,6 @@ never recover or send old plaintext keys.
   or allowlisted.
 - Native Anthropic API support is not implemented.
 - Responses API and embeddings API are not implemented.
-- External Slack/PagerDuty/webhook alert integrations are not implemented yet.
+- Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.

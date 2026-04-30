@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from slaif_gateway.services.pricing_import import (
+    build_pricing_import_execution_plan,
     classify_pricing_import_preview,
+    execute_pricing_import_plan,
+    pricing_import_execution_result_to_dict,
     parse_pricing_import_csv,
     parse_pricing_import_json,
     pricing_import_preview_to_dict,
@@ -127,3 +132,70 @@ def test_pricing_import_classifies_duplicate_and_existing_rows() -> None:
     payload = pricing_import_preview_to_dict(classified)
     assert "sk-real-looking-secret" not in str(payload)
     assert "token_hash" not in str(payload)
+
+
+def test_pricing_import_execution_plan_blocks_invalid_duplicate_and_overlap_rows() -> None:
+    valid_from = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [
+        _valid_row(model="create-model"),
+        _valid_row(model="duplicate-model"),
+        _valid_row(model="overlap-model"),
+        _valid_row(input_price_per_1m=0.1),
+    ]
+    preview = validate_pricing_import_rows(rows, max_rows=10, now=valid_from)
+    classified = classify_pricing_import_preview(
+        preview,
+        existing_rules_by_row={
+            2: [SimpleNamespace(currency="EUR", valid_from=valid_from, valid_until=None, enabled=True)],
+            3: [SimpleNamespace(currency="EUR", valid_from=valid_from - timedelta(days=1), valid_until=None, enabled=True)],
+        },
+    )
+
+    plan = build_pricing_import_execution_plan(classified)
+
+    assert plan.executable is False
+    assert plan.executable_count == 1
+    assert plan.blocked_count == 3
+    error_text = "\n".join("\n".join(row.errors) for row in plan.rows)
+    assert "duplicate rows are not supported" in error_text
+    assert "overlap rows are not supported" in error_text
+    assert "decimal string" in error_text
+
+
+def test_pricing_import_execution_plan_executes_create_only_rows_without_raw_content() -> None:
+    class FakePricingService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_pricing_rule(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    preview = validate_pricing_import_rows(
+        [_valid_row(notes="<script>alert(1)</script>")],
+        max_rows=10,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    plan = build_pricing_import_execution_plan(preview)
+    service = FakePricingService()
+
+    result = asyncio.run(
+        execute_pricing_import_plan(
+            plan,
+            pricing_rule_service=service,
+            actor_admin_id=uuid.uuid4(),
+            reason="pricing import",
+        )
+    )
+
+    assert result.created_count == 1
+    assert service.calls[0]["input_price_per_1m"].as_tuple()
+    assert str(service.calls[0]["input_price_per_1m"]) == "0.100000000"
+    assert service.calls[0]["reason"] == "pricing import"
+    payload = pricing_import_execution_result_to_dict(result)
+    assert "<script>alert(1)</script>" in str(payload)
+    assert "provider,model,input_price_per_1m" not in str(payload)
+    assert "token_hash" not in str(payload)
+    assert "encrypted_payload" not in str(payload)
+    assert "nonce" not in str(payload)
+    assert "password_hash" not in str(payload)

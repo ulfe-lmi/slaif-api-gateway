@@ -53,9 +53,13 @@ from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
 from slaif_gateway.services.pricing_import import (
+    PricingImportExecutionPlan,
+    PricingImportExecutionResult,
     PricingImportPreview,
+    build_pricing_import_execution_plan,
     classify_pricing_import_preview,
     detect_pricing_import_format,
+    execute_pricing_import_plan,
     parse_pricing_import_csv,
     parse_pricing_import_json,
     validate_pricing_import_rows,
@@ -2284,6 +2288,134 @@ async def admin_pricing_import_preview(
     )
 
 
+@router.post("/pricing/import/execute", response_class=HTMLResponse)
+async def admin_pricing_import_execute(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+    reason: str = Form(""),
+    confirm_import: str = Form(""),
+    import_file: UploadFile | None = File(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    if confirm_import != "true":
+        return _render_pricing_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": import_text,
+                "source_label": source_label,
+                "reason": reason,
+            },
+            error="Confirm pricing import execution before continuing.",
+            status_code=400,
+        )
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _render_pricing_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": import_text,
+                "source_label": source_label,
+                "reason": reason,
+            },
+            error="Enter an audit reason before importing pricing rows.",
+            status_code=400,
+        )
+
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_pricing_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.PRICING_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_pricing_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = (
+            parse_pricing_import_json(text)
+            if detected_format == "json"
+            else parse_pricing_import_csv(text)
+        )
+        preview = validate_pricing_import_rows(
+            raw_rows,
+            max_rows=settings.PRICING_IMPORT_MAX_ROWS,
+        )
+        preview = await _classify_pricing_import_preview(request, preview)
+        plan = build_pricing_import_execution_plan(preview)
+    except ValueError as exc:
+        return _render_pricing_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": import_text,
+                "source_label": source_label,
+                "reason": reason,
+            },
+            error=str(exc),
+            status_code=400,
+        )
+
+    if not plan.executable:
+        return _render_pricing_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=_blocked_pricing_import_result(plan),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_pricing_rule_service_scope(request) as service:
+            result = await execute_pricing_import_plan(
+                plan,
+                pricing_rule_service=service,
+                actor_admin_id=action_context.admin_user.id,
+                reason=cleaned_reason,
+            )
+    except ValueError:
+        return _render_pricing_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=_blocked_pricing_import_result(plan),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            error="Pricing import execution failed validation. No rows were written.",
+            status_code=400,
+        )
+
+    return _render_pricing_import_result(
+        request,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        result=result,
+        import_format=detected_format,
+        source_label=source_label.strip(),
+    )
+
+
 @router.get("/pricing/new", response_class=HTMLResponse)
 async def create_admin_pricing_rule_form(request: Request) -> Response:
     settings = _settings(request)
@@ -3844,9 +3976,35 @@ def _render_pricing_import_form(
         {
             "admin": admin,
             "csrf_token": csrf_token,
-            "form": form or {"format": "auto", "import_text": "", "source_label": ""},
+            "form": form or {"format": "auto", "import_text": "", "source_label": "", "reason": ""},
             "error": error,
             "settings": _settings(request),
+        },
+        status_code=status_code,
+    )
+
+
+def _render_pricing_import_result(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    result: PricingImportExecutionResult,
+    import_format: str,
+    source_label: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "pricing/import_result.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "result": result,
+            "import_format": import_format,
+            "source_label": source_label,
+            "error": error,
         },
         status_code=status_code,
     )
@@ -4511,6 +4669,18 @@ async def _classify_pricing_import_preview(
                     limit=200,
                 )
     return classify_pricing_import_preview(preview, existing_rules_by_row=existing_by_row)
+
+
+def _blocked_pricing_import_result(plan: PricingImportExecutionPlan) -> PricingImportExecutionResult:
+    return PricingImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=0,
+        updated_count=0,
+        skipped_count=sum(1 for row in plan.rows if row.action == "skipped"),
+        error_count=plan.blocked_count,
+        rows=plan.rows,
+        audit_summary="No pricing rows were written.",
+    )
 
 
 def _decimal_form_value(value: object) -> str:
