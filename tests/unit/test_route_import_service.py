@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 
@@ -7,9 +8,12 @@ import pytest
 
 from slaif_gateway.services.route_import import (
     RouteImportProviderRef,
+    build_route_import_execution_plan,
     classify_route_import_preview,
+    execute_route_import_plan,
     parse_route_import_csv,
     parse_route_import_json,
+    route_import_execution_result_to_dict,
     route_import_preview_to_dict,
     validate_route_import_rows,
 )
@@ -182,3 +186,89 @@ def test_preview_dict_does_not_include_raw_content() -> None:
 
     assert payload["rows"][0]["requested_model"] == "gpt-4.1-mini"
     assert "requested_model,match_type" not in str(payload)
+
+
+def test_route_import_execution_plan_blocks_non_create_rows() -> None:
+    preview = _preview(
+        [
+            _valid_row(),
+            _valid_row(),
+            _valid_row(requested_model="gpt-update", upstream_model="gpt-update"),
+            _valid_row(requested_model="gpt-conflict", upstream_model="gpt-conflict"),
+            _valid_row(provider="missing"),
+        ]
+    )
+    classified = classify_route_import_preview(
+        preview,
+        existing_routes_by_row={
+            3: [
+                SimpleNamespace(
+                    requested_model="gpt-update",
+                    match_type="exact",
+                    endpoint="/v1/chat/completions",
+                    provider="openai",
+                    upstream_model="gpt-update-v2",
+                    priority=10,
+                    enabled=True,
+                    visible_in_models=True,
+                    supports_streaming=True,
+                    capabilities={},
+                    notes=None,
+                )
+            ],
+            4: [
+                SimpleNamespace(
+                    requested_model="gpt-conflict",
+                    match_type="exact",
+                    endpoint="/v1/chat/completions",
+                    provider="openrouter",
+                )
+            ],
+        },
+    )
+
+    plan = build_route_import_execution_plan(classified)
+
+    assert plan.executable is False
+    assert plan.executable_count == 1
+    assert plan.blocked_count == 4
+    error_text = "\n".join("\n".join(row.errors) for row in plan.rows)
+    assert "duplicate rows are not supported" in error_text
+    assert "update rows are not supported" in error_text
+    assert "conflict rows are not supported" in error_text
+    assert "provider must reference an existing provider config" in error_text
+
+
+def test_route_import_execution_plan_executes_create_only_rows_without_raw_content() -> None:
+    class FakeRouteService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_model_route(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    preview = _preview([_valid_row(notes="<script>alert(1)</script>")])
+    plan = build_route_import_execution_plan(preview)
+    service = FakeRouteService()
+
+    result = asyncio.run(
+        execute_route_import_plan(
+            plan,
+            model_route_service=service,
+            actor_admin_id=uuid.uuid4(),
+            reason="route import",
+        )
+    )
+
+    assert result.created_count == 1
+    assert service.calls[0]["requested_model"] == "gpt-4.1-mini"
+    assert service.calls[0]["endpoint"] == "/v1/chat/completions"
+    assert service.calls[0]["reason"] == "route import"
+    payload = route_import_execution_result_to_dict(result)
+    assert "<script>alert(1)</script>" in str(payload)
+    assert "requested_model,match_type" not in str(payload)
+    assert "token_hash" not in str(payload)
+    assert "encrypted_payload" not in str(payload)
+    assert "nonce" not in str(payload)
+    assert "password_hash" not in str(payload)

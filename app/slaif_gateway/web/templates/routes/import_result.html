@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 
-{% block title %}Route Import Preview Result{% endblock %}
+{% block title %}Route Import Result{% endblock %}
 
 {% block body %}
-<section class="dashboard-shell wide" aria-labelledby="route-import-preview-heading">
+<section class="dashboard-shell wide" aria-labelledby="route-import-result-heading">
   <header class="dashboard-header">
     <div>
       <p class="eyebrow">Routing Catalog</p>
-      <h1 id="route-import-preview-heading">Route Import Preview Result</h1>
-      <p class="muted">Preview only. No model route rows were written.</p>
+      <h1 id="route-import-result-heading">Route Import Result</h1>
+      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/routes/import">Preview another import</a>
+      <a class="button-link secondary" href="/admin/routes/import">Import more routes</a>
       <a class="button-link secondary" href="/admin/routes">Model routes</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -20,17 +20,43 @@
     </div>
   </header>
 
-  <section class="summary-grid" aria-label="Route import summary">
-    <div><span class="muted">Format</span><strong>{{ import_format }}</strong></div>
-    <div><span class="muted">Rows</span><strong>{{ preview.total_rows }}</strong></div>
-    <div><span class="muted">Valid rows</span><strong>{{ preview.valid_count }}</strong></div>
-    <div><span class="muted">Invalid rows</span><strong>{{ preview.invalid_count }}</strong></div>
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="summary-grid" aria-label="Route import execution summary">
+    <div class="summary-card">
+      <span>Total rows</span>
+      <strong>{{ result.total_rows }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Created rows</span>
+      <strong>{{ result.created_count }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Updated rows</span>
+      <strong>{{ result.updated_count }}</strong>
+    </div>
+    <div class="summary-card">
+      <span>Errors</span>
+      <strong>{{ result.error_count }}</strong>
+    </div>
   </section>
 
-  {% if source_label %}
-  <p class="muted">Source label: {{ source_label }}</p>
+  {% if result.error_count %}
+  <div class="admin-flash admin-flash-error" role="status">
+    Import blocked. No model route rows were written because the execution workflow is all-or-nothing.
+  </div>
+  {% else %}
+  <div class="admin-flash admin-flash-success" role="status">
+    Route import completed. Created rows were written through the route service and audited.
+  </div>
   {% endif %}
-  <p class="warning-text">Database writes, provider calls, route resolution changes, and audit writes are not performed by this preview. To execute, return to the import page and resubmit the original file or pasted content with confirmation and an audit reason.</p>
+
+  <p class="muted small">{{ result.audit_summary }}</p>
+  {% if source_label %}
+  <p class="muted small">Source label: {{ source_label }}</p>
+  {% endif %}
 
   <div class="table-wrap">
     <table>
@@ -38,7 +64,8 @@
         <tr>
           <th>Row</th>
           <th>Status</th>
-          <th>Classification</th>
+          <th>Action</th>
+          <th>Route</th>
           <th>Match</th>
           <th>Target</th>
           <th>Flags</th>
@@ -47,11 +74,18 @@
         </tr>
       </thead>
       <tbody>
-        {% for row in preview.rows %}
+        {% for row in result.rows %}
         <tr>
           <td>{{ row.row_number }}</td>
           <td>{{ row.status }}</td>
-          <td>{{ row.classification }}</td>
+          <td>{{ row.action }}</td>
+          <td>
+            {% if row.route_id %}
+            <a href="/admin/routes/{{ row.route_id }}">{{ row.route_id }}</a>
+            {% else %}
+            <span class="muted small">n/a</span>
+            {% endif %}
+          </td>
           <td>
             <div>{{ row.requested_model or "not parsed" }}</div>
             <div class="muted small">{{ row.match_type or "n/a" }} / {{ row.endpoint or "n/a" }}</div>
@@ -81,12 +115,12 @@
               {% endfor %}
             </ul>
             {% else %}
-            <span class="muted">none</span>
+            <span class="muted small">None</span>
             {% endif %}
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="empty-state">No rows found.</td></tr>
+        <tr><td colspan="9" class="empty-state">No rows were processed.</td></tr>
         {% endfor %}
       </tbody>
     </table>

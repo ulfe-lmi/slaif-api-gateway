@@ -19,8 +19,12 @@ those dashboard workflows do not change the forwarding contract, provider
 adapter semantics, route-resolution algorithm, pricing algorithm, or FX lookup
 semantics described below. Provider config rows store environment variable names
 only, never provider key values. Dashboard route import currently has a
-preview/dry-run workflow only; it validates CSV/JSON metadata without writing
-`model_routes` or changing route resolution.
+preview/dry-run workflow plus confirmed create-only execution. Execution
+re-parses and re-validates CSV/JSON metadata server-side, requires CSRF,
+explicit confirmation, and an audit reason, writes only valid new local
+`model_routes`, and does not call providers. Confirmed imports can affect
+future route resolution through the existing route-resolution algorithm; they do
+not change provider forwarding or adapter semantics.
 
 ## OpenAI Upstream Forwarding
 
