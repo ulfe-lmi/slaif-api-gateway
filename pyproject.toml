@@ -39,6 +39,7 @@ dev = [
   "pytest-asyncio",
   "respx",
   "openai",
+  "playwright",
   "testcontainers[postgres]",
   "hypothesis",
   "ruff",
@@ -64,6 +65,7 @@ pythonpath = ["app"]
 addopts = "-q"
 markers = [
   "e2e: end-to-end tests that require an explicit local test database",
+  "playwright: optional browser smoke tests that require TEST_DATABASE_URL and an installed Playwright browser",
 ]
 
 [tool.ruff]

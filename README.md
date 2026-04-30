@@ -334,6 +334,22 @@ Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRo
 
 Redis rate-limit integration tests use `TEST_REDIS_URL` when set. If it is not set and `redis-server` is available locally, tests start a temporary user-owned Redis instance on a free localhost port.
 
+Optional admin dashboard browser smoke tests use Playwright and do not run as
+part of the normal unit, integration, or OpenAI-compatible E2E commands. Install
+Chromium explicitly and run the browser suite against a migrated test database:
+
+```bash
+python -m playwright install chromium
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m playwright
+```
+
+The browser smoke suite starts the local FastAPI app, seeds safe dummy admin
+dashboard data, checks login/navigation/logout, verifies representative CSRF
+forms are rendered, and asserts normal dashboard pages do not expose token
+hashes, encrypted one-time-secret material, provider keys, plaintext gateway
+keys, prompts, completions, or session data. It does not call real
+OpenAI/OpenRouter providers or send real email.
+
 ## External Reviews And Remediation
 
 The project has undergone external quality/security-oriented mid-development reviews. Review artifacts and remediation status are tracked in:

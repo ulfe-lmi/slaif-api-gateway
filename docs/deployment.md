@@ -118,6 +118,24 @@ docker compose down
 Use `docker compose down -v` only when you intentionally want to delete local
 PostgreSQL and Redis volumes.
 
+## Optional Browser Smoke Tests
+
+The Playwright admin dashboard smoke tests are optional and are not part of the
+normal unit, integration, or OpenAI-compatible E2E commands. They require an
+explicit test database and an explicitly installed browser:
+
+```bash
+python -m playwright install chromium
+TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m playwright
+```
+
+The suite starts the local FastAPI app, seeds safe dummy dashboard data, drives
+admin login/navigation/logout in Chromium, checks representative CSRF-protected
+forms are present, and verifies rendered normal dashboard pages do not expose
+token hashes, encrypted one-time-secret material, provider keys, plaintext
+gateway keys, prompts, completions, or session data. It does not call real
+OpenAI/OpenRouter providers and does not send real email.
+
 ## Production Notes
 
 Docker Compose is local/development packaging and a clear service layout. It is
