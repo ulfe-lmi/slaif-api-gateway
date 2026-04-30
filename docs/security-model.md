@@ -227,7 +227,12 @@ pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
 quota limit update, usage-counter reset, rotation, provider config, route,
 pricing, and FX metadata mutation forms require a valid authenticated session
-plus the per-session CSRF token. The dashboard pricing import preview form also
+plus the per-session CSRF token. The dashboard route import preview form
+requires CSRF, validates CSV/JSON rows, verifies provider references against
+provider config rows, rejects unknown fields and secret-looking
+capabilities/metadata values, and does not write `model_routes`, audit rows, or
+uploaded content. Route import preview does not call providers and does not
+change route resolution runtime behavior. The dashboard pricing import preview form also
 requires CSRF, validates CSV/JSON rows with Decimal money values parsed from
 strings, rejects unknown fields and secret-looking source/metadata values, and
 does not write `pricing_rules`, audit rows, or uploaded content. Dashboard
@@ -291,7 +296,8 @@ never recover or send old plaintext keys.
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
-  Route import and FX import/upload/external-refresh workflows are future work.
+  Route import execution and FX import/upload/external-refresh workflows are
+  future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run
