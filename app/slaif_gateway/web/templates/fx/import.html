@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}FX Import Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-import-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">FX Catalog</p>
+      <h1 id="fx-import-heading">FX Import Preview</h1>
+      <p class="muted">Dry-run only. Validate CSV or JSON FX-rate metadata without writing fx_rates rows.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="fx-import-policy-heading">
+    <h2 id="fx-import-policy-heading">Preview Policy</h2>
+    <p class="muted small">This workflow parses and validates uploaded content in memory only. It does not call external FX services, does not call providers, does not store uploaded content, and does not write audit rows or fx_rates rows.</p>
+    <p class="muted small">Accepted fields: base_currency, quote_currency, rate, source, valid_from, valid_until, metadata, notes. Decimal rates must be strings. Secret-looking source, note, or metadata values are rejected.</p>
+    <p class="muted small">Limits: {{ settings.FX_IMPORT_MAX_ROWS }} rows and {{ settings.FX_IMPORT_MAX_BYTES }} bytes.</p>
+  </section>
+
+  <form class="create-form" method="post" action="/admin/fx/import/preview" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="fx-import-input-heading">
+      <h2 id="fx-import-input-heading">Input</h2>
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>Source label<input name="source_label" value="{{ form.source_label }}" autocomplete="off"></label>
+        <label>Upload file<input name="import_file" type="file" accept=".csv,.json,text/csv,application/json"></label>
+      </div>
+      <label>Paste CSV or JSON<textarea name="import_text" rows="14" spellcheck="false">{{ form.import_text }}</textarea></label>
+      <p class="muted small">Use either upload or pasted content, not both.</p>
+      <button type="submit">Preview FX import</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

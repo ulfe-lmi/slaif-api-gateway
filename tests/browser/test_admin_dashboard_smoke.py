@@ -378,6 +378,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 (f"/admin/pricing/{data['pricing_id']}/edit", "Edit Pricing Rule", 2),
                 ("/admin/fx", "FX Rates", 1),
                 ("/admin/fx/new", "Create FX rate", 2),
+                ("/admin/fx/import", "FX Import Preview", 2),
                 (f"/admin/fx/{data['fx_id']}", "USD / EUR", 1),
                 (f"/admin/fx/{data['fx_id']}/edit", "Edit FX rate", 2),
                 ("/admin/usage", "Usage Ledger", 1),

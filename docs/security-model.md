@@ -251,7 +251,14 @@ and writes pricing rows only after all rows validate as supported create rows.
 Invalid, duplicate, overlapping, disabled, or update-classified rows block the
 entire import with no mutation. Successful creates are audited through the
 pricing service. Neither preview nor execution calls external pricing APIs or
-providers, stores raw uploaded content, or accepts provider keys. Dashboard key creation
+providers, stores raw uploaded content, or accepts provider keys. The dashboard
+FX import preview form requires CSRF, validates CSV/JSON rows with Decimal
+rates parsed from strings, rejects unknown fields, invalid currency pairs,
+same-currency pairs, invalid validity windows, non-positive rates, and
+secret-looking source/note/metadata values, and does not write `fx_rates`, audit
+rows, or uploaded content. FX import preview does not call external FX APIs or
+providers, does not accept provider keys, and does not change FX lookup runtime
+behavior. FX import execution remains future work. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -304,7 +311,7 @@ never recover or send old plaintext keys.
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, cohort, usage, and audit mutation pages are not
   implemented yet.
-  FX import/upload/external-refresh workflows are future work.
+  FX import execution/upload/external-refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run
