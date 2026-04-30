@@ -247,6 +247,11 @@ def test_admin_activity_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "one-time secret" in html
     assert "plaintext gateway key will not be shown" in html
     assert "Celery" in html
+    assert "/admin/usage/export.csv" in html
+    assert "/admin/audit/export.csv" in html
+    assert "confirm_export" in html
+    assert "Audit reason" in html
+    assert "Formula-looking CSV cells are neutralized" in html
 
     forbidden = [
         "sk-provider-secret-placeholder",

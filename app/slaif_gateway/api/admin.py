@@ -36,6 +36,7 @@ from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_activity_dashboard import AdminActivityDashboardService, AdminActivityNotFoundError
 from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
+from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
 from slaif_gateway.services.admin_session_service import (
@@ -3619,6 +3620,7 @@ async def list_admin_usage(
                 "limit": limit,
                 "offset": offset,
             },
+            "export_max_rows": settings.ADMIN_USAGE_EXPORT_MAX_ROWS,
         },
     )
 
@@ -3654,6 +3656,81 @@ async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response
             "usage": usage,
         },
     )
+
+
+@router.post("/usage/export.csv")
+async def export_admin_usage_csv(
+    request: Request,
+    csrf_token: str = Form(""),
+    confirm_export: str | None = Form(None),
+    reason: str | None = Form(None),
+    provider: str | None = Form(None),
+    model: str | None = Form(None),
+    endpoint: str | None = Form(None),
+    status: str | None = Form(None),
+    gateway_key_id: str | None = Form(None),
+    owner_id: str | None = Form(None),
+    institution_id: str | None = Form(None),
+    cohort_id: str | None = Form(None),
+    request_id: str | None = Form(None),
+    streaming: str | None = Form(None),
+    start_at: str | None = Form(None),
+    end_at: str | None = Form(None),
+    limit: str | None = Form(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    if not _is_checked(confirm_export):
+        return HTMLResponse("Confirm the CSV export before continuing.", status_code=400)
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return HTMLResponse("Enter an audit reason before exporting usage rows.", status_code=400)
+
+    try:
+        parsed_gateway_key_id = _parse_optional_admin_uuid(gateway_key_id, field_name="gateway_key_id")
+        parsed_owner_id = _parse_optional_admin_uuid(owner_id, field_name="owner_id")
+        parsed_institution_id = _parse_optional_admin_uuid(institution_id, field_name="institution_id")
+        parsed_cohort_id = _parse_optional_admin_uuid(cohort_id, field_name="cohort_id")
+        parsed_streaming = _parse_optional_admin_bool(streaming, field_name="streaming")
+        parsed_start_at = _parse_admin_datetime(start_at)
+        parsed_end_at = _parse_admin_datetime(end_at)
+        if parsed_start_at is not None and parsed_end_at is not None and parsed_end_at < parsed_start_at:
+            raise ValueError("end_at must be greater than or equal to start_at.")
+        parsed_limit = _parse_admin_export_limit(
+            limit,
+            default=settings.ADMIN_USAGE_EXPORT_MAX_ROWS,
+            maximum=settings.ADMIN_USAGE_EXPORT_MAX_ROWS,
+        )
+    except ValueError as exc:
+        return HTMLResponse(str(exc), status_code=400)
+
+    async with _admin_csv_export_service_scope(request) as service:
+        result = await service.export_usage_csv(
+            actor_admin_id=action_context.admin_user.id,
+            reason=cleaned_reason,
+            provider=provider,
+            model=model,
+            endpoint=endpoint,
+            status=status,
+            gateway_key_id=parsed_gateway_key_id,
+            owner_id=parsed_owner_id,
+            institution_id=parsed_institution_id,
+            cohort_id=parsed_cohort_id,
+            request_id=request_id,
+            streaming=parsed_streaming,
+            start_at=parsed_start_at,
+            end_at=parsed_end_at,
+            limit=parsed_limit,
+            ip_address=_client_host(request),
+            user_agent=request.headers.get("user-agent"),
+            audit_request_id=request.headers.get(_settings(request).REQUEST_ID_HEADER),
+        )
+    return _csv_export_response(result)
 
 
 @router.get("/audit", response_class=HTMLResponse)
@@ -3714,8 +3791,71 @@ async def list_admin_audit_logs(
                 "limit": limit,
                 "offset": offset,
             },
+            "export_max_rows": settings.ADMIN_AUDIT_EXPORT_MAX_ROWS,
         },
     )
+
+
+@router.post("/audit/export.csv")
+async def export_admin_audit_csv(
+    request: Request,
+    csrf_token: str = Form(""),
+    confirm_export: str | None = Form(None),
+    reason: str | None = Form(None),
+    actor_admin_id: str | None = Form(None),
+    action: str | None = Form(None),
+    target_type: str | None = Form(None),
+    target_id: str | None = Form(None),
+    request_id: str | None = Form(None),
+    start_at: str | None = Form(None),
+    end_at: str | None = Form(None),
+    limit: str | None = Form(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    if not _is_checked(confirm_export):
+        return HTMLResponse("Confirm the CSV export before continuing.", status_code=400)
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return HTMLResponse("Enter an audit reason before exporting audit rows.", status_code=400)
+
+    try:
+        parsed_actor_admin_id = _parse_optional_admin_uuid(actor_admin_id, field_name="actor_admin_id")
+        parsed_target_id = _parse_optional_admin_uuid(target_id, field_name="target_id")
+        parsed_start_at = _parse_admin_datetime(start_at)
+        parsed_end_at = _parse_admin_datetime(end_at)
+        if parsed_start_at is not None and parsed_end_at is not None and parsed_end_at < parsed_start_at:
+            raise ValueError("end_at must be greater than or equal to start_at.")
+        parsed_limit = _parse_admin_export_limit(
+            limit,
+            default=settings.ADMIN_AUDIT_EXPORT_MAX_ROWS,
+            maximum=settings.ADMIN_AUDIT_EXPORT_MAX_ROWS,
+        )
+    except ValueError as exc:
+        return HTMLResponse(str(exc), status_code=400)
+
+    async with _admin_csv_export_service_scope(request) as service:
+        result = await service.export_audit_csv(
+            actor_admin_id=action_context.admin_user.id,
+            reason=cleaned_reason,
+            actor_filter_admin_id=parsed_actor_admin_id,
+            action=action,
+            target_type=target_type,
+            target_id=parsed_target_id,
+            request_id=request_id,
+            start_at=parsed_start_at,
+            end_at=parsed_end_at,
+            limit=parsed_limit,
+            ip_address=_client_host(request),
+            user_agent=request.headers.get("user-agent"),
+            audit_request_id=request.headers.get(_settings(request).REQUEST_ID_HEADER),
+        )
+    return _csv_export_response(result)
 
 
 @router.get("/audit/{audit_log_id}", response_class=HTMLResponse)
@@ -4206,6 +4346,17 @@ async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIter
                 usage_ledger_repository=UsageLedgerRepository(session),
                 audit_repository=AuditRepository(session),
                 email_deliveries_repository=EmailDeliveriesRepository(session),
+            )
+
+
+@asynccontextmanager
+async def _admin_csv_export_service_scope(request: Request) -> AsyncIterator[AdminCsvExportService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield AdminCsvExportService(
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
             )
 
 
@@ -5740,6 +5891,41 @@ def _parse_optional_admin_int(value: str | None) -> tuple[bool, int | None]:
     if parsed <= 0:
         raise ValueError("integer must be positive")
     return True, parsed
+
+
+def _parse_admin_export_limit(value: str | None, *, default: int, maximum: int) -> int:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value.strip(), 10)
+    except ValueError as exc:
+        raise ValueError("limit must be a positive integer.") from exc
+    if parsed <= 0:
+        raise ValueError("limit must be a positive integer.")
+    if parsed > maximum:
+        raise ValueError(f"limit must be less than or equal to {maximum}.")
+    return parsed
+
+
+def _parse_optional_admin_bool(value: str | None, *, field_name: str) -> bool | None:
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{field_name} must be true or false.")
+
+
+def _csv_export_response(result: AdminCsvExportResult) -> Response:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    filename = f"{result.filename_prefix}-{timestamp}.csv"
+    return Response(
+        content=result.content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _is_checked(value: str | None) -> bool:

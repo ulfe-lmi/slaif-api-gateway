@@ -68,6 +68,8 @@ def _clear_env(monkeypatch) -> None:
         "ROUTE_IMPORT_MAX_ROWS",
         "FX_IMPORT_MAX_BYTES",
         "FX_IMPORT_MAX_ROWS",
+        "ADMIN_USAGE_EXPORT_MAX_ROWS",
+        "ADMIN_AUDIT_EXPORT_MAX_ROWS",
         "METRICS_REQUIRE_AUTH",
         "METRICS_ALLOWED_IPS",
         "REQUEST_ID_HEADER",
@@ -183,6 +185,8 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.ROUTE_IMPORT_MAX_ROWS == 1000
     assert settings.FX_IMPORT_MAX_BYTES == 1048576
     assert settings.FX_IMPORT_MAX_ROWS == 1000
+    assert settings.ADMIN_USAGE_EXPORT_MAX_ROWS == 10000
+    assert settings.ADMIN_AUDIT_EXPORT_MAX_ROWS == 10000
     assert settings.ENABLE_ADMIN_DASHBOARD is True
     assert settings.ADMIN_SESSION_COOKIE_NAME == "slaif_admin_session"
     assert settings.admin_session_cookie_secure() is False
@@ -459,6 +463,8 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("ROUTE_IMPORT_MAX_ROWS", "50")
     monkeypatch.setenv("FX_IMPORT_MAX_BYTES", "8192")
     monkeypatch.setenv("FX_IMPORT_MAX_ROWS", "75")
+    monkeypatch.setenv("ADMIN_USAGE_EXPORT_MAX_ROWS", "1500")
+    monkeypatch.setenv("ADMIN_AUDIT_EXPORT_MAX_ROWS", "1600")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -484,6 +490,8 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     assert settings.ROUTE_IMPORT_MAX_ROWS == 50
     assert settings.FX_IMPORT_MAX_BYTES == 8192
     assert settings.FX_IMPORT_MAX_ROWS == 75
+    assert settings.ADMIN_USAGE_EXPORT_MAX_ROWS == 1500
+    assert settings.ADMIN_AUDIT_EXPORT_MAX_ROWS == 1600
 
 
 def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
@@ -502,6 +510,8 @@ def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
         ("ROUTE_IMPORT_MAX_ROWS", "-1", "positive"),
         ("FX_IMPORT_MAX_BYTES", "0", "positive"),
         ("FX_IMPORT_MAX_ROWS", "-1", "positive"),
+        ("ADMIN_USAGE_EXPORT_MAX_ROWS", "0", "positive"),
+        ("ADMIN_AUDIT_EXPORT_MAX_ROWS", "-1", "positive"),
     )
 
     for name, value, message in invalid_cases:
