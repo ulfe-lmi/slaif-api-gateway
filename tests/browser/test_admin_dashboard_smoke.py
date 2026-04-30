@@ -368,6 +368,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 (f"/admin/providers/{data['provider_id']}/edit", "Edit Provider Config", 2),
                 ("/admin/routes", "Model Routes", 1),
                 ("/admin/routes/new", "Create Model Route", 2),
+                ("/admin/routes/import", "Route Import Preview", 2),
                 (f"/admin/routes/{data['route_id']}", "browser-gpt", 2),
                 (f"/admin/routes/{data['route_id']}/edit", "Edit Model Route", 2),
                 ("/admin/pricing", "Pricing Rules", 1),

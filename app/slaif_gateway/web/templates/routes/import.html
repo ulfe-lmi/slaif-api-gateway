@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Route Import Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-import-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-import-heading">Route Import Preview</h1>
+      <p class="muted">Validate model route CSV or JSON before any execution workflow exists.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/routes/import/preview" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="route-import-source-heading">
+      <h2 id="route-import-source-heading">Dry-run only</h2>
+      <p class="warning-text">This preview validates route metadata and does not write model_routes rows, change route resolution, call providers, or write audit rows.</p>
+      <p class="muted">Maximum {{ settings.ROUTE_IMPORT_MAX_BYTES }} bytes and {{ settings.ROUTE_IMPORT_MAX_ROWS }} rows.</p>
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>
+          Source label
+          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="optional local note">
+        </label>
+        <label>
+          Upload file
+          <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json">
+        </label>
+      </div>
+      <label>
+        Paste CSV or JSON
+        <textarea name="import_text" spellcheck="false" placeholder="requested_model,match_type,provider,upstream_model">{{ form.import_text }}</textarea>
+      </label>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-import-fields-heading">
+      <h2 id="route-import-fields-heading">Supported fields</h2>
+      <p class="muted">Use requested_model or model_pattern, match_type, endpoint, provider or provider_config_id, upstream_model, priority, enabled, visible_in_models, supports_streaming, capabilities, and notes. Provider references must match provider config rows; provider key values are rejected.</p>
+      <button type="submit">Preview route import</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

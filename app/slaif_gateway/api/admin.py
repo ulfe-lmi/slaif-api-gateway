@@ -67,6 +67,15 @@ from slaif_gateway.services.pricing_import import (
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
+from slaif_gateway.services.route_import import (
+    RouteImportPreview,
+    classify_route_import_preview,
+    detect_route_import_format,
+    parse_route_import_csv,
+    parse_route_import_json,
+    provider_refs_from_rows,
+    validate_route_import_rows,
+)
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -1768,6 +1777,92 @@ async def list_admin_routes(
                 "limit": limit,
                 "offset": offset,
             },
+        },
+    )
+
+
+@router.get("/routes/import", response_class=HTMLResponse)
+async def admin_route_import_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_route_import_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+    )
+
+
+@router.post("/routes/import/preview", response_class=HTMLResponse)
+async def admin_route_import_preview(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+    import_file: UploadFile | None = File(None),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_route_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.ROUTE_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_route_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = (
+            parse_route_import_json(text)
+            if detected_format == "json"
+            else parse_route_import_csv(text)
+        )
+        preview = await _build_route_import_preview(
+            request,
+            raw_rows,
+            max_rows=settings.ROUTE_IMPORT_MAX_ROWS,
+        )
+    except ValueError as exc:
+        return _render_route_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": "",
+                "source_label": "",
+            },
+            error=str(exc),
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "routes/import_preview.html",
+        {
+            "admin": action_context.admin_user,
+            "csrf_token": csrf_token,
+            "preview": preview,
+            "import_format": detected_format,
+            "source_label": source_label.strip(),
+            "max_rows": settings.ROUTE_IMPORT_MAX_ROWS,
+            "max_bytes": settings.ROUTE_IMPORT_MAX_BYTES,
         },
     )
 
@@ -4103,6 +4198,29 @@ def _render_route_form(
     )
 
 
+def _render_route_import_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str] | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "routes/import.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "form": form or {"format": "auto", "import_text": "", "source_label": ""},
+            "error": error,
+            "settings": _settings(request),
+        },
+        status_code=status_code,
+    )
+
+
 def _default_route_form() -> dict[str, str]:
     return {
         "requested_model": "",
@@ -4636,6 +4754,37 @@ async def _read_pricing_import_input(
         raise ValueError("Pricing import content must be UTF-8 text.") from exc
 
 
+async def _read_route_import_input(
+    *,
+    import_file: UploadFile | None,
+    import_text: str,
+    max_bytes: int,
+) -> tuple[str | None, str]:
+    text_supplied = bool(import_text.strip())
+    file_supplied = import_file is not None and bool(import_file.filename)
+    if text_supplied and file_supplied:
+        raise ValueError("Use either a file upload or pasted content, not both.")
+    if not text_supplied and not file_supplied:
+        raise ValueError("Paste route content or upload a route file.")
+
+    if text_supplied:
+        encoded = import_text.encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ValueError(f"Route import content must be at most {max_bytes} bytes.")
+        return None, import_text
+
+    assert import_file is not None
+    content = await import_file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise ValueError(f"Route import content must be at most {max_bytes} bytes.")
+    if not content:
+        raise ValueError("Route import file is empty.")
+    try:
+        return import_file.filename, content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Route import content must be UTF-8 text.") from exc
+
+
 def _parse_optional_import_source_label(value: str | None) -> str | None:
     source_label = _clean_admin_reason(value)
     if source_label is None:
@@ -4644,6 +4793,37 @@ def _parse_optional_import_source_label(value: str | None) -> str | None:
     if lowered.startswith(("bearer ", "sk-", "sk_", "sk-or-")) or redact_text(source_label) != source_label:
         raise ValueError("Source label must not contain secret-looking values.")
     return source_label
+
+
+async def _build_route_import_preview(
+    request: Request,
+    raw_rows: list[dict[str, object]],
+    *,
+    max_rows: int,
+) -> RouteImportPreview:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            providers = await ProviderConfigsRepository(session).list_provider_configs(limit=1000)
+            preview = validate_route_import_rows(
+                raw_rows,
+                provider_configs=provider_refs_from_rows(providers),
+                max_rows=max_rows,
+            )
+            valid_rows = [row for row in preview.rows if row.status == "valid"]
+            if not valid_rows:
+                return preview
+
+            route_repository = ModelRoutesRepository(session)
+            existing_by_row: dict[int, list[object]] = {}
+            for row in valid_rows:
+                if not row.requested_model or not row.match_type or not row.endpoint:
+                    continue
+                existing_by_row[row.row_number] = await route_repository.list_model_routes(
+                    endpoint=row.endpoint,
+                    limit=1000,
+                )
+    return classify_route_import_preview(preview, existing_routes_by_row=existing_by_row)
 
 
 async def _classify_pricing_import_preview(

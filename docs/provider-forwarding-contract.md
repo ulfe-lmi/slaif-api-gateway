@@ -18,7 +18,9 @@ route, pricing, and FX metadata where described in the compatibility matrix, but
 those dashboard workflows do not change the forwarding contract, provider
 adapter semantics, route-resolution algorithm, pricing algorithm, or FX lookup
 semantics described below. Provider config rows store environment variable names
-only, never provider key values.
+only, never provider key values. Dashboard route import currently has a
+preview/dry-run workflow only; it validates CSV/JSON metadata without writing
+`model_routes` or changing route resolution.
 
 ## OpenAI Upstream Forwarding
 
