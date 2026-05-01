@@ -69,11 +69,16 @@ from slaif_gateway.services.fx_import import (
 )
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_import import (
+    KeyImportExecutionResult,
     KeyImportCohortRef,
     KeyImportOwnerRef,
     KeyImportPreview,
     KeyImportReadOnlyContext,
+    build_key_import_execution_plan,
     detect_key_import_format,
+    execute_key_import_plan,
+    key_import_execution_error_result,
+    key_import_execution_result_from_preview_errors,
     parse_key_import_csv,
     parse_key_import_json,
     validate_key_import_rows,
@@ -754,6 +759,111 @@ async def preview_bulk_import_admin_keys(
     )
     _set_no_store_headers(response)
     return response
+
+
+@router.post("/keys/bulk-import/execute", response_class=HTMLResponse)
+async def execute_bulk_import_admin_keys(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_file: UploadFile | None = File(None),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+    confirm_import: str = Form(""),
+    confirm_plaintext_display: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    detected_format = import_format
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_key_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.KEY_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_key_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        preview = await _build_key_import_preview(
+            request,
+            raw_rows,
+            max_rows=settings.KEY_IMPORT_MAX_ROWS,
+        )
+        if preview.invalid_count:
+            return _render_key_import_result(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                result=key_import_execution_result_from_preview_errors(preview),
+                import_format=detected_format,
+                source_label=source_label.strip(),
+                error="All rows must validate before bulk key import execution.",
+                status_code=400,
+            )
+        plan = build_key_import_execution_plan(
+            preview,
+            actor_admin_id=action_context.admin_user.id,
+            reason=reason,
+            confirm_import=_is_checked(confirm_import),
+            confirm_plaintext_display=_is_checked(confirm_plaintext_display),
+        )
+    except ValueError as exc:
+        return _render_key_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=key_import_execution_error_result(str(exc)),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_key_email_delivery_runtime_scope(request) as (
+            _owners_repository,
+            _cohorts_repository,
+            key_service,
+            email_delivery_service,
+        ):
+            result = await execute_key_import_plan(
+                plan,
+                key_service=key_service,
+                email_delivery_service=email_delivery_service,
+            )
+    except (EmailError, KeyManagementError, ValueError):
+        return _render_key_import_result(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            result=key_import_execution_error_result(
+                "Bulk key import execution failed safely. No keys were created."
+            ),
+            import_format=detected_format,
+            source_label=source_label.strip(),
+            error="Bulk key import execution failed safely. No keys were created.",
+            status_code=400,
+        )
+
+    return _render_key_import_result(
+        request,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        result=result,
+        import_format=detected_format,
+        source_label=source_label.strip(),
+    )
 
 
 @router.get("/keys/{gateway_key_id}", response_class=HTMLResponse)
@@ -5358,6 +5468,34 @@ def _render_key_import_form(
         },
         status_code=status_code,
     )
+
+
+def _render_key_import_result(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    result: KeyImportExecutionResult,
+    import_format: str,
+    source_label: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    response = templates.TemplateResponse(
+        request,
+        "keys/bulk_import_result.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "result": result,
+            "import_format": import_format,
+            "source_label": source_label,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+    _set_no_store_headers(response)
+    return response
 
 
 def _default_key_create_form() -> dict[str, str]:

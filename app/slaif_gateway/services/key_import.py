@@ -12,6 +12,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 
+from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 KEY_IMPORT_ALLOWED_FIELDS = {
@@ -150,6 +153,85 @@ class KeyImportPreview:
     duplicate_owner_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class KeyImportExecutionPlan:
+    """Validated all-or-nothing plan for confirmed bulk key creation."""
+
+    total_rows: int
+    rows: tuple[KeyImportRowPreview, ...]
+    actor_admin_id: uuid.UUID
+    reason: str
+    plaintext_display_required: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KeyImportExecutionRow:
+    """Safe row-level result for confirmed bulk key creation."""
+
+    row_number: int
+    action: str
+    owner_id: uuid.UUID | None = None
+    owner_email: str | None = None
+    owner_name: str | None = None
+    gateway_key_id: uuid.UUID | None = None
+    public_key_id: str | None = None
+    display_prefix: str | None = None
+    one_time_secret_id: uuid.UUID | None = None
+    email_delivery_id: uuid.UUID | None = None
+    email_delivery_mode: str = "none"
+    email_delivery_status: str | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    cost_limit_eur: str | None = None
+    token_limit: int | None = None
+    request_limit: int | None = None
+    allowed_models: tuple[str, ...] = ()
+    allowed_endpoints: tuple[str, ...] = ()
+    rate_limit_policy: dict[str, int] | None = None
+    plaintext_key: str | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def allowed_models_summary(self) -> str:
+        return _policy_summary(self.allowed_models, allow_all=False)
+
+    @property
+    def allowed_endpoints_summary(self) -> str:
+        return _policy_summary(self.allowed_endpoints, allow_all=False)
+
+    @property
+    def rate_limit_summary(self) -> str:
+        if not self.rate_limit_policy:
+            return "none"
+        parts = []
+        if "requests_per_minute" in self.rate_limit_policy:
+            parts.append(f"{self.rate_limit_policy['requests_per_minute']} req/min")
+        if "tokens_per_minute" in self.rate_limit_policy:
+            parts.append(f"{self.rate_limit_policy['tokens_per_minute']} tokens/min")
+        if "max_concurrent_requests" in self.rate_limit_policy:
+            parts.append(f"{self.rate_limit_policy['max_concurrent_requests']} concurrent")
+        if "window_seconds" in self.rate_limit_policy:
+            parts.append(f"{self.rate_limit_policy['window_seconds']}s window")
+        return ", ".join(parts) if parts else "none"
+
+
+@dataclass(frozen=True, slots=True)
+class KeyImportExecutionResult:
+    """Safe aggregate result for confirmed bulk key creation."""
+
+    total_rows: int
+    created_count: int
+    invalid_count: int
+    rows: tuple[KeyImportExecutionRow, ...]
+    plaintext_display_count: int = 0
+    pending_email_delivery_count: int = 0
+    audit_summary: str = "Per-key creation audit rows written through KeyService."
+
+    @property
+    def error_count(self) -> int:
+        return self.invalid_count
+
+
 def parse_key_import_csv(text: str) -> list[dict[str, object]]:
     """Parse key import CSV text into raw row mappings."""
     try:
@@ -232,6 +314,154 @@ def validate_key_import_rows(
         invalid_count=len(classified) - valid_count,
         rows=classified,
         duplicate_owner_count=sum(1 for row in classified if row.status == "valid" and row.classification == "duplicate"),
+    )
+
+
+def build_key_import_execution_plan(
+    preview: KeyImportPreview,
+    *,
+    actor_admin_id: uuid.UUID,
+    reason: str,
+    confirm_import: bool,
+    confirm_plaintext_display: bool,
+) -> KeyImportExecutionPlan:
+    """Build an all-or-nothing execution plan from a fresh validated preview."""
+    cleaned_reason = reason.strip()
+    if not confirm_import:
+        raise ValueError("Confirm bulk key import before continuing.")
+    if not cleaned_reason:
+        raise ValueError("Enter an audit reason before importing keys.")
+    if preview.invalid_count:
+        raise ValueError("All rows must validate before bulk key import execution.")
+
+    unsupported_modes = sorted(
+        {row.email_delivery_mode for row in preview.rows if row.email_delivery_mode in {"send-now", "enqueue"}}
+    )
+    if unsupported_modes:
+        raise ValueError("Bulk send-now and enqueue email delivery are future work; use none or pending.")
+
+    for row in preview.rows:
+        if row.allowed_providers:
+            raise ValueError("allowed_providers is not supported by the current key creation service.")
+        if row.allow_all_models or row.allow_all_endpoints or row.allow_all_providers:
+            raise ValueError("allow_all policy flags are not supported by the current key creation service.")
+
+    plaintext_display_required = any(row.email_delivery_mode in {"none", "pending"} for row in preview.rows)
+    if plaintext_display_required and not confirm_plaintext_display:
+        raise ValueError("Confirm one-time plaintext display before importing keys.")
+
+    return KeyImportExecutionPlan(
+        total_rows=preview.total_rows,
+        rows=preview.rows,
+        actor_admin_id=actor_admin_id,
+        reason=cleaned_reason,
+        plaintext_display_required=plaintext_display_required,
+    )
+
+
+async def execute_key_import_plan(
+    plan: KeyImportExecutionPlan,
+    *,
+    key_service: KeyService,
+    email_delivery_service: EmailDeliveryService,
+) -> KeyImportExecutionResult:
+    """Apply a validated bulk key import plan through existing creation services."""
+    result_rows: list[KeyImportExecutionRow] = []
+    for row in plan.rows:
+        create_input = _create_gateway_key_input_from_row(
+            row,
+            actor_admin_id=plan.actor_admin_id,
+            reason=plan.reason,
+        )
+        created = await key_service.create_gateway_key(create_input)
+        delivery_result: PendingKeyEmailResult | None = None
+        if row.email_delivery_mode == "pending":
+            delivery_result = await email_delivery_service.create_pending_key_email_delivery(
+                gateway_key_id=created.gateway_key_id,
+                one_time_secret_id=created.one_time_secret_id,
+                owner_id=created.owner_id,
+                actor_admin_id=plan.actor_admin_id,
+                reason=plan.reason,
+            )
+        result_rows.append(
+            KeyImportExecutionRow(
+                row_number=row.row_number,
+                action="created",
+                owner_id=row.owner_id,
+                owner_email=row.owner_email,
+                owner_name=row.owner_name,
+                gateway_key_id=created.gateway_key_id,
+                public_key_id=created.public_key_id,
+                display_prefix=created.display_prefix,
+                one_time_secret_id=created.one_time_secret_id,
+                email_delivery_id=delivery_result.email_delivery_id if delivery_result else None,
+                email_delivery_mode=row.email_delivery_mode,
+                email_delivery_status=delivery_result.status if delivery_result else None,
+                valid_from=created.valid_from,
+                valid_until=created.valid_until,
+                cost_limit_eur=row.cost_limit_eur,
+                token_limit=row.token_limit,
+                request_limit=row.request_limit,
+                allowed_models=row.allowed_models,
+                allowed_endpoints=row.allowed_endpoints,
+                rate_limit_policy=row.rate_limit_policy,
+                plaintext_key=created.plaintext_key,
+            )
+        )
+
+    return KeyImportExecutionResult(
+        total_rows=plan.total_rows,
+        created_count=len(result_rows),
+        invalid_count=0,
+        rows=tuple(result_rows),
+        plaintext_display_count=sum(1 for row in result_rows if row.plaintext_key),
+        pending_email_delivery_count=sum(1 for row in result_rows if row.email_delivery_mode == "pending"),
+    )
+
+
+def key_import_execution_result_from_preview_errors(preview: KeyImportPreview) -> KeyImportExecutionResult:
+    """Convert validation failures into a safe no-mutation execution result."""
+    rows = tuple(
+        KeyImportExecutionRow(
+            row_number=row.row_number,
+            action="invalid",
+            owner_id=row.owner_id,
+            owner_email=row.owner_email,
+            owner_name=row.owner_name,
+            email_delivery_mode=row.email_delivery_mode,
+            valid_from=row.valid_from,
+            valid_until=row.valid_until,
+            cost_limit_eur=row.cost_limit_eur,
+            token_limit=row.token_limit,
+            request_limit=row.request_limit,
+            allowed_models=row.allowed_models,
+            allowed_endpoints=row.allowed_endpoints,
+            rate_limit_policy=row.rate_limit_policy,
+            errors=row.errors or ("row is invalid",),
+        )
+        for row in preview.rows
+    )
+    return KeyImportExecutionResult(
+        total_rows=preview.total_rows,
+        created_count=0,
+        invalid_count=preview.invalid_count,
+        rows=rows,
+        plaintext_display_count=0,
+        pending_email_delivery_count=0,
+        audit_summary="No mutation was performed.",
+    )
+
+
+def key_import_execution_error_result(message: str) -> KeyImportExecutionResult:
+    """Build a safe one-row error result for rejected execution requests."""
+    return KeyImportExecutionResult(
+        total_rows=0,
+        created_count=0,
+        invalid_count=1,
+        rows=(KeyImportExecutionRow(row_number=0, action="invalid", errors=(message,)),),
+        plaintext_display_count=0,
+        pending_email_delivery_count=0,
+        audit_summary="No mutation was performed.",
     )
 
 
@@ -542,6 +772,10 @@ def _optional_import_list(value: object, *, field_name: str) -> list[str]:
     for item in items:
         if _looks_like_secret(item):
             raise ValueError(f"{field_name} must not contain secret-looking values")
+        if field_name == "allowed_endpoints" and not _is_safe_endpoint_policy(item):
+            raise ValueError("allowed_endpoints must contain safe /v1 paths")
+        if field_name in {"allowed_models", "allowed_providers"} and any(ch.isspace() for ch in item):
+            raise ValueError(f"{field_name} values must not contain whitespace")
     return items
 
 
@@ -613,6 +847,36 @@ def _policy_summary(values: tuple[str, ...], *, allow_all: bool) -> str:
     if not values:
         return "default"
     return ", ".join(values)
+
+
+def _create_gateway_key_input_from_row(
+    row: KeyImportRowPreview,
+    *,
+    actor_admin_id: uuid.UUID,
+    reason: str,
+) -> CreateGatewayKeyInput:
+    if row.owner_id is None or row.valid_from is None or row.valid_until is None:
+        raise ValueError("validated key import row is missing required create fields")
+    return CreateGatewayKeyInput(
+        owner_id=row.owner_id,
+        cohort_id=row.cohort_id,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        created_by_admin_id=actor_admin_id,
+        cost_limit_eur=Decimal(row.cost_limit_eur) if row.cost_limit_eur is not None else None,
+        token_limit_total=row.token_limit,
+        request_limit_total=row.request_limit,
+        allowed_models=list(row.allowed_models),
+        allowed_endpoints=list(row.allowed_endpoints),
+        rate_limit_policy=dict(row.rate_limit_policy) if row.rate_limit_policy else None,
+        note=reason,
+    )
+
+
+def _is_safe_endpoint_policy(value: str) -> bool:
+    if value == "/v1/chat/completions" or value == "/v1/models":
+        return True
+    return value.startswith("/v1/") and "?" not in value and "#" not in value and not any(ch.isspace() for ch in value)
 
 
 def _aware_time(value: datetime) -> datetime:
