@@ -41,6 +41,52 @@
 
   <p class="warning-text">No plaintext gateway keys were generated. Email delivery modes are validation-only in this preview.</p>
 
+  {% if preview.valid_count and not preview.invalid_count %}
+  <section class="action-panel" aria-labelledby="bulk-key-execute-heading">
+    <h2 id="bulk-key-execute-heading">Confirmed Bulk Key Creation</h2>
+    <p class="warning-text">Execution will generate gateway keys. Re-upload or paste the same CSV/JSON content; the server will parse and validate it again before any rows are written.</p>
+    <form class="create-form" method="post" action="/admin/keys/bulk-import/execute" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if import_format == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if import_format == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if import_format == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>
+          Source label
+          <input name="source_label" value="{{ source_label }}" autocomplete="off" placeholder="Optional safe label">
+        </label>
+      </div>
+      <label>
+        Upload CSV/JSON
+        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json">
+      </label>
+      <label>
+        Or paste CSV/JSON
+        <textarea name="import_text" rows="10" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,email_delivery_mode&#10;ada@example.org,30,10.00,none"></textarea>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_import" value="true">
+        <span>I confirm this import should create gateway keys for every valid row.</span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_plaintext_display" value="true">
+        <span>I understand newly generated plaintext keys will be shown once on the no-cache result page.</span>
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" autocomplete="off" required placeholder="Required reason for bulk key creation">
+      </label>
+      <p class="muted small">Bulk execution supports email delivery modes <code>none</code> and <code>pending</code>. It does not send email or queue Celery tasks.</p>
+      <button type="submit">Execute import</button>
+    </form>
+  </section>
+  {% endif %}
+
   <div class="table-wrap">
     <table>
       <thead>

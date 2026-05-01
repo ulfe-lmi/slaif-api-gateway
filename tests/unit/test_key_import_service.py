@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
+from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.key_import import (
+    KeyImportExecutionResult,
     KeyImportCohortRef,
     KeyImportOwnerRef,
     KeyImportReadOnlyContext,
+    build_key_import_execution_plan,
+    execute_key_import_plan,
+    key_import_execution_error_result,
     key_import_preview_to_dict,
     parse_key_import_csv,
     parse_key_import_json,
@@ -19,6 +25,7 @@ from slaif_gateway.services.key_import import (
 OWNER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 INSTITUTION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 COHORT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
+ADMIN_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 
 
 def _context(**overrides) -> KeyImportReadOnlyContext:
@@ -212,3 +219,153 @@ def test_preview_dict_does_not_include_raw_content_or_secret_fields() -> None:
     assert "nonce" not in str(payload)
     assert "password_hash" not in str(payload)
     assert "sk-slaif-plaintext.secret" not in str(payload)
+
+
+def test_execution_plan_requires_confirmation_reason_and_valid_rows() -> None:
+    preview = _preview([_valid_row(allowed_providers="")])
+
+    with pytest.raises(ValueError, match="Confirm bulk key import"):
+        build_key_import_execution_plan(
+            preview,
+            actor_admin_id=ADMIN_ID,
+            reason="bulk import",
+            confirm_import=False,
+            confirm_plaintext_display=True,
+        )
+    with pytest.raises(ValueError, match="audit reason"):
+        build_key_import_execution_plan(
+            preview,
+            actor_admin_id=ADMIN_ID,
+            reason=" ",
+            confirm_import=True,
+            confirm_plaintext_display=True,
+        )
+    with pytest.raises(ValueError, match="one-time plaintext display"):
+        build_key_import_execution_plan(
+            preview,
+            actor_admin_id=ADMIN_ID,
+            reason="bulk import",
+            confirm_import=True,
+            confirm_plaintext_display=False,
+        )
+
+    invalid = _preview([_valid_row(owner_id=str(uuid.uuid4()))])
+    with pytest.raises(ValueError, match="All rows must validate"):
+        build_key_import_execution_plan(
+            invalid,
+            actor_admin_id=ADMIN_ID,
+            reason="bulk import",
+            confirm_import=True,
+            confirm_plaintext_display=True,
+        )
+
+
+def test_execution_plan_rejects_unsupported_email_modes_and_provider_policy() -> None:
+    configured = _context(email_delivery_enabled=True, smtp_configured=True, celery_configured=True)
+    send_now = _preview([_valid_row(email_delivery_mode="send-now", allowed_providers="")], context=configured)
+    provider_policy = _preview([_valid_row()], context=configured)
+
+    with pytest.raises(ValueError, match="send-now and enqueue"):
+        build_key_import_execution_plan(
+            send_now,
+            actor_admin_id=ADMIN_ID,
+            reason="bulk import",
+            confirm_import=True,
+            confirm_plaintext_display=True,
+        )
+    with pytest.raises(ValueError, match="allowed_providers"):
+        build_key_import_execution_plan(
+            provider_policy,
+            actor_admin_id=ADMIN_ID,
+            reason="bulk import",
+            confirm_import=True,
+            confirm_plaintext_display=True,
+        )
+
+
+def test_execution_plan_builds_for_supported_modes() -> None:
+    preview = _preview([_valid_row(allowed_providers="", email_delivery_mode="pending")])
+
+    plan = build_key_import_execution_plan(
+        preview,
+        actor_admin_id=ADMIN_ID,
+        reason="bulk import",
+        confirm_import=True,
+        confirm_plaintext_display=True,
+    )
+
+    assert plan.total_rows == 1
+    assert plan.reason == "bulk import"
+    assert plan.plaintext_display_required is True
+
+
+class _FakeKeyService:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def create_gateway_key(self, payload):
+        self.payloads.append(payload)
+        return CreatedGatewayKey(
+            gateway_key_id=uuid.UUID("55555555-5555-4555-8555-555555555555"),
+            owner_id=payload.owner_id,
+            public_key_id="pub_bulk",
+            display_prefix="sk-slaif-pub_bulk",
+            plaintext_key="sk-slaif-pub_bulk.plaintext-secret",
+            one_time_secret_id=uuid.UUID("66666666-6666-4666-8666-666666666666"),
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            rate_limit_policy=payload.rate_limit_policy,
+        )
+
+
+class _FakeEmailDeliveryService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def create_pending_key_email_delivery(self, **kwargs):
+        self.calls.append(kwargs)
+
+        class _Result:
+            email_delivery_id = uuid.UUID("77777777-7777-4777-8777-777777777777")
+            status = "pending"
+
+        return _Result()
+
+
+@pytest.mark.asyncio
+async def test_execute_key_import_plan_calls_key_service_and_returns_plaintext_once() -> None:
+    preview = _preview([_valid_row(allowed_providers="", email_delivery_mode="pending")])
+    plan = build_key_import_execution_plan(
+        preview,
+        actor_admin_id=ADMIN_ID,
+        reason="bulk import",
+        confirm_import=True,
+        confirm_plaintext_display=True,
+    )
+    key_service = _FakeKeyService()
+    email_service = _FakeEmailDeliveryService()
+
+    result = await execute_key_import_plan(
+        plan,
+        key_service=key_service,  # type: ignore[arg-type]
+        email_delivery_service=email_service,  # type: ignore[arg-type]
+    )
+
+    assert result.created_count == 1
+    assert result.plaintext_display_count == 1
+    assert result.pending_email_delivery_count == 1
+    assert result.rows[0].plaintext_key == "sk-slaif-pub_bulk.plaintext-secret"
+    assert result.rows[0].email_delivery_id == uuid.UUID("77777777-7777-4777-8777-777777777777")
+    assert key_service.payloads[0].owner_id == OWNER_ID
+    assert key_service.payloads[0].cost_limit_eur == Decimal("10.50")
+    assert email_service.calls[0]["one_time_secret_id"] == uuid.UUID("66666666-6666-4666-8666-666666666666")
+
+
+def test_execution_error_result_does_not_include_raw_content() -> None:
+    result = key_import_execution_error_result("safe error")
+
+    assert isinstance(result, KeyImportExecutionResult)
+    assert result.invalid_count == 1
+    assert "owner_email,valid_days" not in str(result)
+    assert "token_hash" not in str(result)
+    assert "encrypted_payload" not in str(result)

@@ -337,9 +337,10 @@ operator reconciliation workflows:
   execution uploads/pasted content.
 - `FX_IMPORT_MAX_ROWS=1000` caps dashboard FX import preview and execution row
   counts.
-- `KEY_IMPORT_MAX_BYTES=1048576` caps dashboard bulk key import preview
-  uploads/pasted content.
-- `KEY_IMPORT_MAX_ROWS=1000` caps dashboard bulk key import preview row counts.
+- `KEY_IMPORT_MAX_BYTES=1048576` caps dashboard bulk key import preview and
+  execution uploads/pasted content.
+- `KEY_IMPORT_MAX_ROWS=1000` caps dashboard bulk key import preview and
+  execution row counts.
 
 With only `ENABLE_SCHEDULED_RECONCILIATION=true`, Celery Beat schedules backlog
 inspection/reporting. Automatic repair of expired pending reservations or
@@ -365,7 +366,14 @@ rejects unknown fields, gateway-key-looking input, provider-key-looking input,
 and secret-looking notes/metadata/policy values. Preview does not generate
 plaintext keys, does not write `gateway_keys`, `one_time_secrets`,
 `email_deliveries`, or audit rows, does not enqueue Celery tasks, does not send
-email, and does not call providers. Bulk key execution remains future work.
+email, and does not call providers. Dashboard bulk key import execution uses the
+same parser and validation rules, requires CSRF, explicit import confirmation,
+one-time plaintext display confirmation, and a non-empty audit reason, and only
+creates keys after all rows validate. Execution supports `none` and `pending`
+email modes. `send-now` and `enqueue` remain future work for bulk execution.
+Plaintext keys are shown once on a no-cache result page for supported modes and
+are not stored in PostgreSQL, audit rows, cookies, sessions, URLs, email
+delivery rows, logs, or Celery payloads.
 
 Dashboard pricing import execution is also CSRF-protected and uses the same
 parser/validation rules as preview. Execution requires explicit confirmation

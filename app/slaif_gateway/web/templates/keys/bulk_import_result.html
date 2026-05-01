@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Key Import Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="bulk-key-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="bulk-key-result-heading">Bulk Key Import Result</h1>
+      <p class="muted">Confirmed execution re-parsed and re-validated the submitted CSV/JSON before creating any gateway keys.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link" href="/admin/keys/bulk-import">Import more keys</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="summary-grid" aria-label="Bulk key import result summary">
+    <article class="summary-card">
+      <span class="summary-label">Total rows</span>
+      <strong>{{ result.total_rows }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Created keys</span>
+      <strong>{{ result.created_count }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Invalid rows</span>
+      <strong>{{ result.invalid_count }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Pending emails</span>
+      <strong>{{ result.pending_email_delivery_count }}</strong>
+    </article>
+  </section>
+
+  {% if result.plaintext_display_count %}
+  <section class="action-panel" aria-labelledby="bulk-key-plaintext-heading">
+    <h2 id="bulk-key-plaintext-heading">One-Time Plaintext Keys</h2>
+    <p class="warning-text">Copy these keys now. They will not be shown again. Lost keys must be rotated.</p>
+    <p class="muted">This response is served with no-cache headers. PostgreSQL stores HMACs and encrypted one-time-secret material only; audit rows, cookies, sessions, URLs, email delivery rows, logs, and Celery payloads do not store plaintext keys.</p>
+  </section>
+  {% endif %}
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Action</th>
+          <th>Owner</th>
+          <th>Key</th>
+          <th>Plaintext key</th>
+          <th>Validity</th>
+          <th>Quotas</th>
+          <th>Policy</th>
+          <th>Email</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in result.rows %}
+        <tr>
+          <td>{{ row.row_number if row.row_number else "-" }}</td>
+          <td><span class="status-pill status-{{ row.action }}">{{ row.action }}</span></td>
+          <td>
+            {{ row.owner_name or "Unresolved owner" }}
+            {% if row.owner_email %}<div class="muted small">{{ row.owner_email }}</div>{% endif %}
+            {% if row.owner_id %}<div class="muted small">{{ row.owner_id }}</div>{% endif %}
+          </td>
+          <td>
+            {% if row.gateway_key_id %}
+            <div>{{ row.gateway_key_id }}</div>
+            <div class="muted small">Public ID: {{ row.public_key_id }}</div>
+            <div class="muted small">Display prefix: {{ row.display_prefix }}</div>
+            {% else %}
+            <span class="muted">not created</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.plaintext_key %}
+            <code>{{ row.plaintext_key }}</code>
+            {% else %}
+            <span class="muted">not shown</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.valid_from %}<div>{{ row.valid_from.isoformat() }}</div>{% endif %}
+            {% if row.valid_until %}<div class="muted small">until {{ row.valid_until.isoformat() }}</div>{% endif %}
+          </td>
+          <td>
+            <div>EUR {{ row.cost_limit_eur or "unlimited" }}</div>
+            <div class="muted small">{{ row.token_limit if row.token_limit is not none else "unlimited" }} tokens</div>
+            <div class="muted small">{{ row.request_limit if row.request_limit is not none else "unlimited" }} requests</div>
+          </td>
+          <td>
+            <div>Models: {{ row.allowed_models_summary }}</div>
+            <div class="muted small">Endpoints: {{ row.allowed_endpoints_summary }}</div>
+            <div class="muted small">Rate limits: {{ row.rate_limit_summary }}</div>
+          </td>
+          <td>
+            <div>{{ row.email_delivery_mode }}</div>
+            {% if row.email_delivery_id %}<div class="muted small">Delivery ID: {{ row.email_delivery_id }}</div>{% endif %}
+            {% if row.email_delivery_status %}<div class="muted small">Status: {{ row.email_delivery_status }}</div>{% endif %}
+            {% if row.one_time_secret_id %}<div class="muted small">One-time delivery secret ID: {{ row.one_time_secret_id }}</div>{% endif %}
+          </td>
+          <td>
+            {% if row.errors %}
+            <ul class="compact-list">
+              {% for error in row.errors %}
+              <li>{{ error }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <span class="muted">none</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="10" class="empty-state">No rows created.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <section class="action-panel" aria-labelledby="bulk-key-audit-heading">
+    <h2 id="bulk-key-audit-heading">Audit</h2>
+    <p class="muted">{{ result.audit_summary }}</p>
+    <p class="muted">Raw uploaded content is not stored by the dashboard workflow.</p>
+  </section>
+</section>
+{% endblock %}
