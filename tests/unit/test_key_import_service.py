@@ -8,11 +8,13 @@ import pytest
 
 from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.key_import import (
+    KeyImportExecutionRow,
     KeyImportExecutionResult,
     KeyImportCohortRef,
     KeyImportOwnerRef,
     KeyImportReadOnlyContext,
     build_key_import_execution_plan,
+    enqueue_key_import_email_tasks,
     execute_key_import_plan,
     key_import_execution_error_result,
     key_import_preview_to_dict,
@@ -260,12 +262,12 @@ def test_execution_plan_requires_confirmation_reason_and_valid_rows() -> None:
         )
 
 
-def test_execution_plan_rejects_unsupported_email_modes_and_provider_policy() -> None:
+def test_execution_plan_rejects_send_now_and_provider_policy() -> None:
     configured = _context(email_delivery_enabled=True, smtp_configured=True, celery_configured=True)
     send_now = _preview([_valid_row(email_delivery_mode="send-now", allowed_providers="")], context=configured)
     provider_policy = _preview([_valid_row()], context=configured)
 
-    with pytest.raises(ValueError, match="send-now and enqueue"):
+    with pytest.raises(ValueError, match="send-now email delivery is not implemented"):
         build_key_import_execution_plan(
             send_now,
             actor_admin_id=ADMIN_ID,
@@ -284,7 +286,14 @@ def test_execution_plan_rejects_unsupported_email_modes_and_provider_policy() ->
 
 
 def test_execution_plan_builds_for_supported_modes() -> None:
-    preview = _preview([_valid_row(allowed_providers="", email_delivery_mode="pending")])
+    context = _context(email_delivery_enabled=True, celery_configured=True)
+    preview = _preview(
+        [
+            _valid_row(allowed_providers="", email_delivery_mode="pending"),
+            _valid_row(allowed_providers="", email_delivery_mode="enqueue"),
+        ],
+        context=context,
+    )
 
     plan = build_key_import_execution_plan(
         preview,
@@ -294,7 +303,7 @@ def test_execution_plan_builds_for_supported_modes() -> None:
         confirm_plaintext_display=True,
     )
 
-    assert plan.total_rows == 1
+    assert plan.total_rows == 2
     assert plan.reason == "bulk import"
     assert plan.plaintext_display_required is True
 
@@ -360,6 +369,107 @@ async def test_execute_key_import_plan_calls_key_service_and_returns_plaintext_o
     assert key_service.payloads[0].cost_limit_eur == Decimal("10.50")
     assert email_service.calls[0]["one_time_secret_id"] == uuid.UUID("66666666-6666-4666-8666-666666666666")
 
+
+@pytest.mark.asyncio
+async def test_execute_key_import_plan_suppresses_plaintext_for_enqueue() -> None:
+    context = _context(email_delivery_enabled=True, celery_configured=True)
+    preview = _preview([_valid_row(allowed_providers="", email_delivery_mode="enqueue")], context=context)
+    plan = build_key_import_execution_plan(
+        preview,
+        actor_admin_id=ADMIN_ID,
+        reason="bulk import",
+        confirm_import=True,
+        confirm_plaintext_display=False,
+    )
+    key_service = _FakeKeyService()
+    email_service = _FakeEmailDeliveryService()
+
+    result = await execute_key_import_plan(
+        plan,
+        key_service=key_service,  # type: ignore[arg-type]
+        email_delivery_service=email_service,  # type: ignore[arg-type]
+    )
+
+    assert result.created_count == 1
+    assert result.plaintext_display_count == 0
+    assert result.rows[0].plaintext_key is None
+    assert result.rows[0].email_delivery_id == uuid.UUID("77777777-7777-4777-8777-777777777777")
+    assert result.rows[0].enqueue_status == "pending"
+
+
+def test_enqueue_key_import_email_tasks_uses_ids_only() -> None:
+    queued: list[dict[str, object]] = []
+    delivery_id = uuid.UUID("77777777-7777-4777-8777-777777777777")
+    secret_id = uuid.UUID("66666666-6666-4666-8666-666666666666")
+    base = KeyImportExecutionResult(
+        total_rows=1,
+        created_count=1,
+        invalid_count=0,
+        rows=(
+            KeyImportExecutionRow(
+                row_number=1,
+                action="created",
+                one_time_secret_id=secret_id,
+                email_delivery_id=delivery_id,
+                email_delivery_mode="enqueue",
+                enqueue_status="pending",
+                plaintext_key=None,
+            ),
+        ),
+    )
+
+    def enqueue_func(**kwargs):
+        queued.append(kwargs)
+        return "task-123"
+
+    result = enqueue_key_import_email_tasks(
+        base,
+        actor_admin_id=ADMIN_ID,
+        enqueue_func=enqueue_func,
+    )
+
+    assert queued == [
+        {
+            "one_time_secret_id": secret_id,
+            "email_delivery_id": delivery_id,
+            "actor_admin_id": ADMIN_ID,
+        }
+    ]
+    assert "plaintext" not in str(queued).lower()
+    assert result.rows[0].enqueue_status == "queued"
+    assert result.rows[0].email_delivery_status == "queued"
+    assert result.rows[0].celery_task_id == "task-123"
+    assert result.rows[0].plaintext_key is None
+    assert result.queued_email_delivery_count == 1
+
+
+def test_enqueue_key_import_email_tasks_handles_failure_safely() -> None:
+    base = KeyImportExecutionResult(
+        total_rows=1,
+        created_count=1,
+        invalid_count=0,
+        rows=(
+            KeyImportExecutionRow(
+                row_number=1,
+                action="created",
+                one_time_secret_id=uuid.UUID("66666666-6666-4666-8666-666666666666"),
+                email_delivery_id=uuid.UUID("77777777-7777-4777-8777-777777777777"),
+                email_delivery_mode="enqueue",
+                enqueue_status="pending",
+                plaintext_key=None,
+            ),
+        ),
+    )
+
+    def enqueue_func(**kwargs):
+        raise RuntimeError("broker contains sk-slaif-secret")
+
+    result = enqueue_key_import_email_tasks(base, actor_admin_id=ADMIN_ID, enqueue_func=enqueue_func)
+
+    assert result.rows[0].enqueue_status == "failed"
+    assert "pending" in (result.rows[0].enqueue_error or "")
+    assert "sk-slaif" not in (result.rows[0].enqueue_error or "")
+    assert result.rows[0].plaintext_key is None
 
 def test_execution_error_result_does_not_include_raw_content() -> None:
     result = key_import_execution_error_result("safe error")

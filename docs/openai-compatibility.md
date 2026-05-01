@@ -153,7 +153,7 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
-- Bulk key send-now/enqueue execution, owner/institution/cohort delete or anonymization workflows,
+- Bulk key send-now execution, owner/institution/cohort delete or anonymization workflows,
   usage/audit mutation pages beyond CSV exports, and MFA remain outside the current admin surface.
   Bulk key import preview/execution and owner/institution/cohort create/edit pages are
   admin metadata workflows only.

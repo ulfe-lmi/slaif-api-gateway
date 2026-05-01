@@ -284,15 +284,18 @@ plaintext keys are generated, no `gateway_keys`, `one_time_secrets`,
 `email_deliveries`, or audit rows are written, no Celery tasks are enqueued, no
 email is sent, and no providers are called. Dashboard bulk key import execution
 requires CSRF, explicit import confirmation, one-time plaintext display
-confirmation, and a non-empty audit reason. It re-parses and re-validates the
-submitted upload or pasted content server-side, creates gateway keys only after
-all rows validate, calls the existing key service, and writes safe key-creation
-audit rows through that service. Bulk execution supports `none` and `pending`
-email modes; `send-now` and `enqueue` are future work for bulk execution and are
-rejected without mutation. Generated plaintext keys are shown exactly once on a
-no-cache result page for supported modes and are not stored in PostgreSQL,
-audit rows, logs, cookies, server-side sessions, URLs, email delivery rows, or
-Celery payloads. Dashboard usage and audit CSV exports require an authenticated admin
+confirmation when browser plaintext will be shown, and a non-empty audit
+reason. It re-parses and re-validates the submitted upload or pasted content
+server-side, creates gateway keys only after all rows validate, calls the
+existing key service, and writes safe key-creation audit rows through that
+service. Bulk execution supports `none`, `pending`, and `enqueue` email modes;
+bulk `send-now` remains future work and is rejected without mutation. Generated
+plaintext keys are shown exactly once on a no-cache result page for `none` and
+`pending` rows, are suppressed for `enqueue` rows, and are not stored in
+PostgreSQL, audit rows, logs, cookies, server-side sessions, URLs, email
+delivery rows, or Celery payloads. Bulk `enqueue` creates encrypted
+one-time-secret rows and pending email delivery rows, then queues Celery tasks
+with IDs only; SMTP is not called in the admin HTTP request. Dashboard usage and audit CSV exports require an authenticated admin
 session, CSRF token, explicit confirmation, and a non-empty audit reason. Export
 generation writes a safe audit row, respects the current dashboard filters,
 enforces configured row limits, and neutralizes CSV formula injection. Exports
@@ -349,8 +352,8 @@ never recover or send old plaintext keys.
 ## Current Limitations
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
-  Bulk key send-now/enqueue execution is not implemented; bulk dashboard
-  execution currently supports `none` and `pending` only.
+  Bulk key send-now execution is not implemented; bulk dashboard execution
+  currently supports `none`, `pending`, and `enqueue`.
   Standalone email-delivery mutation pages beyond the existing
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, and cohort delete/anonymization workflows are not

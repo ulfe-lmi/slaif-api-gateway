@@ -88,6 +88,8 @@ def test_bulk_import_preview_template_includes_execution_controls(monkeypatch) -
     assert 'name="confirm_plaintext_display"' in html
     assert 'name="reason"' in html
     assert "will generate gateway keys" in html
+    assert "enqueue" in html
+    assert "send-now" in html
 
 
 def test_bulk_import_result_template_shows_plaintext_once_and_no_secret_fields(monkeypatch) -> None:
@@ -127,3 +129,45 @@ def test_bulk_import_result_template_shows_plaintext_once_and_no_secret_fields(m
     assert "nonce" not in html
     assert "password_hash" not in html
     assert "session-token-must-not-render" not in html
+
+
+def test_bulk_import_result_template_suppresses_plaintext_for_enqueue(monkeypatch) -> None:
+    async def build_preview(request, raw_rows, *, max_rows):
+        from tests.unit.test_admin_bulk_key_import_routes import _preview
+
+        return _preview(email_delivery_mode="enqueue")
+
+    async def execute_plan(plan, *, key_service, email_delivery_service):
+        from tests.unit.test_admin_bulk_key_import_routes import _enqueue_execution_result
+
+        return _enqueue_execution_result()
+
+    def enqueue_func(**kwargs):
+        return "task-123"
+
+    monkeypatch.setattr("slaif_gateway.api.admin._build_key_import_preview", build_preview)
+    monkeypatch.setattr("slaif_gateway.api.admin.execute_key_import_plan", execute_plan)
+    monkeypatch.setattr("slaif_gateway.api.admin._enqueue_admin_pending_key_email", enqueue_func)
+    _patch_action_csrf(monkeypatch)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/bulk-import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(email_delivery_mode="enqueue"),
+            "confirm_import": "true",
+            "reason": "bulk",
+        },
+    )
+    html = response.text
+
+    assert "task-123" in html
+    assert "Enqueue: queued" in html
+    assert "sk-slaif-pub_bulk.plaintext-secret" not in html
+    assert "not shown" in html
+    assert "token_hash" not in html
+    assert "encrypted_payload" not in html
+    assert "nonce" not in html

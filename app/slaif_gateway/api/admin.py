@@ -76,6 +76,7 @@ from slaif_gateway.services.key_import import (
     KeyImportReadOnlyContext,
     build_key_import_execution_plan,
     detect_key_import_format,
+    enqueue_key_import_email_tasks,
     execute_key_import_plan,
     key_import_execution_error_result,
     key_import_execution_result_from_preview_errors,
@@ -855,6 +856,12 @@ async def execute_bulk_import_admin_keys(
             error="Bulk key import execution failed safely. No keys were created.",
             status_code=400,
         )
+
+    result = enqueue_key_import_email_tasks(
+        result,
+        actor_admin_id=action_context.admin_user.id,
+        enqueue_func=_enqueue_admin_pending_key_email,
+    )
 
     return _render_key_import_result(
         request,
