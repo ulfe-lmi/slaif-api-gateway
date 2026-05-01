@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Owner{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="owner-edit-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Owner Management</p>
+      <h1 id="owner-edit-heading">Edit owner</h1>
+      <p class="muted">Update safe owner metadata. Historical usage snapshots are not modified.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/owners/{{ owner_id }}">Owner detail</a>
+      <a class="button-link secondary" href="/admin/owners">Owners</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/owners/{{ owner_id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="owner-identity-heading">
+      <h2 id="owner-identity-heading">Identity</h2>
+      <div class="form-grid">
+        <label>Name<input name="name" value="{{ form.name }}" autocomplete="given-name" required></label>
+        <label>Surname<input name="surname" value="{{ form.surname }}" autocomplete="family-name" required></label>
+        <label>Email<input name="email" value="{{ form.email }}" autocomplete="email" required></label>
+        <label>External ID<input name="external_id" value="{{ form.external_id }}" autocomplete="off"></label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="owner-institution-heading">
+      <h2 id="owner-institution-heading">Institution</h2>
+      <label>Institution
+        <select name="institution_id">
+          <option value="">Not set</option>
+          {% for institution in institutions %}
+          <option value="{{ institution.id }}" {% if form.institution_id == institution.id|string %}selected{% endif %}>{{ institution.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="checkbox-row"><input type="checkbox" name="is_active" value="true" {% if form.is_active in ["true", "1", "on", "yes"] %}checked{% endif %}> Active owner</label>
+      <p class="muted small">Owners do not link directly to cohorts in the current schema; cohorts are assigned through keys.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="owner-notes-heading">
+      <h2 id="owner-notes-heading">Notes</h2>
+      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
+      <p class="muted small">Notes must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="owner-audit-heading">
+      <h2 id="owner-audit-heading">Audit</h2>
+      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <button type="submit">Save owner</button>
+      <a class="button-link secondary" href="/admin/owners/{{ owner_id }}">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

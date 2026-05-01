@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Owner Detail</p>
       <h1 id="owner-heading">{{ owner.display_name }}</h1>
-      <p class="muted">Safe read-only metadata. Plaintext keys and secret material are not displayed.</p>
+      <p class="muted">Safe owner metadata. Plaintext keys and secret material are not displayed.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/owners/{{ owner.id }}/edit">Edit owner</a>
       <a class="button-link secondary" href="/admin/owners">All owners</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,6 +19,10 @@
       </form>
     </div>
   </header>
+
+  {% if admin_status_message %}
+  <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
+  {% endif %}
 
   <div class="detail-grid">
     <section class="detail-section">

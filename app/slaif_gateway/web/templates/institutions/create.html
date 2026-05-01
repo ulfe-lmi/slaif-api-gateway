@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Create Institution{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="institution-create-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Institution Management</p>
+      <h1 id="institution-create-heading">Create institution</h1>
+      <p class="muted">Create safe organization metadata. No keys or usage rows are created by this form.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/institutions">Institutions</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/institutions/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="institution-fields-heading">
+      <h2 id="institution-fields-heading">Metadata</h2>
+      <div class="form-grid">
+        <label>Name<input name="name" value="{{ form.name }}" autocomplete="organization" required></label>
+        <label>Country<input name="country" value="{{ form.country }}" autocomplete="country-name"></label>
+      </div>
+      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
+      <p class="muted small">Notes must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="institution-audit-heading">
+      <h2 id="institution-audit-heading">Audit</h2>
+      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <button type="submit">Create institution</button>
+      <a class="button-link secondary" href="/admin/institutions">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

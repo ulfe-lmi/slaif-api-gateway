@@ -183,8 +183,8 @@ tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
 - `ADMIN_LOGIN_LOCKOUT_SECONDS` defaults to `900`.
 
 The current web surface includes `/admin/login`, `/admin/logout`, a placeholder
-`/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
-institution, and cohort list/detail pages, provider config list/detail/create/edit
+`/admin` dashboard, key list/detail pages under `/admin/keys`, owner,
+institution, and cohort list/detail/create/edit pages, provider config list/detail/create/edit
 pages under `/admin/providers`, model route list/detail/create/edit pages under
 `/admin/routes`, pricing list/detail/create/edit pages under `/admin/pricing`,
 FX list/detail/create/edit pages under `/admin/fx`, and read-only usage, audit,
@@ -212,7 +212,16 @@ counters, and rotate keys through the existing key service and audit behavior.
 Usage reset preserves usage ledger rows; reserved-counter reset requires an
 additional admin repair confirmation. Hard quota limit updates are distinct from
 Redis operational rate-limit policy. Owner, institution, and
-cohort pages show safe record metadata and key count summaries. Provider pages
+cohort pages show safe record metadata and key count summaries, and their
+create/edit forms require CSRF plus a non-empty audit reason. Institution forms
+manage only `name`, `country`, and `notes`; cohort forms manage only `name`,
+`description`, `starts_at`, and `ends_at`; owner forms manage only
+`name`, `surname`, `email`, optional `institution_id`, `external_id`, `notes`,
+and `is_active`. Cohorts are standalone in the current schema and are not linked
+directly to institutions; owners can reference institutions but not cohorts.
+The forms reject secret-looking notes/metadata, write safe audit rows through
+service-layer logic, do not create keys inline, and do not modify historical
+usage snapshots. Provider pages
 allow CSRF-protected metadata create/edit/enable/disable actions and may show
 `api_key_env_var` names, but never provider key values. Route, pricing, and FX
 catalog pages no longer share the same mutation status: model route pages allow
@@ -242,9 +251,9 @@ external services.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
 external FX refresh workflows, standalone
-email-delivery mutation pages beyond the existing send-now/enqueue actions, and
-owner, institution, cohort, usage, and audit dashboard mutation workflows are
-not implemented yet. Admin
+email-delivery mutation pages beyond the existing send-now/enqueue actions,
+owner/institution/cohort delete or anonymization workflows, and usage/audit
+dashboard mutation workflows beyond audited CSV exports are not implemented yet. Admin
 sessions are stored server-side in PostgreSQL with only
 HMAC-hashed session and CSRF tokens. State-changing admin forms use CSRF
 protection. Failed admin login attempts and temporary lockout events are tracked

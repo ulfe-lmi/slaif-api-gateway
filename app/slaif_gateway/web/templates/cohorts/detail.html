@@ -8,9 +8,10 @@
     <div>
       <p class="eyebrow">Cohort Detail</p>
       <h1 id="cohort-heading">{{ cohort.name }}</h1>
-      <p class="muted">Safe read-only metadata. Secrets are not displayed.</p>
+      <p class="muted">Safe cohort metadata. Secrets are not displayed.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/cohorts/{{ cohort.id }}/edit">Edit cohort</a>
       <a class="button-link secondary" href="/admin/cohorts">All cohorts</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,6 +19,10 @@
       </form>
     </div>
   </header>
+
+  {% if admin_status_message %}
+  <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
+  {% endif %}
 
   <div class="detail-grid">
     <section class="detail-section">
