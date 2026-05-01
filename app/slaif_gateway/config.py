@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     ROUTE_IMPORT_MAX_ROWS: int = 1000
     FX_IMPORT_MAX_BYTES: int = 1048576
     FX_IMPORT_MAX_ROWS: int = 1000
+    KEY_IMPORT_MAX_BYTES: int = 1048576
+    KEY_IMPORT_MAX_ROWS: int = 1000
     ADMIN_USAGE_EXPORT_MAX_ROWS: int = 10000
     ADMIN_AUDIT_EXPORT_MAX_ROWS: int = 10000
     ENABLE_METRICS: bool = True
@@ -264,6 +266,10 @@ class Settings(BaseSettings):
             raise ValueError("FX_IMPORT_MAX_BYTES must be a positive integer")
         if self.FX_IMPORT_MAX_ROWS <= 0:
             raise ValueError("FX_IMPORT_MAX_ROWS must be a positive integer")
+        if self.KEY_IMPORT_MAX_BYTES <= 0:
+            raise ValueError("KEY_IMPORT_MAX_BYTES must be a positive integer")
+        if self.KEY_IMPORT_MAX_ROWS <= 0:
+            raise ValueError("KEY_IMPORT_MAX_ROWS must be a positive integer")
         if self.ADMIN_USAGE_EXPORT_MAX_ROWS <= 0:
             raise ValueError("ADMIN_USAGE_EXPORT_MAX_ROWS must be a positive integer")
         if self.ADMIN_AUDIT_EXPORT_MAX_ROWS <= 0:

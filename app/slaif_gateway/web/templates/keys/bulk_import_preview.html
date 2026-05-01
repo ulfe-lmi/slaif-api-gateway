@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Key Import Preview Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="bulk-key-preview-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="bulk-key-preview-heading">Bulk Key Import Preview Result</h1>
+      <p class="muted">Dry-run only. Database writes, key generation, one-time secrets, email delivery rows, audit rows, Celery tasks, providers, and external services were not used.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link" href="/admin/keys/bulk-import">Preview another import</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="summary-grid" aria-label="Import summary">
+    <article class="summary-card">
+      <span class="summary-label">Total rows</span>
+      <strong>{{ preview.total_rows }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Valid rows</span>
+      <strong>{{ preview.valid_count }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Invalid rows</span>
+      <strong>{{ preview.invalid_count }}</strong>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Duplicate owners</span>
+      <strong>{{ preview.duplicate_owner_count }}</strong>
+    </article>
+  </section>
+
+  <p class="warning-text">No plaintext gateway keys were generated. Email delivery modes are validation-only in this preview.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Status</th>
+          <th>Owner</th>
+          <th>Scope</th>
+          <th>Validity</th>
+          <th>Quotas</th>
+          <th>Policy</th>
+          <th>Email</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in preview.rows %}
+        <tr>
+          <td>{{ row.row_number }}</td>
+          <td>
+            <span class="status-pill status-{{ row.status }}">{{ row.status }}</span>
+            <div class="muted small">{{ row.classification }}</div>
+          </td>
+          <td>
+            {{ row.owner_name or "Unresolved owner" }}
+            {% if row.owner_email %}<div class="muted small">{{ row.owner_email }}</div>{% endif %}
+            {% if row.owner_id %}<div class="muted small">{{ row.owner_id }}</div>{% endif %}
+          </td>
+          <td>
+            <div>{{ row.institution_name or "No institution" }}</div>
+            {% if row.institution_id %}<div class="muted small">{{ row.institution_id }}</div>{% endif %}
+            <div class="muted small">Cohort: {{ row.cohort_name or "none" }}</div>
+          </td>
+          <td>
+            {% if row.valid_from %}<div>{{ row.valid_from.isoformat() }}</div>{% endif %}
+            {% if row.valid_until %}<div class="muted small">until {{ row.valid_until.isoformat() }}</div>{% endif %}
+          </td>
+          <td>
+            <div>EUR {{ row.cost_limit_eur or "unlimited" }}</div>
+            <div class="muted small">{{ row.token_limit if row.token_limit is not none else "unlimited" }} tokens</div>
+            <div class="muted small">{{ row.request_limit if row.request_limit is not none else "unlimited" }} requests</div>
+          </td>
+          <td>
+            <div>Models: {{ row.allowed_models_summary }}</div>
+            <div class="muted small">Endpoints: {{ row.allowed_endpoints_summary }}</div>
+            <div class="muted small">Providers: {{ row.allowed_providers_summary }}</div>
+            <div class="muted small">Rate limits: {{ row.rate_limit_summary }}</div>
+            <div class="muted small">Metadata: {{ row.metadata_summary }}</div>
+          </td>
+          <td>{{ row.email_delivery_mode }}</td>
+          <td>
+            {% if row.errors %}
+            <ul class="compact-list">
+              {% for error in row.errors %}
+              <li>{{ error }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <span class="muted">none</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="empty-state">No rows parsed.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

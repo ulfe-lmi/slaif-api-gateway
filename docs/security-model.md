@@ -275,7 +275,14 @@ block the entire import with no mutation. Successful creates are audited through
 the FX service. FX import preview/execution does not call external FX APIs or
 providers, does not accept provider keys, does not store raw uploaded content,
 and changes future EUR conversion only after confirmed local FX rows are
-created. Dashboard usage and audit CSV exports require an authenticated admin
+created. Dashboard bulk key import preview requires an authenticated admin
+session and CSRF token. It validates CSV/JSON key-creation rows, owner
+references, optional cohort references, validity windows, hard quota fields,
+allowlist policy fields, Redis rate-limit policy fields, email delivery modes,
+upload size, row count, and secret-looking input. It is preview-only: no
+plaintext keys are generated, no `gateway_keys`, `one_time_secrets`,
+`email_deliveries`, or audit rows are written, no Celery tasks are enqueued, no
+email is sent, and no providers are called. Dashboard usage and audit CSV exports require an authenticated admin
 session, CSRF token, explicit confirmation, and a non-empty audit reason. Export
 generation writes a safe audit row, respects the current dashboard filters,
 enforces configured row limits, and neutralizes CSV formula injection. Exports
@@ -332,6 +339,8 @@ never recover or send old plaintext keys.
 ## Current Limitations
 
 - Arbitrary old-key dashboard email resend actions are not implemented.
+  Bulk key creation execution is not implemented; the dashboard currently
+  provides preview/dry-run validation only.
   Standalone email-delivery mutation pages beyond the existing
   one-time-secret-backed send-now/enqueue actions are not implemented.
   Owner, institution, and cohort delete/anonymization workflows are not
