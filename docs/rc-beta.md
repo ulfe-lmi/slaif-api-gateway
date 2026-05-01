@@ -8,6 +8,9 @@ RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
+Tag-specific release notes for the first release candidate are in
+[`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).
+
 ## Implemented Scope
 
 - OpenAI-compatible `GET /v1/models`.
@@ -133,9 +136,10 @@ test setup at `DATABASE_URL`.
 Tag only after the release checklist is complete:
 
 ```bash
-git tag -a v0.1.0-rc-beta.1 -m "SLAIF API Gateway RC beta 1"
-git push origin v0.1.0-rc-beta.1
+git tag -a v0.1.0-rc.1 -m "SLAIF API Gateway v0.1.0-rc.1"
+git push origin v0.1.0-rc.1
 ```
 
-The exact version is a maintainer decision. The tag should point to a commit
-whose CI run and Docker smoke are green.
+The exact version is a maintainer decision. For this RC-beta preparation pass,
+the recommended tag is `v0.1.0-rc.1`. The tag should point to a commit whose CI
+run and Docker smoke are green.
