@@ -41,6 +41,14 @@
       <input name="request_id" value="{{ filters.request_id }}" autocomplete="off">
     </label>
     <label>
+      Start
+      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
+    </label>
+    <label>
+      End
+      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z">
+    </label>
+    <label>
       Streaming
       <select name="streaming">
         <option value="" {% if filters.streaming == "" %}selected{% endif %}>Any</option>
@@ -51,6 +59,40 @@
     <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
+
+  <section class="action-panel" aria-labelledby="usage-export-heading">
+    <h2 id="usage-export-heading">CSV export</h2>
+    <p class="muted">Export safe usage metadata for the current filters. Prompt, completion, raw request/response body, and secret fields are excluded. Formula-looking CSV cells are neutralized. Export generation is audited and capped at {{ export_max_rows }} rows.</p>
+    <form method="post" action="/admin/usage/export.csv">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="provider" value="{{ filters.provider }}">
+      <input type="hidden" name="model" value="{{ filters.model }}">
+      <input type="hidden" name="endpoint" value="{{ filters.endpoint }}">
+      <input type="hidden" name="status" value="{{ filters.status }}">
+      <input type="hidden" name="gateway_key_id" value="{{ filters.gateway_key_id }}">
+      <input type="hidden" name="owner_id" value="{{ filters.owner_id }}">
+      <input type="hidden" name="institution_id" value="{{ filters.institution_id }}">
+      <input type="hidden" name="cohort_id" value="{{ filters.cohort_id }}">
+      <input type="hidden" name="request_id" value="{{ filters.request_id }}">
+      <input type="hidden" name="streaming" value="{{ filters.streaming }}">
+      <input type="hidden" name="start_at" value="{{ filters.start_at }}">
+      <input type="hidden" name="end_at" value="{{ filters.end_at }}">
+      <label>
+        Row limit
+        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric">
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" required autocomplete="off" placeholder="Reason for this export">
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_export" value="true" required>
+        I understand this export is audited and contains usage metadata only.
+      </label>
+      <p class="warning-text">Do not share exported metadata outside approved operational channels.</p>
+      <button type="submit">Export usage CSV</button>
+    </form>
+  </section>
 
   <div class="table-wrap">
     <table>

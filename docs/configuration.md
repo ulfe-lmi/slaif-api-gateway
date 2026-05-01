@@ -230,11 +230,15 @@ var names but never provider key values. FX forms do not accept provider key
 values and do not call external FX APIs. The FX import preview page validates
 CSV/JSON FX metadata without writing rows; confirmed FX import execution
 re-validates server-side, requires explicit confirmation plus an audit reason,
-and creates rows only after every row validates. Usage, audit, and
-email delivery pages show safe local metadata only; they do not show prompts,
-completions, raw request/response bodies, email bodies, plaintext key material,
-token hashes, one-time-secret material, provider key values, password hashes, or
-session tokens.
+and creates rows only after every row validates. Usage and audit pages include
+CSRF-protected CSV metadata exports for the current filters. Exports require
+explicit confirmation and a non-empty audit reason, write safe export audit rows,
+enforce configured row caps, and mitigate CSV formula injection. Exported usage
+and audit CSVs exclude prompts, completions, raw request/response bodies, email
+bodies, plaintext key material, token hashes, one-time-secret material, provider
+key values, password hashes, and session tokens. Usage, audit, and email
+delivery pages show safe local metadata only and do not call providers or
+external services.
 
 Arbitrary old-key dashboard email resend actions, bulk key creation forms,
 external FX refresh workflows, standalone
@@ -385,6 +389,14 @@ update/replace decision, no rows are written. Successful creates go through the
 route service and write safe audit rows. Confirmed imports can affect future
 model resolution through the existing resolver; route resolution runtime
 semantics are otherwise unchanged.
+
+Dashboard usage and audit CSV exports are capped by:
+
+- `ADMIN_USAGE_EXPORT_MAX_ROWS` defaults to `10000`.
+- `ADMIN_AUDIT_EXPORT_MAX_ROWS` defaults to `10000`.
+
+Both values must be positive integers. The optional form-level export limit must
+also be positive and cannot exceed the configured cap.
 
 Optional reconciliation alerts are operator-visibility only. They are generated
 from the inspection task, do not call providers, do not send email, and do not

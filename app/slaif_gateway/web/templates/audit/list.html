@@ -36,9 +36,50 @@
       Request ID
       <input name="request_id" value="{{ filters.request_id }}" autocomplete="off">
     </label>
+    <label>
+      Actor admin ID
+      <input name="actor_admin_id" value="{{ filters.actor_admin_id }}" autocomplete="off">
+    </label>
+    <label>
+      Start
+      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
+    </label>
+    <label>
+      End
+      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z">
+    </label>
     <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
+
+  <section class="action-panel" aria-labelledby="audit-export-heading">
+    <h2 id="audit-export-heading">CSV export</h2>
+    <p class="muted">Export safe audit metadata for the current filters. Secrets, prompt/completion content, raw request/response bodies, email bodies, and encrypted secret material are excluded. Formula-looking CSV cells are neutralized. Export generation is audited and capped at {{ export_max_rows }} rows.</p>
+    <form method="post" action="/admin/audit/export.csv">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="actor_admin_id" value="{{ filters.actor_admin_id }}">
+      <input type="hidden" name="action" value="{{ filters.action }}">
+      <input type="hidden" name="target_type" value="{{ filters.target_type }}">
+      <input type="hidden" name="target_id" value="{{ filters.target_id }}">
+      <input type="hidden" name="request_id" value="{{ filters.request_id }}">
+      <input type="hidden" name="start_at" value="{{ filters.start_at }}">
+      <input type="hidden" name="end_at" value="{{ filters.end_at }}">
+      <label>
+        Row limit
+        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric">
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" required autocomplete="off" placeholder="Reason for this export">
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_export" value="true" required>
+        I understand this export is audited and contains audit metadata only.
+      </label>
+      <p class="warning-text">Review exported metadata handling before sharing it outside the operator group.</p>
+      <button type="submit">Export audit CSV</button>
+    </form>
+  </section>
 
   <div class="table-wrap">
     <table>

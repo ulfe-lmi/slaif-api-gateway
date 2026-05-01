@@ -268,7 +268,15 @@ block the entire import with no mutation. Successful creates are audited through
 the FX service. FX import preview/execution does not call external FX APIs or
 providers, does not accept provider keys, does not store raw uploaded content,
 and changes future EUR conversion only after confirmed local FX rows are
-created. Dashboard key creation
+created. Dashboard usage and audit CSV exports require an authenticated admin
+session, CSRF token, explicit confirmation, and a non-empty audit reason. Export
+generation writes a safe audit row, respects the current dashboard filters,
+enforces configured row limits, and neutralizes CSV formula injection. Exports
+contain metadata only: prompts, completions, raw request/response bodies, email
+bodies, plaintext gateway keys, provider key values, token hashes, encrypted
+payloads, nonces, password hashes, session tokens, SMTP passwords, and HMAC
+secrets are excluded or redacted. Export generation does not mutate usage or
+audit rows and does not call providers or external services. Dashboard key creation
 only selects existing owners/cohorts, calls the existing key service, and writes
 the service audit row. Dashboard key creation and rotation support explicit
 email-delivery modes:
@@ -319,8 +327,8 @@ never recover or send old plaintext keys.
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Standalone email-delivery mutation pages beyond the existing
   one-time-secret-backed send-now/enqueue actions are not implemented.
-  Owner, institution, cohort, usage, and audit mutation pages are not
-  implemented yet.
+  Owner, institution, and cohort mutation pages are not implemented yet. Usage
+  and audit pages remain metadata-only except for audited CSV export controls.
   external FX refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a

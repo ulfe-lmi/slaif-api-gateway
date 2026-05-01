@@ -381,16 +381,22 @@ def test_admin_dashboard_browser_smoke() -> None:
                 ("/admin/fx/import", "FX Import Preview", 2),
                 (f"/admin/fx/{data['fx_id']}", "USD / EUR", 1),
                 (f"/admin/fx/{data['fx_id']}/edit", "Edit FX rate", 2),
-                ("/admin/usage", "Usage Ledger", 1),
+                ("/admin/usage", "Usage Ledger", 2),
                 (f"/admin/usage/{data['usage_id']}", "browser-metadata-ok", 1),
-                ("/admin/audit", "Audit Log", 1),
+                ("/admin/audit", "Audit Log", 2),
                 (f"/admin/audit/{data['audit_id']}", "browser-audit-ok", 1),
                 ("/admin/email-deliveries", "Email Deliveries", 1),
                 (f"/admin/email-deliveries/{data['email_id']}", "Browser gateway key delivery", 3),
             ]
             for path, expected, csrf_count in pages:
-                _assert_page_ok(page, path, expected)
+                html = _assert_page_ok(page, path, expected)
                 _assert_csrf_controls(page, minimum_count=csrf_count)
+                if path == "/admin/usage":
+                    assert 'action="/admin/usage/export.csv"' in html
+                    assert 'name="confirm_export"' in html
+                if path == "/admin/audit":
+                    assert 'action="/admin/audit/export.csv"' in html
+                    assert 'name="confirm_export"' in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')
