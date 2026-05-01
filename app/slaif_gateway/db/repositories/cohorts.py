@@ -94,3 +94,23 @@ class CohortsRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def update_cohort_metadata(
+        self,
+        cohort_id: uuid.UUID,
+        *,
+        name: str,
+        description: str | None,
+        starts_at: datetime | None,
+        ends_at: datetime | None,
+    ) -> Cohort | None:
+        cohort = await self.get_cohort_by_id(cohort_id)
+        if cohort is None:
+            return None
+
+        cohort.name = name
+        cohort.description = description
+        cohort.starts_at = starts_at
+        cohort.ends_at = ends_at
+        await self._session.flush()
+        return cohort

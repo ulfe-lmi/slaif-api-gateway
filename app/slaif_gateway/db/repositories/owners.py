@@ -136,3 +136,29 @@ class OwnersRepository:
 
         await self._session.flush()
         return owner
+
+    async def update_owner_metadata(
+        self,
+        owner_id: uuid.UUID,
+        *,
+        name: str,
+        surname: str,
+        email: str,
+        institution_id: uuid.UUID | None,
+        external_id: str | None,
+        notes: str | None,
+        is_active: bool,
+    ) -> Owner | None:
+        owner = await self.get_owner_by_id(owner_id)
+        if owner is None:
+            return None
+
+        owner.name = name
+        owner.surname = surname
+        owner.email = email
+        owner.institution_id = institution_id
+        owner.external_id = external_id
+        owner.notes = notes
+        owner.is_active = is_active
+        await self._session.flush()
+        return owner

@@ -39,6 +39,11 @@ from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboard
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
+from slaif_gateway.services.admin_record_forms import (
+    parse_cohort_form,
+    parse_institution_form,
+    parse_owner_form,
+)
 from slaif_gateway.services.admin_session_service import (
     AdminAuthenticationError,
     AdminLoginRateLimitedError,
@@ -65,6 +70,9 @@ from slaif_gateway.services.fx_import import (
 from slaif_gateway.services.key_errors import KeyManagementError
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.cohort_service import CohortService
+from slaif_gateway.services.institution_service import InstitutionService
+from slaif_gateway.services.owner_service import OwnerService
 from slaif_gateway.services.pricing_import import (
     PricingImportExecutionPlan,
     PricingImportExecutionResult,
@@ -79,7 +87,7 @@ from slaif_gateway.services.pricing_import import (
 )
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
-from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
+from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError, UnsupportedRecordOperationError
 from slaif_gateway.services.route_import import (
     RouteImportExecutionPlan,
     RouteImportExecutionResult,
@@ -201,6 +209,13 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "fx_rate_failed": ("error", "FX rate action failed."),
     "fx_rate_reason_required": ("error", "Enter an audit reason before changing FX metadata."),
     "invalid_fx_rate": ("error", "Enter valid FX metadata."),
+    "institution_created": ("success", "Institution created."),
+    "institution_updated": ("success", "Institution updated."),
+    "cohort_created": ("success", "Cohort created."),
+    "cohort_updated": ("success", "Cohort updated."),
+    "owner_created": ("success", "Owner created."),
+    "owner_updated": ("success", "Owner updated."),
+    "invalid_admin_record": ("error", "Enter valid record metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
     "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
     "key_action_failed": ("error", "Gateway key action failed."),
@@ -1167,6 +1182,7 @@ async def list_admin_owners(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "owners": rows,
             "filters": {
                 "email": email or "",
@@ -1177,6 +1193,101 @@ async def list_admin_owners(
             },
         },
     )
+
+
+@router.get("/owners/new", response_class=HTMLResponse)
+async def new_admin_owner_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    institutions = await _load_record_form_institutions(request)
+    return _render_owner_form(
+        request,
+        template_name="owners/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_owner_form(),
+        institutions=institutions,
+    )
+
+
+@router.post("/owners/new", response_class=HTMLResponse)
+async def create_admin_owner(
+    request: Request,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    surname: str = Form(""),
+    email: str = Form(""),
+    institution_id: str = Form(""),
+    external_id: str = Form(""),
+    notes: str = Form(""),
+    is_active: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _owner_form_from_values(
+        name=name,
+        surname=surname,
+        email=email,
+        institution_id=institution_id,
+        external_id=external_id,
+        notes=notes,
+        is_active=is_active,
+        reason=reason,
+    )
+    try:
+        parsed = parse_owner_form(**form)
+    except ValueError as exc:
+        return _render_owner_form(
+            request,
+            template_name="owners/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institutions=await _load_record_form_institutions(request),
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_owner_service_scope(request) as service:
+            created = await service.create_owner(
+                name=parsed.name,
+                surname=parsed.surname,
+                email=parsed.email,
+                institution_id=parsed.institution_id,
+                external_id=parsed.external_id,
+                notes=parsed.notes,
+                is_active=parsed.is_active,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except (DuplicateRecordError, RecordNotFoundError, ValueError):
+        return _render_owner_form(
+            request,
+            template_name="owners/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institutions=await _load_record_form_institutions(request),
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_owner(created.id, message="owner_created")
 
 
 @router.get("/owners/{owner_id}", response_class=HTMLResponse)
@@ -1207,9 +1318,139 @@ async def admin_owner_detail(request: Request, owner_id: str) -> Response:
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "owner": owner,
         },
     )
+
+
+@router.get("/owners/{owner_id}/edit", response_class=HTMLResponse)
+async def edit_admin_owner_form(request: Request, owner_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_owner_id = uuid.UUID(owner_id)
+    except ValueError:
+        return HTMLResponse("Owner not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            owner = await service.get_owner_detail(parsed_owner_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Owner not found.", status_code=404)
+
+    return _render_owner_form(
+        request,
+        template_name="owners/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_owner_form_from_detail(owner),
+        institutions=await _load_record_form_institutions(request),
+        owner_id=parsed_owner_id,
+    )
+
+
+@router.post("/owners/{owner_id}/edit", response_class=HTMLResponse)
+async def update_admin_owner(
+    request: Request,
+    owner_id: str,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    surname: str = Form(""),
+    email: str = Form(""),
+    institution_id: str = Form(""),
+    external_id: str = Form(""),
+    notes: str = Form(""),
+    is_active: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_owner_id = uuid.UUID(owner_id)
+    except ValueError:
+        return HTMLResponse("Owner not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _owner_form_from_values(
+        name=name,
+        surname=surname,
+        email=email,
+        institution_id=institution_id,
+        external_id=external_id,
+        notes=notes,
+        is_active=is_active,
+        reason=reason,
+    )
+    try:
+        parsed = parse_owner_form(**form)
+    except ValueError as exc:
+        return _render_owner_form(
+            request,
+            template_name="owners/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institutions=await _load_record_form_institutions(request),
+            owner_id=parsed_owner_id,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_owner_service_scope(request) as service:
+            updated = await service.update_owner(
+                parsed_owner_id,
+                name=parsed.name,
+                surname=parsed.surname,
+                email=parsed.email,
+                institution_id=parsed.institution_id,
+                external_id=parsed.external_id,
+                notes=parsed.notes,
+                is_active=parsed.is_active,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except RecordNotFoundError as exc:
+        if getattr(exc, "entity", "") == "Owner":
+            return HTMLResponse("Owner not found.", status_code=404)
+        return _render_owner_form(
+            request,
+            template_name="owners/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institutions=await _load_record_form_institutions(request),
+            owner_id=parsed_owner_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+    except (DuplicateRecordError, ValueError):
+        return _render_owner_form(
+            request,
+            template_name="owners/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institutions=await _load_record_form_institutions(request),
+            owner_id=parsed_owner_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_owner(updated.id, message="owner_updated")
 
 
 @router.get("/institutions", response_class=HTMLResponse)
@@ -1237,6 +1478,7 @@ async def list_admin_institutions(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "institutions": rows,
             "filters": {
                 "name": name or "",
@@ -1245,6 +1487,80 @@ async def list_admin_institutions(
             },
         },
     )
+
+
+@router.get("/institutions/new", response_class=HTMLResponse)
+async def new_admin_institution_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_institution_form(
+        request,
+        template_name="institutions/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_institution_form(),
+    )
+
+
+@router.post("/institutions/new", response_class=HTMLResponse)
+async def create_admin_institution(
+    request: Request,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    country: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _institution_form_from_values(name=name, country=country, notes=notes, reason=reason)
+    try:
+        parsed = parse_institution_form(**form)
+    except ValueError as exc:
+        return _render_institution_form(
+            request,
+            template_name="institutions/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_institution_service_scope(request) as service:
+            created = await service.create_institution(
+                name=parsed.name,
+                country=parsed.country,
+                notes=parsed.notes,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except (DuplicateRecordError, ValueError):
+        return _render_institution_form(
+            request,
+            template_name="institutions/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_institution(created.id, message="institution_created")
 
 
 @router.get("/institutions/{institution_id}", response_class=HTMLResponse)
@@ -1275,9 +1591,107 @@ async def admin_institution_detail(request: Request, institution_id: str) -> Res
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "institution": institution,
         },
     )
+
+
+@router.get("/institutions/{institution_id}/edit", response_class=HTMLResponse)
+async def edit_admin_institution_form(request: Request, institution_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_institution_id = uuid.UUID(institution_id)
+    except ValueError:
+        return HTMLResponse("Institution not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            institution = await service.get_institution_detail(parsed_institution_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Institution not found.", status_code=404)
+
+    return _render_institution_form(
+        request,
+        template_name="institutions/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_institution_form_from_detail(institution),
+        institution_id=parsed_institution_id,
+    )
+
+
+@router.post("/institutions/{institution_id}/edit", response_class=HTMLResponse)
+async def update_admin_institution(
+    request: Request,
+    institution_id: str,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    country: str = Form(""),
+    notes: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_institution_id = uuid.UUID(institution_id)
+    except ValueError:
+        return HTMLResponse("Institution not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _institution_form_from_values(name=name, country=country, notes=notes, reason=reason)
+    try:
+        parsed = parse_institution_form(**form)
+    except ValueError as exc:
+        return _render_institution_form(
+            request,
+            template_name="institutions/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institution_id=parsed_institution_id,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_institution_service_scope(request) as service:
+            updated = await service.update_institution(
+                parsed_institution_id,
+                name=parsed.name,
+                country=parsed.country,
+                notes=parsed.notes,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Institution not found.", status_code=404)
+    except (DuplicateRecordError, ValueError):
+        return _render_institution_form(
+            request,
+            template_name="institutions/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            institution_id=parsed_institution_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_institution(updated.id, message="institution_updated")
 
 
 @router.get("/cohorts", response_class=HTMLResponse)
@@ -1306,6 +1720,7 @@ async def list_admin_cohorts(
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "cohorts": rows,
             "filters": {
                 "name": name or "",
@@ -1315,6 +1730,88 @@ async def list_admin_cohorts(
             },
         },
     )
+
+
+@router.get("/cohorts/new", response_class=HTMLResponse)
+async def new_admin_cohort_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_cohort_form(
+        request,
+        template_name="cohorts/create.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_cohort_form(),
+    )
+
+
+@router.post("/cohorts/new", response_class=HTMLResponse)
+async def create_admin_cohort(
+    request: Request,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    description: str = Form(""),
+    starts_at: str = Form(""),
+    ends_at: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _cohort_form_from_values(
+        name=name,
+        description=description,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        reason=reason,
+    )
+    try:
+        parsed = parse_cohort_form(**form)
+    except ValueError as exc:
+        return _render_cohort_form(
+            request,
+            template_name="cohorts/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_cohort_service_scope(request) as service:
+            created = await service.create_cohort(
+                name=parsed.name,
+                description=parsed.description,
+                starts_at=parsed.starts_at,
+                ends_at=parsed.ends_at,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except (DuplicateRecordError, ValueError, UnsupportedRecordOperationError):
+        return _render_cohort_form(
+            request,
+            template_name="cohorts/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_cohort(created.id, message="cohort_created")
 
 
 @router.get("/cohorts/{cohort_id}", response_class=HTMLResponse)
@@ -1345,9 +1842,115 @@ async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
         {
             "admin": context.admin_user,
             "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
             "cohort": cohort,
         },
     )
+
+
+@router.get("/cohorts/{cohort_id}/edit", response_class=HTMLResponse)
+async def edit_admin_cohort_form(request: Request, cohort_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_cohort_id = uuid.UUID(cohort_id)
+    except ValueError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_records_dashboard_service_scope(request) as service:
+            cohort = await service.get_cohort_detail(parsed_cohort_id)
+    except AdminRecordNotFoundError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+
+    return _render_cohort_form(
+        request,
+        template_name="cohorts/edit.html",
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_cohort_form_from_detail(cohort),
+        cohort_id=parsed_cohort_id,
+    )
+
+
+@router.post("/cohorts/{cohort_id}/edit", response_class=HTMLResponse)
+async def update_admin_cohort(
+    request: Request,
+    cohort_id: str,
+    csrf_token: str = Form(""),
+    name: str = Form(""),
+    description: str = Form(""),
+    starts_at: str = Form(""),
+    ends_at: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    try:
+        parsed_cohort_id = uuid.UUID(cohort_id)
+    except ValueError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _cohort_form_from_values(
+        name=name,
+        description=description,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        reason=reason,
+    )
+    try:
+        parsed = parse_cohort_form(**form)
+    except ValueError as exc:
+        return _render_cohort_form(
+            request,
+            template_name="cohorts/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            cohort_id=parsed_cohort_id,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        async with _admin_cohort_service_scope(request) as service:
+            updated = await service.update_cohort(
+                parsed_cohort_id,
+                name=parsed.name,
+                description=parsed.description,
+                starts_at=parsed.starts_at,
+                ends_at=parsed.ends_at,
+                actor_admin_id=action_context.admin_user.id,
+                reason=parsed.reason,
+            )
+    except RecordNotFoundError:
+        return HTMLResponse("Cohort not found.", status_code=404)
+    except (DuplicateRecordError, ValueError, UnsupportedRecordOperationError):
+        return _render_cohort_form(
+            request,
+            template_name="cohorts/edit.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            cohort_id=parsed_cohort_id,
+            error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
+            status_code=400,
+        )
+
+    return _redirect_to_admin_cohort(updated.id, message="cohort_updated")
 
 
 @router.get("/providers", response_class=HTMLResponse)
@@ -4281,6 +4884,40 @@ async def _admin_records_dashboard_service_scope(request: Request) -> AsyncItera
 
 
 @asynccontextmanager
+async def _admin_institution_service_scope(request: Request) -> AsyncIterator[InstitutionService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield InstitutionService(
+                institutions_repository=InstitutionsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
+async def _admin_cohort_service_scope(request: Request) -> AsyncIterator[CohortService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield CohortService(
+                cohorts_repository=CohortsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
+async def _admin_owner_service_scope(request: Request) -> AsyncIterator[OwnerService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield OwnerService(
+                owners_repository=OwnersRepository(session),
+                institutions_repository=InstitutionsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncIterator[AdminCatalogDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -4474,6 +5111,21 @@ def _redirect_to_admin_fx_rate(fx_rate_id: uuid.UUID, *, message: str) -> Redire
     return RedirectResponse(f"/admin/fx/{fx_rate_id}?{query}", status_code=303)
 
 
+def _redirect_to_admin_owner(owner_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/owners/{owner_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_institution(institution_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/institutions/{institution_id}?{query}", status_code=303)
+
+
+def _redirect_to_admin_cohort(cohort_id: uuid.UUID, *, message: str) -> RedirectResponse:
+    query = urlencode({"message": message})
+    return RedirectResponse(f"/admin/cohorts/{cohort_id}?{query}", status_code=303)
+
+
 def _set_no_store_headers(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -4484,6 +5136,88 @@ async def _load_key_create_form_options(request: Request) -> dict[str, object]:
         owners = await service.list_owners(limit=200)
         cohorts = await service.list_cohorts(limit=200)
     return {"owners": owners, "cohorts": cohorts}
+
+
+async def _load_record_form_institutions(request: Request) -> list[object]:
+    async with _admin_records_dashboard_service_scope(request) as service:
+        return await service.list_institutions(limit=200)
+
+
+def _render_institution_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    institution_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "institution_id": institution_id,
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _render_cohort_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    cohort_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "cohort_id": cohort_id,
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _render_owner_form(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    institutions: list[object],
+    owner_id: uuid.UUID | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "owner_id": owner_id,
+            "form": form,
+            "institutions": institutions,
+            "error": error,
+        },
+        status_code=status_code,
+    )
 
 
 def _render_key_create_form(
@@ -4530,6 +5264,111 @@ def _default_key_create_form() -> dict[str, str]:
         "email_delivery_mode": "none",
         "reason": "",
     }
+
+
+def _default_institution_form() -> dict[str, str]:
+    return _institution_form_from_values(name="", country="", notes="", reason="")
+
+
+def _institution_form_from_values(*, name: str, country: str, notes: str, reason: str) -> dict[str, str]:
+    return {
+        "name": name,
+        "country": country,
+        "notes": notes,
+        "reason": reason,
+    }
+
+
+def _institution_form_from_detail(institution: object) -> dict[str, str]:
+    return _institution_form_from_values(
+        name=str(getattr(institution, "name", "") or ""),
+        country=str(getattr(institution, "country", "") or ""),
+        notes=str(getattr(institution, "notes", "") or ""),
+        reason="",
+    )
+
+
+def _default_cohort_form() -> dict[str, str]:
+    return _cohort_form_from_values(name="", description="", starts_at="", ends_at="", reason="")
+
+
+def _cohort_form_from_values(
+    *,
+    name: str,
+    description: str,
+    starts_at: str,
+    ends_at: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "name": name,
+        "description": description,
+        "starts_at": starts_at,
+        "ends_at": ends_at,
+        "reason": reason,
+    }
+
+
+def _cohort_form_from_detail(cohort: object) -> dict[str, str]:
+    starts_at = getattr(cohort, "starts_at", None)
+    ends_at = getattr(cohort, "ends_at", None)
+    return _cohort_form_from_values(
+        name=str(getattr(cohort, "name", "") or ""),
+        description=str(getattr(cohort, "description", "") or ""),
+        starts_at=starts_at.isoformat() if starts_at is not None else "",
+        ends_at=ends_at.isoformat() if ends_at is not None else "",
+        reason="",
+    )
+
+
+def _default_owner_form() -> dict[str, str]:
+    return _owner_form_from_values(
+        name="",
+        surname="",
+        email="",
+        institution_id="",
+        external_id="",
+        notes="",
+        is_active="true",
+        reason="",
+    )
+
+
+def _owner_form_from_values(
+    *,
+    name: str,
+    surname: str,
+    email: str,
+    institution_id: str,
+    external_id: str,
+    notes: str,
+    is_active: str,
+    reason: str,
+) -> dict[str, str]:
+    return {
+        "name": name,
+        "surname": surname,
+        "email": email,
+        "institution_id": institution_id,
+        "external_id": external_id,
+        "notes": notes,
+        "is_active": is_active,
+        "reason": reason,
+    }
+
+
+def _owner_form_from_detail(owner: object) -> dict[str, str]:
+    institution_id = getattr(owner, "institution_id", None)
+    return _owner_form_from_values(
+        name=str(getattr(owner, "name", "") or ""),
+        surname=str(getattr(owner, "surname", "") or ""),
+        email=str(getattr(owner, "email", "") or ""),
+        institution_id=str(institution_id) if institution_id is not None else "",
+        external_id=str(getattr(owner, "external_id", "") or ""),
+        notes=str(getattr(owner, "notes", "") or ""),
+        is_active="true" if getattr(owner, "is_active", False) else "",
+        reason="",
+    )
 
 
 def _render_provider_config_form(

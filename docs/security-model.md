@@ -153,8 +153,8 @@ explicit confirmation.
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder
-`/admin` dashboard, key list/detail pages under `/admin/keys`, read-only owner,
-institution, and cohort list/detail pages, provider config pages, model route
+`/admin` dashboard, key list/detail pages under `/admin/keys`, owner,
+institution, and cohort list/detail/create/edit pages, provider config pages, model route
 pages, pricing pages, and FX list/detail/create/edit pages. The key pages
 display safe key metadata only:
 prefix, public key ID, hint, owner, status, computed validity state, quotas,
@@ -162,7 +162,14 @@ counters, allowed policy summaries, and rate-limit policy. Key detail pages
 provide CSRF-protected POST actions to suspend, activate, and permanently revoke
 gateway keys through the existing key service and audit behavior.
 Owner, institution, and cohort pages display safe record metadata and key count
-summaries. Provider config pages display safe local metadata and provide
+summaries and provide CSRF-protected create/edit forms for schema-backed record
+metadata. These forms require a non-empty audit reason, write safe audit rows
+through service-layer logic, reject secret-looking notes/metadata, do not create
+keys inline, and do not modify historical usage ledger rows. Delete and
+anonymization workflows are intentionally not implemented yet because
+owner/institution/cohort records can be linked to historical usage snapshots.
+Cohorts are standalone in the current schema; owners can reference institutions
+but do not link directly to cohorts. Provider config pages display safe local metadata and provide
 CSRF-protected create, edit, enable, and disable forms for provider metadata
 only. They may display `api_key_env_var` names, but never provider secret values,
 and state changes write safe audit rows through the provider config service.
@@ -228,8 +235,8 @@ with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
 server-side session row. Admin key, owner, institution, cohort, provider, route,
 pricing, FX, usage, audit, and email delivery pages use authenticated GET
 routes. Key creation, suspend, activate, revoke, validity-window update, hard
-quota limit update, usage-counter reset, rotation, provider config, route,
-pricing, and FX metadata mutation forms require a valid authenticated session
+quota limit update, usage-counter reset, rotation, owner/institution/cohort
+metadata changes, provider config, route, pricing, and FX metadata mutation forms require a valid authenticated session
 plus the per-session CSRF token. The dashboard route import preview form
 requires CSRF, validates CSV/JSON rows, verifies provider references against
 provider config rows, rejects unknown fields and secret-looking
@@ -327,8 +334,9 @@ never recover or send old plaintext keys.
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Standalone email-delivery mutation pages beyond the existing
   one-time-secret-backed send-now/enqueue actions are not implemented.
-  Owner, institution, and cohort mutation pages are not implemented yet. Usage
-  and audit pages remain metadata-only except for audited CSV export controls.
+  Owner, institution, and cohort delete/anonymization workflows are not
+  implemented yet. Usage and audit pages remain metadata-only except for
+  audited CSV export controls.
   external FX refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a

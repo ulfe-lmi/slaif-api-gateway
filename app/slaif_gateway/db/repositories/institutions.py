@@ -77,3 +77,21 @@ class InstitutionsRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def update_institution_metadata(
+        self,
+        institution_id: uuid.UUID,
+        *,
+        name: str,
+        country: str | None,
+        notes: str | None,
+    ) -> Institution | None:
+        institution = await self.get_institution_by_id(institution_id)
+        if institution is None:
+            return None
+
+        institution.name = name
+        institution.country = country
+        institution.notes = notes
+        await self._session.flush()
+        return institution

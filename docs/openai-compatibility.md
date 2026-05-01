@@ -153,8 +153,9 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
-- Bulk key creation, owner/institution/cohort mutation pages,
-  usage/audit mutation pages, and MFA remain outside the current admin surface.
+- Bulk key creation, owner/institution/cohort delete or anonymization workflows,
+  usage/audit mutation pages beyond CSV exports, and MFA remain outside the current admin surface.
+  Owner/institution/cohort create/edit pages are admin metadata workflows only.
   Route import preview/execution and pricing import preview/execution are admin
   metadata workflows. FX import preview/execution is also admin metadata:
   preview is no-mutation, execution is confirmed create-only local metadata

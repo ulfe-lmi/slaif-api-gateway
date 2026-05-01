@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Create Cohort{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="cohort-create-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Cohort Management</p>
+      <h1 id="cohort-create-heading">Create cohort</h1>
+      <p class="muted">Create safe cohort metadata. The current schema does not link cohorts directly to institutions.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/cohorts">Cohorts</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/cohorts/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="cohort-fields-heading">
+      <h2 id="cohort-fields-heading">Metadata</h2>
+      <label>Name<input name="name" value="{{ form.name }}" autocomplete="off" required></label>
+      <label>Description<textarea name="description" rows="4">{{ form.description }}</textarea></label>
+      <p class="muted small">Description must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="cohort-window-heading">
+      <h2 id="cohort-window-heading">Window</h2>
+      <div class="form-grid">
+        <label>Starts at<input name="starts_at" value="{{ form.starts_at }}" placeholder="2026-01-01T00:00:00+00:00" autocomplete="off"></label>
+        <label>Ends at<input name="ends_at" value="{{ form.ends_at }}" placeholder="Optional ISO datetime" autocomplete="off"></label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="cohort-audit-heading">
+      <h2 id="cohort-audit-heading">Audit</h2>
+      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <button type="submit">Create cohort</button>
+      <a class="button-link secondary" href="/admin/cohorts">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}
