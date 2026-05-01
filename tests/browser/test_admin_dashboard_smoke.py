@@ -356,6 +356,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 ("/admin/keys", "Gateway Keys", 1),
                 (f"/admin/keys/{data['key_id']}", str(data["public_key_id"]), 7),
                 ("/admin/keys/create", "Create Gateway Key", 2),
+                ("/admin/keys/bulk-import", "Bulk Key Import Preview", 2),
                 ("/admin/owners", "Owners", 1),
                 ("/admin/owners/new", "Create owner", 2),
                 (f"/admin/owners/{data['owner_id']}", "Browser Owner", 1),

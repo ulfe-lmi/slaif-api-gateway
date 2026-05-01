@@ -68,6 +68,8 @@ def _clear_env(monkeypatch) -> None:
         "ROUTE_IMPORT_MAX_ROWS",
         "FX_IMPORT_MAX_BYTES",
         "FX_IMPORT_MAX_ROWS",
+        "KEY_IMPORT_MAX_BYTES",
+        "KEY_IMPORT_MAX_ROWS",
         "ADMIN_USAGE_EXPORT_MAX_ROWS",
         "ADMIN_AUDIT_EXPORT_MAX_ROWS",
         "METRICS_REQUIRE_AUTH",
@@ -185,6 +187,8 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.ROUTE_IMPORT_MAX_ROWS == 1000
     assert settings.FX_IMPORT_MAX_BYTES == 1048576
     assert settings.FX_IMPORT_MAX_ROWS == 1000
+    assert settings.KEY_IMPORT_MAX_BYTES == 1048576
+    assert settings.KEY_IMPORT_MAX_ROWS == 1000
     assert settings.ADMIN_USAGE_EXPORT_MAX_ROWS == 10000
     assert settings.ADMIN_AUDIT_EXPORT_MAX_ROWS == 10000
     assert settings.ENABLE_ADMIN_DASHBOARD is True

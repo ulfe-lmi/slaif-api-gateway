@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Key Import Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="bulk-key-import-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="bulk-key-import-heading">Bulk Key Import Preview</h1>
+      <p class="muted">Dry-run only. This preview validates CSV/JSON rows without generating plaintext keys or writing key, one-time secret, email delivery, or audit rows.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/keys/bulk-import/preview" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="bulk-key-source-heading">
+      <h2 id="bulk-key-source-heading">Import Source</h2>
+      <p class="warning-text">Preview only: no keys are generated, no plaintext keys are displayed, no email is sent, and no Celery task is queued.</p>
+      <div class="form-grid">
+        <label>
+          Format
+          <select name="import_format">
+            <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
+            <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
+            <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
+          </select>
+        </label>
+        <label>
+          Source label
+          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="Optional safe label">
+        </label>
+      </div>
+      <label>
+        Upload CSV/JSON
+        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json">
+      </label>
+      <label>
+        Or paste CSV/JSON
+        <textarea name="import_text" rows="14" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,token_limit_total,request_limit_total,email_delivery_mode&#10;ada@example.org,30,10.00,100000,1000,none">{{ form.import_text }}</textarea>
+      </label>
+      <p class="muted small">Use either upload or paste, not both. Secret-looking values, gateway keys, provider keys, encrypted secret material, password credentials, session credentials, prompts, and completions are rejected or excluded.</p>
+      <button type="submit">Preview import</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

@@ -68,6 +68,16 @@ from slaif_gateway.services.fx_import import (
     validate_fx_import_rows,
 )
 from slaif_gateway.services.key_errors import KeyManagementError
+from slaif_gateway.services.key_import import (
+    KeyImportCohortRef,
+    KeyImportOwnerRef,
+    KeyImportPreview,
+    KeyImportReadOnlyContext,
+    detect_key_import_format,
+    parse_key_import_csv,
+    parse_key_import_json,
+    validate_key_import_rows,
+)
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
 from slaif_gateway.services.cohort_service import CohortService
@@ -657,6 +667,89 @@ async def create_admin_key(
             "email_delivery_mode": parsed_email_delivery_mode,
             "delivery": delivery_result,
             "celery_task_id": celery_task_id,
+        },
+    )
+    _set_no_store_headers(response)
+    return response
+
+
+@router.get("/keys/bulk-import", response_class=HTMLResponse)
+async def bulk_import_admin_keys_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_key_import_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        form=_default_key_import_form(),
+    )
+
+
+@router.post("/keys/bulk-import/preview", response_class=HTMLResponse)
+async def preview_bulk_import_admin_keys(
+    request: Request,
+    csrf_token: str = Form(""),
+    import_format: str = Form("auto"),
+    import_file: UploadFile | None = File(None),
+    import_text: str = Form(""),
+    source_label: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    try:
+        _parse_optional_import_source_label(source_label)
+        filename, text = await _read_key_import_input(
+            import_file=import_file,
+            import_text=import_text,
+            max_bytes=settings.KEY_IMPORT_MAX_BYTES,
+        )
+        detected_format = detect_key_import_format(
+            filename=filename,
+            requested_format=import_format,
+            text=text,
+        )
+        raw_rows = parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        preview = await _build_key_import_preview(
+            request,
+            raw_rows,
+            max_rows=settings.KEY_IMPORT_MAX_ROWS,
+        )
+    except ValueError as exc:
+        return _render_key_import_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form={
+                "format": import_format,
+                "import_text": "",
+                "source_label": source_label,
+            },
+            error=str(exc),
+            status_code=400,
+        )
+
+    response = templates.TemplateResponse(
+        request,
+        "keys/bulk_import_preview.html",
+        {
+            "admin": action_context.admin_user,
+            "csrf_token": csrf_token,
+            "preview": preview,
+            "import_format": detected_format,
+            "source_label": source_label.strip(),
         },
     )
     _set_no_store_headers(response)
@@ -5245,6 +5338,28 @@ def _render_key_create_form(
     )
 
 
+def _render_key_import_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "keys/bulk_import.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
 def _default_key_create_form() -> dict[str, str]:
     return {
         "owner_id": "",
@@ -5263,6 +5378,14 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_window_seconds": "",
         "email_delivery_mode": "none",
         "reason": "",
+    }
+
+
+def _default_key_import_form() -> dict[str, str]:
+    return {
+        "format": "auto",
+        "import_text": "",
+        "source_label": "",
     }
 
 
@@ -6231,6 +6354,37 @@ async def _read_fx_import_input(
         raise ValueError("FX import content must be UTF-8 text.") from exc
 
 
+async def _read_key_import_input(
+    *,
+    import_file: UploadFile | None,
+    import_text: str,
+    max_bytes: int,
+) -> tuple[str | None, str]:
+    text_supplied = bool(import_text.strip())
+    file_supplied = import_file is not None and bool(import_file.filename)
+    if text_supplied and file_supplied:
+        raise ValueError("Use either a file upload or pasted content, not both.")
+    if not text_supplied and not file_supplied:
+        raise ValueError("Paste key import content or upload a key import file.")
+
+    if text_supplied:
+        encoded = import_text.encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ValueError(f"Key import content must be at most {max_bytes} bytes.")
+        return None, import_text
+
+    assert import_file is not None
+    content = await import_file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise ValueError(f"Key import content must be at most {max_bytes} bytes.")
+    if not content:
+        raise ValueError("Key import file is empty.")
+    try:
+        return import_file.filename, content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Key import content must be UTF-8 text.") from exc
+
+
 def _parse_optional_import_source_label(value: str | None) -> str | None:
     source_label = _clean_admin_reason(value)
     if source_label is None:
@@ -6270,6 +6424,47 @@ async def _build_route_import_preview(
                     limit=1000,
                 )
     return classify_route_import_preview(preview, existing_routes_by_row=existing_by_row)
+
+
+async def _build_key_import_preview(
+    request: Request,
+    raw_rows: list[dict[str, object]],
+    *,
+    max_rows: int,
+) -> KeyImportPreview:
+    settings = _settings(request)
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            owners = await OwnersRepository(session).list_owners_for_admin(limit=1000)
+            cohorts = await CohortsRepository(session).list_cohorts(limit=1000)
+
+    owner_refs = [
+        KeyImportOwnerRef(
+            id=owner.id,
+            email=str(owner.email).strip().lower(),
+            display_name=f"{owner.name} {owner.surname}".strip(),
+            institution_id=owner.institution_id,
+            institution_name=getattr(getattr(owner, "institution", None), "name", None),
+        )
+        for owner in owners
+    ]
+    context = KeyImportReadOnlyContext(
+        owners_by_id={owner.id: owner for owner in owner_refs},
+        owners_by_email={owner.email.lower(): owner for owner in owner_refs},
+        cohorts_by_id={
+            cohort.id: KeyImportCohortRef(id=cohort.id, name=cohort.name)
+            for cohort in cohorts
+        },
+        email_delivery_enabled=settings.ENABLE_EMAIL_DELIVERY,
+        smtp_configured=bool(settings.SMTP_HOST and settings.SMTP_FROM),
+        celery_configured=bool(settings.get_celery_broker_url()),
+    )
+    return validate_key_import_rows(
+        raw_rows,
+        context=context,
+        max_rows=max_rows,
+    )
 
 
 async def _classify_pricing_import_preview(
