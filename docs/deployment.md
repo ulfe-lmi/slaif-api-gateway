@@ -4,6 +4,10 @@ This document describes the repository Docker Compose packaging and the
 deployment boundaries operators must keep explicit. It is not a production
 certification or a complete site reliability runbook.
 
+For a beginner-friendly local walkthrough, start with
+[`quickstart.md`](quickstart.md). For RC-beta scope and release checklist, see
+[`rc-beta.md`](rc-beta.md) and [`beta-readiness.md`](beta-readiness.md).
+
 ## Overview
 
 The Compose packaging defines these services:
@@ -135,6 +139,20 @@ forms are present, and verifies rendered normal dashboard pages do not expose
 token hashes, encrypted one-time-secret material, provider keys, plaintext
 gateway keys, prompts, completions, or session data. It does not call real
 OpenAI/OpenRouter providers and does not send real email.
+
+## GitHub CI Packaging Smoke
+
+The public GitHub Actions CI includes a Docker Compose smoke job for the
+repository packaging. It copies `.env.example` to `.env`, validates
+`docker compose config`, builds the image, starts PostgreSQL, Redis, and
+Mailpit, runs `slaif-gateway db upgrade` explicitly, starts API/worker/scheduler
+services, checks `/healthz` and `/readyz`, validates the Nginx config with the
+official `nginx:stable` image, and then runs `docker compose down -v` in
+cleanup.
+
+The CI smoke does not use real provider keys, does not call OpenAI/OpenRouter,
+does not send real external email, and does not run migrations implicitly from
+API/worker/scheduler startup.
 
 ## Production Notes
 

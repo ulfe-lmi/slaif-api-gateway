@@ -4,7 +4,8 @@ Date: 2026-05-01
 
 Status: RC-beta readiness candidate after verification fixes.
 
-Current verified `main` baseline: `77fcd4494279fcc31f256561b74ba0c13720f3be`
+Current verified `main` baseline before CI/docs branch:
+`8815fff7d23357ad5c767b90d6f2c23838084395`
 
 Recommendation: RC-beta ready for the implemented and documented scope once the
 readiness-fixes PR is merged.
@@ -74,6 +75,10 @@ non-empty audit reason according to the action.
   Alembic head.
 - Container health/readiness smoke: `/healthz` and `/readyz` returned ok.
 - Nginx syntax validation: passed with `nginx:stable nginx -t`.
+
+The RC-beta CI/docs follow-up adds GitHub Actions coverage for unit/lint,
+PostgreSQL integration, E2E, Playwright browser smoke, Docker Compose smoke,
+Nginx syntax validation, documentation hygiene, CodeQL, and Dependabot.
 
 ## Review 5.0 Closure
 
@@ -145,8 +150,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   native provider adapters as separate scoped projects.
 - Build production runbooks for backups, monitoring, alerting, secret rotation,
   and incident response.
-- Consider CI automation for the full unit, integration, E2E, browser, Docker,
-  and Nginx validation suite.
+- Keep CI green and review dependency/security updates before each tag.
 
 Final verdict: RC-beta ready: yes, for the implemented and documented scope,
 after the readiness-fixes PR is merged.

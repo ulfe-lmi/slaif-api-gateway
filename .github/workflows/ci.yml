@@ -1,0 +1,285 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-lint:
+    name: Unit, lint, and migration head
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit
+
+      - name: Run Ruff
+        run: python -m ruff check app tests
+
+      - name: Check Alembic heads
+        run: alembic heads
+
+      - name: Check whitespace
+        run: git diff --check
+
+  postgres-integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: slaif_gateway_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d slaif_gateway_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/slaif_gateway_test
+      TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run integration tests
+        run: python -m pytest tests/integration
+
+  e2e:
+    name: OpenAI-compatible E2E tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: slaif_gateway_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d slaif_gateway_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/slaif_gateway_test
+      TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run E2E tests
+        run: python -m pytest tests/e2e
+
+  browser:
+    name: Playwright browser smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: slaif_gateway_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d slaif_gateway_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/slaif_gateway_test
+      TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        run: python -m pytest tests/browser -m playwright
+
+  docker-smoke:
+    name: Docker Compose smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare local environment
+        run: cp .env.example .env
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start infrastructure
+        run: docker compose up -d postgres redis mailpit
+
+      - name: Run migrations explicitly
+        run: docker compose run --rm api slaif-gateway db upgrade
+
+      - name: Start application services
+        run: docker compose up -d api worker scheduler
+
+      - name: Wait for API health and readiness
+        run: |
+          wait_for_http() {
+            local name="$1"
+            local url="$2"
+            local attempts="${3:-60}"
+            local delay="${4:-2}"
+
+            for i in $(seq 1 "$attempts"); do
+              if curl -fsS --max-time 5 "$url"; then
+                echo "$name is ready"
+                return 0
+              fi
+
+              echo "Waiting for $name at $url ($i/$attempts)..."
+              docker compose ps || true
+              if [ "$i" -eq 1 ] || [ $((i % 10)) -eq 0 ]; then
+                docker compose logs --tail=80 api || true
+              fi
+              sleep "$delay"
+            done
+
+            echo "$name did not become ready at $url"
+            docker compose ps || true
+            docker compose logs --tail=200 api worker scheduler postgres redis mailpit || true
+            return 1
+          }
+
+          wait_for_http "healthz" "http://localhost:8000/healthz" 60 2
+          wait_for_http "readyz" "http://localhost:8000/readyz" 60 2
+
+      - name: Validate Nginx configuration
+        run: |
+          docker run --rm \
+            --network "$(basename "$PWD")_default" \
+            -v "$PWD/deploy/nginx:/etc/nginx/conf.d:ro" \
+            nginx:stable nginx -t
+
+      - name: Stop Docker Compose services
+        if: always()
+        run: docker compose down -v
+
+  docs-hygiene:
+    name: Documentation hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Check README brand header
+        run: |
+          sed -n '1,5p' README.md | diff -u - <(cat <<'EOF'
+          <div style="text-align: center;">
+            <a href="https://www.slaif.si">
+              <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="400" height="400">
+            </a>
+          </div>
+          EOF
+          )
+
+      - name: Check public client environment variable names
+        run: |
+          if git grep -n -E 'SLAIF_API_KEY|SLAIF_BASE_URL' -- README.md docs .env.example pyproject.toml Makefile; then
+            echo "Use OPENAI_API_KEY and OPENAI_BASE_URL in public client examples." >&2
+            exit 1
+          fi

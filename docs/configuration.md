@@ -1,5 +1,9 @@
 # Configuration
 
+For first-time local setup, see [`quickstart.md`](quickstart.md). For RC-beta
+release scope and the verification checklist, see [`rc-beta.md`](rc-beta.md)
+and [`beta-readiness.md`](beta-readiness.md).
+
 This gateway is configured with environment variables. Secrets should come from
 environment variables, a deployment secret manager, or Docker secrets. The root
 `.env.example` file is a safe Docker Compose-oriented template only; it must not
@@ -468,3 +472,14 @@ TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m p
 The suite starts a local FastAPI server and uses safe dummy data only. It does
 not use `DATABASE_URL` for destructive setup, call real OpenAI/OpenRouter
 providers, or send real email.
+
+## GitHub CI Configuration
+
+The checked-in GitHub Actions workflows install the package with `.[dev]`, run
+the normal unit/lint/Alembic checks, and run PostgreSQL-backed integration,
+OpenAI-compatible E2E, Playwright browser, and Docker Compose smoke jobs without
+real provider keys. CI database jobs use `TEST_DATABASE_URL`, not `DATABASE_URL`,
+and Redis-backed tests use `TEST_REDIS_URL`.
+
+The Docker smoke job copies `.env.example` to `.env` and uses only development
+placeholders. It does not call providers or send real external email.

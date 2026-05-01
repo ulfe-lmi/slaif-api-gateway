@@ -6,9 +6,18 @@
 
 # SLAIF API Gateway
 
+[![CI](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml)
+
 SLAIF API Gateway is an open-source, OpenAI-compatible API gateway for educational and institutional LLM access. It lets users run ordinary OpenAI SDK examples by setting `OPENAI_API_KEY` and `OPENAI_BASE_URL`, while operators keep control over issued gateway keys, quotas, model access, provider routing, pricing, usage accounting, and audit logs.
 
 The gateway is intended for workshops, courses, training events, and AI-factory environments where users need practical LLM API access but organizers must protect upstream provider credentials and spending.
+
+If you are new to the project, start with the step-by-step
+[`docs/quickstart.md`](docs/quickstart.md). For RC-beta release status,
+verification scope, and known limitations, see
+[`docs/rc-beta.md`](docs/rc-beta.md) and
+[`docs/beta-readiness.md`](docs/beta-readiness.md).
 
 For exact reviewer-facing behavior, see:
 
@@ -44,7 +53,8 @@ Not implemented yet:
 
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
 - Automatic key-email sending by default.
-- OpenTelemetry tracing and full production hardening/CI/CD runbooks.
+- OpenTelemetry tracing and full production hardening/runbooks beyond the
+  checked-in CI and RC-beta verification workflows.
 
 ## OpenAI-Compatible Usage
 
@@ -96,6 +106,10 @@ are implemented; it is not silently clamped or dropped.
 
 ## Quick Local Setup
 
+For a slower beginner tutorial with explanations and checkpoints, use
+[`docs/quickstart.md`](docs/quickstart.md). The commands below are the compact
+local setup.
+
 Docker Compose local setup:
 
 ```bash
@@ -138,6 +152,23 @@ container-internal URLs still use `postgres:5432` and `redis:6379`.
 
 See [`docs/deployment.md`](docs/deployment.md) for the full deployment runbook
 and optional Nginx configuration.
+
+## CI / Verification
+
+GitHub Actions runs the normal public test and packaging suite without real
+provider keys or real external email:
+
+- unit tests, Ruff, Alembic head check, and whitespace checks
+- PostgreSQL-backed integration tests with Redis available
+- OpenAI-compatible E2E tests using mocked upstream providers
+- Playwright Chromium admin dashboard smoke
+- Docker Compose build/migration/API/worker/scheduler smoke and Nginx syntax
+  validation
+- CodeQL Python analysis and weekly Dependabot checks
+
+CI uses `TEST_DATABASE_URL` for test databases and does not use `DATABASE_URL`
+for destructive setup. The Docker smoke copies `.env.example` to `.env`, runs
+migrations explicitly, and does not call OpenAI/OpenRouter or send real email.
 
 Python local setup:
 
