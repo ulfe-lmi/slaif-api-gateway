@@ -200,7 +200,7 @@ jobs:
         run: cp .env.example .env
 
       - name: Validate Compose configuration
-        run: docker compose config
+        run: docker compose config --quiet
 
       - name: Build images
         run: docker compose build
@@ -214,11 +214,36 @@ jobs:
       - name: Start application services
         run: docker compose up -d api worker scheduler
 
-      - name: Check health
-        run: curl -fsS http://localhost:8000/healthz
+      - name: Wait for API health and readiness
+        run: |
+          wait_for_http() {
+            local name="$1"
+            local url="$2"
+            local attempts="${3:-60}"
+            local delay="${4:-2}"
 
-      - name: Check readiness
-        run: curl -fsS http://localhost:8000/readyz
+            for i in $(seq 1 "$attempts"); do
+              if curl -fsS --max-time 5 "$url"; then
+                echo "$name is ready"
+                return 0
+              fi
+
+              echo "Waiting for $name at $url ($i/$attempts)..."
+              docker compose ps || true
+              if [ "$i" -eq 1 ] || [ $((i % 10)) -eq 0 ]; then
+                docker compose logs --tail=80 api || true
+              fi
+              sleep "$delay"
+            done
+
+            echo "$name did not become ready at $url"
+            docker compose ps || true
+            docker compose logs --tail=200 api worker scheduler postgres redis mailpit || true
+            return 1
+          }
+
+          wait_for_http "healthz" "http://localhost:8000/healthz" 60 2
+          wait_for_http "readyz" "http://localhost:8000/readyz" 60 2
 
       - name: Validate Nginx configuration
         run: |
