@@ -368,12 +368,15 @@ plaintext keys, does not write `gateway_keys`, `one_time_secrets`,
 `email_deliveries`, or audit rows, does not enqueue Celery tasks, does not send
 email, and does not call providers. Dashboard bulk key import execution uses the
 same parser and validation rules, requires CSRF, explicit import confirmation,
-one-time plaintext display confirmation, and a non-empty audit reason, and only
-creates keys after all rows validate. Execution supports `none` and `pending`
-email modes. `send-now` and `enqueue` remain future work for bulk execution.
-Plaintext keys are shown once on a no-cache result page for supported modes and
-are not stored in PostgreSQL, audit rows, cookies, sessions, URLs, email
-delivery rows, logs, or Celery payloads.
+one-time plaintext display confirmation when browser plaintext will be shown,
+and a non-empty audit reason, and only creates keys after all rows validate.
+Execution supports `none`, `pending`, and `enqueue` email modes. Bulk `send-now`
+remains future work and rejects before mutation. Plaintext keys are shown once
+on a no-cache result page for `none` and `pending` rows, are suppressed for
+`enqueue` rows, and are not stored in PostgreSQL, audit rows, cookies, sessions,
+URLs, email delivery rows, logs, or Celery payloads. Bulk `enqueue` creates
+one-time secrets and pending email delivery rows, then queues Celery tasks with
+IDs only; SMTP is not called in the admin HTTP request.
 
 Dashboard pricing import execution is also CSRF-protected and uses the same
 parser/validation rules as preview. Execution requires explicit confirmation

@@ -40,6 +40,7 @@
   </section>
 
   <p class="warning-text">No plaintext gateway keys were generated. Email delivery modes are validation-only in this preview.</p>
+  <p class="muted small"><code>none</code> shows generated plaintext once after confirmed execution. <code>pending</code> creates a pending delivery row and also shows plaintext once. <code>enqueue</code> creates a pending delivery row and queues Celery delivery with IDs only; browser plaintext is suppressed. <code>send-now</code> remains unsupported for bulk execution.</p>
 
   {% if preview.valid_count and not preview.invalid_count %}
   <section class="action-panel" aria-labelledby="bulk-key-execute-heading">
@@ -73,15 +74,17 @@
         <input type="checkbox" name="confirm_import" value="true">
         <span>I confirm this import should create gateway keys for every valid row.</span>
       </label>
+      {% if preview.plaintext_display_required %}
       <label class="checkbox-row">
         <input type="checkbox" name="confirm_plaintext_display" value="true">
-        <span>I understand newly generated plaintext keys will be shown once on the no-cache result page.</span>
+        <span>I understand newly generated plaintext keys for <code>none</code> and <code>pending</code> rows will be shown once on the no-cache result page.</span>
       </label>
+      {% endif %}
       <label>
         Audit reason
         <input name="reason" autocomplete="off" required placeholder="Required reason for bulk key creation">
       </label>
-      <p class="muted small">Bulk execution supports email delivery modes <code>none</code> and <code>pending</code>. It does not send email or queue Celery tasks.</p>
+      <p class="muted small">Bulk execution supports email delivery modes <code>none</code>, <code>pending</code>, and <code>enqueue</code>. It does not send SMTP in the admin request. <code>send-now</code> is rejected before mutation.</p>
       <button type="submit">Execute import</button>
     </form>
   </section>
@@ -136,7 +139,16 @@
             <div class="muted small">Rate limits: {{ row.rate_limit_summary }}</div>
             <div class="muted small">Metadata: {{ row.metadata_summary }}</div>
           </td>
-          <td>{{ row.email_delivery_mode }}</td>
+          <td>
+            <div>{{ row.email_delivery_mode }}</div>
+            {% if row.email_delivery_mode == "enqueue" %}
+            <div class="muted small">Celery queued after creation; plaintext suppressed.</div>
+            {% elif row.email_delivery_mode in ["none", "pending"] %}
+            <div class="muted small">Plaintext displayed once after confirmed execution.</div>
+            {% elif row.email_delivery_mode == "send-now" %}
+            <div class="muted small">Unsupported for bulk execution.</div>
+            {% endif %}
+          </td>
           <td>
             {% if row.errors %}
             <ul class="compact-list">

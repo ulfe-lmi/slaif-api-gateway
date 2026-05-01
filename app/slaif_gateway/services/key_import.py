@@ -6,7 +6,7 @@ import csv
 import json
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -49,6 +49,7 @@ KEY_IMPORT_ALLOWED_FIELDS = {
 
 KEY_IMPORT_EMAIL_MODES = {"none", "pending", "send-now", "enqueue"}
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_UNSET = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,14 @@ class KeyImportPreview:
     rows: tuple[KeyImportRowPreview, ...]
     duplicate_owner_count: int = 0
 
+    @property
+    def plaintext_display_required(self) -> bool:
+        return any(row.email_delivery_mode in {"none", "pending"} for row in self.rows)
+
+    @property
+    def enqueue_count(self) -> int:
+        return sum(1 for row in self.rows if row.email_delivery_mode == "enqueue")
+
 
 @dataclass(frozen=True, slots=True)
 class KeyImportExecutionPlan:
@@ -180,6 +189,9 @@ class KeyImportExecutionRow:
     email_delivery_id: uuid.UUID | None = None
     email_delivery_mode: str = "none"
     email_delivery_status: str | None = None
+    enqueue_status: str = "not_applicable"
+    enqueue_error: str | None = None
+    celery_task_id: str | None = None
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     cost_limit_eur: str | None = None
@@ -225,6 +237,7 @@ class KeyImportExecutionResult:
     rows: tuple[KeyImportExecutionRow, ...]
     plaintext_display_count: int = 0
     pending_email_delivery_count: int = 0
+    queued_email_delivery_count: int = 0
     audit_summary: str = "Per-key creation audit rows written through KeyService."
 
     @property
@@ -334,11 +347,9 @@ def build_key_import_execution_plan(
     if preview.invalid_count:
         raise ValueError("All rows must validate before bulk key import execution.")
 
-    unsupported_modes = sorted(
-        {row.email_delivery_mode for row in preview.rows if row.email_delivery_mode in {"send-now", "enqueue"}}
-    )
+    unsupported_modes = sorted({row.email_delivery_mode for row in preview.rows if row.email_delivery_mode == "send-now"})
     if unsupported_modes:
-        raise ValueError("Bulk send-now and enqueue email delivery are future work; use none or pending.")
+        raise ValueError("Bulk send-now email delivery is not implemented; use enqueue, pending, or none.")
 
     for row in preview.rows:
         if row.allowed_providers:
@@ -346,7 +357,7 @@ def build_key_import_execution_plan(
         if row.allow_all_models or row.allow_all_endpoints or row.allow_all_providers:
             raise ValueError("allow_all policy flags are not supported by the current key creation service.")
 
-    plaintext_display_required = any(row.email_delivery_mode in {"none", "pending"} for row in preview.rows)
+    plaintext_display_required = preview.plaintext_display_required
     if plaintext_display_required and not confirm_plaintext_display:
         raise ValueError("Confirm one-time plaintext display before importing keys.")
 
@@ -375,7 +386,7 @@ async def execute_key_import_plan(
         )
         created = await key_service.create_gateway_key(create_input)
         delivery_result: PendingKeyEmailResult | None = None
-        if row.email_delivery_mode == "pending":
+        if row.email_delivery_mode in {"pending", "enqueue"}:
             delivery_result = await email_delivery_service.create_pending_key_email_delivery(
                 gateway_key_id=created.gateway_key_id,
                 one_time_secret_id=created.one_time_secret_id,
@@ -397,6 +408,7 @@ async def execute_key_import_plan(
                 email_delivery_id=delivery_result.email_delivery_id if delivery_result else None,
                 email_delivery_mode=row.email_delivery_mode,
                 email_delivery_status=delivery_result.status if delivery_result else None,
+                enqueue_status="pending" if row.email_delivery_mode == "enqueue" else "not_applicable",
                 valid_from=created.valid_from,
                 valid_until=created.valid_until,
                 cost_limit_eur=row.cost_limit_eur,
@@ -405,7 +417,7 @@ async def execute_key_import_plan(
                 allowed_models=row.allowed_models,
                 allowed_endpoints=row.allowed_endpoints,
                 rate_limit_policy=row.rate_limit_policy,
-                plaintext_key=created.plaintext_key,
+                plaintext_key=created.plaintext_key if row.email_delivery_mode in {"none", "pending"} else None,
             )
         )
 
@@ -415,7 +427,70 @@ async def execute_key_import_plan(
         invalid_count=0,
         rows=tuple(result_rows),
         plaintext_display_count=sum(1 for row in result_rows if row.plaintext_key),
-        pending_email_delivery_count=sum(1 for row in result_rows if row.email_delivery_mode == "pending"),
+        pending_email_delivery_count=sum(1 for row in result_rows if row.email_delivery_mode in {"pending", "enqueue"}),
+        queued_email_delivery_count=sum(1 for row in result_rows if row.enqueue_status == "queued"),
+    )
+
+
+def enqueue_key_import_email_tasks(
+    result: KeyImportExecutionResult,
+    *,
+    actor_admin_id: uuid.UUID | None,
+    enqueue_func: Callable[..., str],
+) -> KeyImportExecutionResult:
+    """Queue Celery delivery for enqueue-mode rows using IDs only."""
+    updated_rows: list[KeyImportExecutionRow] = []
+    queued_count = 0
+    for row in result.rows:
+        if row.email_delivery_mode != "enqueue":
+            updated_rows.append(row)
+            continue
+        if row.one_time_secret_id is None or row.email_delivery_id is None:
+            updated_rows.append(
+                _replace_execution_row(
+                    row,
+                    enqueue_status="failed",
+                    enqueue_error="Email delivery metadata was not created.",
+                    plaintext_key=None,
+                )
+            )
+            continue
+        try:
+            task_id = enqueue_func(
+                one_time_secret_id=row.one_time_secret_id,
+                email_delivery_id=row.email_delivery_id,
+                actor_admin_id=actor_admin_id,
+            )
+        except Exception:  # noqa: BLE001
+            updated_rows.append(
+                _replace_execution_row(
+                    row,
+                    enqueue_status="failed",
+                    enqueue_error="Email delivery remains pending; enqueue can be retried from the email delivery page.",
+                    plaintext_key=None,
+                )
+            )
+            continue
+        queued_count += 1
+        updated_rows.append(
+            _replace_execution_row(
+                row,
+                email_delivery_status="queued",
+                enqueue_status="queued",
+                celery_task_id=str(task_id),
+                plaintext_key=None,
+            )
+        )
+
+    return KeyImportExecutionResult(
+        total_rows=result.total_rows,
+        created_count=result.created_count,
+        invalid_count=result.invalid_count,
+        rows=tuple(updated_rows),
+        plaintext_display_count=sum(1 for row in updated_rows if row.plaintext_key),
+        pending_email_delivery_count=sum(1 for row in updated_rows if row.email_delivery_mode in {"pending", "enqueue"}),
+        queued_email_delivery_count=queued_count,
+        audit_summary=result.audit_summary,
     )
 
 
@@ -429,6 +504,7 @@ def key_import_execution_result_from_preview_errors(preview: KeyImportPreview) -
             owner_email=row.owner_email,
             owner_name=row.owner_name,
             email_delivery_mode=row.email_delivery_mode,
+            enqueue_status="not_applicable",
             valid_from=row.valid_from,
             valid_until=row.valid_until,
             cost_limit_eur=row.cost_limit_eur,
@@ -448,6 +524,7 @@ def key_import_execution_result_from_preview_errors(preview: KeyImportPreview) -
         rows=rows,
         plaintext_display_count=0,
         pending_email_delivery_count=0,
+        queued_email_delivery_count=0,
         audit_summary="No mutation was performed.",
     )
 
@@ -461,6 +538,7 @@ def key_import_execution_error_result(message: str) -> KeyImportExecutionResult:
         rows=(KeyImportExecutionRow(row_number=0, action="invalid", errors=(message,)),),
         plaintext_display_count=0,
         pending_email_delivery_count=0,
+        queued_email_delivery_count=0,
         audit_summary="No mutation was performed.",
     )
 
@@ -505,6 +583,46 @@ def key_import_preview_to_dict(preview: KeyImportPreview) -> dict[str, object]:
             for row in preview.rows
         ],
     }
+
+
+def _replace_execution_row(
+    row: KeyImportExecutionRow,
+    *,
+    email_delivery_status: str | None | object = _UNSET,
+    enqueue_status: str | object = _UNSET,
+    enqueue_error: str | None | object = _UNSET,
+    celery_task_id: str | None | object = _UNSET,
+    plaintext_key: str | None | object = _UNSET,
+) -> KeyImportExecutionRow:
+    return KeyImportExecutionRow(
+        row_number=row.row_number,
+        action=row.action,
+        owner_id=row.owner_id,
+        owner_email=row.owner_email,
+        owner_name=row.owner_name,
+        gateway_key_id=row.gateway_key_id,
+        public_key_id=row.public_key_id,
+        display_prefix=row.display_prefix,
+        one_time_secret_id=row.one_time_secret_id,
+        email_delivery_id=row.email_delivery_id,
+        email_delivery_mode=row.email_delivery_mode,
+        email_delivery_status=row.email_delivery_status
+        if email_delivery_status is _UNSET
+        else email_delivery_status,
+        enqueue_status=row.enqueue_status if enqueue_status is _UNSET else str(enqueue_status),
+        enqueue_error=row.enqueue_error if enqueue_error is _UNSET else enqueue_error,
+        celery_task_id=row.celery_task_id if celery_task_id is _UNSET else celery_task_id,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        cost_limit_eur=row.cost_limit_eur,
+        token_limit=row.token_limit,
+        request_limit=row.request_limit,
+        allowed_models=row.allowed_models,
+        allowed_endpoints=row.allowed_endpoints,
+        rate_limit_policy=row.rate_limit_policy,
+        plaintext_key=row.plaintext_key if plaintext_key is _UNSET else plaintext_key,
+        errors=row.errors,
+    )
 
 
 def _validate_one_row(

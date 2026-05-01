@@ -39,7 +39,7 @@ def _valid_csv(**overrides: str) -> str:
     return ",".join(headers) + "\n" + ",".join(row[name] for name in headers) + "\n"
 
 
-def _preview(*, valid: bool = True) -> KeyImportPreview:
+def _preview(*, valid: bool = True, email_delivery_mode: str = "none") -> KeyImportPreview:
     owner_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
     valid_from = datetime(2026, 1, 1, tzinfo=UTC)
     row = KeyImportRowPreview(
@@ -58,7 +58,7 @@ def _preview(*, valid: bool = True) -> KeyImportPreview:
         allowed_models=("gpt-test",) if valid else (),
         allowed_endpoints=("/v1/chat/completions",) if valid else (),
         allowed_providers=(),
-        email_delivery_mode="none",
+        email_delivery_mode=email_delivery_mode,
         note="&lt;script&gt;" if valid else None,
         errors=() if valid else ("owner_id must reference an existing owner",),
     )
@@ -276,6 +276,34 @@ def _execution_result(*, plaintext: bool = True) -> KeyImportExecutionResult:
     )
 
 
+def _enqueue_execution_result() -> KeyImportExecutionResult:
+    row = KeyImportExecutionRow(
+        row_number=1,
+        action="created",
+        owner_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        owner_email="ada@example.org",
+        owner_name="Ada Lovelace",
+        gateway_key_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        public_key_id="pub_bulk",
+        display_prefix="sk-slaif-pub_bulk",
+        one_time_secret_id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        email_delivery_id=uuid.UUID("44444444-4444-4444-8444-444444444444"),
+        email_delivery_mode="enqueue",
+        email_delivery_status="pending",
+        enqueue_status="pending",
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    return KeyImportExecutionResult(
+        total_rows=1,
+        created_count=1,
+        invalid_count=0,
+        rows=(row,),
+        plaintext_display_count=0,
+        pending_email_delivery_count=1,
+    )
+
+
 def test_bulk_key_import_execute_requires_auth_and_csrf(monkeypatch) -> None:
     client = TestClient(_app())
     unauthenticated = client.post("/admin/keys/bulk-import/execute", follow_redirects=False)
@@ -406,6 +434,85 @@ def test_bulk_key_import_execute_calls_execution_service_and_returns_no_cache_re
     assert "encrypted_payload" not in response.text
     assert "nonce" not in response.text
     assert "password_hash" not in response.text
+
+
+def test_bulk_key_import_execute_accepts_enqueue_and_queues_ids_only(monkeypatch) -> None:
+    queued: list[dict[str, object]] = []
+
+    async def build_preview(request, raw_rows, *, max_rows):
+        return _preview(email_delivery_mode="enqueue")
+
+    async def execute_plan(plan, *, key_service, email_delivery_service):
+        assert plan.plaintext_display_required is False
+        return _enqueue_execution_result()
+
+    def enqueue_func(**kwargs):
+        queued.append(kwargs)
+        return "task-123"
+
+    monkeypatch.setattr("slaif_gateway.api.admin._build_key_import_preview", build_preview)
+    monkeypatch.setattr("slaif_gateway.api.admin.execute_key_import_plan", execute_plan)
+    monkeypatch.setattr("slaif_gateway.api.admin._enqueue_admin_pending_key_email", enqueue_func)
+    _patch_csrf_refresh(monkeypatch)
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/bulk-import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(email_delivery_mode="enqueue"),
+            "confirm_import": "true",
+            "reason": "bulk",
+        },
+    )
+
+    assert response.status_code == 200
+    assert queued == [
+        {
+            "one_time_secret_id": uuid.UUID("33333333-3333-4333-8333-333333333333"),
+            "email_delivery_id": uuid.UUID("44444444-4444-4444-8444-444444444444"),
+            "actor_admin_id": admin_user.id,
+        }
+    ]
+    assert "task-123" in response.text
+    assert "sk-slaif-pub_bulk.plaintext-secret" not in response.text
+    assert "encrypted_payload" not in response.text
+
+
+def test_bulk_key_import_execute_rejects_send_now_before_mutation(monkeypatch) -> None:
+    called = False
+
+    async def execute_plan(plan, *, key_service, email_delivery_service):
+        nonlocal called
+        called = True
+        return _execution_result()
+
+    async def build_preview(request, raw_rows, *, max_rows):
+        return _preview(email_delivery_mode="send-now")
+
+    monkeypatch.setattr("slaif_gateway.api.admin._build_key_import_preview", build_preview)
+    monkeypatch.setattr("slaif_gateway.api.admin.execute_key_import_plan", execute_plan)
+    _patch_csrf_refresh(monkeypatch)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/bulk-import/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "import_format": "csv",
+            "import_text": _valid_csv(email_delivery_mode="send-now"),
+            "confirm_import": "true",
+            "confirm_plaintext_display": "true",
+            "reason": "bulk",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "send-now email delivery is not implemented" in response.text
+    assert called is False
 
 
 def test_bulk_key_import_execute_rejects_conflicting_input(monkeypatch) -> None:

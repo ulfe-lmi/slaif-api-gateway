@@ -39,6 +39,10 @@ def _settings(database_url: str) -> Settings:
         ADMIN_SESSION_SECRET="s" * 40,
         TOKEN_HMAC_SECRET="hmac-secret-for-bulk-key-execution-tests",
         ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+        ENABLE_EMAIL_DELIVERY=True,
+        SMTP_HOST="localhost",
+        SMTP_FROM="noreply@example.org",
+        CELERY_BROKER_URL="memory://",
         OPENAI_UPSTREAM_API_KEY="sk-provider-secret-placeholder",
         OPENROUTER_API_KEY="sk-or-provider-secret-placeholder",
     )
@@ -182,7 +186,7 @@ def _assert_plaintext_not_persisted(database_url: str, plaintext_keys: list[str]
     assert "nonce" not in json.dumps([audit.new_values for audit in audits], default=str)
 
 
-def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> None:
+def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monkeypatch) -> None:
     data = asyncio.run(_seed_records(migrated_postgres_url))
     owner_id = data["owner_id"]
     owner_email = data["owner_email"]
@@ -191,6 +195,13 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
     assert isinstance(cohort_id, uuid.UUID)
     settings = _settings(migrated_postgres_url)
     app = create_app(settings)
+    queued_payloads: list[dict[str, object]] = []
+
+    def enqueue_func(**kwargs):
+        queued_payloads.append(kwargs)
+        return f"task-{len(queued_payloads)}"
+
+    monkeypatch.setattr("slaif_gateway.api.admin._enqueue_admin_pending_key_email", enqueue_func)
 
     with TestClient(app) as client:
         unauthenticated = client.post(
@@ -339,6 +350,65 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
         assert after_pending["audit_logs"] == after_created["audit_logs"] + 2
         _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys + pending_plaintext)
 
+        enqueue_csv = f"owner_email,valid_days,cost_limit_eur,email_delivery_mode\n{owner_email},10,7.00,enqueue\n"
+        enqueue = client.post(
+            "/admin/keys/bulk-import/execute",
+            data={
+                "csrf_token": csrf,
+                "import_format": "csv",
+                "import_text": enqueue_csv,
+                "confirm_import": "true",
+                "reason": "bulk enqueue key execution",
+            },
+        )
+        assert enqueue.status_code == 200
+        enqueue_plaintext = _plaintext_keys_from_html(enqueue.text)
+        assert enqueue_plaintext == []
+        assert "Enqueue: queued" in enqueue.text
+        assert "task-1" in enqueue.text
+        after_enqueue = asyncio.run(_counts(migrated_postgres_url))
+        assert after_enqueue["gateway_keys"] == after_pending["gateway_keys"] + 1
+        assert after_enqueue["one_time_secrets"] == after_pending["one_time_secrets"] + 1
+        assert after_enqueue["email_deliveries"] == after_pending["email_deliveries"] + 1
+        assert after_enqueue["audit_logs"] == after_pending["audit_logs"] + 2
+        assert len(queued_payloads) == 1
+        assert set(queued_payloads[0]) == {"one_time_secret_id", "email_delivery_id", "actor_admin_id"}
+        assert all(isinstance(value, uuid.UUID) for value in queued_payloads[0].values())
+        assert "plaintext" not in str(queued_payloads).lower()
+        assert "sk-slaif-" not in str(queued_payloads)
+        _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys + pending_plaintext)
+
+        mixed_csv = (
+            "owner_email,valid_days,cost_limit_eur,email_delivery_mode\n"
+            f"{owner_email},12,1.00,none\n"
+            f"{owner_email},13,2.00,pending\n"
+            f"{owner_email},14,3.00,enqueue\n"
+        )
+        mixed = client.post(
+            "/admin/keys/bulk-import/execute",
+            data={
+                "csrf_token": csrf,
+                "import_format": "csv",
+                "import_text": mixed_csv,
+                "confirm_import": "true",
+                "confirm_plaintext_display": "true",
+                "reason": "bulk mixed key execution",
+            },
+        )
+        assert mixed.status_code == 200
+        mixed_plaintext = _plaintext_keys_from_html(mixed.text)
+        assert len(mixed_plaintext) == 2
+        for plaintext_key in mixed_plaintext:
+            assert mixed.text.count(plaintext_key) == 1
+        assert "Enqueue: queued" in mixed.text
+        assert "task-2" in mixed.text
+        after_mixed = asyncio.run(_counts(migrated_postgres_url))
+        assert after_mixed["gateway_keys"] == after_enqueue["gateway_keys"] + 3
+        assert after_mixed["one_time_secrets"] == after_enqueue["one_time_secrets"] + 3
+        assert after_mixed["email_deliveries"] == after_enqueue["email_deliveries"] + 2
+        assert len(queued_payloads) == 2
+        _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys + pending_plaintext + mixed_plaintext)
+
         invalid_csv = f"owner_email,valid_days,cost_limit_eur\nmissing@example.org,30,10.00\n{owner_email},30,8.00\n"
         invalid = client.post(
             "/admin/keys/bulk-import/execute",
@@ -353,7 +423,7 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
         )
         assert invalid.status_code == 400
         assert "All rows must validate" in invalid.text
-        assert asyncio.run(_counts(migrated_postgres_url)) == after_pending
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
 
         unsupported_send = client.post(
             "/admin/keys/bulk-import/execute",
@@ -368,7 +438,8 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
         )
         assert unsupported_send.status_code == 400
         assert "send-now" in unsupported_send.text
-        assert asyncio.run(_counts(migrated_postgres_url)) == after_pending
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
+        assert len(queued_payloads) == 2
 
         secret_input = client.post(
             "/admin/keys/bulk-import/execute",
@@ -384,7 +455,7 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
         assert secret_input.status_code == 400
         assert "note must not contain secret-looking values" in secret_input.text
         assert "sk-provider-secret" not in secret_input.text
-        assert asyncio.run(_counts(migrated_postgres_url)) == after_pending
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
 
         provider_policy = client.post(
             "/admin/keys/bulk-import/execute",
@@ -399,4 +470,4 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str) -> N
         )
         assert provider_policy.status_code == 400
         assert "allowed_providers" in provider_policy.text
-        assert asyncio.run(_counts(migrated_postgres_url)) == after_pending
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed

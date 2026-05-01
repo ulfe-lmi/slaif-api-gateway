@@ -41,6 +41,10 @@
       <span class="summary-label">Pending emails</span>
       <strong>{{ result.pending_email_delivery_count }}</strong>
     </article>
+    <article class="summary-card">
+      <span class="summary-label">Queued emails</span>
+      <strong>{{ result.queued_email_delivery_count }}</strong>
+    </article>
   </section>
 
   {% if result.plaintext_display_count %}
@@ -111,6 +115,9 @@
             <div>{{ row.email_delivery_mode }}</div>
             {% if row.email_delivery_id %}<div class="muted small">Delivery ID: {{ row.email_delivery_id }}</div>{% endif %}
             {% if row.email_delivery_status %}<div class="muted small">Status: {{ row.email_delivery_status }}</div>{% endif %}
+            {% if row.enqueue_status and row.enqueue_status != "not_applicable" %}<div class="muted small">Enqueue: {{ row.enqueue_status }}</div>{% endif %}
+            {% if row.celery_task_id %}<div class="muted small">Task ID: {{ row.celery_task_id }}</div>{% endif %}
+            {% if row.enqueue_error %}<div class="muted small">{{ row.enqueue_error }}</div>{% endif %}
             {% if row.one_time_secret_id %}<div class="muted small">One-time delivery secret ID: {{ row.one_time_secret_id }}</div>{% endif %}
           </td>
           <td>
