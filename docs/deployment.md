@@ -238,6 +238,9 @@ plaintext.
 - No CI/CD system is required or added by this repository packaging.
 - Native Anthropic API, Responses API, embeddings, files, images, and audio
   endpoints remain unsupported unless separately implemented and documented.
-- Bulk import/upload workflows are not implemented by this deployment slice.
+- Admin bulk/import/upload workflows are application features documented in
+  README.md, `docs/security-model.md`, and `docs/compatibility-matrix.md`; the
+  deployment packaging does not add separate asynchronous import/export job
+  infrastructure beyond the implemented app and Celery services.
 - Slack/PagerDuty-specific SDK integrations are not implemented; use the
   optional generic reconciliation webhook with an operator-managed bridge.

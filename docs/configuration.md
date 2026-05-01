@@ -249,7 +249,7 @@ key values, password hashes, and session tokens. Usage, audit, and email
 delivery pages show safe local metadata only and do not call providers or
 external services.
 
-Arbitrary old-key dashboard email resend actions, bulk key creation forms,
+Arbitrary old-key dashboard email resend actions, bulk key send-now execution,
 external FX refresh workflows, standalone
 email-delivery mutation pages beyond the existing send-now/enqueue actions,
 owner/institution/cohort delete or anonymization workflows, and usage/audit
