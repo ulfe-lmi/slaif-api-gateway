@@ -309,7 +309,9 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
         assert after_created["one_time_secrets"] == counts_after_login["one_time_secrets"] + 1
         assert after_created["email_deliveries"] == counts_after_login["email_deliveries"]
         assert after_created["audit_logs"] == counts_after_login["audit_logs"] + 1
-        key = asyncio.run(_created_keys(migrated_postgres_url))[0]
+        owner_keys = [key for key in asyncio.run(_created_keys(migrated_postgres_url)) if key.owner_id == owner_id]
+        assert len(owner_keys) == 1
+        key = owner_keys[0]
         assert key.cost_limit_eur == Decimal("10.00")
         assert key.allowed_models == ["gpt-test"]
         assert key.allowed_endpoints == ["/v1/chat/completions"]

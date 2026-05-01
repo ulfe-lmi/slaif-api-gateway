@@ -354,12 +354,12 @@ never recover or send old plaintext keys.
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Bulk key send-now execution is not implemented; bulk dashboard execution
   currently supports `none`, `pending`, and `enqueue`.
-  Standalone email-delivery mutation pages beyond the existing
-  one-time-secret-backed send-now/enqueue actions are not implemented.
+  Email-delivery mutation pages are limited to existing one-time-secret-backed
+  send-now/enqueue actions.
   Owner, institution, and cohort delete/anonymization workflows are not
   implemented yet. Usage and audit pages remain metadata-only except for
   audited CSV export controls.
-  external FX refresh workflows are future work.
+  External FX refresh workflows are future work.
 - Docker Compose packaging and an optional Nginx example are included for
   local/development service layout and reverse-proxy guidance. They are not a
   production certification; production operators must replace all secrets, run
