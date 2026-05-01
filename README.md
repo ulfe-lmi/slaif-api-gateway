@@ -21,6 +21,8 @@ verification scope, and known limitations, see
 
 For exact reviewer-facing behavior, see:
 
+- [`docs/releases/v0.1.0-rc.1.md`](docs/releases/v0.1.0-rc.1.md) for the
+  first RC-beta release-candidate notes and tagging checklist.
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.

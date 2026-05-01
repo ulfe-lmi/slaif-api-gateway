@@ -4,11 +4,10 @@ Date: 2026-05-01
 
 Status: RC-beta readiness candidate after verification fixes.
 
-Current verified `main` baseline before CI/docs branch:
-`8815fff7d23357ad5c767b90d6f2c23838084395`
+Current `main` baseline after the RC-beta CI/docs PR #120 merge:
+`dbc98374c47be4537cc5087bd008a36b76fc8f17`
 
-Recommendation: RC-beta ready for the implemented and documented scope once the
-readiness-fixes PR is merged.
+Recommendation: RC-beta ready for the implemented and documented scope.
 
 This report is not a production certification, compliance attestation, or
 penetration-test report. It records a release-candidate beta verification pass
@@ -152,5 +151,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   and incident response.
 - Keep CI green and review dependency/security updates before each tag.
 
-Final verdict: RC-beta ready: yes, for the implemented and documented scope,
-after the readiness-fixes PR is merged.
+Final verdict: RC-beta ready: yes, for the implemented and documented scope.
+
+Tag-specific release notes for the recommended first RC-beta tag are in
+[`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).
