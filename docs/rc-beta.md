@@ -80,7 +80,10 @@ migrations automatically.
 - Bulk synchronous `send-now` key import execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
-- Responses API is not implemented.
+- Responses API is not implemented in RC1. RC2 is planned to focus on limited
+  stateless `POST /v1/responses` support with explicit key/template policy,
+  allowed tool controls, pricing catalog support, and bounded-overrun cost
+  estimates. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
 - MFA is not implemented.
