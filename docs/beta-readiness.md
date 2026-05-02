@@ -116,7 +116,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Bulk key synchronous `send-now` execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
-- Responses API is not implemented.
+- Responses API is not implemented in RC1. RC2 is planned to focus on limited
+  stateless `POST /v1/responses` support with explicit key/template policy,
+  allowed tool controls, pricing catalog support, and bounded-overrun cost
+  estimates. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator
@@ -136,7 +139,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses, embeddings, files, image, or audio API support.
+- No Responses, embeddings, files, image, or audio API support in RC1.
 - No MFA or full RBAC.
 - No production certification or compliance claim.
 - No real provider calls or external email during verification.
@@ -145,8 +148,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - Add MFA and role-gated permissions if required for the deployment context.
 - Add formal security review or penetration testing before production claims.
-- Decide whether to implement bulk key send-now, Responses API, embeddings, and
-  native provider adapters as separate scoped projects.
+- Implement Responses API as a separate scoped RC2 project under
+  `responses-compatibility.md`; decide separately whether to implement bulk key
+  send-now, embeddings, and native provider adapters.
 - Build production runbooks for backups, monitoring, alerting, secret rotation,
   and incident response.
 - Keep CI green and review dependency/security updates before each tag.

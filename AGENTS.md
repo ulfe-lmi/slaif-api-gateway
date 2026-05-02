@@ -321,7 +321,8 @@ Minimum initial endpoints:
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings` if enabled in routing/pricing
-- `POST /v1/responses` may be implemented later, but document support level carefully
+- `POST /v1/responses` is the planned RC2-beta feature family, not current RC1
+  behavior unless a later implementation PR adds and tests it
 
 Rules:
 
@@ -332,6 +333,85 @@ Rules:
 - Do not require custom environment variables from clients.
 - The client-provided `Authorization: Bearer ...` token is a gateway-issued token, not the upstream provider token.
 - Unsupported large file/image/audio endpoints are out of scope unless explicitly implemented, priced, routed, and tested.
+
+### 4.1.1 Responses API / RC2-beta direction
+
+The next release-candidate beta feature family is Responses API support.
+
+RC2 goal:
+
+- Add `POST /v1/responses` support for OpenAI-compatible clients.
+- Preserve SLAIF's core promise: gateway keys, provider-secret isolation,
+  PostgreSQL hard quota/accounting, auditability, and no plaintext secret
+  leakage.
+- Support Responses tools only through explicit key/template policies and
+  bounded-overrun cost estimates.
+
+Default policy:
+
+- Responses API is disabled per key by default.
+- Admins may enable Responses API with a single checkbox.
+- Enabling Responses API must expose clear policy controls and cost-bound
+  previews.
+
+Stateful/background exclusions for RC2:
+
+- `background=true` is not supported.
+- `store=true` and stored response retrieval are not supported.
+- `previous_response_id` is not supported.
+- Conversation/provider-side state is not supported.
+- Response retrieval, delete, cancel, and input-item listing are not supported
+  unless explicitly implemented later with ownership checks.
+- MCP/connectors are not supported.
+
+Tool policy:
+
+- Do not blindly pass through Responses tools.
+- Supported tool types must be explicitly allowlisted per key or key template.
+- MCP is out of scope for RC2.
+- Function tools may be supported first.
+- Web search may be supported with `max_tool_calls` and cost-bound
+  calculations.
+- File search and code interpreter/container tools require explicit policy,
+  pricing, and audit treatment.
+- Image generation, computer use, external MCP/connectors, shell tools, and
+  hosted patch/application tools are out of scope unless explicitly approved
+  later.
+
+Bounded overrun policy:
+
+- With Responses tools, the final request that starts under a key limit may
+  exceed the remaining limit.
+- This is acceptable only if the maximum possible single-request overrun is
+  bounded, visible to admins, and controlled by policy.
+- SLAIF must calculate and display informative upper bounds before admins enable
+  a Responses/tool policy.
+- After an overrun, PostgreSQL accounting must block future requests until
+  limits are restored or reset.
+
+Key templates:
+
+- Key templates are required for usable Responses policies.
+- Templates should be snapshot/versioned.
+- Keys created from a template should record template/revision metadata.
+- Editing a template must not silently mutate existing keys unless a separate
+  audited "apply update" workflow is implemented.
+
+Pricing catalog:
+
+- OpenRouter pricing may be fetched from OpenRouter model metadata where
+  available.
+- OpenAI pricing should be curated/manual or imported through a confirmed
+  preview workflow unless a stable official pricing API is implemented.
+- Pricing refreshes must be previewed, confirmed, and audited.
+- Pricing refresh must never silently replace production pricing rows.
+
+Testing:
+
+- Responses support requires unit tests, PostgreSQL integration tests, mocked
+  upstream E2E with the official OpenAI Python client, streaming tests if
+  streaming is implemented, provider adapter tests, dashboard policy tests, and
+  browser smoke tests for policy UI.
 
 ### 4.2 Gateway key service
 

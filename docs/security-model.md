@@ -97,6 +97,30 @@ operator reconciliation.
 
 Prompt and completion content are not stored by default.
 
+## Planned Responses API Security Model
+
+Responses API is not implemented in RC1. The planned RC2 security model is
+default-off and policy-first:
+
+- Responses must be explicitly enabled per key or key template.
+- Endpoint, model, provider, and tool allowlists all apply.
+- Supported tool types must be explicitly allowed; tool JSON is not blind
+  passthrough.
+- MCP/connectors are excluded from RC2.
+- `background`, `store`, `previous_response_id`, conversation/provider-side
+  state, retrieval, delete, cancel, and input-item listing are excluded until
+  ownership mapping, quota, accounting, and audit behavior are implemented.
+- Tool-enabled policies require bounded-overrun cost calculations that admins
+  can inspect before enabling the policy.
+- Pricing catalog refreshes must be previewed, confirmed, and audited; refreshes
+  must never silently replace production pricing rows.
+- Provider secrets remain server-side and are never accepted from Responses
+  request bodies or dashboard policy forms.
+- Plaintext gateway key rules are unchanged.
+
+The central implementation contract is
+[`responses-compatibility.md`](responses-compatibility.md).
+
 ## Redis Rate Limiting
 
 When enabled, Redis enforces request, estimated-token, and active-concurrency
@@ -366,7 +390,8 @@ never recover or send old plaintext keys.
   migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
   or allowlisted.
 - Native Anthropic API support is not implemented.
-- Responses API and embeddings API are not implemented.
+- Responses API and embeddings API are not implemented. Responses API is the
+  planned RC2 feature family under `docs/responses-compatibility.md`.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.

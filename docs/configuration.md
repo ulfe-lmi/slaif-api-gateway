@@ -142,6 +142,29 @@ forms do not accept provider key values or call upstream providers.
 These caps protect hard quota reservation by bounding worst-case usage before
 upstream forwarding.
 
+## Planned Responses API Configuration
+
+Responses API settings are planned for RC2 and are not implemented unless a
+future PR adds matching code, tests, and `.env.example` entries. Do not set these
+as production controls yet.
+
+Possible future setting names:
+
+- `ENABLE_RESPONSES_API=false`
+- `RESPONSES_DEFAULT_ENABLED_FOR_KEYS=false`
+- `RESPONSES_MAX_TOOL_CALLS_DEFAULT`
+- `RESPONSES_ALLOWED_TOOLS_DEFAULT`
+- `RESPONSES_MAX_SINGLE_REQUEST_COST_EUR_DEFAULT`
+- `PRICING_CATALOG_FETCH_ENABLED=false`
+- `OPENROUTER_PRICE_REFRESH_ENABLED=false`
+
+The intended behavior is documented in
+[`responses-compatibility.md`](responses-compatibility.md),
+[`key-templates.md`](key-templates.md), and
+[`pricing-catalog.md`](pricing-catalog.md). Unimplemented settings are not added
+to `.env.example` so operators do not mistake roadmap names for active runtime
+controls.
+
 ## Metrics, Readiness, And Logging
 
 - `/healthz` is process liveness and can be public-ish.

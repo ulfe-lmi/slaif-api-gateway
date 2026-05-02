@@ -1,6 +1,9 @@
 # Provider Forwarding Contract
 
-This document describes exactly how implemented `/v1/chat/completions` requests are forwarded to upstream providers. It is intended for code reviewers and operators verifying implementation claims.
+This document describes exactly how implemented `/v1/chat/completions` requests
+are forwarded to upstream providers. It also records the planned forwarding
+constraints for future Responses API work. It is intended for code reviewers and
+operators verifying implementation claims.
 
 ## Provider Adapters
 
@@ -85,6 +88,37 @@ Known limitations:
 - The gateway does not fetch live OpenRouter billing or pricing.
 - Native provider-specific APIs behind OpenRouter are not exposed.
 - Provider-specific request fields are forwarded only as ordinary JSON body fields; provider-specific headers are not generally forwarded.
+
+## Planned Responses Forwarding
+
+Current Chat Completions forwarding remains unchanged. `POST /v1/responses` is
+not implemented on current `main`.
+
+Future Responses forwarding must follow the same provider-secret boundary:
+
+- client `Authorization` is never forwarded upstream;
+- provider authorization is substituted server-side from configured provider
+  secrets or provider config env-var names;
+- provider key values are never accepted from dashboard forms, request bodies,
+  client headers, or import files;
+- diagnostics are bounded and sanitized.
+
+Responses-specific rules for RC2:
+
+- tool fields are not blind passthrough;
+- supported tool types must be explicitly allowlisted by key or key template;
+- MCP/connectors are excluded;
+- `background`, `store`, `previous_response_id`, and `conversation` are rejected
+  before provider forwarding;
+- response retrieval, cancel, delete, and input-item listing require explicit
+  provider response ownership mapping before they can be implemented;
+- provider response IDs and tool diagnostics must be treated as metadata and
+  sanitized before storage or display.
+
+OpenRouter's Responses API is beta and stateless. OpenAI's Responses API exposes
+stateful/background/storage and hosted-tool surfaces. SLAIF must fail closed on
+those differences until the policy, pricing, ownership, and accounting contracts
+are implemented and tested.
 
 ## Header Contract
 

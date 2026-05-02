@@ -24,6 +24,11 @@ For exact reviewer-facing behavior, see:
 - [`docs/releases/v0.1.0-rc.1.md`](docs/releases/v0.1.0-rc.1.md) for the
   first RC-beta release-candidate notes and tagging checklist.
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
+- [`docs/responses-compatibility.md`](docs/responses-compatibility.md) for the
+  planned RC2 Responses API contract.
+- [`docs/key-templates.md`](docs/key-templates.md) and
+  [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for planned RC2 key
+  template and pricing-catalog direction.
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
 - [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
@@ -53,6 +58,13 @@ Implemented:
 
 Not implemented yet:
 
+- Responses API. RC2 is planned to focus on limited stateless
+  `POST /v1/responses` support with default-off key policy, key templates,
+  pricing catalog support, bounded-overrun cost estimates, and explicit tool
+  controls. MCP/connectors, background mode, provider-side storage,
+  `previous_response_id`, conversations, response retrieval/cancel/delete,
+  image generation, and computer use remain excluded from the planned first
+  Responses slice.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the

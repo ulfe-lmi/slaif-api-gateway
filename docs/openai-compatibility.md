@@ -17,7 +17,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | --- | --- | --- | --- | --- | --- |
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
-| `POST /v1/responses` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
+| `POST /v1/responses` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; planned RC2 scope is limited stateless support under `docs/responses-compatibility.md` |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -25,6 +25,30 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | Native Anthropic API | Not implemented | Not applicable | Not implemented | Not implemented | Anthropic-family model names are covered only through OpenRouter routes |
 
 Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error handlers. The gateway does not claim 100% OpenAI platform compatibility outside the rows marked implemented.
+
+## Planned Responses API Scope
+
+`POST /v1/responses` is not implemented in RC1. Responses API support is the
+planned RC2 feature family and is constrained by
+[`responses-compatibility.md`](responses-compatibility.md).
+
+Planned RC2 support is intentionally narrow:
+
+- stateless `POST /v1/responses` first;
+- default-off per key;
+- explicit endpoint, model, provider, and tool policy;
+- bounded-overrun cost estimates before tool policies are enabled;
+- no `background=true`;
+- no `store=true` or provider-side response retrieval;
+- no `previous_response_id`;
+- no `conversation`/provider-side state;
+- no MCP/connectors;
+- no response delete/cancel/retrieve/list input items initially.
+
+Responses tools must not be blind passthrough. Function tools are the safest
+first candidate, web search requires explicit `max_tool_calls` and cost bounds,
+and file search/code interpreter require separate pricing, ownership, and audit
+treatment before support is claimed.
 
 ## Model Catalog Visibility
 
@@ -148,7 +172,9 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 
 ## What Is Not Implemented
 
-- Responses API.
+- Responses API in RC1. It is planned for RC2 under
+  `docs/responses-compatibility.md`, with stateful/background/provider-side
+  storage features and MCP excluded from the initial scope.
 - Embeddings API.
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.
