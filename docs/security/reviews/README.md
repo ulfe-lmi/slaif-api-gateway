@@ -6,7 +6,7 @@ These reviews are preserved for transparency. They are not formal security certi
 
 Older reviews may contain findings that were later remediated or superseded. See [`remediation-matrix.md`](remediation-matrix.md) for the current status of major findings and the PRs/checks associated with remediation.
 
-Review 5.0 should be treated as the latest implementation-review baseline until superseded by a later archived review.
+Review 6.0 / RC1 should be treated as the latest external review baseline until superseded by a later archived review.
 
 The authoritative implementation contract remains the repository code and these project docs:
 
@@ -16,6 +16,8 @@ The authoritative implementation contract remains the repository code and these 
 - [`../../database-schema.md`](../../database-schema.md)
 - [`../../security-model.md`](../../security-model.md)
 - [`../../configuration.md`](../../configuration.md)
+- [`../../rc-beta.md`](../../rc-beta.md)
+- [`../../beta-readiness.md`](../../beta-readiness.md)
 
 ## Review Files
 
@@ -24,7 +26,8 @@ The authoritative implementation contract remains the repository code and these 
 | [`2026-04-review-4.0.md`](2026-04-review-4.0.md) | Superseded | Initial mid-development review that identified major compatibility, streaming accounting, Redis concurrency, CLI secret-output, redaction, and operational-readiness gaps. |
 | [`2026-04-review-4.1.md`](2026-04-review-4.1.md) | Superseded | Follow-up review after early remediation work; several central blockers remained at that point. |
 | [`2026-04-review-4.2.md`](2026-04-review-4.2.md) | Superseded | Review baseline before the broader admin dashboard mutation surface and later documentation updates. It still identifies historical follow-up work. |
-| [`2026-04-review-5.0.md`](2026-04-review-5.0.md) | Current baseline | Latest review baseline for the current implemented scope. It grades the project as serious pre-production infrastructure but not production-release-ready. |
+| [`2026-04-review-5.0.md`](2026-04-review-5.0.md) | Superseded | Review baseline for the implemented scope before the RC1 packaging, CI, release, and Responses RC2 planning updates. It grades the project as serious pre-production infrastructure but not production-release-ready. |
+| [`2026-05-review-6.0-rc1.md`](2026-05-review-6.0-rc1.md) | Latest RC1 review baseline | Latest external RC1 review baseline. It classifies the project as credible RC-beta software for the implemented and documented scope, while identifying remaining production-readiness work. |
 
 ## Reading Notes
 

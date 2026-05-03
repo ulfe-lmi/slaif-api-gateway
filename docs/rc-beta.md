@@ -11,6 +11,12 @@ compliance attestation, or penetration-test report.
 Tag-specific release notes for the first release candidate are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).
 
+The latest external RC1 review baseline is archived at
+[`security/reviews/2026-05-review-6.0-rc1.md`](security/reviews/2026-05-review-6.0-rc1.md).
+It supports RC-beta readiness for the implemented scope while keeping remaining
+production-readiness work explicit, including non-message input estimation,
+property/invariant tests, and production runbooks.
+
 ## Implemented Scope
 
 - OpenAI-compatible `GET /v1/models`.
