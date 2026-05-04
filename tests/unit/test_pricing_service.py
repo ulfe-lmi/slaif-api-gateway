@@ -323,6 +323,44 @@ async def test_cost_estimate_calculates_native_and_eur_totals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cost_estimate_uses_total_policy_input_tokens_with_non_message_fields() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-4.1-mini",
+                currency="EUR",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+            )
+        ],
+    )
+    policy = ChatCompletionPolicyResult(
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [{"role": "user", "content": "hi"}],
+            "response_format": {"type": "json_schema", "json_schema": {"schema": {}}},
+        },
+        requested_output_tokens=10,
+        effective_output_tokens=10,
+        estimated_input_tokens=1500,
+        estimated_message_input_tokens=25,
+        estimated_non_message_input_tokens=1475,
+        estimated_non_message_input_bytes=1475,
+        estimated_non_message_input_fields=("response_format",),
+        injected_default_output_tokens=False,
+    )
+
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(requested_model="classroom-cheap", resolved_model="gpt-4.1-mini"),
+        policy=policy,
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.estimated_input_tokens == 1500
+    assert estimate.estimated_input_cost_native == Decimal("0.001500000000")
+
+
+@pytest.mark.asyncio
 async def test_cost_estimate_default_endpoint_uses_chat_completions_pricing_row() -> None:
     service = _service(pricing_rows=[_pricing_rule(currency="EUR")])
 

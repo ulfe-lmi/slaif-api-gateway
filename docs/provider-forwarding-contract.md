@@ -146,24 +146,33 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
 | `stream_options` | Preserved, but `include_usage` forced to `true` for streaming | Required for reliable streaming accounting |
 | `n` | Preserved only when omitted or exactly `1`; rejected for any other value | Multi-choice accounting is not implemented, so `n > 1` is rejected before provider forwarding |
-| `tools` / `tool_choice` | Preserved | Ordinary OpenAI Chat Completions fields |
-| `response_format` | Preserved | Ordinary OpenAI Chat Completions field |
+| `tools` / `tool_choice` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions fields can affect provider context size |
+| `functions` / `function_call` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
+| `response_format` | Preserved when accepted; serialized JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
 | `metadata` | Preserved to provider; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field |
 | `user` | Preserved | Ordinary OpenAI Chat Completions field |
 | `temperature` / `top_p` | Preserved | Ordinary OpenAI Chat Completions fields |
-| Unknown ordinary JSON fields | Preserved | Avoid silently dropping OpenAI SDK/provider-compatible fields |
+| Unknown ordinary JSON fields | Preserved when accepted; unknown object/list fields are included in input/cost pre-reservation | Avoid silently dropping OpenAI SDK/provider-compatible fields without underestimating forwarded payload size |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
 `n > 1` is a deliberate compatibility limitation, not a forwarding transformation. Supporting it later requires choice-aware reservation, cost estimation, and final usage validation before the gateway can safely forward multi-choice requests.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 
+Large serialized non-message provider-forwarded fields can be rejected by the
+request policy before provider forwarding. The estimator is deterministic,
+dependency-free, and conservative: it counts message input plus canonical JSON
+byte-size upper bounds for forwarded non-message object/list fields. It may
+over-reserve, but it must not under-reserve known large tool/function/schema
+surfaces. Actual provider usage still finalizes accounting when available.
+
 ## Accounting Contract
 
 For `POST /v1/chat/completions`:
 
 1. Authentication and endpoint policy run before provider work.
-2. Request policy validates shape, estimates input tokens, and bounds maximum output.
+2. Request policy validates shape, estimates input tokens including serialized
+   non-message provider-forwarded object/list fields, and bounds maximum output.
 3. Redis operational rate limiting runs when enabled.
 4. Route resolution selects provider and upstream model.
 5. Pricing/FX lookup estimates maximum cost.

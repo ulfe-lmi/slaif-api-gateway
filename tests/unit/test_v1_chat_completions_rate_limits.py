@@ -366,3 +366,38 @@ def test_rate_limit_estimated_tokens_combines_input_and_effective_output(monkeyp
 
     assert response.status_code == 200
     assert rate_state["reserve_calls"][0]["estimated_tokens"] >= 20
+
+
+def test_rate_limit_estimated_tokens_include_non_message_fields(monkeypatch) -> None:
+    app = create_app(
+        Settings(
+            OPENAI_UPSTREAM_API_KEY="unused",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+            HARD_MAX_INPUT_TOKENS=5000,
+        )
+    )
+    _wire_pipeline(monkeypatch, app, auth=_auth({"tokens_per_minute": 10000}))
+    rate_state = _wire_rate_service(monkeypatch)
+
+    small_response = TestClient(app).post("/v1/chat/completions", json=_chat_request(max_tokens=20))
+    large_response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=_chat_request(
+            max_tokens=20,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string", "description": "x" * 600}},
+                    },
+                },
+            },
+        ),
+    )
+
+    assert small_response.status_code == 200
+    assert large_response.status_code == 200
+    assert rate_state["reserve_calls"][1]["estimated_tokens"] > rate_state["reserve_calls"][0]["estimated_tokens"]

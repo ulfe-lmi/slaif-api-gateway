@@ -138,6 +138,10 @@ forms do not accept provider key values or call upstream providers.
   token controls.
 - `HARD_MAX_OUTPUT_TOKENS` rejects requests above the configured maximum output.
 - `HARD_MAX_INPUT_TOKENS` rejects requests whose estimated input is too large.
+  For Chat Completions, this estimate includes message content plus
+  conservative serialized-size estimates for provider-forwarded non-message
+  object/list fields such as `tools`, `functions`, and `response_format` JSON
+  schemas.
 
 These caps protect hard quota reservation by bounding worst-case usage before
 upstream forwarding.

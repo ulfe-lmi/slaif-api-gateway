@@ -558,3 +558,71 @@ def test_openai_python_client_rejects_multi_choice_chat_before_upstream(
     )
     assert reservation_count == 0
     assert usage_ledger_count == 0
+
+
+@pytest.mark.e2e
+def test_chat_completions_rejects_oversized_response_schema_before_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    monkeypatch.setenv("HARD_MAX_INPUT_TOKENS", "100")
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    get_settings.cache_clear()
+    created = asyncio.run(_create_test_data(database_url))
+
+    port = _free_port()
+    app = create_app(get_settings())
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    500,
+                    json={"error": {"message": "upstream should not be called"}},
+                )
+            )
+
+            response = httpx.post(
+                f"http://127.0.0.1:{port}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {created.plaintext_gateway_key}"},
+                json={
+                    "model": TEST_MODEL,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "answer",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "answer": {
+                                        "type": "string",
+                                        "description": "oversized schema marker" + ("x" * 300),
+                                    }
+                                },
+                            },
+                        },
+                    },
+                },
+                timeout=10,
+            )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["error"]["code"] == "input_token_limit_exceeded"
+    assert body["error"]["param"] == "request"
+    assert "oversized schema marker" not in body["error"]["message"]
+    assert len(upstream_route.calls) == 0
+
+    reservation_count, usage_ledger_count = asyncio.run(
+        _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
+    )
+    assert reservation_count == 0
+    assert usage_ledger_count == 0

@@ -12,14 +12,15 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 | Files/images/audio endpoints | Not implemented | None | No file/image/audio storage, pricing, or forwarding | Error handling only |
 | Native Anthropic API | Not implemented | None | Anthropic-family model names may be routed through OpenRouter only | Route/OpenRouter coverage |
 | `messages` | Preserved | OpenAI, OpenRouter | Required and validated as a list of objects with string `role`; not stored in ledger | Request policy and forwarding tests |
-| `tools` / `tool_choice` | Preserved | OpenAI, OpenRouter | Forwarded as ordinary JSON fields | Provider and route forwarding tests |
-| `response_format` | Preserved | OpenAI, OpenRouter | Forwarded as ordinary JSON field | Provider and route forwarding tests |
+| `tools` / `tool_choice` | Preserved when accepted | OpenAI, OpenRouter | Forwarded as ordinary JSON fields; serialized object/list payloads are included in Chat Completions input/cost pre-reservation and can be rejected before provider calls when oversized | Estimator, request policy, provider no-forwarding, cost/quota, PostgreSQL integration, and route forwarding tests |
+| `functions` / `function_call` | Preserved when accepted | OpenAI, OpenRouter | Legacy function fields are treated like other forwarded non-message payloads for conservative input/cost pre-reservation | Estimator and request policy tests |
+| `response_format` | Preserved when accepted | OpenAI, OpenRouter | Forwarded as ordinary JSON field; JSON schemas are included in Chat Completions input/cost pre-reservation and can be rejected before provider calls when oversized | Estimator, request policy, provider no-forwarding, cost/quota, PostgreSQL integration, and route forwarding tests |
 | `stream_options.include_usage` | Forced to `true` for streaming | OpenAI, OpenRouter | Other `stream_options` keys are preserved | Unit, integration, E2E streaming tests |
 | `temperature` / `top_p` / `stop` | Preserved | OpenAI, OpenRouter | Forwarded as ordinary JSON fields | Request passthrough tests |
 | `max_tokens` / `max_completion_tokens` | Validated/preserved or defaulted | OpenAI, OpenRouter | Conflicting values rejected; absent values inject `max_completion_tokens` | Request policy tests |
 | `n` | Limited | OpenAI, OpenRouter | Omitted or `1` is allowed and preserved; `n > 1` and invalid values are rejected before rate limiting, routing, pricing, quota reservation, or forwarding until multi-choice accounting is implemented | Request policy, route policy, provider adapter, and E2E tests |
 | `metadata` / `user` | Preserved upstream | OpenAI, OpenRouter | Not stored wholesale in usage ledger | Request passthrough tests |
-| Unknown ordinary JSON fields | Preserved | OpenAI, OpenRouter | The gateway avoids silent dropping; explicit policy errors still apply | Request passthrough tests |
+| Unknown ordinary JSON fields | Preserved when accepted | OpenAI, OpenRouter | The gateway avoids silent dropping; unknown object/list fields are included in input/cost pre-reservation and explicit policy errors still apply | Estimator and request passthrough tests |
 | OpenAI non-streaming | Implemented | OpenAI | Uses OpenAI provider key and JSON Accept | Provider adapter tests |
 | OpenAI streaming | Implemented | OpenAI | SSE parse/forward, usage chunk parse, error event handling | Provider streaming tests |
 | OpenRouter non-streaming | Implemented | OpenRouter | Parses usage, request IDs, and provider-reported cost metadata when present | Provider adapter tests |

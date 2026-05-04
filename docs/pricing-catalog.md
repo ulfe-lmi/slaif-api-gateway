@@ -13,6 +13,14 @@ but runtime quota cannot silently depend on a live pricing API.
 Unknown pricing or unknown required FX conversion must continue to fail closed
 for cost-limited keys.
 
+For implemented Chat Completions, the local cost estimate uses the request
+policy's total estimated input tokens. That total includes message input plus
+conservative serialized estimates for provider-forwarded non-message object/list
+fields such as `tools`, legacy `functions`, `response_format` JSON schemas, and
+unknown passthrough objects/lists. This can over-reserve, but prevents large
+tool/schema payloads from passing cost checks with a messages-only estimate.
+Successful accounting still finalizes from actual provider usage when available.
+
 ## OpenRouter Price Refresh
 
 OpenRouter publishes model metadata that includes a `pricing` object with
