@@ -5,6 +5,7 @@ from slaif_gateway.services.policy_errors import (
     InvalidChatMessagesError,
     InvalidChoiceCountError,
     InvalidOutputTokenLimitError,
+    InvalidRequestBodyError,
     OutputTokenLimitExceededError,
 )
 
@@ -16,6 +17,7 @@ def test_request_policy_errors_have_safe_metadata() -> None:
         InputTokenLimitExceededError("too many", param="messages"),
         AmbiguousOutputTokenLimitError("ambiguous", param="max_completion_tokens"),
         InvalidChatMessagesError("bad messages", param="messages"),
+        InvalidRequestBodyError("bad body", param="request"),
         InvalidChoiceCountError("bad n", param="n"),
     ]
 

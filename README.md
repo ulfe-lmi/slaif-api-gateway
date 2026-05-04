@@ -114,6 +114,11 @@ the gateway explicitly rejects them. For streaming requests, the gateway forward
 `stream_options.include_usage=true` so final provider usage can be captured for
 accounting.
 
+Chat Completions token/cost pre-reservation includes conservative serialized
+estimates for provider-forwarded non-message fields such as `tools` and
+`response_format` JSON schemas, so very large schemas may be rejected before
+provider calls; actual provider usage still finalizes accounting.
+
 Chat Completions `n` is preserved when omitted or exactly `1`. `n > 1` is
 intentionally rejected until multi-choice quota reservation and cost accounting
 are implemented; it is not silently clamped or dropped.

@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Mapping
 from typing import Any
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.services.input_token_estimation import estimate_chat_completion_input_tokens
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidChatMessagesError,
     InvalidChoiceCountError,
     InvalidOutputTokenLimitError,
+    InvalidRequestBodyError,
     InvalidStreamOptionsError,
     MULTI_CHOICE_UNSUPPORTED_MESSAGE,
     OutputTokenLimitExceededError,
@@ -37,21 +38,35 @@ class ChatCompletionRequestPolicy:
         )
         self._force_streaming_usage_metadata(effective_body)
 
-        estimated_input_tokens = self._estimate_input_tokens(messages)
-        if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
+        try:
+            input_estimate = estimate_chat_completion_input_tokens(
+                effective_body,
+                messages=messages,
+            )
+        except ValueError as exc:
+            raise InvalidRequestBodyError(
+                "Request body contains a field that is not JSON-serializable.",
+                param="request",
+            ) from exc
+
+        if input_estimate.total_input_tokens_estimate > self._settings.HARD_MAX_INPUT_TOKENS:
             raise InputTokenLimitExceededError(
                 (
-                    "Estimated input tokens exceed the configured hard maximum "
+                    "Estimated input size exceeds the configured hard maximum "
                     f"({self._settings.HARD_MAX_INPUT_TOKENS})."
                 ),
-                param="messages",
+                param="request",
             )
 
         return ChatCompletionPolicyResult(
             effective_body=effective_body,
             requested_output_tokens=requested_output_tokens,
             effective_output_tokens=effective_output_tokens,
-            estimated_input_tokens=estimated_input_tokens,
+            estimated_input_tokens=input_estimate.total_input_tokens_estimate,
+            estimated_message_input_tokens=input_estimate.message_input_tokens_estimate,
+            estimated_non_message_input_tokens=input_estimate.non_message_input_tokens_estimate,
+            estimated_non_message_input_bytes=input_estimate.counted_bytes,
+            estimated_non_message_input_fields=input_estimate.counted_fields,
             injected_default_output_tokens=injected_default,
         )
 
@@ -173,44 +188,3 @@ class ChatCompletionRequestPolicy:
             validated.append(message)
 
         return validated
-
-    def _estimate_input_tokens(self, messages: list[Mapping[str, Any]]) -> int:
-        # Conservative guardrail estimator only; this is not provider billing tokenization.
-        # We over-estimate by counting UTF-8 bytes and converting to tokens with a 3-byte bucket
-        # plus a fixed overhead per message.
-        total_tokens = 0
-
-        for message in messages:
-            total_tokens += 16
-            for value in message.values():
-                total_tokens += self._estimate_value_tokens(value)
-
-        return total_tokens
-
-    def _estimate_value_tokens(self, value: Any) -> int:
-        if value is None:
-            return 0
-
-        if isinstance(value, str):
-            return self._estimate_text_tokens(value)
-
-        if isinstance(value, Mapping):
-            if "text" in value and isinstance(value.get("text"), str):
-                return self._estimate_text_tokens(value["text"]) + 4
-            return self._estimate_text_tokens(self._safe_json_dumps(value))
-
-        if isinstance(value, list):
-            subtotal = 0
-            for item in value:
-                subtotal += self._estimate_value_tokens(item)
-            return subtotal + 4
-
-        return self._estimate_text_tokens(self._safe_json_dumps(value))
-
-    def _estimate_text_tokens(self, text: str) -> int:
-        byte_len = len(text.encode("utf-8"))
-        return max(1, (byte_len + 2) // 3)
-
-    @staticmethod
-    def _safe_json_dumps(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

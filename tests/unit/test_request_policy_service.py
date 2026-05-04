@@ -12,6 +12,7 @@ from slaif_gateway.services.policy_errors import (
     InputTokenLimitExceededError,
     InvalidOutputTokenLimitError,
     InvalidChoiceCountError,
+    InvalidRequestBodyError,
     InvalidStreamOptionsError,
     OutputTokenLimitExceededError,
 )
@@ -154,6 +155,72 @@ def test_input_messages_over_hard_max_fails() -> None:
         )
 
 
+def test_large_tools_schema_over_hard_max_fails_without_raw_payload() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=80))
+    raw_marker = "raw tool schema marker"
+
+    with pytest.raises(InputTokenLimitExceededError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": raw_marker + ("x" * 200),
+                                    }
+                                },
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+    assert exc_info.value.param == "request"
+    assert "Estimated input size exceeds" in exc_info.value.safe_message
+    assert raw_marker not in exc_info.value.safe_message
+
+
+def test_large_response_format_schema_over_hard_max_fails_without_raw_payload() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=80))
+    raw_marker = "raw response schema marker"
+
+    with pytest.raises(InputTokenLimitExceededError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "answer": {
+                                    "type": "string",
+                                    "description": raw_marker + ("x" * 200),
+                                }
+                            },
+                        },
+                    },
+                },
+            }
+        )
+
+    assert exc_info.value.param == "request"
+    assert "Estimated input size exceeds" in exc_info.value.safe_message
+    assert raw_marker not in exc_info.value.safe_message
+
+
 def test_input_estimate_handles_plain_text_messages() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
 
@@ -203,8 +270,27 @@ def test_service_does_not_mutate_original_request() -> None:
     assert "max_completion_tokens" not in original
 
 
+def test_non_serializable_extra_field_is_rejected_without_mutating_original() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
+    original = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "x_bad": {"not_json": object()},
+    }
+    body = copy.deepcopy(original)
+
+    with pytest.raises(InvalidRequestBodyError) as exc_info:
+        policy.apply(body)
+
+    assert exc_info.value.param == "request"
+    assert "not JSON-serializable" in exc_info.value.safe_message
+    assert body.keys() == original.keys()
+    assert body["model"] == original["model"]
+    assert body["messages"] == original["messages"]
+
+
 def test_unrelated_fields_are_preserved() -> None:
-    policy = ChatCompletionRequestPolicy(_settings())
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
 
     result = policy.apply(
         {
@@ -251,6 +337,14 @@ def test_unrelated_fields_are_preserved() -> None:
     assert result.effective_body["store"] is False
     assert result.effective_body["prediction"]["content"] == "hello"
     assert result.effective_body["service_tier"] == "auto"
+    assert result.estimated_non_message_input_tokens > 0
+    assert set(result.estimated_non_message_input_fields) >= {
+        "metadata",
+        "modalities",
+        "prediction",
+        "response_format",
+        "tools",
+    }
 
 
 def test_choice_count_omitted_is_allowed() -> None:
@@ -313,7 +407,7 @@ def test_chat_completion_request_model_preserves_extra_openai_fields() -> None:
 
 
 def test_streaming_policy_forces_include_usage_without_mutating_original() -> None:
-    policy = ChatCompletionRequestPolicy(_settings())
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
     original = {
         "model": "gpt-4.1-mini",
         "messages": [{"role": "user", "content": "hi"}],
@@ -331,7 +425,7 @@ def test_streaming_policy_forces_include_usage_without_mutating_original() -> No
 
 
 def test_streaming_policy_injects_include_usage_when_missing() -> None:
-    policy = ChatCompletionRequestPolicy(_settings())
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
 
     result = policy.apply(
         {

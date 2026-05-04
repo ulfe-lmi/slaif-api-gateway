@@ -97,6 +97,25 @@ operator reconciliation.
 
 Prompt and completion content are not stored by default.
 
+## Chat Completions Non-Message Input Estimation
+
+Chat Completions request policy estimates input tokens before Redis rate
+limiting, route resolution, pricing lookup, PostgreSQL quota reservation, or
+provider forwarding. The estimate includes message content plus conservative
+canonical JSON byte-size upper bounds for serialized non-message object/list
+fields that are forwarded to providers, including `tools`, `functions`,
+object-shaped `tool_choice` / `function_call`, `response_format` JSON schemas,
+`stream_options`, and unknown object/list passthrough fields.
+
+Large tool/function/schema payloads may be rejected before provider calls. The
+estimator stores and exposes only safe count metadata such as token estimate,
+counted field names, and counted bytes. It does not store prompts, completions,
+raw request bodies, raw response bodies, raw tool/schema payloads, provider
+keys, plaintext gateway keys, token hashes, encrypted payloads, nonces,
+password hashes, session tokens, or email bodies. Successful requests still
+finalize accounting from actual provider usage when available. This is Chat
+Completions hardening only; it does not implement Responses API behavior.
+
 ## Planned Responses API Security Model
 
 Responses API is not implemented in RC1. The planned RC2 security model is

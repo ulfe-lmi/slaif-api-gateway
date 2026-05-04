@@ -40,6 +40,10 @@ class InvalidChatMessagesError(RequestPolicyError):
     error_code = "invalid_messages"
 
 
+class InvalidRequestBodyError(RequestPolicyError):
+    error_code = "invalid_request_body"
+
+
 class InvalidStreamOptionsError(RequestPolicyError):
     error_code = "invalid_stream_options"
 

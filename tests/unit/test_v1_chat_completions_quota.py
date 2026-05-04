@@ -7,6 +7,7 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
+from slaif_gateway.config import Settings
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
@@ -239,6 +240,180 @@ def test_quota_exceeded_returns_openai_error_before_501(monkeypatch) -> None:
     assert response.json()["error"]["code"] == "quota_limit_exceeded"
     assert reserve_calls == ["classroom-cheap"]
     assert release_calls == []
+
+
+def test_quota_reservation_uses_total_input_estimate_including_response_format(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app(Settings(HARD_MAX_INPUT_TOKENS=5000))
+    _wire_auth_and_db(monkeypatch, app)
+    seen_policy_estimates: list[tuple[int, int, int]] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, authenticated_key)
+        return _route_result(requested_model)
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, endpoint, at)
+        return ChatCostEstimate(
+            provider="openai",
+            requested_model="classroom-cheap",
+            resolved_model="gpt-4.1-mini",
+            native_currency="EUR",
+            estimated_input_tokens=policy.estimated_input_tokens,
+            estimated_output_tokens=policy.effective_output_tokens,
+            estimated_input_cost_native=Decimal("0.001"),
+            estimated_output_cost_native=Decimal("0.002"),
+            estimated_total_cost_native=Decimal("0.003"),
+            estimated_total_cost_eur=Decimal("0.003"),
+            pricing_rule_id=None,
+            fx_rate_id=None,
+        )
+
+    async def _fake_reserve(
+        self,
+        *,
+        authenticated_key,
+        route,
+        policy,
+        cost_estimate,
+        request_id,
+        now=None,
+    ):
+        _ = (self, authenticated_key, route, request_id, now)
+        seen_policy_estimates.append(
+            (
+                policy.estimated_message_input_tokens,
+                policy.estimated_non_message_input_tokens,
+                cost_estimate.estimated_input_tokens,
+            )
+        )
+        return QuotaReservationResult(
+            reservation_id=uuid.uuid4(),
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            reserved_cost_eur=Decimal("0.003"),
+            reserved_tokens=policy.estimated_input_tokens + policy.effective_output_tokens,
+            status="pending",
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    _wire_successful_forwarding(monkeypatch)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            **_chat_request(),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string", "description": "x" * 600}},
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    message_tokens, non_message_tokens, priced_input_tokens = seen_policy_estimates[0]
+    assert message_tokens > 0
+    assert non_message_tokens > 0
+    assert priced_input_tokens == message_tokens + non_message_tokens
+
+
+def test_cost_limit_rejection_uses_non_message_estimate_before_provider_call(monkeypatch) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app(Settings(HARD_MAX_INPUT_TOKENS=5000))
+    _wire_auth_and_db(monkeypatch, app)
+    provider_calls: list[str] = []
+    quota_calls: list[int] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, authenticated_key)
+        return _route_result(requested_model)
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, endpoint, at)
+        assert policy.estimated_non_message_input_tokens > policy.estimated_message_input_tokens
+        return ChatCostEstimate(
+            provider="openai",
+            requested_model="classroom-cheap",
+            resolved_model="gpt-4.1-mini",
+            native_currency="EUR",
+            estimated_input_tokens=policy.estimated_input_tokens,
+            estimated_output_tokens=policy.effective_output_tokens,
+            estimated_input_cost_native=Decimal("2.000000000"),
+            estimated_output_cost_native=Decimal("0.000000000"),
+            estimated_total_cost_native=Decimal("2.000000000"),
+            estimated_total_cost_eur=Decimal("2.000000000"),
+            pricing_rule_id=None,
+            fx_rate_id=None,
+        )
+
+    async def _fake_reserve(
+        self,
+        *,
+        authenticated_key,
+        route,
+        policy,
+        cost_estimate,
+        request_id,
+        now=None,
+    ):
+        _ = (self, authenticated_key, route, policy, request_id, now)
+        quota_calls.append(cost_estimate.estimated_input_tokens)
+        raise QuotaLimitExceededError("Cost quota limit exceeded", param="cost_limit_eur")
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            **_chat_request(),
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string", "description": "x" * 1200}},
+                        },
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "quota_limit_exceeded"
+    assert quota_calls
+    assert provider_calls == []
 
 
 def test_pricing_failure_happens_before_quota_reservation(monkeypatch) -> None:

@@ -14,4 +14,8 @@ class ChatCompletionPolicyResult(BaseModel):
     requested_output_tokens: int
     effective_output_tokens: int
     estimated_input_tokens: int
+    estimated_message_input_tokens: int = 0
+    estimated_non_message_input_tokens: int = 0
+    estimated_non_message_input_bytes: int = 0
+    estimated_non_message_input_fields: tuple[str, ...] = ()
     injected_default_output_tokens: bool

@@ -98,6 +98,18 @@ The schema preserves extra JSON-compatible fields instead of silently dropping t
 
 Unknown ordinary JSON-compatible fields are also preserved unless a gateway policy explicitly rejects them. Current request policy rejects malformed `messages`, invalid output-token controls, input estimates over the configured hard input cap, non-object `stream_options` when `stream=true`, and Chat Completions `n` values other than integer `1`.
 
+Chat Completions input-token and cost pre-reservation uses a conservative local
+estimate over message content plus serialized non-message provider-forwarded
+object/list fields such as `tools`, legacy `functions`, object-shaped
+`tool_choice` / `function_call`, `response_format` JSON schemas,
+`stream_options`, and unknown JSON object/list passthrough fields. Very large
+tool/function/schema payloads may be rejected before Redis rate limiting, route
+resolution, pricing lookup, PostgreSQL quota reservation, or provider calls when
+the hard input cap is exceeded. The estimate is intentionally conservative and
+may over-reserve; successful accounting still finalizes from actual provider
+usage when available. This is Chat Completions remediation and does not
+implement the Responses API.
+
 `n > 1` is intentionally rejected for now. Multi-choice Chat Completions can produce multiple choices and require choice-aware quota reservation, cost estimation, and final usage validation. The gateway does not silently clamp or drop `n`; future support requires multiplying reservation and cost policy by the requested choice count and validating provider final-usage semantics.
 
 ## Gateway-Mutated Fields
@@ -119,7 +131,8 @@ For `POST /v1/chat/completions`, the implemented order is:
 1. Authenticate the gateway key from `Authorization: Bearer ...`.
 2. Check endpoint allow-list policy.
 3. Validate request shape with the permissive Chat Completions schema.
-4. Apply request policy and token caps.
+4. Apply request policy and token caps, including serialized non-message
+   provider-forwarded Chat Completions fields in the input estimate.
 5. Apply Redis operational rate limits when enabled.
 6. Resolve the model route and provider.
 7. Look up pricing and FX data.
