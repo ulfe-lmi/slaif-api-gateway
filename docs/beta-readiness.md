@@ -15,8 +15,10 @@ for the current implemented scope.
 
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
 baseline. It supports RC-beta readiness for the implemented scope and identifies
-remaining production-readiness work: non-message input estimation for hard
-quota/cost reservation, property/invariant tests, and production runbooks.
+production-readiness work tracked beyond the original RC1 baseline. The
+non-message input estimation and quota/accounting/reconciliation invariant-test
+recommendations are addressed in follow-up PRs; production runbooks remain a
+GA-oriented operations item.
 
 ## Implemented API Scope
 

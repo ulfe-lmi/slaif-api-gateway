@@ -61,6 +61,15 @@ The usage ledger records metadata, token counts, cost, provider/model status,
 and safe diagnostics. It does not store prompt text, completion text, uploaded
 files, tool payloads, or raw provider bodies by default.
 
+Quota, accounting, and reconciliation are covered by invariant-oriented unit
+and PostgreSQL tests. The coverage checks that reserved and used counters do not
+go negative, repeated release/finalization/reconciliation attempts do not
+double-subtract or double-charge, provider-completed usage remains recoverable
+after finalization failures, and ledger/audit metadata omits prompt,
+completion, raw request/response, key, token-hash, encrypted-payload, nonce,
+password-hash, and session-token material. These tests are defense-in-depth and
+are not formal verification.
+
 Manual reconciliation exists for expired pending reservations and
 provider-completed streaming finalization failures. Provider-completed repair
 uses stored safe usage/cost metadata and does not call providers.

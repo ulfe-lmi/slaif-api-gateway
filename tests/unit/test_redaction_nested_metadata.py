@@ -62,6 +62,9 @@ def test_sanitize_metadata_drops_prompt_completion_and_body_content_when_request
         "choices": [{"message": {"content": "assistant body"}}],
         "request_body": {"api_key": "secret"},
         "response-body": {"content": "secret"},
+        "token_hash": "hash secret",
+        "encrypted_payload": "payload secret",
+        "nonce": "nonce secret",
     }
 
     sanitized = sanitize_metadata_mapping(metadata, drop_content_keys=True)

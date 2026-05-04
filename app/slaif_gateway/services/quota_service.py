@@ -55,6 +55,8 @@ class QuotaService:
     ) -> QuotaReservationResult:
         check_now = _aware_now(now)
         reserved_cost_eur = _validate_cost(cost_estimate.estimated_total_cost_eur)
+        _validate_tokens(policy.estimated_input_tokens)
+        _validate_tokens(policy.effective_output_tokens)
         reserved_tokens = _validate_tokens(
             policy.estimated_input_tokens + policy.effective_output_tokens
         )
@@ -213,4 +215,3 @@ def _reservation_result(row: QuotaReservation) -> QuotaReservationResult:
         status=row.status,
         expires_at=row.expires_at,
     )
-

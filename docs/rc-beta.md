@@ -14,8 +14,9 @@ Tag-specific release notes for the first release candidate are in
 The latest external RC1 review baseline is archived at
 [`security/reviews/2026-05-review-6.0-rc1.md`](security/reviews/2026-05-review-6.0-rc1.md).
 It supports RC-beta readiness for the implemented scope while keeping remaining
-production-readiness work explicit, including non-message input estimation,
-property/invariant tests, and production runbooks.
+production-readiness work explicit. Follow-up PRs address non-message Chat
+Completions input estimation and quota/accounting/reconciliation invariant-test
+coverage; production runbooks remain a GA-oriented operations item.
 
 ## Implemented Scope
 

@@ -25,7 +25,11 @@ _CONTENT_KEY_NAMES = {
     "requestpayload",
     "responsepayload",
     "rawrequest",
+    "rawrequestbody",
+    "rawrequestpayload",
     "rawresponse",
+    "rawresponsebody",
+    "rawresponsepayload",
 }
 
 
@@ -78,6 +82,8 @@ def _sanitize_mapping(
         if drop_content_keys and is_content_key(key):
             continue
         if is_sensitive_key(key):
+            if drop_content_keys:
+                continue
             safe[key] = REDACTED_VALUE
             continue
         safe[key] = _sanitize_value(
