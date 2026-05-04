@@ -88,6 +88,30 @@ That can be acceptable only as a bounded overrun:
 
 No unlimited or unbounded tool policy is acceptable for cost-limited keys.
 
+## Cost And Quota Recommendation Inputs
+
+The pricing catalog supports money estimates for Responses policies and
+calibration-derived templates, but usage-derived recommendations can be based
+primarily on operational limits rather than money. For workshop participant keys,
+token, request, and tool-call limits are often easier to explain and enforce
+than exact currency estimates.
+
+Money estimates remain useful as an admin-visible warning and budget preview,
+especially for bounded-overrun policy, but they are informational when tool costs
+are provider-specific, incomplete, or hard to predict. The recommendation UI
+should still show the bounded-overrun estimate and the pricing assumptions used
+to calculate it.
+
+Preferred recommendation inputs for participant templates:
+
+- observed request counts;
+- observed input, output, reasoning, cached, and total token counts where
+  available;
+- observed tool calls by type and safe function name where available;
+- observed per-request maxima;
+- local pricing rows and FX rates where known;
+- provider-reported cost metadata where available.
+
 ## No Silent Replacement
 
 Pricing refresh workflows must not mutate production pricing invisibly. They

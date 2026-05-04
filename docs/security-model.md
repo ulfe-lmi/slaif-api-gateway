@@ -118,6 +118,22 @@ default-off and policy-first:
   request bodies or dashboard policy forms.
 - Plaintext gateway key rules are unchanged.
 
+### Calibration Keys And Usage-Derived Recommendations
+
+Calibration keys are ordinary gateway keys with deliberately lenient limits for
+trusted organizers. Admins may analyze their safe usage metadata to recommend
+stricter templates for participant keys.
+
+The workflow may use endpoint, provider, model, token-count, tool-count, and
+cost metadata. It must not store raw prompts, completions, raw request/response
+bodies, raw tool payloads, raw chain-of-thought, plaintext gateway keys,
+provider keys, session tokens, password hashes, encrypted payloads, nonces, or
+email bodies. Reasoning or thinking token counts are safe operational metadata
+when a provider exposes them.
+
+Recommendations are never automatic mutations. An admin must review assumptions
+and explicitly confirm any generated template or key creation.
+
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
 

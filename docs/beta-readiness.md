@@ -124,7 +124,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Responses API is not implemented in RC1. RC2 is planned to focus on limited
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. See `responses-compatibility.md`.
+  estimates. RC2 also plans calibration keys and usage-derived key templates so
+  admins can derive participant limits from real organizer/test-key usage. See
+  `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

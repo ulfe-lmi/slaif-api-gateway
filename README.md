@@ -64,7 +64,9 @@ Not implemented yet:
   controls. MCP/connectors, background mode, provider-side storage,
   `previous_response_id`, conversations, response retrieval/cancel/delete,
   image generation, and computer use remain excluded from the planned first
-  Responses slice.
+  Responses slice. RC2 also plans calibration keys and usage-derived key
+  templates, so admins can derive participant limits from real
+  organizer/test-key usage.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the
