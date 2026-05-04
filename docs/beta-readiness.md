@@ -13,6 +13,11 @@ This report is not a production certification, compliance attestation, or
 penetration-test report. It records a release-candidate beta verification pass
 for the current implemented scope.
 
+The external review archive now includes Review 6.0 / RC1 as the latest RC1
+baseline. It supports RC-beta readiness for the implemented scope and identifies
+remaining production-readiness work: non-message input estimation for hard
+quota/cost reservation, property/invariant tests, and production runbooks.
+
 ## Implemented API Scope
 
 - `GET /healthz` and `GET /readyz`.
