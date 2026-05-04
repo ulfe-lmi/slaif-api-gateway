@@ -397,6 +397,47 @@ Key templates:
 - Editing a template must not silently mutate existing keys unless a separate
   audited "apply update" workflow is implemented.
 
+#### Usage-derived quota recommendations / calibration keys
+
+SLAIF should support an operator workflow where a semi-trusted organizer receives
+a lenient calibration key, runs the planned workflow, and the admin derives
+stricter participant keys from observed usage.
+
+Rules:
+
+- Usage-derived recommendations are advisory until an admin confirms a template
+  or key creation.
+- The gateway must record safe detailed usage needed for recommendations:
+  - endpoint path
+  - provider
+  - requested model
+  - resolved upstream model
+  - sanitized provider endpoint path
+  - input tokens
+  - output tokens
+  - total tokens
+  - reasoning/thinking tokens when exposed by provider usage
+  - cached tokens when exposed
+  - tool call counts by type
+  - safe tool names for function tools when available
+  - actual/calc cost fields when available
+- Do not store prompts, completions, raw request bodies, raw response bodies,
+  provider keys, gateway plaintext keys, encrypted payloads, nonces, password
+  hashes, session tokens, or email bodies for this workflow.
+- Do not store raw chain-of-thought; reasoning/thinking token counts are allowed
+  when provider exposes them.
+- Exact URLs must be sanitized: store gateway endpoint and provider host/path,
+  but not query strings, fragments, credentials, signed URLs, or bearer tokens.
+- Recommendation workflows should support multipliers such as 1.5x, 2x, 3x, and
+  custom values.
+- Recommended templates should include request limits, input/output/reasoning
+  token limits, tool-call limits, per-request caps, allowed
+  endpoints/models/providers, and Responses policy.
+- Admins must see assumptions and may edit recommended values before creating a
+  template or keys.
+- Calibration-derived templates should record source key, source time window,
+  multiplier, and template revision.
+
 Pricing catalog:
 
 - OpenRouter pricing may be fetched from OpenRouter model metadata where

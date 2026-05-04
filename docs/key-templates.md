@@ -35,6 +35,34 @@ Planned workflow:
 5. Run normal OpenAI-compatible client examples against the test key.
 6. Bulk-create workshop keys from the approved template revision.
 
+## Deriving Templates From Calibration-Key Usage
+
+Admins should also be able to derive a template from observed calibration-key
+usage. This supports cases where a trusted organizer, teacher, seminar lead, or
+foreman runs the real workflow first and participant limits are based on actual
+usage rather than a guess.
+
+The recommendation workflow should capture:
+
+- source key and source owner;
+- source time window;
+- multiplier, such as 1.5x, 2x, 3x, or a custom value;
+- observed usage summary;
+- recommended quotas and per-request caps;
+- Responses endpoint/model/provider/tool policy;
+- bounded-overrun assumptions;
+- admin edits and final confirmation.
+
+Generated templates remain normal templates. They should create an immutable
+template revision and record the source key, source owner, source time window,
+multiplier, and observed summary used to generate the proposal. Bulk key
+creation can then issue classroom, workshop, seminar, or worksite participant
+keys from that generated template revision.
+
+Recommendations must not mutate existing keys automatically. Admins must review
+the assumptions, edit values if needed, and explicitly confirm template creation
+or bulk key creation.
+
 ## Snapshot And Revision Semantics
 
 Templates should be versioned.

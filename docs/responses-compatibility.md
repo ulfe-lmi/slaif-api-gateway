@@ -113,6 +113,61 @@ Template requirements:
 
 See `docs/key-templates.md` for the planned template contract.
 
+## Usage Tracking And Calibration Keys
+
+Calibration keys are planned for RC2 so operators can turn real organizer usage
+into safer participant limits. A semi-trusted organizer, teacher, workshop lead,
+or foreman can receive a relatively lenient calibration key, run the planned
+seminar or workflow, and let an admin derive a stricter key template from the
+observed usage window.
+
+The workflow is advisory until an admin confirms a template or key creation:
+
+1. Create a lenient calibration key for a trusted organizer.
+2. Run the representative workflow.
+3. Select a source key and time window, such as the last week.
+4. Review observed request, token, tool, and cost usage.
+5. Choose a multiplier such as 1.5x, 2x, 3x, or a custom value.
+6. Generate a proposed template with stricter per-key and per-request limits.
+7. Let the admin edit assumptions before creating a template or bulk keys.
+
+SLAIF should record safe operational metadata needed for recommendations:
+
+- gateway endpoint path;
+- provider and sanitized provider endpoint host/path;
+- requested model and resolved upstream model;
+- input, output, total, cached, and reasoning/thinking token counts when exposed
+  by provider usage;
+- tool call counts by type;
+- safe function-tool names when available;
+- provider-reported and gateway-calculated cost fields when available;
+- request counts, per-request maxima, and bounded-overrun assumptions.
+
+SLAIF must not store prompts, completions, raw request bodies, raw response
+bodies, raw tool payloads, raw chain-of-thought, provider keys, plaintext gateway
+keys, encrypted payloads, nonces, password hashes, session tokens, email bodies,
+query strings, URL fragments, credentials, signed URLs, or bearer tokens for this
+workflow. Exact URL storage must be sanitized to gateway endpoints and provider
+host/path only.
+
+OpenAI exposes an input-token counting endpoint for Responses-compatible
+payloads, including request shapes with tools and schemas. Provider final usage
+can also expose input, output, cached, and reasoning token counts. SLAIF should
+use those capabilities where available, but it must not assume every provider
+exposes every tool metric, cost field, cached-token count, or reasoning-token
+count. Missing provider details should be shown as assumptions in the
+recommendation preview.
+
+Derived templates can include:
+
+- request count limits;
+- input, output, reasoning, and total token limits;
+- tool-call limits by type and safe function name;
+- per-request maxima;
+- allowed endpoints, models, and providers;
+- Responses tool policy;
+- maximum single-request cost and bounded-overrun estimates.
+
 ## Pricing Catalog
 
 Local pricing remains the quota/accounting source of truth.
