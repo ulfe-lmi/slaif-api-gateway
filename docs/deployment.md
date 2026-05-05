@@ -6,7 +6,9 @@ certification or a complete site reliability runbook.
 
 For a beginner-friendly local walkthrough, start with
 [`quickstart.md`](quickstart.md). For RC-beta scope and release checklist, see
-[`rc-beta.md`](rc-beta.md) and [`beta-readiness.md`](beta-readiness.md).
+[`rc-beta.md`](rc-beta.md) and [`beta-readiness.md`](beta-readiness.md). For
+operator incident and maintenance procedures, see
+[`runbooks/README.md`](runbooks/README.md).
 
 ## Overview
 
@@ -229,6 +231,10 @@ do not call providers, and do not send email. Payloads are counts-only by
 default; `RECONCILIATION_ALERT_INCLUDE_IDS=true` adds only safe reservation and
 usage-ledger IDs. Treat the webhook URL as a secret if it contains tokens.
 
+Operational procedures for stale reservations and provider-completed recovery
+are in [`runbooks/stale-reservation-reconciliation.md`](runbooks/stale-reservation-reconciliation.md)
+and [`runbooks/provider-completed-reconciliation.md`](runbooks/provider-completed-reconciliation.md).
+
 ## Backups
 
 Back up PostgreSQL. It is the source of truth for key metadata, HMAC digests,
@@ -248,6 +254,15 @@ Losing an HMAC secret invalidates keys created with that HMAC version. Losing a
 one-time-secret encryption key prevents recovery of pending encrypted delivery
 secrets; rotate affected gateway keys instead of attempting to resend old
 plaintext.
+
+Backup/restore and secret-rotation procedures are documented in
+[`runbooks/database-backup-restore.md`](runbooks/database-backup-restore.md),
+[`runbooks/provider-key-rotation.md`](runbooks/provider-key-rotation.md),
+[`runbooks/hmac-secret-rotation.md`](runbooks/hmac-secret-rotation.md), and
+[`runbooks/one-time-secret-encryption-key.md`](runbooks/one-time-secret-encryption-key.md).
+
+Docker and Nginx troubleshooting guidance is in
+[`runbooks/docker-nginx-troubleshooting.md`](runbooks/docker-nginx-troubleshooting.md).
 
 ## Limitations
 

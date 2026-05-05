@@ -16,7 +16,9 @@ The latest external RC1 review baseline is archived at
 It supports RC-beta readiness for the implemented scope while keeping remaining
 production-readiness work explicit. Follow-up PRs address non-message Chat
 Completions input estimation and quota/accounting/reconciliation invariant-test
-coverage; production runbooks remain a GA-oriented operations item.
+coverage. Production/operator runbooks are now documented under
+[`runbooks/README.md`](runbooks/README.md); they improve operational readiness
+but are not a production certification.
 
 ## Implemented Scope
 
@@ -36,6 +38,9 @@ coverage; production runbooks remain a GA-oriented operations item.
 - Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis, and
   Mailpit.
 - Nginx reverse-proxy example with streaming-safe proxy settings.
+- Operator runbooks for secret rotation, key leak response, backup/restore,
+  reconciliation, Redis/DB incidents, metrics thresholds, Docker/Nginx
+  troubleshooting, admin access, and RC-beta upgrades.
 
 ## CI Coverage
 
@@ -117,6 +122,7 @@ Before tagging an RC-beta release:
 - Nginx syntax validation has passed.
 - `docs/beta-readiness.md`, `docs/compatibility-matrix.md`, and README match the
   implemented scope.
+- `docs/runbooks/README.md` links the current operator runbooks.
 - README still starts with the SLAIF logo/link block.
 - No real provider keys, gateway keys, SMTP passwords, HMAC secrets, session
   secrets, one-time-secret encryption keys, or `.env` files are committed.

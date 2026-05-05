@@ -17,8 +17,9 @@ The external review archive now includes Review 6.0 / RC1 as the latest RC1
 baseline. It supports RC-beta readiness for the implemented scope and identifies
 production-readiness work tracked beyond the original RC1 baseline. The
 non-message input estimation and quota/accounting/reconciliation invariant-test
-recommendations are addressed in follow-up PRs; production runbooks remain a
-GA-oriented operations item.
+recommendations are addressed in follow-up PRs. Production/operator runbooks are
+now documented in [`runbooks/README.md`](runbooks/README.md); they remain
+operational guidance, not a production certification.
 
 ## Implemented API Scope
 
@@ -65,6 +66,10 @@ non-empty audit reason according to the action.
   Mailpit. Migrations remain explicit operator actions.
 - Nginx configuration is present for reverse proxy guidance with streaming-safe
   proxy settings and metrics denied by default.
+- Operator runbooks cover provider key rotation, gateway key leak response,
+  HMAC and one-time-secret handling, database backup/restore, reconciliation,
+  email ambiguity, Redis outage, PostgreSQL readiness, metrics thresholds,
+  Docker/Nginx troubleshooting, admin access, and RC-beta upgrades.
 
 ## Verification Summary
 
@@ -142,7 +147,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - There is no formal security certification, formal penetration test, SOC/ISO
   attestation, or compliance certification.
 - Production deployment still requires operator-managed secrets, HTTPS/Nginx
-  hardening, backups, monitoring, alert routing, and operational runbooks.
+  hardening, backups, monitoring, alert routing, and staging rehearsal of the
+  runbooks.
 
 ## Non-Goals For This RC-Beta
 
@@ -160,8 +166,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Implement Responses API as a separate scoped RC2 project under
   `responses-compatibility.md`; decide separately whether to implement bulk key
   send-now, embeddings, and native provider adapters.
-- Build production runbooks for backups, monitoring, alerting, secret rotation,
-  and incident response.
+- Exercise the production/operator runbooks in at least one production-like
+  staging deployment.
+- Continue tuning monitoring and alert routing for the target deployment.
 - Keep CI green and review dependency/security updates before each tag.
 
 Final verdict: RC-beta ready: yes, for the implemented and documented scope.
