@@ -1,0 +1,132 @@
+[
+  {
+    "model_id": "gpt-5.2",
+    "upstream_model": "gpt-5.2",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "Current OpenAI GPT-5.2 text model documented for Chat Completions. Excludes Responses-only tool behavior.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-5.1",
+    "upstream_model": "gpt-5.1",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "Current OpenAI GPT-5.1 text model documented for Chat Completions. Excludes Responses-only tool behavior.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-5",
+    "upstream_model": "gpt-5",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-5 text model documented for Chat Completions. Excludes Responses-only tool behavior.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-5-mini",
+    "upstream_model": "gpt-5-mini",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-5 mini text model documented for Chat Completions. Excludes Responses-only tool behavior.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-5-nano",
+    "upstream_model": "gpt-5-nano",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-5 nano text model documented for Chat Completions. Excludes Responses-only tool behavior.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4.1",
+    "upstream_model": "gpt-4.1",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-4.1 model documented for Chat Completions.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4.1-mini",
+    "upstream_model": "gpt-4.1-mini",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-4.1 mini model documented for Chat Completions.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4.1-nano",
+    "upstream_model": "gpt-4.1-nano",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-4.1 nano model documented for Chat Completions.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4o",
+    "upstream_model": "gpt-4o",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-4o model documented for Chat Completions.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4o-mini",
+    "upstream_model": "gpt-4o-mini",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": false,
+    "notes": "OpenAI GPT-4o mini model documented for Chat Completions.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4",
+    "upstream_model": "gpt-4",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": true,
+    "notes": "Older OpenAI GPT-4 chat model. Included only when --include-legacy-models is used.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-4-turbo",
+    "upstream_model": "gpt-4-turbo",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": true,
+    "notes": "Older OpenAI GPT-4 Turbo chat model. Included only when --include-legacy-models is used.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  },
+  {
+    "model_id": "gpt-3.5-turbo",
+    "upstream_model": "gpt-3.5-turbo",
+    "endpoint": "chat.completions",
+    "visible_in_models": true,
+    "supports_streaming": true,
+    "legacy_model": true,
+    "notes": "Legacy OpenAI chat model. Included only when --include-legacy-models is used.",
+    "source_note": "Curated from OpenAI model documentation; availability and endpoint support can change and this catalog must be maintained."
+  }
+]

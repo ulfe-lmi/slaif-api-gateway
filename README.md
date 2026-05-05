@@ -43,6 +43,7 @@ Implemented:
 - `GET /healthz` and `GET /readyz`.
 - Authenticated `GET /v1/models` backed by local provider and route metadata, filtered by the gateway key's effective model allow-list.
 - Non-streaming and SSE streaming `POST /v1/chat/completions` with request policy checks, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
+- `slaif-gateway bootstrap openai-completions-catalog` for seeding the local OpenAI provider config, exact Chat Completions routes, and explicit pricing rows from a curated in-repo catalog and an operator-controlled pricing CSV.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
 - PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
@@ -68,6 +69,9 @@ Not implemented yet:
   templates, so admins can derive participant limits from real
   organizer/test-key usage.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
+- Legacy `POST /v1/completions`. The current bootstrap command rejects
+  `--include-legacy-completions` until a proper endpoint, forwarding,
+  accounting, pricing, and test slice is implemented.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the
   checked-in CI and RC-beta verification workflows.
@@ -88,7 +92,7 @@ from openai import OpenAI
 
 client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-test-mini",
+    model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(response.choices[0].message.content)
@@ -98,7 +102,7 @@ Streaming chat completions use OpenAI-compatible Server-Sent Events and work wit
 
 ```python
 stream = client.chat.completions.create(
-    model="gpt-test-mini",
+    model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello"}],
     stream=True,
 )
@@ -174,9 +178,25 @@ printf '%s\n' 'replace-this-password' \
       --password-stdin
 ```
 
-Configure provider, route, pricing, and FX metadata with the CLI examples below,
-then issue a gateway key. Users call the local gateway with standard
-OpenAI-compatible variables:
+Bootstrap OpenAI Completions metadata before issuing a gateway key. The gateway
+does not call OpenAI to discover models for `/v1/models`; model visibility comes
+from local enabled route metadata plus the gateway key policy. For real use,
+copy [`docs/examples/openai-completions-pricing.example.csv`](docs/examples/openai-completions-pricing.example.csv),
+replace the placeholder prices with operator-reviewed local pricing assumptions,
+and run:
+
+```bash
+docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file docs/examples/openai-completions-pricing.example.csv \
+  --apply
+```
+
+The command creates local provider, exact `/v1/chat/completions` route, and
+pricing metadata only. It stores `OPENAI_UPSTREAM_API_KEY` as an environment
+variable name and never reads or prints the provider key value. See
+[`docs/quickstart.md`](docs/quickstart.md) for the full first-run workflow,
+including owner/key creation and model allow-lists. Users call the local gateway
+with standard OpenAI-compatible variables:
 
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."
@@ -373,16 +393,17 @@ export CELERY_BROKER_URL="${REDIS_URL:-redis://localhost:6379/0}"
 
 `slaif-gateway email test --to ada@example.org` sends a safe test email with no gateway key material. `slaif-gateway email send-pending-key --one-time-secret-id <id> --send-now` retries/sends a key from an existing encrypted `one_time_secrets` row, and `--enqueue` queues the Celery task instead. The task payload contains only IDs such as `one_time_secret_id` and `email_delivery_id`; plaintext gateway keys are decrypted only inside the delivery process and are never placed in Redis/Celery payloads, audit rows, or `email_deliveries`. SMTP failure before acceptance remains retryable, but in-progress or ambiguous deliveries are blocked to prevent duplicate key emails. Lost keys cannot be resent from old plaintext; rotate the key and send the replacement one-time secret.
 
-Configure local provider, route, pricing, and FX metadata:
+Bootstrap local OpenAI Chat Completions provider, route, and pricing metadata:
 
 ```bash
-slaif-gateway providers add --provider openai --api-key-env-var OPENAI_UPSTREAM_API_KEY
-slaif-gateway routes add --requested-model gpt-test-mini --match-type exact --provider openai --upstream-model gpt-test-mini
-slaif-gateway pricing add --provider openai --model gpt-test-mini --endpoint chat.completions --currency EUR --input-price-per-1m 0.10 --output-price-per-1m 0.20
+slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file docs/examples/openai-completions-pricing.example.csv \
+  --apply
 slaif-gateway fx add --base-currency USD --quote-currency EUR --rate 0.920000000
 ```
 
-Inspect usage ledger metadata:
+The checked-in pricing CSV uses placeholder values for smoke tests only. Replace
+them before production accounting. Inspect usage ledger metadata:
 
 ```bash
 slaif-gateway usage summarize --group-by provider_model

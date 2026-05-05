@@ -180,6 +180,41 @@ actual provider key values. Model routes, pricing, and FX rates are configured
 through CLI/database metadata and the implemented admin metadata forms; those
 forms do not accept provider key values or call upstream providers.
 
+## OpenAI Completions Catalog Bootstrap
+
+For the implemented OpenAI-compatible Completions flow, operators should seed
+local OpenAI Chat Completions metadata with:
+
+```bash
+slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file local-openai-pricing.csv \
+  --apply
+```
+
+The command creates or verifies:
+
+- provider metadata for `provider=openai`, storing only the
+  `OPENAI_UPSTREAM_API_KEY` env var name by default;
+- exact visible routes for curated `/v1/chat/completions` model IDs;
+- local pricing rows from an operator-controlled CSV.
+
+The required pricing CSV columns are:
+
+```text
+provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
+```
+
+`--pricing-mode require-file` is the default and fails closed if any selected
+catalog model is missing a pricing row. `--pricing-mode placeholder` requires
+`--confirm-placeholder-pricing`, creates rows marked as placeholder assumptions,
+and is for smoke tests only. Placeholder prices are not real pricing and must
+not be used for production accounting.
+
+`--include-legacy-models` adds older chat models from the curated catalog.
+`--include-legacy-completions` is rejected because `POST /v1/completions` is not
+implemented yet. Responses API configuration is separate and out of scope for
+this bootstrap command.
+
 ## Request Caps
 
 - `DEFAULT_MAX_OUTPUT_TOKENS` is injected when a supported request omits output
