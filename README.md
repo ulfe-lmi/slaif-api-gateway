@@ -137,6 +137,27 @@ Docker Compose local setup:
 git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
 cd slaif-api-gateway
 cp .env.example .env
+```
+
+Generate local runtime secrets before starting services. These are server
+runtime secrets, not user gateway keys:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+slaif-gateway secrets generate hmac --version 1 --env-file .env --write
+slaif-gateway secrets generate admin-session --env-file .env --write
+slaif-gateway secrets generate one-time --env-file .env --write
+slaif-gateway secrets validate-env --env-file .env
+```
+
+See [`docs/quickstart.md`](docs/quickstart.md) for the Docker-only
+bind-mounted variant, and [`docs/configuration.md`](docs/configuration.md) for
+secret meanings and rotation cautions.
+
+```bash
 docker compose build
 docker compose up -d postgres redis mailpit
 docker compose run --rm api slaif-gateway db upgrade

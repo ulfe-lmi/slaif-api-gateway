@@ -43,6 +43,12 @@ outside local testing. For local Compose, `.env.example` already points
 `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, and `SMTP_HOST` at the Compose
 service names.
 
+Generate local runtime secrets with `slaif-gateway secrets generate ... --write`
+before starting services. Use either the host-local CLI workflow or the
+Docker-only bind-mounted workflow in [`quickstart.md`](quickstart.md); do not
+assume a plain `docker compose run api ... --env-file .env --write` updates the
+host `.env` file unless the project directory is explicitly mounted.
+
 Build the image and start infrastructure:
 
 ```bash
@@ -176,6 +182,10 @@ Before production use:
 - Provide upstream provider secrets through environment variables, Docker
   secrets, or a deployment secret manager. Do not store provider key values in
   `provider_configs`; that table stores env var names only.
+- Use a deployment secret manager or Docker secrets for production where
+  appropriate. The `slaif-gateway secrets generate ...` CLI can produce strong
+  initial values for local or self-hosted setup, but it is not a full
+  secret-management system.
 
 The server-side OpenAI upstream secret is `OPENAI_UPSTREAM_API_KEY`.
 `OPENAI_API_KEY` is reserved for clients carrying gateway-issued keys.

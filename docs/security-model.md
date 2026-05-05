@@ -224,6 +224,14 @@ exposure overrides visible but do not replace network controls.
 
 ## CLI Safety
 
+`slaif-gateway secrets generate ...` creates server/runtime secrets one at a
+time for HMAC signing, admin sessions, and one-time-secret encryption. Without
+`--write`, the generated value is printed once to stdout for operator capture.
+With `--write`, the CLI updates only the requested env variable and does not
+print the generated value by default. It refuses to modify `.env.example`,
+preserves unrelated env lines, does not create backup files, and requires
+`--force` before replacing existing non-placeholder values.
+
 Text-mode key create/rotate commands may show the newly generated plaintext key
 once for operator workflows. JSON output is secret-safe by default: operators
 must explicitly use `--show-plaintext` or `--secret-output-file` when capturing

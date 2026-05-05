@@ -26,6 +26,50 @@ Production requires strong, non-placeholder values for:
 Rotate any provider or SMTP secret that is accidentally committed, logged, or
 shared.
 
+## Generating Local Runtime Secrets
+
+For local setup or initial self-hosted bootstrap, use the CLI to generate one
+server runtime secret at a time:
+
+```bash
+slaif-gateway secrets generate hmac --version 1
+slaif-gateway secrets generate admin-session
+slaif-gateway secrets generate one-time
+```
+
+Without `--write`, each command prints only the generated value to stdout. To
+update a local env file safely, copy `.env.example` first and write each target
+variable explicitly:
+
+```bash
+cp .env.example .env
+slaif-gateway secrets generate hmac --version 1 --env-file .env --write
+slaif-gateway secrets generate admin-session --env-file .env --write
+slaif-gateway secrets generate one-time --env-file .env --write
+slaif-gateway secrets validate-env --env-file .env
+```
+
+Targets:
+
+- `secrets generate hmac --version 1` writes `TOKEN_HMAC_SECRET_V1`.
+- `secrets generate admin-session` writes `ADMIN_SESSION_SECRET`.
+- `secrets generate one-time` writes `ONE_TIME_SECRET_ENCRYPTION_KEY`.
+- `secrets validate-env` checks that the active HMAC secret, admin session
+  secret, and one-time encryption key are configured without printing values.
+
+`--write` preserves comments and unrelated env lines, replaces blank or
+placeholder values, and appends the variable if it is missing. It refuses to
+replace an existing non-placeholder value unless `--force` is supplied.
+`--force` prints only safe rotation warnings: replacing an HMAC secret can
+invalidate keys signed with that version, replacing `ADMIN_SESSION_SECRET` logs
+admins out, and replacing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make pending
+encrypted one-time deliveries undecryptable.
+
+The `.env` file remains local operator configuration and must not be committed.
+The generator is not a complete secret-management system; production
+deployments should use deployment secret managers, Docker secrets, or equivalent
+controls where appropriate.
+
 ## Client Vs Upstream Provider Keys
 
 Training users configure the standard OpenAI client variables:

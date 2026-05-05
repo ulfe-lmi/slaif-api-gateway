@@ -53,7 +53,67 @@ OPENAI_UPSTREAM_API_KEY=sk-your-real-upstream-provider-key
 This is different from the user's client key. Users set `OPENAI_API_KEY` to a
 gateway-issued key.
 
-## 3. Build And Start Local Services
+## 3. Generate Local Runtime Secrets
+
+`.env.example` has placeholders for server runtime secrets. Generate them with
+SLAIF's CLI instead of writing ad hoc Python snippets. These values protect
+server-side HMAC signing, admin sessions, and encrypted one-time key deliveries.
+They are not user gateway keys.
+
+Host-local CLI workflow:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+slaif-gateway secrets generate hmac --version 1 --env-file .env --write
+slaif-gateway secrets generate admin-session --env-file .env --write
+slaif-gateway secrets generate one-time --env-file .env --write
+slaif-gateway secrets validate-env --env-file .env
+```
+
+Docker-only workflow:
+
+```bash
+docker compose build api
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  api slaif-gateway secrets generate hmac --version 1 --env-file .env --write
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  api slaif-gateway secrets generate admin-session --env-file .env --write
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  api slaif-gateway secrets generate one-time --env-file .env --write
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  api slaif-gateway secrets validate-env --env-file .env
+```
+
+The explicit bind mount makes the container update your host `.env` file.
+
+Keep these rotation cautions in mind:
+
+- Changing `TOKEN_HMAC_SECRET_V1` invalidates existing gateway keys signed with
+  that secret unless the old secret remains configured.
+- Changing `ADMIN_SESSION_SECRET` logs active admins out.
+- Changing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make existing encrypted
+  one-time key deliveries undecryptable.
+
+## 4. Build And Start Local Services
 
 Build the local image:
 
@@ -109,7 +169,7 @@ You should see JSON with healthy database and schema status. If readiness fails
 with a schema or migration message, run `docker compose run --rm api
 slaif-gateway db upgrade` again and retry.
 
-## 4. Create The First Admin
+## 5. Create The First Admin
 
 Create an admin account:
 
@@ -131,7 +191,7 @@ http://localhost:8000/admin/login
 
 Log in with `admin@example.org` and the password you supplied.
 
-## 5. Add Basic Local Metadata
+## 6. Add Basic Local Metadata
 
 The gateway needs local records before it can issue useful keys and route
 requests. You can create these through the dashboard or with CLI commands.
@@ -192,7 +252,7 @@ docker compose run --rm api slaif-gateway fx add \
 These commands create local metadata only. They do not call OpenAI or
 OpenRouter.
 
-## 6. Create A Gateway Key
+## 7. Create A Gateway Key
 
 Create a key for the owner. Replace `<owner-id>` with the owner ID:
 
@@ -208,7 +268,7 @@ The plaintext gateway key is shown once. Save it somewhere appropriate for your
 local test. The gateway does not store plaintext keys and cannot show old keys
 again.
 
-## 7. Try The OpenAI Python Client
+## 8. Try The OpenAI Python Client
 
 Install the OpenAI client on your host if you want to run a client script:
 
@@ -253,7 +313,7 @@ If you did not set a real `OPENAI_UPSTREAM_API_KEY` in `.env`, real provider
 forwarding will fail safely. The local dashboard, database, migrations, key
 creation, and tests can still be tried without a real provider key.
 
-## 8. Check Fake Email In Mailpit
+## 9. Check Fake Email In Mailpit
 
 Mailpit is available at:
 
@@ -264,7 +324,7 @@ http://localhost:8025
 If you create or rotate a key with a pending/enqueued local email delivery, test
 messages appear there instead of being sent to the internet.
 
-## 9. Run Local Tests
+## 10. Run Local Tests
 
 Unit tests do not need PostgreSQL, Redis, Docker, real provider keys, or email:
 
@@ -293,7 +353,7 @@ TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m p
 The normal tests mock upstream providers. They do not need real OpenAI or
 OpenRouter keys and do not send real external email.
 
-## 10. Stop Or Clean Up
+## 11. Stop Or Clean Up
 
 Stop containers but keep local data:
 
