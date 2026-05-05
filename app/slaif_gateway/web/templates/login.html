@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "_brand.html" import slaif_brand %}
 
 {% block title %}Admin Login{% endblock %}
 
 {% block body %}
 <section class="auth-panel" aria-labelledby="login-heading">
   <div class="auth-header">
-    <p class="eyebrow">SLAIF API Gateway</p>
+    {{ slaif_brand(lockup_class="brand-lockup auth-brand", logo_class="brand-logo auth-logo") }}
     <h1 id="login-heading">Admin Login</h1>
   </div>
 

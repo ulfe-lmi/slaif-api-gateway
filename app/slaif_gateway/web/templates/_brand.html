@@ -1,0 +1,17 @@
+{% macro slaif_brand(link=false, lockup_class="brand-lockup", logo_class="brand-logo") -%}
+{% if link %}
+<a class="{{ lockup_class }}" href="/admin">
+{% else %}
+<div class="{{ lockup_class }}">
+{% endif %}
+  <img
+    class="{{ logo_class }}"
+    src="/admin/static/img/slaif-logo.svg"
+    alt="SLAIF Slovenian AI Factory"
+  >
+{% if link %}
+</a>
+{% else %}
+</div>
+{% endif %}
+{%- endmacro %}
