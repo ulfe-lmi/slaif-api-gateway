@@ -3,7 +3,8 @@
 This document describes exactly how implemented `/v1/chat/completions` requests
 are forwarded to upstream providers. It also records the planned forwarding
 constraints for future Responses API work. It is intended for code reviewers and
-operators verifying implementation claims.
+operators verifying implementation claims. Legacy `/v1/completions` is not
+implemented in the current gateway.
 
 ## Provider Adapters
 
@@ -35,6 +36,22 @@ only valid new local `fx_rates`, and does not call external FX APIs or
 providers. Confirmed FX imports can affect future EUR conversion through the
 existing FX lookup path; they do not change provider forwarding, adapter
 semantics, or FX lookup semantics.
+
+Route and pricing endpoint values are normalized to local `/v1` paths for
+runtime lookup:
+
+| Operator value | Stored endpoint | Status |
+| --- | --- | --- |
+| `chat.completions` | `/v1/chat/completions` | Implemented |
+| `/v1/chat/completions` | `/v1/chat/completions` | Implemented |
+| `completions` | `/v1/completions` only after a future implementation adds normalization | Not implemented |
+| `/v1/completions` | `/v1/completions` | Not implemented |
+
+`slaif-gateway bootstrap openai-completions-catalog` seeds exact local
+`/v1/chat/completions` routes and matching pricing rows from a curated in-repo
+catalog plus an operator-controlled pricing CSV. The command does not call
+OpenAI for model discovery, does not fetch pricing, and rejects legacy
+`/v1/completions` route creation while that endpoint is not implemented.
 
 ## OpenAI Upstream Forwarding
 

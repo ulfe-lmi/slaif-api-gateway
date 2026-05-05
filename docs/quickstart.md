@@ -52,7 +52,7 @@ For a real OpenAI provider call later, put the server-side upstream key in
 `.env` as:
 
 ```env
-OPENAI_UPSTREAM_API_KEY=sk-your-real-upstream-provider-key
+OPENAI_UPSTREAM_API_KEY=replace-with-real-upstream-provider-key
 ```
 
 This is different from the user's client key. Users set `OPENAI_API_KEY` to a
@@ -235,27 +235,56 @@ docker compose run --rm api slaif-gateway owners create \
   --institution-id <institution-id>
 ```
 
-Create provider, route, pricing, and FX metadata:
+### Bootstrap OpenAI Completions models
+
+SLAIF does not call OpenAI to discover models for `/v1/models`. The models list
+is built from local enabled, visible route metadata filtered by the gateway key's
+model policy. First-time OpenAI Chat Completions setup therefore needs local
+provider, route, and pricing rows.
+
+The catalog bootstrap command seeds exact OpenAI routes for the curated
+Completions-compatible Chat Completions catalog. It is about
+`/v1/chat/completions` now. Legacy `/v1/completions` is not implemented in this
+repository state, and `--include-legacy-completions` is rejected.
+
+For real accounting, create an operator-controlled pricing CSV with one row for
+every selected catalog model. The required columns are:
+
+```text
+provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
+```
+
+The checked-in example file is safe for smoke tests, but its prices are
+placeholder values and are not production pricing. Copy it and replace the
+prices before real use:
 
 ```bash
-docker compose run --rm api slaif-gateway providers add \
-  --provider openai \
-  --api-key-env-var OPENAI_UPSTREAM_API_KEY
+cp docs/examples/openai-completions-pricing.example.csv local-openai-pricing.csv
+# edit local-openai-pricing.csv with reviewed local pricing assumptions
 
-docker compose run --rm api slaif-gateway routes add \
-  --requested-model gpt-test-mini \
-  --match-type exact \
-  --provider openai \
-  --upstream-model gpt-test-mini
+docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file local-openai-pricing.csv \
+  --apply
+```
 
-docker compose run --rm api slaif-gateway pricing add \
-  --provider openai \
-  --model gpt-test-mini \
-  --endpoint chat.completions \
-  --currency EUR \
-  --input-price-per-1m 0.10 \
-  --output-price-per-1m 0.20
+For a local wiring smoke where cost accounting must not be treated as real, you
+can use explicit placeholder mode instead:
 
+```bash
+docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-mode placeholder \
+  --confirm-placeholder-pricing \
+  --apply
+```
+
+Both modes create local metadata only. They do not call OpenAI, fetch pricing,
+read provider key values, create gateway keys, or alter `.env`. The provider
+config stores only the env var name `OPENAI_UPSTREAM_API_KEY`.
+
+Add FX metadata if any imported pricing uses a non-EUR currency. The example
+below is a manual local assumption, not a fetched FX rate:
+
+```bash
 docker compose run --rm api slaif-gateway fx add \
   --base-currency USD \
   --quote-currency EUR \
@@ -274,12 +303,26 @@ docker compose run --rm api slaif-gateway keys create \
   --owner-id <owner-id> \
   --valid-days 30 \
   --cost-limit-eur 5.00 \
-  --request-limit-total 100
+  --request-limit-total 100 \
+  --allowed-endpoint /v1/models \
+  --allowed-endpoint /v1/chat/completions \
+  --allowed-model gpt-4o-mini
 ```
 
 The plaintext gateway key is shown once. Save it somewhere appropriate for your
 local test. The gateway does not store plaintext keys and cannot show old keys
 again.
+
+You may allow every catalog model by editing the key policy through the
+dashboard or service workflows, or list only the selected catalog model IDs with
+repeated `--allowed-model` options.
+
+Before sending a chat request, verify local model visibility:
+
+```bash
+curl -fsS http://localhost:8000/v1/models \
+  -H "Authorization: Bearer $GATEWAY_KEY"
+```
 
 ## 8. Try The OpenAI Python Client
 
@@ -309,7 +352,7 @@ from openai import OpenAI
 client = OpenAI()
 
 response = client.chat.completions.create(
-    model="gpt-test-mini",
+    model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Say hello in one short sentence."}],
 )
 
@@ -426,6 +469,9 @@ password from the `admin create` command. Login errors are intentionally generic
 
 `/v1/models` only returns models visible to the gateway key. Check that provider
 config, route metadata, key model policy, and key status/validity are correct.
+Run `slaif-gateway bootstrap openai-completions-catalog --pricing-file ... --apply`
+to seed OpenAI Chat Completions routes, then allow `/v1/models`,
+`/v1/chat/completions`, and the desired catalog model IDs on the gateway key.
 
 ### Unknown Pricing Or FX
 

@@ -46,6 +46,39 @@ preview/confirm/audit pattern.
 Do not scrape or silently refresh OpenAI prices into production rows without a
 separate reviewed implementation contract.
 
+## OpenAI Completions Bootstrap CSV
+
+The first-run OpenAI Completions bootstrap command uses local pricing metadata
+as SLAIF's accounting source of truth:
+
+```bash
+slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file local-openai-pricing.csv \
+  --apply
+```
+
+The CSV must include one row for every selected catalog model and endpoint:
+
+```text
+provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
+```
+
+Supported endpoint values for the current command are `chat.completions` and
+`/v1/chat/completions`. `POST /v1/completions` is not implemented, so legacy
+Completions pricing rows are not bootstrapped yet.
+
+The command defaults to `--pricing-mode require-file` and fails safely when a
+catalog model is missing. `--pricing-mode placeholder` requires
+`--confirm-placeholder-pricing`, marks created rows with placeholder metadata
+when the schema supports it, and prints a warning. Placeholder pricing is for
+smoke tests only, is not real pricing, and must not be used for production
+accounting.
+
+The checked-in
+[`docs/examples/openai-completions-pricing.example.csv`](examples/openai-completions-pricing.example.csv)
+uses placeholder values to demonstrate the format. Operators must replace those
+values with reviewed local pricing assumptions before real provider traffic.
+
 ## Tool Pricing Fields
 
 Responses tools can add cost beyond ordinary input/output tokens. The RC2

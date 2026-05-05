@@ -86,26 +86,16 @@ printf '%s\n' 'replace-this-password' \
       --password-stdin
 ```
 
-Create local catalog metadata before sending traffic through `/v1`:
+Create local catalog metadata before sending traffic through `/v1`. For real
+traffic, copy the example pricing CSV and replace its placeholder prices with
+operator-reviewed local pricing assumptions before applying it:
 
 ```bash
-docker compose run --rm api slaif-gateway providers add \
-  --provider openai \
-  --api-key-env-var OPENAI_UPSTREAM_API_KEY
+cp docs/examples/openai-completions-pricing.example.csv local-openai-pricing.csv
 
-docker compose run --rm api slaif-gateway routes add \
-  --requested-model gpt-test-mini \
-  --match-type exact \
-  --provider openai \
-  --upstream-model gpt-test-mini
-
-docker compose run --rm api slaif-gateway pricing add \
-  --provider openai \
-  --model gpt-test-mini \
-  --endpoint chat.completions \
-  --currency EUR \
-  --input-price-per-1m 0.10 \
-  --output-price-per-1m 0.20
+docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file local-openai-pricing.csv \
+  --apply
 
 docker compose run --rm api slaif-gateway fx add \
   --base-currency USD \
@@ -113,9 +103,13 @@ docker compose run --rm api slaif-gateway fx add \
   --rate 0.920000000
 ```
 
-Create prerequisite owner records and issue a gateway key with the existing CLI
-commands documented in the README. Users then call the local gateway with normal
-OpenAI-compatible variables:
+The bootstrap command creates local OpenAI Chat Completions metadata only. It
+does not call OpenAI, fetch pricing, create gateway keys, or store provider key
+values. Legacy `/v1/completions` is not implemented.
+
+Create prerequisite owner records and issue a gateway key with endpoints
+`/v1/models` and `/v1/chat/completions` plus the desired catalog model IDs.
+Users then call the local gateway with normal OpenAI-compatible variables:
 
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."

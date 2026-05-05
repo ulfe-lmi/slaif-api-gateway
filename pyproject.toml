@@ -56,6 +56,7 @@ where = ["app"]
 
 [tool.setuptools.package-data]
 slaif_gateway = [
+  "resources/*.json",
   "web/templates/**/*.html",
   "web/static/**/*",
 ]

@@ -17,6 +17,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | --- | --- | --- | --- | --- | --- |
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
+| `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
 | `POST /v1/responses` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; planned RC2 scope is limited stateless support under `docs/responses-compatibility.md` |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -61,6 +62,20 @@ Model access follows the same key policy used by chat authorization:
 - `allow_all_models=false` with an empty `allowed_models` list returns `{"object": "list", "data": []}`.
 
 This avoids exposing local model catalog entries to keys that cannot use any model.
+
+Operators can seed first-run OpenAI Chat Completions metadata with:
+
+```bash
+slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-file local-openai-pricing.csv \
+  --apply
+```
+
+The bootstrap command uses a curated in-repo catalog for `/v1/chat/completions`
+only. It does not call OpenAI for discovery, does not fetch pricing, and does
+not store provider key values. Legacy `/v1/completions` remains unsupported in
+this repository state, so the command rejects `--include-legacy-completions`.
+Responses API work is separate and out of scope for this command.
 
 ## Chat Completions Request Fields
 
