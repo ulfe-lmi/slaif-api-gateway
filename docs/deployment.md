@@ -41,13 +41,21 @@ cp .env.example .env
 Replace development placeholders in `.env` before using the stack for anything
 outside local testing. For local Compose, `.env.example` already points
 `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, and `SMTP_HOST` at the Compose
-service names.
+service names. `.env` is clear-text local runtime configuration; do not commit
+it, and on shared systems restrict it with:
+
+```bash
+chmod 600 .env
+```
 
 Generate local runtime secrets with `slaif-gateway secrets generate ... --write`
 before starting services. Use either the host-local CLI workflow or the
 Docker-only bind-mounted workflow in [`quickstart.md`](quickstart.md); do not
 assume a plain `docker compose run api ... --env-file .env --write` updates the
-host `.env` file unless the project directory is explicitly mounted.
+host `.env` file unless the project directory is explicitly mounted. The
+`--write` option intentionally writes generated runtime secrets to that
+clear-text file for local/self-hosted bootstrap. It is a convenience, not a
+complete production secret-management system.
 
 Build the image and start infrastructure:
 
@@ -186,6 +194,11 @@ Before production use:
   appropriate. The `slaif-gateway secrets generate ...` CLI can produce strong
   initial values for local or self-hosted setup, but it is not a full
   secret-management system.
+- Replacing `TOKEN_HMAC_SECRET_V1` invalidates gateway keys signed with that
+  secret unless the old secret remains configured.
+- Replacing `ADMIN_SESSION_SECRET` invalidates active admin sessions.
+- Replacing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make existing encrypted
+  one-time secrets undecryptable.
 
 The server-side OpenAI upstream secret is `OPENAI_UPSTREAM_API_KEY`.
 `OPENAI_API_KEY` is reserved for clients carrying gateway-issued keys.

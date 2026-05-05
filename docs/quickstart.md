@@ -41,7 +41,12 @@ cp .env.example .env
 `.env.example` contains development placeholders. They are useful for trying the
 project locally, but they are not production secrets. Before any real deployment
 you must replace HMAC, session, database, SMTP, encryption, and provider
-secrets.
+secrets. `.env` is a clear-text local runtime configuration file; never commit
+it. On shared systems, restrict it with:
+
+```bash
+chmod 600 .env
+```
 
 For a real OpenAI provider call later, put the server-side upstream key in
 `.env` as:
@@ -104,6 +109,14 @@ docker compose run --rm --no-deps \
 ```
 
 The explicit bind mount makes the container update your host `.env` file.
+
+The `--write` option intentionally writes generated runtime secrets into the
+local clear-text `.env` file for bootstrap convenience. It does not print the
+generated value, refuses `.env.example`, and will not replace existing
+non-placeholder values unless you pass `--force`. The generator is not a
+complete production secret-management system; production deployments should use
+platform secret managers, Docker secrets, or equivalent operational secret
+management where available.
 
 Keep these rotation cautions in mind:
 

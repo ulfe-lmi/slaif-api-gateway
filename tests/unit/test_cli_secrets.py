@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
+import unicodedata
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from slaif_gateway.cli.main import app
@@ -116,6 +119,38 @@ def test_write_does_not_print_secret_by_default(tmp_path: Path) -> None:
     assert written_value not in result.stdout
     assert written_value not in result.stderr
     assert result.stdout.strip() == f"Updated ONE_TIME_SECRET_ENCRYPTION_KEY in {env_file}"
+
+
+def test_write_does_not_print_generated_secret_values_for_any_secret(tmp_path: Path) -> None:
+    cases = (
+        (
+            ["secrets", "generate", "hmac", "--version", "1"],
+            "TOKEN_HMAC_SECRET_V1",
+        ),
+        (
+            ["secrets", "generate", "admin-session"],
+            "ADMIN_SESSION_SECRET",
+        ),
+        (
+            ["secrets", "generate", "one-time"],
+            "ONE_TIME_SECRET_ENCRYPTION_KEY",
+        ),
+    )
+
+    for command, env_var in cases:
+        env_file = tmp_path / f"{env_var}.env"
+        env_file.write_text(f"{env_var}=\n", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [*command, "--env-file", str(env_file), "--write"],
+        )
+
+        assert result.exit_code == 0
+        written_value = _env_value(env_file, env_var)
+        assert written_value
+        assert written_value not in result.stdout
+        assert written_value not in result.stderr
 
 
 def test_write_preserves_comments_and_unrelated_lines(tmp_path: Path) -> None:
@@ -256,6 +291,48 @@ def test_write_refuses_env_example(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Refusing to modify .env.example" in result.stderr
     assert env_example.read_text(encoding="utf-8") == "ADMIN_SESSION_SECRET=change-me\n"
+
+
+def test_write_missing_env_file_fails_without_creating_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+
+    result = runner.invoke(
+        app,
+        [
+            "secrets",
+            "generate",
+            "admin-session",
+            "--env-file",
+            str(env_file),
+            "--write",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Env file not found" in result.stderr
+    assert not env_file.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file mode warning only")
+def test_write_warns_when_env_file_is_group_or_world_readable(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ADMIN_SESSION_SECRET=\n", encoding="utf-8")
+    env_file.chmod(0o644)
+
+    result = runner.invoke(
+        app,
+        [
+            "secrets",
+            "generate",
+            "admin-session",
+            "--env-file",
+            str(env_file),
+            "--write",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "is readable by other users; consider chmod 600" in result.stderr
 
 
 def test_force_warnings_are_safe_for_each_secret_type(tmp_path: Path) -> None:
@@ -416,3 +493,25 @@ def test_env_example_contains_placeholders_only() -> None:
         env_example
     )
     assert "ONE_TIME_SECRET_ENCRYPTION_KEY=\n" in env_example
+
+
+def test_cli_secrets_source_has_no_hidden_or_bidi_format_controls() -> None:
+    source_path = Path("app/slaif_gateway/cli/secrets.py")
+    text = source_path.read_text(encoding="utf-8")
+    bidi_controls = {
+        *range(0x202A, 0x202F),
+        *range(0x2066, 0x206A),
+        0x200E,
+        0x200F,
+        0x061C,
+    }
+
+    bad_chars: list[str] = []
+    for index, char in enumerate(text):
+        codepoint = ord(char)
+        if unicodedata.category(char) == "Cf" or codepoint in bidi_controls:
+            bad_chars.append(
+                f"offset {index}: U+{codepoint:04X} {unicodedata.name(char, 'UNKNOWN')}"
+            )
+
+    assert bad_chars == []

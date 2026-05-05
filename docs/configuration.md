@@ -7,7 +7,8 @@ and [`beta-readiness.md`](beta-readiness.md).
 This gateway is configured with environment variables. Secrets should come from
 environment variables, a deployment secret manager, or Docker secrets. The root
 `.env.example` file is a safe Docker Compose-oriented template only; it must not
-contain real credentials.
+contain real credentials. A copied `.env` file is clear-text local runtime
+configuration and must not be committed.
 
 Migrations are explicit operator actions. The application and `/readyz` do not
 run migrations on startup.
@@ -57,18 +58,21 @@ Targets:
 - `secrets validate-env` checks that the active HMAC secret, admin session
   secret, and one-time encryption key are configured without printing values.
 
-`--write` preserves comments and unrelated env lines, replaces blank or
-placeholder values, and appends the variable if it is missing. It refuses to
-replace an existing non-placeholder value unless `--force` is supplied.
+`--write` intentionally writes generated runtime secrets into the local
+clear-text dotenv file for bootstrap convenience. It preserves comments and
+unrelated env lines, replaces blank or placeholder values, and appends the
+variable if it is missing. It refuses `.env.example` and refuses to replace an
+existing non-placeholder value unless `--force` is supplied.
 `--force` prints only safe rotation warnings: replacing an HMAC secret can
 invalidate keys signed with that version, replacing `ADMIN_SESSION_SECRET` logs
 admins out, and replacing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make pending
 encrypted one-time deliveries undecryptable.
 
 The `.env` file remains local operator configuration and must not be committed.
-The generator is not a complete secret-management system; production
-deployments should use deployment secret managers, Docker secrets, or equivalent
-controls where appropriate.
+On shared systems, run `chmod 600 .env` so other local users cannot read it. The
+generator is not a complete secret-management system; production deployments
+should use deployment secret managers, Docker secrets, or equivalent controls
+where appropriate.
 
 ## Client Vs Upstream Provider Keys
 

@@ -135,9 +135,21 @@ def _write_env_value(path: Path, env_var: str, value: str, *, force: bool) -> No
     if not updated:
         if lines and not lines[-1].endswith("\n"):
             lines[-1] = f"{lines[-1]}\n"
+        # This command intentionally writes operator-generated runtime secrets to a
+        # local dotenv file for self-hosted bootstrap. The CLI refuses .env.example,
+        # does not print generated values when --write is used, warns about permissive
+        # file modes, and docs direct production deployments toward external secret
+        # management where appropriate.
+        # codeql[py/clear-text-storage-sensitive-data]
         lines.append(f"{env_var}={value}\n")
 
     try:
+        # This command intentionally writes operator-generated runtime secrets to a
+        # local dotenv file for self-hosted bootstrap. The CLI refuses .env.example,
+        # does not print generated values when --write is used, warns about permissive
+        # file modes, and docs direct production deployments toward external secret
+        # management where appropriate.
+        # codeql[py/clear-text-storage-sensitive-data]
         path.write_text("".join(lines), encoding="utf-8")
     except OSError as exc:
         raise CliError(f"Could not update env file: {path}") from exc
