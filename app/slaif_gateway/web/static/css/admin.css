@@ -52,6 +52,43 @@ body {
   margin-bottom: 24px;
 }
 
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-logo {
+  display: block;
+  width: 145px;
+  max-width: 100%;
+  height: auto;
+}
+
+.auth-brand {
+  margin-bottom: 18px;
+}
+
+.auth-logo {
+  width: 170px;
+}
+
+.dashboard-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.dashboard-brand-link {
+  flex: 0 0 auto;
+}
+
+.brand-copy .eyebrow {
+  margin-bottom: 4px;
+}
+
 .dashboard-header {
   display: flex;
   align-items: flex-start;
@@ -476,6 +513,16 @@ dd {
 }
 
 @media (max-width: 640px) {
+  .dashboard-brand {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .brand-logo,
+  .auth-logo {
+    width: min(170px, 70vw);
+  }
+
   .dashboard-header {
     flex-direction: column;
   }

@@ -1,14 +1,18 @@
 {% extends "base.html" %}
+{% from "_brand.html" import slaif_brand %}
 
 {% block title %}Admin Dashboard{% endblock %}
 
 {% block body %}
 <section class="dashboard-shell" aria-labelledby="dashboard-heading">
   <header class="dashboard-header">
-    <div>
-      <p class="eyebrow">SLAIF API Gateway</p>
-      <h1 id="dashboard-heading">Admin Dashboard</h1>
-      <p class="muted">Signed in as {{ admin.display_name }} &lt;{{ admin.email }}&gt;</p>
+    <div class="dashboard-brand">
+      {{ slaif_brand(link=true, lockup_class="brand-lockup dashboard-brand-link", logo_class="brand-logo") }}
+      <div class="brand-copy">
+        <p class="eyebrow">Gateway Admin</p>
+        <h1 id="dashboard-heading">Admin Dashboard</h1>
+        <p class="muted">Signed in as {{ admin.display_name }} &lt;{{ admin.email }}&gt;</p>
+      </div>
     </div>
     <form method="post" action="/admin/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
