@@ -185,7 +185,12 @@ controls.
 - `READYZ_INCLUDE_DETAILS` controls whether exact readiness details such as
   Alembic revisions and missing provider-secret env var names are included.
 - `REQUEST_ID_HEADER`, `LOG_LEVEL`, and `STRUCTURED_LOGS` control request IDs
-  and logging output.
+  and application logging output. `LOG_LEVEL` defaults to `INFO`, and
+  `STRUCTURED_LOGS=true` keeps production-style JSON logs enabled by default.
+- `GUNICORN_LOG_LEVEL` and `CELERY_LOG_LEVEL` are Docker/Compose process-level
+  controls for the API process manager and Celery worker/scheduler. They are
+  intentionally shell/Compose settings rather than application `Settings`
+  fields.
 
 Production startup logs warn when risky explicit overrides make `/metrics`
 public or `/readyz` more detailed than the safe default. These warnings are not a
@@ -194,6 +199,28 @@ layer.
 
 Structured logs redact gateway keys, provider keys, passwords, cookies, session
 tokens, token hashes, encrypted payloads, nonces, and other sensitive fields.
+Admin failure pages show a safe diagnostic/reference ID, but never stack traces
+or raw exception text. Operators can search server logs for that ID.
+
+For local diagnostics, prefer:
+
+```bash
+LOG_LEVEL=DEBUG
+STRUCTURED_LOGS=false
+GUNICORN_LOG_LEVEL=debug
+CELERY_LOG_LEVEL=DEBUG
+```
+
+Inspect logs with:
+
+```bash
+docker compose logs -f api
+docker compose logs -f worker scheduler
+docker compose logs api | rg '<diagnostic-id>'
+```
+
+Logs remain redacted, but they are still operator-side operational records and
+must not be treated as a secret store or exposed through the dashboard.
 
 ## Admin Web
 

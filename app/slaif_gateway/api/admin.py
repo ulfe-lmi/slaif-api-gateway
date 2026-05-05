@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
+import structlog
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -134,6 +135,7 @@ from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
+logger = structlog.get_logger(__name__)
 
 _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_created": ("success", "Gateway key created."),
@@ -525,6 +527,15 @@ async def create_admin_key(
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
     except ValueError as exc:
+        diagnostic_id = _admin_diagnostic_id(request)
+        _log_admin_action_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            owner_id=_uuid_for_log(owner_id),
+            cohort_id=_uuid_for_log(cohort_id),
+            email_delivery_mode=_email_delivery_mode_for_log(email_delivery_mode),
+        )
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
@@ -532,6 +543,7 @@ async def create_admin_key(
             options=options,
             form=form,
             error=str(exc),
+            diagnostic_id=diagnostic_id,
             status_code=400,
         )
 
@@ -577,7 +589,16 @@ async def create_admin_key(
                 actor_admin_id=action_context.admin_user.id,
                 reason=parsed_input.note,
             )
-    except (EmailError, KeyManagementError, ValueError):
+    except (EmailError, KeyManagementError, ValueError) as exc:
+        diagnostic_id = _admin_diagnostic_id(request)
+        _log_admin_action_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            owner_id=parsed_input.owner_id,
+            cohort_id=parsed_input.cohort_id,
+            email_delivery_mode=parsed_email_delivery_mode,
+        )
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
@@ -585,6 +606,7 @@ async def create_admin_key(
             options=options,
             form=form,
             error=_ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
+            diagnostic_id=diagnostic_id,
             status_code=400,
         )
 
@@ -597,7 +619,15 @@ async def create_admin_key(
                     actor_admin_id=action_context.admin_user.id,
                     reason=parsed_input.note,
                 )
-        except EmailError:
+        except EmailError as exc:
+            _log_admin_action_failure(
+                request,
+                exc=exc,
+                admin_id=action_context.admin_user.id,
+                owner_id=parsed_input.owner_id,
+                cohort_id=parsed_input.cohort_id,
+                email_delivery_mode=parsed_email_delivery_mode,
+            )
             delivery_result = PendingKeyEmailResult(
                 email_delivery_id=delivery_result.email_delivery_id,
                 one_time_secret_id=delivery_result.one_time_secret_id,
@@ -624,7 +654,16 @@ async def create_admin_key(
                 recipient_email=delivery_result.recipient_email,
                 status="queued",
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _log_admin_action_failure(
+                request,
+                exc=exc,
+                admin_id=action_context.admin_user.id,
+                owner_id=parsed_input.owner_id,
+                cohort_id=parsed_input.cohort_id,
+                email_delivery_mode=parsed_email_delivery_mode,
+                level="error",
+            )
             delivery_result = PendingKeyEmailResult(
                 email_delivery_id=delivery_result.email_delivery_id,
                 one_time_secret_id=delivery_result.one_time_secret_id,
@@ -5438,6 +5477,7 @@ def _render_key_create_form(
     options: dict[str, object],
     form: dict[str, str],
     error: str | None = None,
+    diagnostic_id: str | None = None,
     status_code: int = 200,
 ) -> Response:
     return templates.TemplateResponse(
@@ -5450,6 +5490,7 @@ def _render_key_create_form(
             "cohorts": options["cohorts"],
             "form": form,
             "error": error,
+            "diagnostic_id": diagnostic_id,
         },
         status_code=status_code,
     )
@@ -7109,6 +7150,64 @@ def _csv_export_response(result: AdminCsvExportResult) -> Response:
 
 def _is_checked(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _admin_diagnostic_id(request: Request) -> str:
+    diagnostic_id = getattr(request.state, "gateway_request_id", None)
+    if isinstance(diagnostic_id, str) and diagnostic_id.startswith("gw-"):
+        return diagnostic_id
+    return "gw-unavailable"
+
+
+def _admin_request_id(request: Request) -> str | None:
+    request_id = getattr(request.state, "request_id", None)
+    return request_id if isinstance(request_id, str) and request_id else None
+
+
+def _log_admin_action_failure(
+    request: Request,
+    *,
+    exc: BaseException,
+    admin_id: uuid.UUID | None,
+    owner_id: uuid.UUID | None,
+    cohort_id: uuid.UUID | None,
+    email_delivery_mode: str | None,
+    level: str = "warning",
+) -> None:
+    event: dict[str, object] = {
+        "diagnostic_id": _admin_diagnostic_id(request),
+        "request_id": _admin_request_id(request),
+        "admin_id": str(admin_id) if admin_id is not None else None,
+        "owner_id": str(owner_id) if owner_id is not None else None,
+        "cohort_id": str(cohort_id) if cohort_id is not None else None,
+        "email_delivery_mode": email_delivery_mode,
+        "exception_type": type(exc).__name__,
+    }
+    error_code = getattr(exc, "error_code", None)
+    if isinstance(error_code, str) and error_code:
+        event["error_code"] = error_code
+    safe_message = getattr(exc, "safe_message", None)
+    if isinstance(safe_message, str) and safe_message:
+        event["safe_message"] = safe_message
+
+    if level == "error":
+        logger.error("admin.key_create.failed", **event)
+    else:
+        logger.warning("admin.key_create.failed", **event)
+
+
+def _uuid_for_log(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+def _email_delivery_mode_for_log(value: str | None) -> str:
+    cleaned = (value or "").strip()
+    return cleaned if cleaned in _ADMIN_EMAIL_DELIVERY_MODES else "invalid"
 
 
 def _settings(request: Request) -> Settings:

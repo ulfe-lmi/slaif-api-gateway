@@ -54,6 +54,36 @@ docker compose logs redis
 docker compose logs mailpit
 ```
 
+Follow API or background logs while reproducing an issue:
+
+```bash
+docker compose logs -f api
+docker compose logs -f worker scheduler
+```
+
+Admin failure pages show a safe reference ID such as `gw-...`. Search API logs
+for that diagnostic ID:
+
+```bash
+docker compose logs api | rg '<diagnostic-id>'
+```
+
+For local readable diagnostics, set these values in `.env` and restart the
+affected services:
+
+```bash
+LOG_LEVEL=DEBUG
+STRUCTURED_LOGS=false
+GUNICORN_LOG_LEVEL=debug
+CELERY_LOG_LEVEL=DEBUG
+```
+
+Production should normally remain at `LOG_LEVEL=INFO` with
+`STRUCTURED_LOGS=true`. Logs are redacted and must not include plaintext gateway
+keys, provider keys, raw request or response bodies, cookies, sessions, CSRF
+tokens, encrypted payloads, or nonces, but they can still contain operational
+metadata and should remain operator-side.
+
 ## Port Conflicts
 
 Default host ports:

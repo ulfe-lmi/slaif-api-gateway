@@ -69,10 +69,15 @@ def _redact_event(
     )
 
 
-def bind_request_id(request_id: str | None) -> None:
-    """Bind request_id to structlog context for the current async context."""
+def bind_request_id(request_id: str | None, gateway_request_id: str | None = None) -> None:
+    """Bind request identifiers to structlog context for the current async context."""
+    context: dict[str, str] = {}
     if request_id:
-        structlog.contextvars.bind_contextvars(request_id=redact_text(request_id))
+        context["request_id"] = redact_text(request_id)
+    if gateway_request_id:
+        context["gateway_request_id"] = redact_text(gateway_request_id)
+    if context:
+        structlog.contextvars.bind_contextvars(**context)
 
 
 def clear_log_context() -> None:

@@ -58,8 +58,10 @@ _PROVIDER_KEY_PATTERN = re.compile(
     r"sk-[A-Za-z0-9-]{12,}(?![A-Za-z0-9_.-]))"
 )
 _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|"
-    r"csrf[_-]?token|password|secret|token)=([^&\s;,]+)"
+    r"(?i)\b(api[_-]?key|provider[_-]?key|gateway[_-]?key|plaintext[_-]?key|"
+    r"new[_-]?plaintext[_-]?key|authorization|cookie|"
+    r"access[_-]?token|refresh[_-]?token|session[_-]?token|csrf[_-]?token|"
+    r"token[_-]?hash|encrypted[_-]?payload|nonce|password|secret|token)=([^&\s;,]+)"
 )
 
 

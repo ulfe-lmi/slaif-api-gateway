@@ -16,6 +16,14 @@ passwords, or bearer tokens into tickets, logs, Slack, GitHub, screenshots, or
 audit reasons. Prefer safe identifiers such as UUIDs, public key IDs, request
 IDs, delivery IDs, provider names, redacted values, and timestamps.
 
+Admin pages may show a diagnostic/reference ID such as `gw-...` when an action
+fails. Use that ID to search operator-side logs, for example
+`docker compose logs api | rg '<diagnostic-id>'`. Production should normally use
+`LOG_LEVEL=INFO` with `STRUCTURED_LOGS=true`; for local diagnostics, temporarily
+use `LOG_LEVEL=DEBUG`, `STRUCTURED_LOGS=false`, `GUNICORN_LOG_LEVEL=debug`, and
+`CELERY_LOG_LEVEL=DEBUG`. Logs are redacted, but they are not a dashboard-facing
+secret store.
+
 Runbooks:
 
 - [Provider key rotation](provider-key-rotation.md)
