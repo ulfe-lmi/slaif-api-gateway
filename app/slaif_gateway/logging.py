@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging as stdlib_logging
-from typing import Any
+from typing import Any, TextIO
 
 import structlog
 
@@ -11,7 +11,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.utils.redaction import redact_mapping, redact_text
 
 
-def configure_logging(settings: Settings) -> None:
+def configure_logging(settings: Settings, *, output: TextIO | None = None) -> None:
     """Configure stdlib logging and structlog processors."""
     stdlib_logging.basicConfig(
         level=getattr(stdlib_logging, settings.LOG_LEVEL.upper(), stdlib_logging.INFO),
@@ -35,7 +35,7 @@ def configure_logging(settings: Settings) -> None:
         wrapper_class=structlog.make_filtering_bound_logger(
             getattr(stdlib_logging, settings.LOG_LEVEL.upper(), stdlib_logging.INFO)
         ),
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(file=output),
         cache_logger_on_first_use=False,
     )
 
