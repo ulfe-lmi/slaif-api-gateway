@@ -3,6 +3,12 @@
 This document summarizes the implemented security architecture. It is not a
 formal certification, compliance audit, or penetration-test report.
 
+For operational response procedures, see the
+[`runbooks`](runbooks/README.md), especially provider key rotation, gateway key
+leak response, HMAC secret rotation, one-time-secret encryption key handling,
+database restore, reconciliation, Redis outage, PostgreSQL readiness, ambiguous
+email delivery, and admin access runbooks.
+
 ## Goals
 
 - Reduce damage from gateway bearer key leakage.
@@ -73,6 +79,10 @@ are not formal verification.
 Manual reconciliation exists for expired pending reservations and
 provider-completed streaming finalization failures. Provider-completed repair
 uses stored safe usage/cost metadata and does not call providers.
+
+Operator procedures are documented in
+[`runbooks/stale-reservation-reconciliation.md`](runbooks/stale-reservation-reconciliation.md)
+and [`runbooks/provider-completed-reconciliation.md`](runbooks/provider-completed-reconciliation.md).
 
 Celery/Celery Beat can be configured to inspect reconciliation backlog
 periodically. Scheduled reconciliation is disabled by default and scheduled
@@ -175,6 +185,9 @@ for long streams and TTL cleanup for crash recovery.
 fails closed and development/test fails open. Redis remains fast operational
 state; it is not the hard quota source of truth.
 
+Redis outage handling is documented in
+[`runbooks/redis-outage.md`](runbooks/redis-outage.md).
+
 ## Email And Celery
 
 Asynchronous key delivery uses encrypted `one_time_secrets` rows. Celery task
@@ -195,6 +208,9 @@ pending, and SMTP success finalizes by consuming the one-time secret and marking
 the delivery `sent`. If SMTP may have accepted the message but database
 finalization fails, the row is left or marked `ambiguous`; automatic retry is
 blocked and operators should rotate the key if receipt cannot be confirmed.
+
+Ambiguous email delivery handling is documented in
+[`runbooks/ambiguous-email-delivery.md`](runbooks/ambiguous-email-delivery.md).
 
 ## Redaction And Logging
 
