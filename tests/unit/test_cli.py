@@ -1,4 +1,5 @@
 import json
+import re
 
 import structlog
 from typer.testing import CliRunner
@@ -10,6 +11,12 @@ from slaif_gateway.config import get_settings
 app = cli_main.app
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _plain_stderr(stderr: str) -> str:
+    return " ".join(_ANSI_RE.sub("", stderr).split())
 
 
 def setup_function() -> None:
@@ -52,16 +59,18 @@ def test_cli_rejects_invalid_log_level() -> None:
     result = runner.invoke(app, ["--log-level", "trace", "version"])
 
     assert result.exit_code == 2
-    assert "--log-level must be one of" in result.stderr
-    assert "DEBUG, INFO, WARNING, ERROR" in result.stderr
-    assert "CRITICAL" in result.stderr
+    plain_stderr = _plain_stderr(result.stderr)
+    assert "--log-level must be one of" in plain_stderr
+    assert "DEBUG, INFO, WARNING, ERROR" in plain_stderr
+    assert "CRITICAL" in plain_stderr
 
 
 def test_cli_rejects_verbose_and_log_level_together() -> None:
     result = runner.invoke(app, ["--verbose", "--log-level", "DEBUG", "version"])
 
     assert result.exit_code == 2
-    assert "Use either --verbose or --log-level, not both" in result.stderr
+    plain_stderr = _plain_stderr(result.stderr)
+    assert "Use either --verbose or --log-level, not both" in plain_stderr
 
 
 def test_cli_verbose_logs_redact_fake_secrets(monkeypatch) -> None:
