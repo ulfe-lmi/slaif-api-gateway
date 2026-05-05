@@ -24,6 +24,7 @@ from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.session import get_sessionmaker
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
@@ -36,6 +37,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
@@ -47,6 +49,8 @@ from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
+policy_app = typer.Typer(help="Show or update gateway-key request policy")
+app.add_typer(policy_app, name="policy")
 
 
 class CliKeyError(Exception):
@@ -94,6 +98,7 @@ async def _key_runtime() -> AsyncIterator[tuple[Settings, GatewayKeysRepository,
                 gateway_keys_repository=keys_repository,
                 one_time_secrets_repository=OneTimeSecretsRepository(session),
                 audit_repository=AuditRepository(session),
+                model_routes_repository=ModelRoutesRepository(session),
             )
             yield settings, keys_repository, service
 
@@ -121,6 +126,7 @@ async def _key_email_runtime() -> AsyncIterator[
                 gateway_keys_repository=keys_repository,
                 one_time_secrets_repository=one_time_secrets_repository,
                 audit_repository=audit_repository,
+                model_routes_repository=ModelRoutesRepository(session),
             )
             email_delivery_service = EmailDeliveryService(
                 settings=settings,
@@ -269,6 +275,12 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "updated_at": gateway_key.updated_at,
         "revoked_at": gateway_key.revoked_at,
         "revoked_reason": gateway_key.revoked_reason,
+        "allowed_models": list(gateway_key.allowed_models or []),
+        "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
+        "allow_all_models": gateway_key.allow_all_models,
+        "allow_all_endpoints": gateway_key.allow_all_endpoints,
+        "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
+        "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
     }
 
@@ -295,6 +307,18 @@ def _rate_limit_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, in
     return policy or None
 
 
+def _allowed_providers_from_gateway_key(gateway_key: GatewayKey) -> list[str] | None:
+    metadata_json = getattr(gateway_key, "metadata_json", None)
+    if not isinstance(metadata_json, dict):
+        return None
+    providers = metadata_json.get("allowed_providers")
+    if providers is None:
+        return None
+    if isinstance(providers, list):
+        return [str(provider) for provider in providers if str(provider).strip()]
+    return []
+
+
 def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, object]:
     return {
         "gateway_key_id": result.gateway_key_id,
@@ -315,6 +339,10 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "last_quota_reset_at": result.last_quota_reset_at,
         "quota_reset_count": result.quota_reset_count,
         "rate_limit_policy": result.rate_limit_policy,
+        "allowed_models": result.allowed_models,
+        "allowed_endpoints": result.allowed_endpoints,
+        "allow_all_models": result.allow_all_models,
+        "allow_all_endpoints": result.allow_all_endpoints,
     }
 
 
@@ -720,6 +748,11 @@ async def _update_rate_limits(
         )
 
 
+async def _update_policy(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, _, service):
+        return await service.update_gateway_key_policy(payload)
+
+
 async def _reset_usage(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
     async with _key_runtime() as (_, _, service):
         return await service.reset_gateway_key_usage(payload)
@@ -897,6 +930,14 @@ def create(
         list[str] | None,
         typer.Option("--allowed-endpoint", help="Allowed endpoint; repeatable"),
     ] = None,
+    allow_all_models: Annotated[
+        bool,
+        typer.Option("--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"),
+    ] = False,
+    allow_all_endpoints: Annotated[
+        bool,
+        typer.Option("--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"),
+    ] = False,
     rate_limit_requests_per_minute: Annotated[
         int | None,
         typer.Option(
@@ -974,6 +1015,8 @@ def create(
         request_limit_total=request_limit_total,
         allowed_models=list(allowed_models or []),
         allowed_endpoints=list(allowed_endpoints or []),
+        allow_all_models=allow_all_models,
+        allow_all_endpoints=allow_all_endpoints,
         rate_limit_policy=_rate_limit_policy_from_options(
             requests_per_minute=rate_limit_requests_per_minute,
             tokens_per_minute=rate_limit_tokens_per_minute,
@@ -1093,6 +1136,92 @@ def show(
         _emit_json(safe_row)
         return
     _echo_kv(safe_row)
+
+
+@policy_app.command("show")
+def policy_show(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Show endpoint/model request policy for one gateway key."""
+    try:
+        gateway_key = _run_async(
+            _show_gateway_key(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    payload = {
+        "gateway_key_id": gateway_key.id,
+        "public_key_id": gateway_key.public_key_id,
+        "allowed_models": list(gateway_key.allowed_models or []),
+        "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
+        "allow_all_models": gateway_key.allow_all_models,
+        "allow_all_endpoints": gateway_key.allow_all_endpoints,
+        "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
+        "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
+    }
+    if json_output:
+        _emit_json(payload)
+        return
+    _echo_kv(payload)
+
+
+@policy_app.command("update")
+def policy_update(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    allowed_models: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-model", help="Allowed model ID; repeatable"),
+    ] = None,
+    allowed_endpoints: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-endpoint", help="Allowed /v1 endpoint path; repeatable"),
+    ] = None,
+    allow_all_models: Annotated[
+        bool,
+        typer.Option("--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"),
+    ] = False,
+    allow_all_endpoints: Annotated[
+        bool,
+        typer.Option("--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"),
+    ] = False,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Required audit reason")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Update endpoint/model request policy for one gateway key."""
+    try:
+        result = _run_async(
+            _update_policy(
+                UpdateGatewayKeyPolicyInput(
+                    gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
+                    allowed_models=list(allowed_models or []),
+                    allowed_endpoints=list(allowed_endpoints or []),
+                    allow_all_models=allow_all_models,
+                    allow_all_endpoints=allow_all_endpoints,
+                    actor_admin_id=(
+                        _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                        if actor_admin_id
+                        else None
+                    ),
+                    reason=reason,
+                )
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    safe_result = _management_result_dict(result)
+    if json_output:
+        _emit_json(safe_result)
+        return
+    _echo_kv(safe_result)
 
 
 def _status_command_common(

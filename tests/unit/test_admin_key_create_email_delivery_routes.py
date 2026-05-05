@@ -28,6 +28,8 @@ def _create_data(owner_id: uuid.UUID, **overrides: str) -> dict[str, str]:
         "csrf_token": "dashboard-csrf",
         "owner_id": str(owner_id),
         "valid_days": "30",
+        "allow_all_models": "true",
+        "allow_all_endpoints": "true",
         "reason": "new workshop key",
     }
     data.update(overrides)

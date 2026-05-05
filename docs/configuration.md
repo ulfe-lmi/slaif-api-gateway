@@ -111,6 +111,18 @@ provider settings.
 - `TOKEN_HMAC_SECRET_V1` stores the server-side HMAC pepper for version 1.
 - `TOKEN_HMAC_SECRET` is a legacy/non-production fallback for version 1 only.
 
+Gateway-key request policy separates models from endpoints:
+
+- allowed models are route-backed model IDs such as `gpt-4o-mini`;
+- allowed endpoints are implemented `/v1` paths such as `/v1/models` and
+  `/v1/chat/completions`;
+- `/v1/responses` and legacy `/v1/completions` are rejected until implemented.
+
+Admins can edit this policy from a key detail page with **Update Request
+Policy**. The same validation is used by service and CLI workflows: endpoint
+values must be implemented `/v1` paths, explicit model values must not be
+endpoint paths, and explicit models must match existing enabled routes.
+
 ## Database Configuration
 
 - `DATABASE_URL` is the SQLAlchemy async PostgreSQL URL.

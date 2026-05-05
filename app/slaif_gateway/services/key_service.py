@@ -23,6 +23,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
@@ -33,10 +34,12 @@ from slaif_gateway.services.key_errors import (
     GatewayKeyNotFoundError,
     GatewayKeyRotationError,
     InvalidGatewayKeyLimitsError,
+    InvalidGatewayKeyPolicyError,
     InvalidGatewayKeyStatusTransitionError,
     InvalidGatewayKeyUsageResetError,
     InvalidGatewayKeyValidityError,
 )
+from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy, validate_gateway_key_policy
 from slaif_gateway.utils.crypto import generate_gateway_key, hmac_sha256_token
 from slaif_gateway.utils.secrets import encrypt_secret
 
@@ -55,11 +58,13 @@ class KeyService:
         gateway_keys_repository: GatewayKeysRepository,
         one_time_secrets_repository: OneTimeSecretsRepository,
         audit_repository: AuditRepository,
+        model_routes_repository: object | None = None,
     ) -> None:
         self._settings = settings
         self._gateway_keys_repository = gateway_keys_repository
         self._one_time_secrets_repository = one_time_secrets_repository
         self._audit_repository = audit_repository
+        self._model_routes_repository = model_routes_repository
 
     async def create_gateway_key(self, payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
         """Create key metadata and encrypted one-time delivery payload safely."""
@@ -75,6 +80,12 @@ class KeyService:
         )
 
         rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
+        request_policy = await self._validate_request_policy(
+            allowed_models=payload.allowed_models,
+            allowed_endpoints=payload.allowed_endpoints,
+            allow_all_models=payload.allow_all_models,
+            allow_all_endpoints=payload.allow_all_endpoints,
+        )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
             key_prefix=active_prefix,
@@ -88,8 +99,10 @@ class KeyService:
             cost_limit_eur=payload.cost_limit_eur,
             token_limit_total=payload.token_limit_total,
             request_limit_total=payload.request_limit_total,
-            allowed_models=payload.allowed_models,
-            allowed_endpoints=payload.allowed_endpoints,
+            allowed_models=request_policy.allowed_models,
+            allowed_endpoints=request_policy.allowed_endpoints,
+            allow_all_models=request_policy.allow_all_models,
+            allow_all_endpoints=request_policy.allow_all_endpoints,
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
@@ -144,6 +157,10 @@ class KeyService:
                 "cost_limit_eur": str(payload.cost_limit_eur) if payload.cost_limit_eur else None,
                 "token_limit_total": payload.token_limit_total,
                 "request_limit_total": payload.request_limit_total,
+                "allowed_models": request_policy.allowed_models,
+                "allowed_endpoints": request_policy.allowed_endpoints,
+                "allow_all_models": request_policy.allow_all_models,
+                "allow_all_endpoints": request_policy.allow_all_endpoints,
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
@@ -187,6 +204,53 @@ class KeyService:
             reason=payload.reason,
             old_values=old_values,
             new_values=self._status_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
+    async def update_gateway_key_policy(
+        self,
+        payload: UpdateGatewayKeyPolicyInput,
+    ) -> GatewayKeyManagementResult:
+        """Update endpoint/model request policy without mutating key material or quotas."""
+        cleaned_reason = payload.reason.strip() if payload.reason else ""
+        if not cleaned_reason:
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating request policy.",
+                param="reason",
+            )
+
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        request_policy = await self._validate_request_policy(
+            allowed_models=payload.allowed_models,
+            allowed_endpoints=payload.allowed_endpoints,
+            allow_all_models=payload.allow_all_models,
+            allow_all_endpoints=payload.allow_all_endpoints,
+        )
+
+        old_values = self._policy_audit_values(gateway_key)
+        now = self._now()
+        updated = await self._gateway_keys_repository.update_gateway_key_request_policy(
+            gateway_key.id,
+            allowed_models=request_policy.allowed_models,
+            allowed_endpoints=request_policy.allowed_endpoints,
+            allow_all_models=request_policy.allow_all_models,
+            allow_all_endpoints=request_policy.allow_all_endpoints,
+        )
+        if not updated:
+            raise GatewayKeyNotFoundError()
+        gateway_key.allowed_models = request_policy.allowed_models
+        gateway_key.allowed_endpoints = request_policy.allowed_endpoints
+        gateway_key.allow_all_models = request_policy.allow_all_models
+        gateway_key.allow_all_endpoints = request_policy.allow_all_endpoints
+        self._set_updated_at(gateway_key, now)
+
+        await self._audit_gateway_key_change(
+            action="update_key_policy",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._policy_audit_values(gateway_key),
         )
         return self._management_result(gateway_key, updated_at=now)
 
@@ -655,6 +719,24 @@ class KeyService:
             normalized[key] = value
         return normalized
 
+    async def _validate_request_policy(
+        self,
+        *,
+        allowed_models: list[str],
+        allowed_endpoints: list[str],
+        allow_all_models: bool,
+        allow_all_endpoints: bool,
+    ) -> GatewayKeyPolicy:
+        return await validate_gateway_key_policy(
+            GatewayKeyPolicy(
+                allowed_models=allowed_models,
+                allowed_endpoints=allowed_endpoints,
+                allow_all_models=allow_all_models,
+                allow_all_endpoints=allow_all_endpoints,
+            ),
+            model_routes_repository=self._model_routes_repository,
+        )
+
     @staticmethod
     def _metadata_with_rate_limit_window(
         metadata_json: dict[str, object] | None,
@@ -735,6 +817,17 @@ class KeyService:
         }
 
     @staticmethod
+    def _policy_audit_values(gateway_key: GatewayKey) -> dict[str, object]:
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "allowed_models": list(gateway_key.allowed_models or []),
+            "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
+            "allow_all_models": gateway_key.allow_all_models,
+            "allow_all_endpoints": gateway_key.allow_all_endpoints,
+        }
+
+    @staticmethod
     def _usage_audit_values(gateway_key: GatewayKey) -> dict[str, object]:
         return {
             "gateway_key_id": str(gateway_key.id),
@@ -779,6 +872,10 @@ class KeyService:
             last_quota_reset_at=gateway_key.last_quota_reset_at,
             quota_reset_count=gateway_key.quota_reset_count,
             rate_limit_policy=cls._rate_limit_policy_from_key(gateway_key),
+            allowed_models=list(gateway_key.allowed_models or []),
+            allowed_endpoints=list(gateway_key.allowed_endpoints or []),
+            allow_all_models=gateway_key.allow_all_models,
+            allow_all_endpoints=gateway_key.allow_all_endpoints,
         )
 
     @staticmethod

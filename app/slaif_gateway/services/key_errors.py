@@ -69,6 +69,11 @@ class InvalidGatewayKeyUsageResetError(KeyManagementError):
     message = "Invalid gateway key usage reset"
 
 
+class InvalidGatewayKeyPolicyError(KeyManagementError):
+    error_code = "invalid_gateway_key_policy"
+    message = "Invalid gateway key request policy"
+
+
 class GatewayKeyRotationError(KeyManagementError):
     error_code = "gateway_key_rotation_failed"
     message = "Gateway key rotation failed"

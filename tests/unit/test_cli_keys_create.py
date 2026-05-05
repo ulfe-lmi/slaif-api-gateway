@@ -85,7 +85,9 @@ def test_keys_create_prints_plaintext_key_once(monkeypatch) -> None:
             "--allowed-model",
             "gpt-test-mini",
             "--allowed-endpoint",
-            "chat.completions",
+            "/v1/chat/completions",
+            "--allow-all-models",
+            "--allow-all-endpoints",
             "--actor-admin-id",
             str(ADMIN_ID),
             "--reason",
@@ -109,7 +111,9 @@ def test_keys_create_prints_plaintext_key_once(monkeypatch) -> None:
     assert payload.token_limit_total == 1000
     assert payload.request_limit_total == 20
     assert payload.allowed_models == ["gpt-test-mini"]
-    assert payload.allowed_endpoints == ["chat.completions"]
+    assert payload.allowed_endpoints == ["/v1/chat/completions"]
+    assert payload.allow_all_models is True
+    assert payload.allow_all_endpoints is True
     assert payload.created_by_admin_id == ADMIN_ID
     assert payload.note == "classroom key"
 

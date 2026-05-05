@@ -99,6 +99,10 @@ def _row() -> AdminKeyListRow:
         cost_reserved_eur=Decimal("0.100000000"),
         tokens_reserved_total=5,
         requests_reserved_total=1,
+        allowed_models=("gpt-test",),
+        allowed_endpoints=("/v1/chat/completions",),
+        allow_all_models=False,
+        allow_all_endpoints=False,
         allowed_models_summary="gpt-test",
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="openai",
@@ -210,6 +214,13 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     assert "Gateway Key Detail" in response.text
     assert key.public_key_id in response.text
     assert "Plaintext keys" in response.text
+    assert "Update Request Policy" in response.text
+    assert f'action="/admin/keys/{key.id}/policy"' in response.text
+    assert 'name="allowed_models"' in response.text
+    assert 'name="allowed_endpoints"' in response.text
+    assert 'name="allow_all_models" value="true"' in response.text
+    assert 'name="allow_all_endpoints" value="true"' in response.text
+    assert "Models must not start with" in response.text
 
 
 def test_admin_key_detail_missing_or_invalid_is_safe(monkeypatch) -> None:

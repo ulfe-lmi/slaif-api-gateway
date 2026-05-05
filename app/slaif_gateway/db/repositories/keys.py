@@ -243,6 +243,26 @@ class GatewayKeysRepository:
         await self._session.flush()
         return True
 
+    async def update_gateway_key_request_policy(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        allowed_models: list[str],
+        allowed_endpoints: list[str],
+        allow_all_models: bool,
+        allow_all_endpoints: bool,
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        gateway_key.allowed_models = allowed_models
+        gateway_key.allowed_endpoints = allowed_endpoints
+        gateway_key.allow_all_models = allow_all_models
+        gateway_key.allow_all_endpoints = allow_all_endpoints
+        await self._session.flush()
+        return True
+
     async def update_gateway_key_validity(
         self,
         gateway_key_id: uuid.UUID,

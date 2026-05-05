@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from fastapi.responses import HTMLResponse
 
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import AdminSession, AdminUser
@@ -196,6 +197,80 @@ def test_activate_calls_key_service_with_actor_and_reason(monkeypatch) -> None:
     assert seen["payload"].gateway_key_id == gateway_key_id
     assert seen["payload"].actor_admin_id == admin_user.id
     assert seen["payload"].reason == "resume access"
+
+
+def test_update_policy_requires_reason_before_service_call(monkeypatch) -> None:
+    called = False
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_policy(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
+        update_gateway_key_policy,
+    )
+
+    async def render_key_policy_error(*args, **kwargs):
+        return HTMLResponse(kwargs["error"], status_code=400)
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._render_key_policy_error",
+        render_key_policy_error,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "allowed_models": "gpt-5.2\ngpt-5.1",
+            "allowed_endpoints": "/v1/models\n/v1/chat/completions",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Enter an audit reason before updating request policy" in response.text
+    assert called is False
+
+
+def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatch) -> None:
+    seen = {}
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_policy(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
+        update_gateway_key_policy,
+    )
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "allowed_models": "gpt-5.2\ngpt-5.1",
+            "allowed_endpoints": "/v1/models\n/v1/chat/completions",
+            "reason": "fix swapped policy",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/keys/{gateway_key_id}?message=key_policy_updated"
+    payload = seen["payload"]
+    assert payload.gateway_key_id == gateway_key_id
+    assert payload.actor_admin_id == admin_user.id
+    assert payload.reason == "fix swapped policy"
+    assert payload.allowed_models == ["gpt-5.2", "gpt-5.1"]
+    assert payload.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
+    assert payload.allow_all_models is False
+    assert payload.allow_all_endpoints is False
 
 
 def test_revoke_requires_confirmation_before_service_call(monkeypatch) -> None:

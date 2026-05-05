@@ -65,6 +65,7 @@ class FakeGatewayKeysRepository:
         self.status_calls: list[dict[str, object]] = []
         self.limit_calls: list[dict[str, object]] = []
         self.rate_limit_calls: list[dict[str, object]] = []
+        self.policy_calls: list[dict[str, object]] = []
         self.validity_calls: list[dict[str, object]] = []
         self.reset_calls: list[dict[str, object]] = []
         self.commit_called = False
@@ -158,6 +159,33 @@ class FakeGatewayKeysRepository:
         else:
             metadata["rate_limit_policy"] = {"window_seconds": window_seconds}
         row.metadata_json = metadata
+        return True
+
+    async def update_gateway_key_request_policy(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        allowed_models: list[str],
+        allowed_endpoints: list[str],
+        allow_all_models: bool,
+        allow_all_endpoints: bool,
+    ) -> bool:
+        self.policy_calls.append(
+            {
+                "gateway_key_id": gateway_key_id,
+                "allowed_models": allowed_models,
+                "allowed_endpoints": allowed_endpoints,
+                "allow_all_models": allow_all_models,
+                "allow_all_endpoints": allow_all_endpoints,
+            }
+        )
+        row = self.rows.get(gateway_key_id)
+        if row is None:
+            return False
+        row.allowed_models = allowed_models
+        row.allowed_endpoints = allowed_endpoints
+        row.allow_all_models = allow_all_models
+        row.allow_all_endpoints = allow_all_endpoints
         return True
 
     async def update_gateway_key_limits(

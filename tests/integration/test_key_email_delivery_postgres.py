@@ -174,6 +174,8 @@ def _create_args(owner_id: uuid.UUID, *extra: str) -> list[str]:
         "2026-02-01T00:00:00+00:00",
         "--reason",
         "integration key email",
+        "--allow-all-models",
+        "--allow-all-endpoints",
         *extra,
     ]
 

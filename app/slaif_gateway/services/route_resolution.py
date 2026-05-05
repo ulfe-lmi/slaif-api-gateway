@@ -45,7 +45,7 @@ def _specificity_rank(match_type: str) -> int:
     return 99
 
 
-def _matches_route(requested_model: str, route: ModelRoute) -> bool:
+def matches_model_route(requested_model: str, route: ModelRoute) -> bool:
     if route.match_type == "exact":
         return requested_model == route.requested_model
     if route.match_type == "prefix":
@@ -97,7 +97,7 @@ class RouteResolutionService:
         matched_disabled_provider = False
 
         for route in routes:
-            if not _matches_route(requested_model, route):
+            if not matches_model_route(requested_model, route):
                 continue
             if not route.enabled:
                 matched_disabled_routes = True

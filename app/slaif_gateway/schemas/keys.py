@@ -22,6 +22,8 @@ class CreateGatewayKeyInput:
     request_limit_total: int | None = None
     allowed_models: list[str] = field(default_factory=list)
     allowed_endpoints: list[str] = field(default_factory=list)
+    allow_all_models: bool = False
+    allow_all_endpoints: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
     note: str | None = None
 
@@ -102,6 +104,19 @@ class UpdateGatewayKeyRateLimitsInput:
 
 
 @dataclass(slots=True)
+class UpdateGatewayKeyPolicyInput:
+    """Input payload for changing a gateway key request policy."""
+
+    gateway_key_id: uuid.UUID
+    allowed_models: list[str] = field(default_factory=list)
+    allowed_endpoints: list[str] = field(default_factory=list)
+    allow_all_models: bool = False
+    allow_all_endpoints: bool = False
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
+@dataclass(slots=True)
 class ResetGatewayKeyUsageInput:
     """Input payload for administrative usage-counter repair/reset."""
 
@@ -150,6 +165,10 @@ class GatewayKeyManagementResult:
     last_quota_reset_at: datetime | None = None
     quota_reset_count: int | None = None
     rate_limit_policy: dict[str, int | None] | None = None
+    allowed_models: list[str] | None = None
+    allowed_endpoints: list[str] | None = None
+    allow_all_models: bool | None = None
+    allow_all_endpoints: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
