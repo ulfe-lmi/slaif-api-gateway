@@ -377,6 +377,13 @@ You may allow every catalog model by editing the key policy through the
 dashboard or service workflows, or list only the selected catalog model IDs with
 repeated `--allowed-model` options.
 
+If a key policy is wrong, open the admin dashboard key detail page and use
+**Update Request Policy**. Allowed models are model IDs such as `gpt-4o-mini`;
+allowed endpoints are `/v1` paths such as `/v1/models` and
+`/v1/chat/completions`. The form validates implemented endpoints and existing
+enabled routes so endpoint paths cannot be saved as models, and model IDs cannot
+be saved as endpoints.
+
 Before sending a chat request, verify local model visibility:
 
 ```bash

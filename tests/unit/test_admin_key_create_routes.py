@@ -121,6 +121,10 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="valid_days"' in response.text
     assert 'name="cost_limit_eur"' in response.text
     assert 'name="allowed_models"' in response.text
+    assert 'name="allow_all_models" value="true"' in response.text
+    assert 'name="allowed_endpoints"' in response.text
+    assert 'name="allow_all_endpoints" value="true"' in response.text
+    assert "Models must not start with" in response.text
     assert 'name="rate_limit_requests_per_minute"' in response.text
     assert "Email delivery mode" in response.text
     assert "Send-now and enqueue suppress browser plaintext display" in response.text
@@ -373,12 +377,46 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
     assert payload.request_limit_total == 100
     assert payload.allowed_models == ["gpt-4.1-mini", "openrouter/model", "gpt-4o-mini"]
     assert payload.allowed_endpoints == ["/v1/chat/completions", "/v1/models"]
+    assert payload.allow_all_models is False
+    assert payload.allow_all_endpoints is False
     assert payload.rate_limit_policy == {
         "requests_per_minute": 60,
         "tokens_per_minute": 12000,
         "max_concurrent_requests": 3,
         "window_seconds": 30,
     }
+
+
+def test_create_rejects_swapped_model_and_endpoint_values_before_service_call(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "30",
+            "allowed_models": "/v1/models\n/v1/chat/completions",
+            "allowed_endpoints": "gpt-5.2\ngpt-5.1",
+            "reason": "new workshop key",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Allowed endpoints must be API paths such as /v1/models" in response.text
+    assert called is False
 
 
 def test_create_service_failure_logs_diagnostic_context_and_renders_reference(monkeypatch, capsys) -> None:
@@ -430,6 +468,8 @@ def test_create_service_failure_logs_diagnostic_context_and_renders_reference(mo
             "owner_id": str(owner_id),
             "cohort_id": str(cohort_id),
             "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
             "email_delivery_mode": "pending",
             "reason": "new workshop key",
         },

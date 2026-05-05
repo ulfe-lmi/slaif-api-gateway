@@ -17,6 +17,7 @@ from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.main import create_app
 from slaif_gateway.utils.passwords import hash_admin_password
 from slaif_gateway.utils.secrets import generate_secret_key
@@ -77,6 +78,12 @@ async def _seed_records(database_url: str) -> dict[str, object]:
                     surname="Lovelace",
                     email=f"bulk-exec-owner-{suffix}@example.org",
                     institution_id=institution.id,
+                )
+                await ModelRoutesRepository(session).create_model_route(
+                    requested_model="gpt-test",
+                    provider="openai",
+                    upstream_model="gpt-test",
+                    endpoint="/v1/chat/completions",
                 )
                 return {
                     "admin_id": admin.id,
@@ -326,6 +333,8 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
                     "owner_id": str(owner_id),
                     "valid_days": "15",
                     "cost_limit_eur": "5.00",
+                    "allow_all_models": True,
+                    "allow_all_endpoints": True,
                     "email_delivery_mode": "pending",
                 }
             ]
@@ -352,7 +361,10 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
         assert after_pending["audit_logs"] == after_created["audit_logs"] + 2
         _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys + pending_plaintext)
 
-        enqueue_csv = f"owner_email,valid_days,cost_limit_eur,email_delivery_mode\n{owner_email},10,7.00,enqueue\n"
+        enqueue_csv = (
+            "owner_email,valid_days,cost_limit_eur,allow_all_models,allow_all_endpoints,email_delivery_mode\n"
+            f"{owner_email},10,7.00,true,true,enqueue\n"
+        )
         enqueue = client.post(
             "/admin/keys/bulk-import/execute",
             data={
@@ -381,10 +393,10 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
         _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys + pending_plaintext)
 
         mixed_csv = (
-            "owner_email,valid_days,cost_limit_eur,email_delivery_mode\n"
-            f"{owner_email},12,1.00,none\n"
-            f"{owner_email},13,2.00,pending\n"
-            f"{owner_email},14,3.00,enqueue\n"
+            "owner_email,valid_days,cost_limit_eur,allow_all_models,allow_all_endpoints,email_delivery_mode\n"
+            f"{owner_email},12,1.00,true,true,none\n"
+            f"{owner_email},13,2.00,true,true,pending\n"
+            f"{owner_email},14,3.00,true,true,enqueue\n"
         )
         mixed = client.post(
             "/admin/keys/bulk-import/execute",

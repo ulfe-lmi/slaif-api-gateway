@@ -90,6 +90,8 @@ async def test_generated_keys_and_persisted_key_prefix_use_configured_prefix() -
         request_limit_total=None,
         allowed_models=[],
         allowed_endpoints=[],
+        allow_all_models=True,
+        allow_all_endpoints=True,
         rate_limit_policy={},
     )
 

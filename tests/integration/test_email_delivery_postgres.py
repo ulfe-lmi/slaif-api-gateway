@@ -83,6 +83,8 @@ async def _create_key_delivery(session: AsyncSession, settings: Settings):
             valid_until=datetime(2026, 2, 1, tzinfo=UTC),
             token_limit_total=1000,
             request_limit_total=20,
+            allow_all_models=True,
+            allow_all_endpoints=True,
         )
     )
     delivery = await EmailDeliveriesRepository(session).create_email_delivery(

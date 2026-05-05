@@ -15,6 +15,7 @@ from slaif_gateway.schemas.keys import (
     GatewayKeyManagementResult,
     RevokeGatewayKeyInput,
     SuspendGatewayKeyInput,
+    UpdateGatewayKeyPolicyInput,
 )
 from slaif_gateway.services.key_errors import GatewayKeyAlreadyRevokedError
 
@@ -43,6 +44,10 @@ def _management_result(status: str = "suspended") -> GatewayKeyManagementResult:
         cost_reserved_eur=Decimal("0"),
         tokens_reserved_total=0,
         requests_reserved_total=0,
+        allowed_models=["gpt-5.2"],
+        allowed_endpoints=["/v1/models", "/v1/chat/completions"],
+        allow_all_models=False,
+        allow_all_endpoints=False,
     )
 
 
@@ -70,6 +75,11 @@ def _gateway_key_row() -> SimpleNamespace:
         updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         revoked_at=None,
         revoked_reason=None,
+        allowed_models=["gpt-5.2"],
+        allowed_endpoints=["/v1/models", "/v1/chat/completions"],
+        allow_all_models=False,
+        allow_all_endpoints=False,
+        metadata_json={"allowed_providers": ["openai"]},
         token_hash="must-not-print",
         encrypted_payload="must-not-print",
         nonce="must-not-print",
@@ -117,7 +127,61 @@ def test_keys_list_and_show_output_safe_metadata(monkeypatch) -> None:
         assert "plaintext" not in output
         assert "encrypted_payload" not in output
         assert "nonce" not in output
-    assert json.loads(show_result.stdout)["id"] == str(GATEWAY_KEY_ID)
+    show_payload = json.loads(show_result.stdout)
+    assert show_payload["id"] == str(GATEWAY_KEY_ID)
+    assert show_payload["allowed_models"] == ["gpt-5.2"]
+    assert show_payload["allowed_endpoints"] == ["/v1/models", "/v1/chat/completions"]
+    assert show_payload["allow_all_models"] is False
+    assert show_payload["allow_all_endpoints"] is False
+    assert show_payload["allowed_providers"] == ["openai"]
+
+
+def test_policy_show_and_update_use_safe_policy_payloads(monkeypatch) -> None:
+    seen: dict[str, UpdateGatewayKeyPolicyInput] = {}
+
+    async def fake_show(gateway_key_id: uuid.UUID) -> SimpleNamespace:
+        assert gateway_key_id == GATEWAY_KEY_ID
+        return _gateway_key_row()
+
+    async def fake_update(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyManagementResult:
+        seen["payload"] = payload
+        return _management_result("active")
+
+    monkeypatch.setattr(keys_cli, "_show_gateway_key", fake_show)
+    monkeypatch.setattr(keys_cli, "_update_policy", fake_update)
+
+    show_result = runner.invoke(app, ["keys", "policy", "show", str(GATEWAY_KEY_ID), "--json"])
+    update_result = runner.invoke(
+        app,
+        [
+            "keys",
+            "policy",
+            "update",
+            str(GATEWAY_KEY_ID),
+            "--allowed-model",
+            "gpt-5.2",
+            "--allowed-endpoint",
+            "/v1/models",
+            "--allowed-endpoint",
+            "/v1/chat/completions",
+            "--actor-admin-id",
+            str(ADMIN_ID),
+            "--reason",
+            "Fix request policy",
+            "--json",
+        ],
+    )
+
+    assert show_result.exit_code == 0
+    assert json.loads(show_result.stdout)["allowed_models"] == ["gpt-5.2"]
+    assert update_result.exit_code == 0
+    payload = seen["payload"]
+    assert payload.gateway_key_id == GATEWAY_KEY_ID
+    assert payload.allowed_models == ["gpt-5.2"]
+    assert payload.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
+    assert payload.actor_admin_id == ADMIN_ID
+    assert payload.reason == "Fix request policy"
+    assert "token_hash" not in update_result.stdout
 
 
 def test_status_commands_call_service_with_actor_and_reason(monkeypatch) -> None:

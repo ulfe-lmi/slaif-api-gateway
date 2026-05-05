@@ -20,6 +20,7 @@ from slaif_gateway.db.models import AuditLog, GatewayKey, OneTimeSecret, UsageLe
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.utils.crypto import parse_gateway_key_public_id
 from slaif_gateway.utils.secrets import generate_secret_key
 from tests.integration.db_test_utils import run_alembic_upgrade_head
@@ -124,6 +125,12 @@ async def _create_owner_context(database_url: str) -> OwnerContext:
                 email=f"{unique}@example.org",
                 institution_id=institution.id,
                 notes="CLI key integration owner",
+            )
+            await ModelRoutesRepository(session).create_model_route(
+                requested_model="gpt-test-mini",
+                provider="openai",
+                upstream_model="gpt-test-mini",
+                endpoint="/v1/chat/completions",
             )
             await session.commit()
             return OwnerContext(
@@ -467,6 +474,8 @@ def test_keys_create_json_secret_output_file_excludes_plaintext_stdout(
             str(context.owner_id),
             "--valid-days",
             "30",
+            "--allow-all-models",
+            "--allow-all-endpoints",
             "--json",
             "--secret-output-file",
             str(secret_path),

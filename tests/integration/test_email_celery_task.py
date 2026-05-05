@@ -72,6 +72,8 @@ async def test_email_celery_task_sends_with_ids_only(
                     owner_id=owner.id,
                     valid_from=datetime(2026, 1, 1, tzinfo=UTC),
                     valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+                    allow_all_models=True,
+                    allow_all_endpoints=True,
                 )
             )
             delivery = await EmailDeliveriesRepository(session).create_email_delivery(
@@ -134,6 +136,8 @@ async def test_email_celery_task_refuses_ambiguous_delivery(
                     owner_id=owner.id,
                     valid_from=datetime(2026, 1, 1, tzinfo=UTC),
                     valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+                    allow_all_models=True,
+                    allow_all_endpoints=True,
                 )
             )
             delivery = await EmailDeliveriesRepository(session).create_email_delivery(

@@ -354,8 +354,8 @@ def build_key_import_execution_plan(
     for row in preview.rows:
         if row.allowed_providers:
             raise ValueError("allowed_providers is not supported by the current key creation service.")
-        if row.allow_all_models or row.allow_all_endpoints or row.allow_all_providers:
-            raise ValueError("allow_all policy flags are not supported by the current key creation service.")
+        if row.allow_all_providers:
+            raise ValueError("allow_all_providers is not supported by the current key creation service.")
 
     plaintext_display_required = preview.plaintext_display_required
     if plaintext_display_required and not confirm_plaintext_display:
@@ -986,6 +986,8 @@ def _create_gateway_key_input_from_row(
         request_limit_total=row.request_limit,
         allowed_models=list(row.allowed_models),
         allowed_endpoints=list(row.allowed_endpoints),
+        allow_all_models=row.allow_all_models,
+        allow_all_endpoints=row.allow_all_endpoints,
         rate_limit_policy=dict(row.rate_limit_policy) if row.rate_limit_policy else None,
         note=reason,
     )

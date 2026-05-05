@@ -40,6 +40,10 @@ class AdminKeyListRow:
     cost_reserved_eur: Decimal
     tokens_reserved_total: int
     requests_reserved_total: int
+    allowed_models: tuple[str, ...]
+    allowed_endpoints: tuple[str, ...]
+    allow_all_models: bool
+    allow_all_endpoints: bool
     allowed_models_summary: str
     allowed_endpoints_summary: str
     allowed_providers_summary: str

@@ -95,6 +95,8 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
             "owner_id": str(owner_id),
             "cohort_id": str(cohort.id),
             "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
             "reason": "new workshop key",
         },
     )

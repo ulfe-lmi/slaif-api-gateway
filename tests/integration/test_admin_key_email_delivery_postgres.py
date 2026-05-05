@@ -219,6 +219,8 @@ def _create_payload(owner_id: uuid.UUID, cohort_id: uuid.UUID, mode: str) -> dic
         "valid_days": "30",
         "reason": f"dashboard email mode {mode}",
         "email_delivery_mode": mode,
+        "allow_all_models": "true",
+        "allow_all_endpoints": "true",
     }
 
 

@@ -86,6 +86,12 @@ from slaif_gateway.services.key_import import (
     validate_key_import_rows,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_policy_validation import (
+    IMPLEMENTED_CLIENT_ENDPOINTS,
+    MODELS_ENDPOINT,
+    GatewayKeyPolicy,
+    validate_gateway_key_policy_values,
+)
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
 from slaif_gateway.services.cohort_service import CohortService
 from slaif_gateway.services.institution_service import InstitutionService
@@ -128,6 +134,7 @@ from slaif_gateway.schemas.keys import (
     RotateGatewayKeyInput,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyValidityInput,
 )
 from slaif_gateway.utils.redaction import redact_text
@@ -144,6 +151,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_revoked": ("success", "Gateway key revoked permanently."),
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
+    "key_policy_updated": ("success", "Gateway key request policy updated."),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
     "rotation_confirmation_required": ("error", "Confirm key rotation before continuing."),
     "rotation_reason_required": ("error", "Enter an audit reason before rotating this key."),
@@ -151,6 +159,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
     "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
     "limits_reason_required": ("error", "Enter an audit reason before updating hard quota limits."),
+    "key_policy_reason_required": ("error", "Enter an audit reason before updating request policy."),
     "usage_reset_confirmation_required": ("error", "Confirm usage-counter reset before continuing."),
     "usage_reset_reason_required": ("error", "Enter an audit reason before resetting usage counters."),
     "reserved_reset_confirmation_required": (
@@ -159,11 +168,13 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "invalid_gateway_key_validity": ("error", "Enter a valid key validity window."),
     "invalid_gateway_key_limits": ("error", "Enter valid positive hard quota limits."),
+    "invalid_gateway_key_policy": ("error", "Enter a valid key request policy."),
     "gateway_key_no_validity_change": ("error", "Change at least one validity field before submitting."),
     "gateway_key_no_limit_change": ("error", "Change or clear at least one hard quota limit before submitting."),
     "gateway_key_already_active": ("error", "Gateway key is already active."),
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
     "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
+    "gateway_key_policy_failed": ("error", "Gateway key request policy update failed."),
     "gateway_key_create_failed": ("error", "Gateway key creation failed."),
     "invalid_email_delivery_mode": ("error", "Select a valid key email delivery mode."),
     "email_delivery_sent": ("success", "Key email delivery sent."),
@@ -484,6 +495,8 @@ async def create_admin_key(
     request_limit_total: str = Form(""),
     allowed_models: str = Form(""),
     allowed_endpoints: str = Form(""),
+    allow_all_models: str = Form(""),
+    allow_all_endpoints: str = Form(""),
     rate_limit_requests_per_minute: str = Form(""),
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
@@ -510,6 +523,8 @@ async def create_admin_key(
         "request_limit_total": request_limit_total,
         "allowed_models": allowed_models,
         "allowed_endpoints": allowed_endpoints,
+        "allow_all_models": allow_all_models,
+        "allow_all_endpoints": allow_all_endpoints,
         "rate_limit_requests_per_minute": rate_limit_requests_per_minute,
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
@@ -526,7 +541,7 @@ async def create_admin_key(
         )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
-    except ValueError as exc:
+    except (KeyManagementError, ValueError) as exc:
         diagnostic_id = _admin_diagnostic_id(request)
         _log_admin_action_failure(
             request,
@@ -599,13 +614,18 @@ async def create_admin_key(
             cohort_id=parsed_input.cohort_id,
             email_delivery_mode=parsed_email_delivery_mode,
         )
+        error_message = (
+            exc.safe_message
+            if isinstance(exc, KeyManagementError) and exc.error_code == "invalid_gateway_key_policy"
+            else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1]
+        )
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             options=options,
             form=form,
-            error=_ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
+            error=error_message,
             diagnostic_id=diagnostic_id,
             status_code=400,
         )
@@ -934,16 +954,79 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
     except AdminKeyNotFoundError:
         return HTMLResponse("Gateway key not found.", status_code=404)
 
-    return templates.TemplateResponse(
+    available_model_routes = await _load_key_policy_route_options(request)
+    return _render_key_detail(
         request,
-        "keys/detail.html",
-        {
-            "admin": context.admin_user,
-            "csrf_token": csrf_token,
-            "admin_status_message": _admin_status_message(request),
-            "key": key,
-        },
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        key=key,
+        available_model_routes=available_model_routes,
     )
+
+
+@router.post("/keys/{gateway_key_id}/policy", response_class=HTMLResponse)
+async def update_admin_key_policy(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    allowed_models: str = Form(""),
+    allowed_endpoints: str = Form(""),
+    allow_all_models: str = Form(""),
+    allow_all_endpoints: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return await _render_key_policy_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=_ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
+        )
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.update_gateway_key_policy(
+                UpdateGatewayKeyPolicyInput(
+                    gateway_key_id=parsed_key_id,
+                    allowed_models=_parse_admin_text_list(allowed_models),
+                    allowed_endpoints=_parse_admin_text_list(allowed_endpoints),
+                    allow_all_models=_is_checked(allow_all_models),
+                    allow_all_endpoints=_is_checked(allow_all_endpoints),
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except KeyManagementError as exc:
+        _log_admin_key_policy_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            gateway_key_id=parsed_key_id,
+        )
+        return await _render_key_policy_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=exc.safe_message,
+            diagnostic_id=_admin_diagnostic_id(request),
+        )
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_policy_updated")
 
 
 @router.post("/keys/{gateway_key_id}/suspend", response_class=HTMLResponse)
@@ -5048,6 +5131,7 @@ async def _admin_key_management_service_scope(request: Request) -> AsyncIterator
                 gateway_keys_repository=GatewayKeysRepository(session),
                 one_time_secrets_repository=OneTimeSecretsRepository(session),
                 audit_repository=AuditRepository(session),
+                model_routes_repository=ModelRoutesRepository(session),
             )
 
 
@@ -5064,6 +5148,7 @@ async def _admin_key_management_runtime_scope(
                 gateway_keys_repository=keys_repository,
                 one_time_secrets_repository=OneTimeSecretsRepository(session),
                 audit_repository=AuditRepository(session),
+                model_routes_repository=ModelRoutesRepository(session),
             )
 
 
@@ -5082,6 +5167,7 @@ async def _admin_key_creation_runtime_scope(
                     gateway_keys_repository=GatewayKeysRepository(session),
                     one_time_secrets_repository=OneTimeSecretsRepository(session),
                     audit_repository=AuditRepository(session),
+                    model_routes_repository=ModelRoutesRepository(session),
                 ),
             )
 
@@ -5106,6 +5192,7 @@ async def _admin_key_email_delivery_runtime_scope(
                     gateway_keys_repository=keys_repository,
                     one_time_secrets_repository=one_time_secrets_repository,
                     audit_repository=audit_repository,
+                    model_routes_repository=ModelRoutesRepository(session),
                 ),
                 EmailDeliveryService(
                     settings=settings,
@@ -5387,6 +5474,79 @@ async def _load_key_create_form_options(request: Request) -> dict[str, object]:
     return {"owners": owners, "cohorts": cohorts}
 
 
+async def _load_key_policy_route_options(request: Request) -> dict[str, list[object]]:
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+        async with session_factory() as session:
+            async with session.begin():
+                routes = await ModelRoutesRepository(session).list_enabled_model_routes()
+    except (AttributeError, RuntimeError):
+        return {}
+
+    grouped: dict[str, list[object]] = {}
+    for route in routes:
+        if route.endpoint not in IMPLEMENTED_CLIENT_ENDPOINTS:
+            continue
+        grouped.setdefault(route.endpoint, []).append(route)
+    return grouped
+
+
+def _render_key_detail(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    key: object,
+    available_model_routes: dict[str, list[object]],
+    error: str | None = None,
+    diagnostic_id: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "keys/detail.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "admin_status_message": _admin_status_message(request),
+            "key": key,
+            "available_model_routes": available_model_routes,
+            "policy_endpoint_options": sorted(IMPLEMENTED_CLIENT_ENDPOINTS),
+            "models_endpoint": MODELS_ENDPOINT,
+            "chat_completions_endpoint": CHAT_COMPLETIONS_ENDPOINT,
+            "error": error,
+            "diagnostic_id": diagnostic_id,
+        },
+        status_code=status_code,
+    )
+
+
+async def _render_key_policy_error(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    gateway_key_id: uuid.UUID,
+    error: str,
+    diagnostic_id: str | None = None,
+) -> Response:
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(gateway_key_id)
+    except AdminKeyNotFoundError:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+    return _render_key_detail(
+        request,
+        admin=admin,
+        csrf_token=csrf_token,
+        key=key,
+        available_model_routes=await _load_key_policy_route_options(request),
+        error=error,
+        diagnostic_id=diagnostic_id,
+        status_code=400,
+    )
+
+
 async def _load_record_form_institutions(request: Request) -> list[object]:
     async with _admin_records_dashboard_service_scope(request) as service:
         return await service.list_institutions(limit=200)
@@ -5558,6 +5718,8 @@ def _default_key_create_form() -> dict[str, str]:
         "request_limit_total": "",
         "allowed_models": "",
         "allowed_endpoints": "",
+        "allow_all_models": "",
+        "allow_all_endpoints": "",
         "rate_limit_requests_per_minute": "",
         "rate_limit_tokens_per_minute": "",
         "rate_limit_concurrent_requests": "",
@@ -6810,6 +6972,15 @@ def _parse_key_create_form(
     except ValueError as exc:
         raise ValueError("Enter valid positive quota and rate-limit values.") from exc
 
+    request_policy = validate_gateway_key_policy_values(
+        GatewayKeyPolicy(
+            allowed_models=_parse_admin_text_list(form.get("allowed_models")),
+            allowed_endpoints=_parse_admin_text_list(form.get("allowed_endpoints")),
+            allow_all_models=_is_checked(form.get("allow_all_models")),
+            allow_all_endpoints=_is_checked(form.get("allow_all_endpoints")),
+        )
+    )
+
     return CreateGatewayKeyInput(
         owner_id=owner_id,
         cohort_id=cohort_id,
@@ -6819,8 +6990,10 @@ def _parse_key_create_form(
         cost_limit_eur=cost_limit_eur,
         token_limit_total=token_limit_total,
         request_limit_total=request_limit_total,
-        allowed_models=_parse_admin_text_list(form.get("allowed_models")),
-        allowed_endpoints=_parse_admin_text_list(form.get("allowed_endpoints")),
+        allowed_models=request_policy.allowed_models,
+        allowed_endpoints=request_policy.allowed_endpoints,
+        allow_all_models=request_policy.allow_all_models,
+        allow_all_endpoints=request_policy.allow_all_endpoints,
         rate_limit_policy=rate_limit_policy,
         note=cleaned_reason,
     )
@@ -7194,6 +7367,26 @@ def _log_admin_action_failure(
         logger.error("admin.key_create.failed", **event)
     else:
         logger.warning("admin.key_create.failed", **event)
+
+
+def _log_admin_key_policy_failure(
+    request: Request,
+    *,
+    exc: BaseException,
+    admin_id: uuid.UUID | None,
+    gateway_key_id: uuid.UUID,
+) -> None:
+    event: dict[str, object] = {
+        "diagnostic_id": _admin_diagnostic_id(request),
+        "request_id": _admin_request_id(request),
+        "admin_id": str(admin_id) if admin_id is not None else None,
+        "gateway_key_id": str(gateway_key_id),
+        "exception_type": type(exc).__name__,
+    }
+    error_code = getattr(exc, "error_code", None)
+    if isinstance(error_code, str) and error_code:
+        event["error_code"] = error_code
+    logger.warning("admin.key_policy_update.failed", **event)
 
 
 def _uuid_for_log(value: str | None) -> uuid.UUID | None:

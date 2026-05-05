@@ -15,6 +15,7 @@ from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.main import create_app
 from slaif_gateway.utils.passwords import hash_admin_password
 from slaif_gateway.utils.secrets import generate_secret_key
@@ -72,6 +73,19 @@ async def _create_admin_owner_and_cohort(database_url: str) -> dict[str, object]
                     surname="Lovelace",
                     email=f"owner-{uuid.uuid4()}@example.org",
                     institution_id=institution.id,
+                )
+                routes = ModelRoutesRepository(session)
+                await routes.create_model_route(
+                    requested_model="gpt-test",
+                    provider="openai",
+                    upstream_model="gpt-test",
+                    endpoint="/v1/chat/completions",
+                )
+                await routes.create_model_route(
+                    requested_model="openrouter/test",
+                    provider="openrouter",
+                    upstream_model="openrouter/test",
+                    endpoint="/v1/chat/completions",
                 )
                 return {
                     "admin_email": admin.email,
