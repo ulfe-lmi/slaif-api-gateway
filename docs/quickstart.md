@@ -235,28 +235,91 @@ docker compose run --rm api slaif-gateway owners create \
   --institution-id <institution-id>
 ```
 
-### Bootstrap OpenAI Completions models
+### Import provider, route, and pricing metadata before testing real OpenAI calls
 
-SLAIF does not call OpenAI to discover models for `/v1/models`. The models list
-is built from local enabled, visible route metadata filtered by the gateway key's
-model policy. First-time OpenAI Chat Completions setup therefore needs local
-provider, route, and pricing rows.
+Setting `OPENAI_UPSTREAM_API_KEY` is necessary for real OpenAI forwarding, but
+it is not sufficient. SLAIF does not call OpenAI to discover models for
+`/v1/models`. The models endpoint returns local route metadata that is:
 
-The catalog bootstrap command seeds exact OpenAI routes for the curated
-Completions-compatible Chat Completions catalog. It is about
-`/v1/chat/completions` now. Legacy `/v1/completions` is not implemented in this
-repository state, and `--include-legacy-completions` is rejected.
+- enabled;
+- visible in the model list;
+- allowed by the gateway key's endpoint and model policy.
 
-For real accounting, create an operator-controlled pricing CSV with one row for
-every selected catalog model. The required columns are:
+If no local routes have been imported, `/v1/models` correctly returns an empty
+OpenAI-shaped list:
 
-```text
-provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
+```json
+{"object":"list","data":[]}
 ```
 
-The checked-in example file is safe for smoke tests, but its prices are
-placeholder values and are not production pricing. Copy it and replace the
-prices before real use:
+If local pricing is missing, cost-limited requests fail closed before provider
+forwarding. The recommended first-time path is:
+
+1. Bootstrap the OpenAI Completions catalog.
+2. Verify provider, route, and pricing metadata exists.
+3. Create or edit a gateway key with the right allowed endpoints and models.
+4. Test `/v1/models`.
+5. Then test `chat.completions`.
+
+The catalog bootstrap command seeds local metadata for the curated
+Completions-compatible Chat Completions catalog. It creates or verifies the
+`openai` provider config, exact `/v1/chat/completions` routes, and pricing rows.
+It is about `/v1/chat/completions` now. Legacy `/v1/completions` is not
+implemented in this repository state, and `--include-legacy-completions` is
+rejected.
+
+Fast local smoke path with explicit placeholder pricing:
+
+```bash
+docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-mode placeholder \
+  --confirm-placeholder-pricing \
+  --apply
+```
+
+Verify the metadata before creating or testing a key:
+
+```bash
+docker compose run --rm api slaif-gateway providers list
+docker compose run --rm api slaif-gateway routes list
+docker compose run --rm api slaif-gateway pricing list
+```
+
+For the first gateway key, use these policy values:
+
+```text
+Allowed endpoints:
+/v1/models
+/v1/chat/completions
+
+Allowed models:
+gpt-4o-mini
+```
+
+Then test model visibility with the standard OpenAI-compatible client
+variables. `OPENAI_API_KEY` is the gateway-issued key, not the upstream OpenAI
+provider key:
+
+```bash
+export OPENAI_API_KEY="sk-slaif-..."
+export OPENAI_BASE_URL="http://localhost:8000/v1"
+
+curl -fsS "$OPENAI_BASE_URL/models" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" | python -m json.tool
+```
+
+Expected outcome: the returned `data` array should include `gpt-4o-mini`, or
+whichever catalog model the key allows. If `data` is empty, use the "No Models
+Are Visible" troubleshooting checklist below.
+
+Placeholder pricing is only for local wiring smoke tests. It must not be used
+for real budgeting decisions.
+
+Real pricing path:
+
+1. Copy the example file.
+2. Replace placeholder prices with operator-reviewed pricing assumptions.
+3. Run the bootstrap command in the default `require-file` mode.
 
 ```bash
 cp docs/examples/openai-completions-pricing.example.csv local-openai-pricing.csv
@@ -267,19 +330,16 @@ docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
   --apply
 ```
 
-For a local wiring smoke where cost accounting must not be treated as real, you
-can use explicit placeholder mode instead:
+The required pricing CSV columns are:
 
-```bash
-docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-mode placeholder \
-  --confirm-placeholder-pricing \
-  --apply
+```text
+provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
 ```
 
-Both modes create local metadata only. They do not call OpenAI, fetch pricing,
-read provider key values, create gateway keys, or alter `.env`. The provider
-config stores only the env var name `OPENAI_UPSTREAM_API_KEY`.
+Both bootstrap modes create local metadata only. They do not call OpenAI, fetch
+pricing, read provider key values, create gateway keys, or alter `.env`. The
+provider config stores only the env var name `OPENAI_UPSTREAM_API_KEY`.
+`OPENAI_API_KEY` remains the client-side gateway key variable.
 
 Add FX metadata if any imported pricing uses a non-EUR currency. The example
 below is a manual local assumption, not a fetched FX rate:
@@ -467,11 +527,33 @@ password from the `admin create` command. Login errors are intentionally generic
 
 ### No Models Are Visible
 
-`/v1/models` only returns models visible to the gateway key. Check that provider
-config, route metadata, key model policy, and key status/validity are correct.
-Run `slaif-gateway bootstrap openai-completions-catalog --pricing-file ... --apply`
-to seed OpenAI Chat Completions routes, then allow `/v1/models`,
-`/v1/chat/completions`, and the desired catalog model IDs on the gateway key.
+`/v1/models` only returns local enabled, visible routes allowed by the gateway
+key policy. Check each item directly:
+
+1. Did you run `slaif-gateway bootstrap openai-completions-catalog ... --apply`?
+2. Does `slaif-gateway providers list` show `openai`?
+3. Does `slaif-gateway routes list` show `gpt-4o-mini`, or the model you are
+   requesting?
+4. Does `slaif-gateway pricing list` show rows for `openai`, the model, and
+   `chat.completions`?
+5. Does the gateway key allow `/v1/models`?
+6. Does the gateway key allow `/v1/chat/completions`?
+7. Does the gateway key allow the requested model, or allow all catalog models?
+8. Is the key active, not expired, not suspended, and not revoked?
+9. Is `OPENAI_UPSTREAM_API_KEY` set in the API container?
+10. Did you restart API, worker, and scheduler after changing `.env`?
+
+Check that the upstream key is visible to the container without printing the
+secret:
+
+```bash
+docker compose run --rm api python - <<'PY'
+import os
+key = os.environ.get("OPENAI_UPSTREAM_API_KEY", "")
+print("OPENAI_UPSTREAM_API_KEY set:", bool(key))
+print("prefix:", key[:7] + "..." if key else "<missing>")
+PY
+```
 
 ### Unknown Pricing Or FX
 
