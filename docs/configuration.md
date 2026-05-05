@@ -7,7 +7,8 @@ and [`beta-readiness.md`](beta-readiness.md).
 This gateway is configured with environment variables. Secrets should come from
 environment variables, a deployment secret manager, or Docker secrets. The root
 `.env.example` file is a safe Docker Compose-oriented template only; it must not
-contain real credentials.
+contain real credentials. A copied `.env` file is clear-text local runtime
+configuration and must not be committed.
 
 Migrations are explicit operator actions. The application and `/readyz` do not
 run migrations on startup.
@@ -25,6 +26,53 @@ Production requires strong, non-placeholder values for:
 `ONE_TIME_SECRET_ENCRYPTION_KEY` must be base64url-encoded 32-byte key material.
 Rotate any provider or SMTP secret that is accidentally committed, logged, or
 shared.
+
+## Generating Local Runtime Secrets
+
+For local setup or initial self-hosted bootstrap, use the CLI to generate one
+server runtime secret at a time:
+
+```bash
+slaif-gateway secrets generate hmac --version 1
+slaif-gateway secrets generate admin-session
+slaif-gateway secrets generate one-time
+```
+
+Without `--write`, each command prints only the generated value to stdout. To
+update a local env file safely, copy `.env.example` first and write each target
+variable explicitly:
+
+```bash
+cp .env.example .env
+slaif-gateway secrets generate hmac --version 1 --env-file .env --write
+slaif-gateway secrets generate admin-session --env-file .env --write
+slaif-gateway secrets generate one-time --env-file .env --write
+slaif-gateway secrets validate-env --env-file .env
+```
+
+Targets:
+
+- `secrets generate hmac --version 1` writes `TOKEN_HMAC_SECRET_V1`.
+- `secrets generate admin-session` writes `ADMIN_SESSION_SECRET`.
+- `secrets generate one-time` writes `ONE_TIME_SECRET_ENCRYPTION_KEY`.
+- `secrets validate-env` checks that the active HMAC secret, admin session
+  secret, and one-time encryption key are configured without printing values.
+
+`--write` intentionally writes generated runtime secrets into the local
+clear-text dotenv file for bootstrap convenience. It preserves comments and
+unrelated env lines, replaces blank or placeholder values, and appends the
+variable if it is missing. It refuses `.env.example` and refuses to replace an
+existing non-placeholder value unless `--force` is supplied.
+`--force` prints only safe rotation warnings: replacing an HMAC secret can
+invalidate keys signed with that version, replacing `ADMIN_SESSION_SECRET` logs
+admins out, and replacing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make pending
+encrypted one-time deliveries undecryptable.
+
+The `.env` file remains local operator configuration and must not be committed.
+On shared systems, run `chmod 600 .env` so other local users cannot read it. The
+generator is not a complete secret-management system; production deployments
+should use deployment secret managers, Docker secrets, or equivalent controls
+where appropriate.
 
 ## Client Vs Upstream Provider Keys
 

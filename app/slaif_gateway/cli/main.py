@@ -21,6 +21,7 @@ from slaif_gateway.cli.pricing import app as pricing_app
 from slaif_gateway.cli.quota import app as quota_app
 from slaif_gateway.cli.providers import app as providers_app
 from slaif_gateway.cli.routes import app as routes_app
+from slaif_gateway.cli.secrets import app as secrets_app
 from slaif_gateway.cli.usage import app as usage_app
 from slaif_gateway.config import get_settings
 from slaif_gateway.logging import configure_logging
@@ -39,6 +40,7 @@ app.add_typer(pricing_app, name="pricing")
 app.add_typer(fx_app, name="fx")
 app.add_typer(usage_app, name="usage")
 app.add_typer(quota_app, name="quota")
+app.add_typer(secrets_app, name="secrets")
 
 _ACCEPTED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 logger = structlog.get_logger(__name__)
