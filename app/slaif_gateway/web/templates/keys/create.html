@@ -20,7 +20,12 @@
   </header>
 
   {% if error %}
-  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+    {% if diagnostic_id %}
+    <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
+    {% endif %}
+  </div>
   {% endif %}
 
   <form class="create-form" method="post" action="/admin/keys/create">

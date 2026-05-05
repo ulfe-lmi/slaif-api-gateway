@@ -59,6 +59,8 @@ services:
       - ${WEB_CONCURRENCY:-2}
       - --timeout
       - "120"
+      - --log-level
+      - ${GUNICORN_LOG_LEVEL:-info}
 
   worker:
     build:
@@ -77,7 +79,7 @@ services:
       - -A
       - slaif_gateway.workers.celery_app:celery_app
       - worker
-      - --loglevel=INFO
+      - --loglevel=${CELERY_LOG_LEVEL:-INFO}
 
   scheduler:
     build:
@@ -94,7 +96,7 @@ services:
       - -A
       - slaif_gateway.workers.celery_app:celery_app
       - beat
-      - --loglevel=INFO
+      - --loglevel=${CELERY_LOG_LEVEL:-INFO}
 
   nginx:
     image: nginx:1.27-alpine

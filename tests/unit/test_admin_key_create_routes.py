@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
+from slaif_gateway.services.email_errors import EmailError
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 
@@ -377,3 +379,91 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
         "max_concurrent_requests": 3,
         "window_seconds": 30,
     }
+
+
+def test_create_service_failure_logs_diagnostic_context_and_renders_reference(monkeypatch, capsys) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    cohort_id = uuid.uuid4()
+    admin_bearer = "Bearer admin-session-token-secret"
+    csrf_token = "csrf-token-secret"
+    fake_plaintext_key = "sk-slaif-newpublic.once-only-created"
+    fake_provider_key = "sk-or-provider-secret-abcdef123456"
+    fake_encrypted_payload = "encrypted-payload-secret"
+    fake_nonce = "nonce-secret"
+    owner = _owner(owner_id)
+    cohort = _cohort(cohort_id)
+    created = _created_key(owner_id=owner_id, plaintext_key=fake_plaintext_key)
+
+    async def get_owner_by_id(self, requested_owner_id):
+        return owner if requested_owner_id == owner_id else None
+
+    async def get_cohort_by_id(self, requested_cohort_id):
+        return cohort if requested_cohort_id == cohort_id else None
+
+    async def create_gateway_key(self, payload):
+        return created
+
+    async def create_pending_key_email_delivery(self, **kwargs):
+        raise EmailError(
+            "SMTP failure "
+            f"Authorization={admin_bearer} csrf_token={csrf_token} session_token=session-token-secret "
+            f"plaintext_key={fake_plaintext_key} provider_key={fake_provider_key} "
+            f"encrypted_payload={fake_encrypted_payload} nonce={fake_nonce}"
+        )
+
+    monkeypatch.setattr("slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id", get_owner_by_id)
+    monkeypatch.setattr("slaif_gateway.db.repositories.cohorts.CohortsRepository.get_cohort_by_id", get_cohort_by_id)
+    monkeypatch.setattr("slaif_gateway.services.key_service.KeyService.create_gateway_key", create_gateway_key)
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.create_pending_key_email_delivery",
+        create_pending_key_email_delivery,
+    )
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client, valid_csrf=csrf_token)
+
+    response = client.post(
+        "/admin/keys/create",
+        headers={"Authorization": admin_bearer},
+        data={
+            "csrf_token": csrf_token,
+            "owner_id": str(owner_id),
+            "cohort_id": str(cohort_id),
+            "valid_days": "30",
+            "email_delivery_mode": "pending",
+            "reason": "new workshop key",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Gateway key creation failed." in response.text
+    assert "Reference ID: " in response.text
+    diagnostic_id = response.headers["X-SLAIF-Diagnostic-ID"]
+    assert diagnostic_id.startswith("gw-")
+    assert diagnostic_id in response.text
+    assert fake_plaintext_key not in response.text
+    assert fake_provider_key not in response.text
+    assert "session-token-secret" not in response.text
+    assert fake_encrypted_payload not in response.text
+    assert fake_nonce not in response.text
+
+    logs = capsys.readouterr().out.strip().splitlines()
+    event = json.loads(logs[-1])
+    serialized_event = json.dumps(event)
+    assert event["event"] == "admin.key_create.failed"
+    assert event["level"] == "warning"
+    assert event["diagnostic_id"] == diagnostic_id
+    assert event["gateway_request_id"] == diagnostic_id
+    assert event["admin_id"] == str(admin_user.id)
+    assert event["owner_id"] == str(owner_id)
+    assert event["cohort_id"] == str(cohort_id)
+    assert event["email_delivery_mode"] == "pending"
+    assert event["exception_type"] == "EmailError"
+    assert event["error_code"] == "email_error"
+    assert fake_plaintext_key not in serialized_event
+    assert fake_provider_key not in serialized_event
+    assert admin_bearer not in serialized_event
+    assert csrf_token not in serialized_event
+    assert "session-token-secret" not in serialized_event
+    assert fake_encrypted_payload not in serialized_event
+    assert fake_nonce not in serialized_event

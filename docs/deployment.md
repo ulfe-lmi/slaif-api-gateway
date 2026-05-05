@@ -180,6 +180,36 @@ Before production use:
 The server-side OpenAI upstream secret is `OPENAI_UPSTREAM_API_KEY`.
 `OPENAI_API_KEY` is reserved for clients carrying gateway-issued keys.
 
+## Diagnostic Logging
+
+Production should normally stay at `LOG_LEVEL=INFO` with
+`STRUCTURED_LOGS=true`, so API logs remain structured JSON and suitable for
+operator log systems. Admin pages return generic browser-safe errors and a
+server-generated reference such as `gw-...`; they do not render stack traces,
+raw request bodies, cookies, CSRF tokens, session tokens, plaintext gateway
+keys, provider keys, encrypted payloads, nonces, prompts, or completions.
+
+For local diagnosis of an admin or worker issue, set:
+
+```bash
+LOG_LEVEL=DEBUG
+STRUCTURED_LOGS=false
+GUNICORN_LOG_LEVEL=debug
+CELERY_LOG_LEVEL=DEBUG
+```
+
+Then inspect logs from the relevant services:
+
+```bash
+docker compose logs -f api
+docker compose logs -f worker scheduler
+docker compose logs api | rg '<diagnostic-id>'
+```
+
+Logs are redacted but can still contain sensitive operational metadata. Keep
+them operator-side; this project intentionally does not expose a dashboard log
+viewer.
+
 ## Streaming And Nginx
 
 `deploy/nginx/slaif-api-gateway.conf` is a starting point. It proxies `/v1`,
@@ -204,13 +234,13 @@ allowlists are deployment-specific and must be reviewed by the operator.
 The `worker` service runs:
 
 ```bash
-celery -A slaif_gateway.workers.celery_app:celery_app worker --loglevel=INFO
+celery -A slaif_gateway.workers.celery_app:celery_app worker --loglevel=${CELERY_LOG_LEVEL:-INFO}
 ```
 
 The `scheduler` service runs:
 
 ```bash
-celery -A slaif_gateway.workers.celery_app:celery_app beat --loglevel=INFO
+celery -A slaif_gateway.workers.celery_app:celery_app beat --loglevel=${CELERY_LOG_LEVEL:-INFO}
 ```
 
 The worker handles explicit key email delivery tasks. Celery payloads carry IDs

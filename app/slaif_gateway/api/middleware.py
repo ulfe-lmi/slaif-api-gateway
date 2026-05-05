@@ -16,6 +16,7 @@ from slaif_gateway.logging import bind_request_id, clear_log_context
 from slaif_gateway.metrics import observe_http_request
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+SLAIF_DIAGNOSTIC_ID_HEADER = "X-SLAIF-Diagnostic-ID"
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -31,14 +32,16 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         request_id = _safe_request_id(request.headers.get(self._header_name))
+        gateway_request_id = f"gw-{uuid.uuid4()}"
         request.state.request_id = request_id
-        request.state.gateway_request_id = f"gw-{uuid.uuid4()}"
-        bind_request_id(request_id)
+        request.state.gateway_request_id = gateway_request_id
+        bind_request_id(request_id, gateway_request_id)
         try:
             response = await call_next(request)
         finally:
             clear_log_context()
         response.headers[self._header_name] = request_id
+        response.headers[SLAIF_DIAGNOSTIC_ID_HEADER] = gateway_request_id
         return response
 
 
