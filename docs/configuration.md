@@ -222,6 +222,27 @@ docker compose logs api | rg '<diagnostic-id>'
 Logs remain redacted, but they are still operator-side operational records and
 must not be treated as a secret store or exposed through the dashboard.
 
+## CLI Diagnostics
+
+`LOG_LEVEL` is the persistent application logging switch for web/API, worker,
+scheduler, and CLI processes that read the environment. For one-off CLI
+diagnostics, use the global CLI options instead of editing `.env`:
+
+```bash
+slaif-gateway --verbose version
+slaif-gateway --log-level DEBUG keys list
+```
+
+`--verbose` is equivalent to a per-command CLI `LOG_LEVEL=DEBUG` override.
+`--log-level` accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`.
+Supplying both options is rejected to avoid ambiguous diagnostics. CLI
+diagnostic logs use the same redaction pipeline as the web app and are written
+to stderr, so JSON command output on stdout remains machine-readable.
+
+CLI verbosity does not change running web/API, Gunicorn, worker, or scheduler
+processes. To diagnose admin pages or `/v1` requests, set `LOG_LEVEL` for the
+API process and use the Docker/Compose process-level controls described above.
+
 ## Admin Web
 
 - `ENABLE_ADMIN_DASHBOARD` enables the server-rendered admin web foundation.
