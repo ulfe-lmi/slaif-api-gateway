@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import csv
 import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +27,8 @@ from slaif_gateway.services.openai_completions_catalog import (
 )
 
 runner = CliRunner()
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EXAMPLE_PRICING_CSV = REPO_ROOT / "docs" / "examples" / "openai-completions-pricing.example.csv"
 
 
 @dataclass
@@ -338,6 +342,31 @@ def test_catalog_excludes_obvious_non_completions_model_categories() -> None:
     for entry in catalog:
         assert entry.endpoint == "chat.completions"
         assert not any(marker in entry.model_id.lower() for marker in forbidden)
+
+
+def test_openai_completions_pricing_example_csv_covers_default_catalog() -> None:
+    required_columns = {
+        "provider",
+        "model",
+        "endpoint",
+        "currency",
+        "input_price_per_1m",
+        "output_price_per_1m",
+    }
+
+    with EXAMPLE_PRICING_CSV.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows
+    assert required_columns.issubset(rows[0])
+    assert all(row["provider"] == "openai" for row in rows)
+    assert all(row["endpoint"] == "chat.completions" for row in rows)
+    assert all("placeholder" in row["notes"].lower() for row in rows)
+    assert all("not real" in row["notes"].lower() for row in rows)
+    assert all("production" in row["notes"].lower() for row in rows)
+
+    catalog = load_openai_chat_completions_catalog(include_legacy_models=False)
+    assert {row["model"] for row in rows} == {entry.upstream_model for entry in catalog}
 
 
 def test_include_legacy_completions_rejected_safely() -> None:

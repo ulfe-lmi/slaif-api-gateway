@@ -57,6 +57,12 @@ slaif-gateway bootstrap openai-completions-catalog \
   --apply
 ```
 
+The bootstrap is intentionally local. It does not call OpenAI, does not fetch
+prices, and does not inspect provider key values. A configured
+`OPENAI_UPSTREAM_API_KEY` alone does not make models visible or priceable:
+operators must import local provider, route, and pricing metadata first.
+Without matching pricing rows, cost-limited requests fail closed.
+
 The CSV must include one row for every selected catalog model and endpoint:
 
 ```text

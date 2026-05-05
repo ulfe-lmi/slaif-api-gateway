@@ -191,12 +191,29 @@ slaif-gateway bootstrap openai-completions-catalog \
   --apply
 ```
 
+Setting `OPENAI_UPSTREAM_API_KEY` only makes the upstream provider secret
+available. It does not create provider, route, or pricing rows. `/v1/models`
+does not query OpenAI live; it lists local enabled, visible routes filtered by
+the gateway key policy. With no local routes, `/v1/models` returns
+`{"object":"list","data":[]}`. With no pricing row, cost-limited requests fail
+closed.
+
 The command creates or verifies:
 
 - provider metadata for `provider=openai`, storing only the
   `OPENAI_UPSTREAM_API_KEY` env var name by default;
 - exact visible routes for curated `/v1/chat/completions` model IDs;
 - local pricing rows from an operator-controlled CSV.
+
+For first-time local wiring checks only, operators may use explicit placeholder
+mode:
+
+```bash
+slaif-gateway bootstrap openai-completions-catalog \
+  --pricing-mode placeholder \
+  --confirm-placeholder-pricing \
+  --apply
+```
 
 The required pricing CSV columns are:
 

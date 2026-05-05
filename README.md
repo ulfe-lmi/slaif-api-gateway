@@ -178,25 +178,25 @@ printf '%s\n' 'replace-this-password' \
       --password-stdin
 ```
 
-Bootstrap OpenAI Completions metadata before issuing a gateway key. The gateway
-does not call OpenAI to discover models for `/v1/models`; model visibility comes
-from local enabled route metadata plus the gateway key policy. For real use,
-copy [`docs/examples/openai-completions-pricing.example.csv`](docs/examples/openai-completions-pricing.example.csv),
-replace the placeholder prices with operator-reviewed local pricing assumptions,
-and run:
+Real OpenAI calls require local provider, route, and pricing metadata before a
+gateway key can see or use models. The gateway does not call OpenAI to discover
+models for `/v1/models`; model visibility comes from local enabled route
+metadata plus the gateway key policy. For a local wiring smoke test only:
 
 ```bash
 docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-file docs/examples/openai-completions-pricing.example.csv \
+  --pricing-mode placeholder \
+  --confirm-placeholder-pricing \
   --apply
 ```
 
 The command creates local provider, exact `/v1/chat/completions` route, and
 pricing metadata only. It stores `OPENAI_UPSTREAM_API_KEY` as an environment
-variable name and never reads or prints the provider key value. See
-[`docs/quickstart.md`](docs/quickstart.md) for the full first-run workflow,
-including owner/key creation and model allow-lists. Users call the local gateway
-with standard OpenAI-compatible variables:
+variable name and never reads or prints the provider key value. Real budgeting
+requires replacing placeholder pricing with operator-reviewed prices in a local
+pricing CSV. See [`docs/quickstart.md`](docs/quickstart.md) for the full
+pricing-file path, owner/key creation, and model allow-lists. Users call the
+local gateway with standard OpenAI-compatible variables:
 
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."
