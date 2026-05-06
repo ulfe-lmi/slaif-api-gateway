@@ -13,6 +13,18 @@ configuration and must not be committed.
 Migrations are explicit operator actions. The application and `/readyz` do not
 run migrations on startup.
 
+The checked-in `.env.example` is intentionally local-development friendly:
+Redis rate limiting is enabled, logs are DEBUG level, and log output is readable
+instead of structured JSON. This makes first-time Docker setup and local
+diagnosis easier. Production deployments should usually set:
+
+```env
+LOG_LEVEL=INFO
+STRUCTURED_LOGS=true
+GUNICORN_LOG_LEVEL=info
+CELERY_LOG_LEVEL=INFO
+```
+
 ## Required Production Secrets
 
 Production requires strong, non-placeholder values for:
@@ -168,9 +180,27 @@ remains the hard quota and accounting source of truth.
 
 The checked-in `.env.example` uses the Docker Compose hostname `redis` inside
 containers and publishes the container's Redis port on host port `16379` by
-default through `REDIS_HOST_PORT`. For host-local development outside Compose,
-use a localhost URL such as `redis://localhost:16379/0`, or set
+default through `REDIS_HOST_PORT`. It enables Redis rate limiting for local
+Docker with conservative request and concurrency defaults. Blank
+`DEFAULT_RATE_LIMIT_*` values mean no global throttle for that dimension unless
+the gateway key has its own rate-limit policy; token-rate defaults are therefore
+left unset until an operator chooses them. For host-local development outside
+Compose, use a localhost URL such as `redis://localhost:16379/0`, or set
 `REDIS_HOST_PORT` to match your local port plan.
+
+Verify the runtime setting without printing secrets:
+
+```bash
+docker compose exec -T api python - <<'PY'
+from slaif_gateway.config import get_settings
+s = get_settings()
+print("ENABLE_REDIS_RATE_LIMITS:", s.ENABLE_REDIS_RATE_LIMITS)
+print("REDIS_URL set:", bool(s.REDIS_URL))
+PY
+```
+
+Choose `RATE_LIMIT_FAIL_CLOSED` deliberately in production. Redis rate limits
+are operational throttles; PostgreSQL quota and accounting remain authoritative.
 
 ## Provider Configuration
 
@@ -297,8 +327,9 @@ controls.
 - `READYZ_INCLUDE_DETAILS` controls whether exact readiness details such as
   Alembic revisions and missing provider-secret env var names are included.
 - `REQUEST_ID_HEADER`, `LOG_LEVEL`, and `STRUCTURED_LOGS` control request IDs
-  and application logging output. `LOG_LEVEL` defaults to `INFO`, and
-  `STRUCTURED_LOGS=true` keeps production-style JSON logs enabled by default.
+  and application logging output. Application settings default to `INFO` and
+  structured JSON, while the checked-in local Docker `.env.example` overrides
+  them to DEBUG and readable console logs for first-time diagnosis.
 - `GUNICORN_LOG_LEVEL` and `CELERY_LOG_LEVEL` are Docker/Compose process-level
   controls for the API process manager and Celery worker/scheduler. They are
   intentionally shell/Compose settings rather than application `Settings`
