@@ -41,8 +41,10 @@ cp .env.example .env
 `.env.example` contains development placeholders. They are useful for trying the
 project locally, but they are not production secrets. Before any real deployment
 you must replace HMAC, session, database, SMTP, encryption, and provider
-secrets. `.env` is a clear-text local runtime configuration file; never commit
-it. On shared systems, restrict it with:
+secrets. The local template enables Redis rate limiting and DEBUG console logs
+so first-time Docker failures are easier to see. Production should switch back
+to INFO logging with structured JSON. `.env` is a clear-text local runtime
+configuration file; never commit it. On shared systems, restrict it with:
 
 ```bash
 chmod 600 .env
@@ -181,6 +183,51 @@ curl -fsS http://localhost:8000/readyz
 You should see JSON with healthy database and schema status. If readiness fails
 with a schema or migration message, run `docker compose run --rm api
 slaif-gateway db upgrade` again and retry.
+
+### Update Or Restart The Docker Install
+
+Use the bundled refresh script for common local maintenance. It is
+non-destructive: it does not run `docker compose down -v`, delete volumes,
+overwrite `.env`, or reset git state.
+
+After changing `.env`:
+
+```bash
+./scripts/docker-refresh.sh --env-only
+```
+
+Manual equivalent:
+
+```bash
+docker compose up -d --force-recreate api worker scheduler
+```
+
+After pulling fresh code:
+
+```bash
+./scripts/docker-refresh.sh --pull
+```
+
+Manual equivalent:
+
+```bash
+git pull --ff-only
+docker compose build api worker scheduler
+docker compose run --rm api slaif-gateway db upgrade
+docker compose up -d --force-recreate api worker scheduler
+docker compose ps
+curl -fsS http://localhost:8000/healthz
+curl -fsS http://localhost:8000/readyz
+```
+
+After local code changes, run the script without flags:
+
+```bash
+./scripts/docker-refresh.sh
+```
+
+Do not run `docker compose down -v` unless you intentionally want to delete
+local PostgreSQL and Redis volumes.
 
 ## 5. Create The First Admin
 
@@ -391,7 +438,7 @@ curl -fsS http://localhost:8000/v1/models \
   -H "Authorization: Bearer $GATEWAY_KEY"
 ```
 
-## 8. Try The OpenAI Python Client
+## 8. Quick Smoke Test With The OpenAI Python Client
 
 Install the OpenAI client on your host if you want to run a client script:
 
@@ -411,26 +458,30 @@ export OPENAI_BASE_URL="http://localhost:8000/v1"
 `OPENAI_API_KEY` is the gateway key you created. `OPENAI_BASE_URL` points the
 client at your local gateway.
 
-Create `hello_gateway.py`:
+Before this smoke test, make sure the OpenAI metadata bootstrap has run and
+the gateway key allows:
 
-```python
-from openai import OpenAI
-
-client = OpenAI()
-
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Say hello in one short sentence."}],
-)
-
-print(response.choices[0].message.content)
+```text
+/v1/models
+/v1/chat/completions
+gpt-4o-mini
 ```
 
-Run it:
+Run the checked-in example:
 
 ```bash
-python hello_gateway.py
+python examples/openai_gateway_smoke.py
 ```
+
+Optional model override:
+
+```bash
+SLAIF_SMOKE_MODEL=gpt-5.2 python examples/openai_gateway_smoke.py
+```
+
+`client.models.list()` tests key endpoint policy and route visibility.
+`chat.completions.create()` tests route resolution, pricing/quota reservation,
+provider forwarding, and accounting finalization.
 
 If you did not set a real `OPENAI_UPSTREAM_API_KEY` in `.env`, real provider
 forwarding will fail safely. The local dashboard, database, migrations, key
@@ -505,6 +556,12 @@ API_HOST_PORT=18000
 ```
 
 Then restart Compose.
+
+For `.env`-only changes, the safe restart shortcut is:
+
+```bash
+./scripts/docker-refresh.sh --env-only
+```
 
 ### Readiness Fails Before Migration
 

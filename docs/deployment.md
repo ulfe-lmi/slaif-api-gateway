@@ -132,6 +132,18 @@ docker compose down
 Use `docker compose down -v` only when you intentionally want to delete local
 PostgreSQL and Redis volumes.
 
+For non-destructive local refreshes, use:
+
+```bash
+./scripts/docker-refresh.sh --env-only  # after .env changes
+./scripts/docker-refresh.sh --pull      # after upstream code updates on main
+./scripts/docker-refresh.sh             # after local code changes
+```
+
+The script builds API/worker/scheduler images, runs migrations unless skipped,
+recreates runtime services, shows Compose status, and checks `/healthz` and
+`/readyz`. It never removes Docker volumes or overwrites `.env`.
+
 ## Optional Browser Smoke Tests
 
 The Playwright admin dashboard smoke tests are optional and are not part of the
@@ -188,6 +200,12 @@ Before production use:
   appropriate. The `slaif-gateway secrets generate ...` CLI can produce strong
   initial values for local or self-hosted setup, but it is not a full
   secret-management system.
+- Do not leave `LOG_LEVEL=DEBUG` running indefinitely in production except for a
+  time-bounded incident diagnosis.
+- Prefer `STRUCTURED_LOGS=true`, `GUNICORN_LOG_LEVEL=info`, and
+  `CELERY_LOG_LEVEL=INFO` for production log aggregation.
+- Monitor Redis rate-limit availability and choose fail-open/fail-closed
+  behavior deliberately. PostgreSQL quotas and accounting remain authoritative.
 - Replacing `TOKEN_HMAC_SECRET_V1` invalidates gateway keys signed with that
   secret unless the old secret remains configured.
 - Replacing `ADMIN_SESSION_SECRET` invalidates active admin sessions.

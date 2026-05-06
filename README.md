@@ -143,6 +143,10 @@ cd slaif-api-gateway
 cp .env.example .env
 ```
 
+The checked-in `.env.example` is tuned for first-time local Docker diagnosis:
+Redis rate limiting is enabled, logs are readable DEBUG output, and production
+operators are expected to switch back to INFO plus structured JSON logs.
+
 Generate local runtime secrets before starting services. These are server
 runtime secrets, not user gateway keys:
 
@@ -201,6 +205,27 @@ local gateway with standard OpenAI-compatible variables:
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."
 export OPENAI_BASE_URL="http://localhost:8000/v1"
+```
+
+Run the OpenAI-compatible smoke example after metadata bootstrap and key
+creation:
+
+```bash
+python examples/openai_gateway_smoke.py
+```
+
+After `.env` changes, recreate the runtime services without deleting local
+volumes:
+
+```bash
+./scripts/docker-refresh.sh --env-only
+```
+
+After code updates on local `main`, use the safe pull/build/migrate/recreate
+flow:
+
+```bash
+./scripts/docker-refresh.sh --pull
 ```
 
 Mailpit is available at `http://localhost:8025`. API, worker, and scheduler
