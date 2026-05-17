@@ -83,39 +83,36 @@ Responses API work is separate and out of scope for this command.
 
 ## Chat Completions Request Fields
 
-`ChatCompletionRequest` requires:
+`ChatCompletionRequest` requires `model` and `messages`. The Pydantic schema
+continues to preserve extra JSON-compatible fields during parsing so the
+gateway can return OpenAI-shaped policy errors instead of silently dropping
+client input. Before forwarding, however, the request policy now classifies
+every top-level Chat Completions field through a fail-closed registry.
 
-- `model`
-- `messages`
+| Field or feature | Current behavior |
+| --- | --- |
+| `model` | Supported; route resolution later replaces it upstream with the resolved model |
+| `messages` | Supported for string content and text content parts; prompts/messages are not stored |
+| `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
+| `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
+| `tools` with `type=function` | Supported local/client-side tool intent; schemas are forwarded and counted for input estimation |
+| `tools` with `type=custom` | Rejected as unsupported until custom-tool forwarding, sizing, and accounting are explicitly implemented |
+| `functions` / `function_call` | Supported legacy local function fields and counted for input estimation |
+| `tool_choice` | Supported for local function choices; hosted/provider-side forced choices are rejected |
+| `response_format` | Supported response-shaping field; JSON schemas are counted for input estimation |
+| `metadata` | Supported only as a JSON object within the gateway size cap; forwarded but not stored wholesale |
+| `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
+| `prediction` | Supported and counted as a provider-context object when object-shaped |
+| `modalities` | Allowed only when it requests text only |
+| `audio`, image/audio/file/video message content parts | Rejected until multimodal/audio/file pricing and accounting support exists |
+| `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
+| `background`, `store=true`, `previous_response_id`, `conversation` | Rejected; provider-side lifecycle/state features are not implemented |
+| Unknown top-level fields | Rejected in standard and trusted-calibration modes with `unknown_chat_completion_field` |
 
-The schema preserves extra JSON-compatible fields instead of silently dropping them. The gateway currently preserves ordinary OpenAI Chat Completions fields including:
-
-- `model`
-- `messages`
-- `temperature`
-- `top_p`
-- `stop`
-- `tools`
-- `tool_choice`
-- `response_format`
-- `seed`
-- `user`
-- `logprobs`
-- `top_logprobs`
-- `presence_penalty`
-- `frequency_penalty`
-- `n` when omitted or exactly `1`
-- `stream`
-- `stream_options`
-- `metadata`
-- `reasoning_effort`
-- `modalities`
-- `parallel_tool_calls`
-- `service_tier`
-- `max_tokens`
-- `max_completion_tokens`
-
-Unknown ordinary JSON-compatible fields are also preserved unless a gateway policy explicitly rejects them. Current request policy rejects malformed `messages`, invalid output-token controls, input estimates over the configured hard input cap, non-object `stream_options` when `stream=true`, and Chat Completions `n` values other than integer `1`.
+Current request policy also rejects malformed `messages`, invalid output-token
+controls, input estimates over the configured hard input cap, non-object
+`stream_options` when `stream=true`, and Chat Completions `n` values other than
+integer `1`.
 
 Current Chat Completions capability policy allows local/client-side function
 tools, legacy `functions` / `function_call`, `response_format`, JSON mode, and
@@ -144,7 +141,8 @@ Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
 object/list fields such as `tools`, legacy `functions`, object-shaped
 `tool_choice` / `function_call`, `response_format` JSON schemas,
-`stream_options`, and unknown JSON object/list passthrough fields. Very large
+`prediction`, `metadata`, and `stream_options`. Rejected unknown fields do not
+reach estimation or provider forwarding. Very large
 tool/function/schema payloads may be rejected before Redis rate limiting, route
 resolution, pricing lookup, PostgreSQL quota reservation, or provider calls when
 the hard input cap is exceeded. The estimate is intentionally conservative and

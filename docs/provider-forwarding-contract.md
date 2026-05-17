@@ -64,7 +64,7 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 | Non-streaming Accept | `application/json` |
 | Streaming Accept | `text/event-stream` |
 | Content-Type | `application/json` |
-| Body preservation | Ordinary OpenAI Chat Completions fields are preserved |
+| Body preservation | Registry-classified OpenAI Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
@@ -88,7 +88,7 @@ provider, and route/provider config overrides must reference env var names only.
 | Streaming Accept | `text/event-stream` |
 | Content-Type | `application/json` |
 | Model routing | Routes may use OpenRouter namespaced models such as `openai/...`, `anthropic/...`, `google/...`, or aliases that resolve to those names |
-| Body preservation | Ordinary OpenAI-compatible fields are preserved |
+| Body preservation | Registry-classified OpenAI-compatible Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
@@ -104,7 +104,9 @@ Known limitations:
 
 - The gateway does not fetch live OpenRouter billing or pricing.
 - Native provider-specific APIs behind OpenRouter are not exposed.
-- Provider-specific request fields are forwarded only as ordinary JSON body fields; provider-specific headers are not generally forwarded.
+- Provider-specific request fields are forwarded only after the Chat Completions
+  field registry explicitly classifies them as supported; provider-specific
+  headers are not generally forwarded.
 
 ## Planned Responses Forwarding
 
@@ -156,6 +158,16 @@ MCP/connectors markers such as `server_url`, `connector_id`, provider-side
 `background=true`, `external_web_access`, or search-specific Chat Completions
 models such as `gpt-5-search-api`.
 
+The Chat Completions field registry is also fail-closed. Standard keys and
+trusted calibration keys reject unknown top-level Chat Completions fields with
+`unknown_chat_completion_field`. Current forwarding supports text-only message
+content, local function tools, legacy function fields, `response_format`,
+`prediction`, metadata within the gateway size cap, omitted/`auto`
+`service_tier`, and text-only `modalities`. It rejects custom tools,
+non-default `service_tier`, audio/image/file/video content, provider-side state
+fields such as `store=true`, `previous_response_id`, and `conversation`, and
+other unclassified feature-bearing fields before any provider request is built.
+
 ## Header Contract
 
 | Header | Client to gateway | Gateway to provider | Gateway to client | Behavior |
@@ -185,10 +197,13 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `tools` / `tool_choice` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Local `function` tools are allowed as client-side behavior. Hosted/provider-side tools, MCP/connectors, web search tools, unknown tool types, and tool choices that force denied hosted tools are rejected before forwarding |
 | `functions` / `function_call` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
 | `response_format` | Preserved when accepted; serialized JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
-| `metadata` | Preserved to provider; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field |
+| `metadata` | Preserved to provider only when it is a JSON object within the gateway size cap; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field with explicit size/shape policy |
 | `user` | Preserved | Ordinary OpenAI Chat Completions field |
 | `temperature` / `top_p` | Preserved | Ordinary OpenAI Chat Completions fields |
-| Unknown ordinary JSON fields | Preserved when accepted; unknown object/list fields are included in input/cost pre-reservation | Avoid silently dropping OpenAI SDK/provider-compatible fields without underestimating forwarded payload size |
+| `prediction` | Preserved when accepted; object/list payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
+| `service_tier` | Omitted or `auto` is allowed; other values are rejected | Local pricing is not service-tier aware |
+| `modalities` / `audio` / non-text content parts | Text-only modality is allowed; audio/image/file/video fields or message parts are rejected | Multimodal/audio/file pricing and accounting are not implemented |
+| Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
 `n > 1` is a deliberate compatibility limitation, not a forwarding transformation. Supporting it later requires choice-aware reservation, cost estimation, and final usage validation before the gateway can safely forward multi-choice requests.

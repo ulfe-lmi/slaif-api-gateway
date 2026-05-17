@@ -466,6 +466,7 @@ def test_multi_choice_count_is_rejected_before_side_effects(monkeypatch) -> None
         ({"tools": [{"type": "image_generation"}]}, "hosted_tool_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "tool_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "custom"}]}, "custom_tool_not_supported", "tools[0].type"),
         (
             {"tools": [{"type": "function", "function": {"name": "lookup"}, "server_url": "https://mcp.test"}]},
             "mcp_connectors_not_allowed",
@@ -488,6 +489,12 @@ def test_multi_choice_count_is_rejected_before_side_effects(monkeypatch) -> None
         ),
         ({"tools": [{"type": "unknown_hosted"}]}, "unknown_tool_type_not_allowed", "tools[0].type"),
         ({"background": True}, "background_not_allowed", "background"),
+        ({"store": True}, "background_not_allowed", "store"),
+        ({"previous_response_id": "resp_123"}, "background_not_allowed", "previous_response_id"),
+        ({"conversation": "conv_123"}, "background_not_allowed", "conversation"),
+        ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
+        ({"x_future": {"secret": "raw request body marker"}}, "unknown_chat_completion_field", "x_future"),
+        ({"audio": {"voice": "alloy"}}, "unsupported_chat_completion_modality", "audio"),
     ],
 )
 def test_hosted_tool_policy_rejects_before_redis_route_pricing_quota_or_provider(
