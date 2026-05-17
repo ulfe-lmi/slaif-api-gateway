@@ -158,8 +158,10 @@ preview-only calibration usage summary and strict participant-policy proposal
 from CLI or admin web by selecting a trusted calibration key, time window, and
 multiplier. After review, admins can create a durable template revision from the
 proposal. That template creation does not create participant keys, mutate
-existing key policy, or update routes/pricing. Future Responses work must extend
-the same safe metadata boundary rather than storing request or response content.
+existing key policy, or update routes/pricing. Admins can create one normal key
+from a selected immutable revision, but bulk participant-key generation remains
+future work. Future Responses work must extend the same safe metadata boundary
+rather than storing request or response content.
 
 Recommendation workflows need safe operational metadata such as:
 

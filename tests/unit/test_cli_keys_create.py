@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -25,7 +26,15 @@ ONE_TIME_SECRET_ID = uuid.UUID("55555555-5555-4555-8555-555555555555")
 PLAINTEXT_KEY = "sk-slaif-public.once-only-secret"
 
 
-def _created_result() -> CreatedGatewayKey:
+TEMPLATE_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
+TEMPLATE_REVISION_ID = uuid.UUID("77777777-7777-4777-8777-777777777777")
+
+
+def _created_result(
+    *,
+    template_id: uuid.UUID | None = None,
+    template_revision_id: uuid.UUID | None = None,
+) -> CreatedGatewayKey:
     return CreatedGatewayKey(
         gateway_key_id=GATEWAY_KEY_ID,
         owner_id=OWNER_ID,
@@ -35,6 +44,8 @@ def _created_result() -> CreatedGatewayKey:
         one_time_secret_id=ONE_TIME_SECRET_ID,
         valid_from=datetime(2026, 1, 1, tzinfo=UTC),
         valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+        template_id=template_id,
+        template_revision_id=template_revision_id,
     )
 
 
@@ -44,6 +55,7 @@ def test_keys_help_registers_commands() -> None:
     assert result.exit_code == 0
     for command in (
         "create",
+        "create-from-template",
         "list",
         "show",
         "suspend",
@@ -120,6 +132,165 @@ def test_keys_create_prints_plaintext_key_once(monkeypatch) -> None:
     assert payload.allow_all_endpoints is True
     assert payload.created_by_admin_id == ADMIN_ID
     assert payload.note == "classroom key"
+
+
+def test_keys_create_from_template_outputs_safe_standard_key(monkeypatch) -> None:
+    async def fake_create(**kwargs):
+        assert kwargs["template_revision_id"] == TEMPLATE_REVISION_ID
+        assert kwargs["owner_id"] == OWNER_ID
+        assert kwargs["cohort_id"] == COHORT_ID
+        assert kwargs["reason"] == "reviewed template"
+        assert kwargs["confirm_create_key_from_template"] is True
+        return (
+            SimpleNamespace(
+                created_key=_created_result(
+                    template_id=TEMPLATE_ID,
+                    template_revision_id=TEMPLATE_REVISION_ID,
+                ),
+                template=SimpleNamespace(id=TEMPLATE_ID, name="Participants"),
+                revision=SimpleNamespace(id=TEMPLATE_REVISION_ID, revision_number=1),
+                audit_log=SimpleNamespace(id=uuid.uuid4()),
+            ),
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(keys_cli, "_create_key_from_template", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create-from-template",
+            "--template-revision-id",
+            str(TEMPLATE_REVISION_ID),
+            "--owner-id",
+            str(OWNER_ID),
+            "--cohort-id",
+            str(COHORT_ID),
+            "--valid-days",
+            "14",
+            "--reason",
+            "reviewed template",
+            "--confirm-create-key-from-template",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert PLAINTEXT_KEY in result.stdout
+    assert "standard" in result.stdout
+    assert str(TEMPLATE_ID) in result.stdout
+    assert str(TEMPLATE_REVISION_ID) in result.stdout
+    assert "No templates, revisions, or existing keys were changed" in result.stdout
+    assert "token_hash" not in result.stdout
+    assert "encrypted_payload" not in result.stdout
+    assert "nonce" not in result.stdout
+
+
+def test_keys_create_from_template_rejects_missing_confirmation(monkeypatch) -> None:
+    called = False
+
+    async def fake_create(**kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(keys_cli, "_create_key_from_template", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create-from-template",
+            "--template-revision-id",
+            str(TEMPLATE_REVISION_ID),
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "14",
+            "--reason",
+            "reviewed template",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert called is False
+    assert "Confirm key creation from template" in result.stderr
+
+
+def test_keys_create_from_template_json_is_secret_safe(monkeypatch) -> None:
+    async def fake_create(**kwargs):
+        return (
+            SimpleNamespace(
+                created_key=_created_result(
+                    template_id=TEMPLATE_ID,
+                    template_revision_id=TEMPLATE_REVISION_ID,
+                ),
+                template=SimpleNamespace(id=TEMPLATE_ID, name="Participants"),
+                revision=SimpleNamespace(id=TEMPLATE_REVISION_ID, revision_number=1),
+                audit_log=SimpleNamespace(id=uuid.uuid4()),
+            ),
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(keys_cli, "_create_key_from_template", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create-from-template",
+            "--template-revision-id",
+            str(TEMPLATE_REVISION_ID),
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "14",
+            "--reason",
+            "reviewed template",
+            "--confirm-create-key-from-template",
+            "--json",
+            "--show-plaintext",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["template_id"] == str(TEMPLATE_ID)
+    assert payload["template_revision_id"] == str(TEMPLATE_REVISION_ID)
+    assert payload["plaintext_key"] == PLAINTEXT_KEY
+    assert "token_hash" not in result.stdout
+    assert "encrypted_payload" not in result.stdout
+    assert "nonce" not in result.stdout
+
+
+def test_keys_create_from_template_rejects_missing_reason(monkeypatch) -> None:
+    called = False
+
+    async def fake_create(**kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(keys_cli, "_create_key_from_template", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create-from-template",
+            "--template-revision-id",
+            str(TEMPLATE_REVISION_ID),
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "14",
+            "--confirm-create-key-from-template",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert called is False
+    assert "--reason is required" in result.stderr
 
 
 def test_keys_create_json_requires_explicit_secret_output(monkeypatch) -> None:

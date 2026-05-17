@@ -177,6 +177,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_policy_updated": ("success", "Gateway key request policy updated."),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
     "template_created": ("success", "Key template created from reviewed calibration proposal."),
+    "key_created_from_template": ("success", "Gateway key created from selected template revision."),
     "rotation_confirmation_required": ("error", "Confirm key rotation before continuing."),
     "rotation_reason_required": ("error", "Enter an audit reason before rotating this key."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
@@ -1255,6 +1256,7 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
         return HTMLResponse("Key template not found.", status_code=404)
 
     current_revision = _current_template_revision(template)
+    options = await _load_key_create_form_options_or_empty(request)
     response = templates.TemplateResponse(
         request,
         "templates/detail.html",
@@ -1263,7 +1265,239 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
             "csrf_token": csrf_token,
             "template": template,
             "current_revision": current_revision,
+            "owners": options["owners"],
+            "cohorts": options["cohorts"],
+            "form": _default_template_key_create_form(current_revision),
             "admin_status_message": _admin_status_message(request),
+        },
+    )
+    _set_no_store_headers(response)
+    return response
+
+
+@router.post("/templates/{template_id}/revisions/{revision_id}/create-key", response_class=HTMLResponse)
+async def create_admin_key_from_template_revision(
+    request: Request,
+    template_id: str,
+    revision_id: str,
+    csrf_token: str = Form(""),
+    owner_id: str = Form(""),
+    cohort_id: str = Form(""),
+    valid_from: str = Form(""),
+    valid_until: str = Form(""),
+    valid_days: str = Form(""),
+    email_delivery_mode: str = Form("none"),
+    confirm_create_key_from_template: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_template_id = _parse_gateway_key_id(template_id)
+    parsed_revision_id = _parse_gateway_key_id(revision_id)
+    if parsed_template_id is None or parsed_revision_id is None:
+        return HTMLResponse("Key template not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = {
+        "owner_id": owner_id,
+        "cohort_id": cohort_id,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "valid_days": valid_days,
+        "email_delivery_mode": email_delivery_mode,
+        "confirm_create_key_from_template": confirm_create_key_from_template,
+        "reason": reason,
+    }
+    options = await _load_key_create_form_options_or_empty(request)
+    template = await _load_template_for_render(request, parsed_template_id)
+    if template is None:
+        return HTMLResponse("Key template not found.", status_code=404)
+    current_revision = _current_template_revision(template)
+    if current_revision is None or current_revision.id != parsed_revision_id:
+        return _render_template_detail_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            template=template,
+            current_revision=current_revision,
+            options=options,
+            form=form,
+            error="Select a valid revision for this template before creating a key.",
+        )
+
+    try:
+        parsed_owner_id = _parse_required_admin_uuid(owner_id, field_name="owner_id")
+        parsed_cohort_id = _parse_optional_admin_uuid(cohort_id, field_name="cohort_id")
+        parsed_valid_from = _parse_admin_datetime(valid_from)
+        parsed_valid_until = _parse_admin_datetime(valid_until)
+        _, parsed_valid_days = _parse_optional_admin_int(valid_days)
+        parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
+        _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
+    except ValueError as exc:
+        return _render_template_detail_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            template=template,
+            current_revision=current_revision,
+            options=options,
+            form=form,
+            error=str(exc),
+        )
+
+    try:
+        async with _admin_template_key_creation_runtime_scope(request) as (
+            owners_repository,
+            cohorts_repository,
+            template_service,
+            email_delivery_service,
+        ):
+            owner = await owners_repository.get_owner_by_id(parsed_owner_id)
+            if owner is None:
+                raise ValueError("Select an existing owner before creating a key.")
+            cohort = None
+            if parsed_cohort_id is not None:
+                cohort = await cohorts_repository.get_cohort_by_id(parsed_cohort_id)
+                if cohort is None:
+                    raise ValueError("Select an existing cohort or leave cohort blank.")
+            result = await template_service.create_key_from_revision(
+                template_revision_id=parsed_revision_id,
+                owner_id=parsed_owner_id,
+                cohort_id=parsed_cohort_id,
+                actor_admin_id=action_context.admin_user.id,
+                reason=reason,
+                confirm_create_key_from_template=_is_checked(confirm_create_key_from_template),
+                valid_from=parsed_valid_from,
+                valid_until=parsed_valid_until,
+                valid_days=parsed_valid_days,
+            )
+            delivery_result = await _handle_admin_key_email_delivery_in_transaction(
+                email_delivery_service,
+                mode=parsed_email_delivery_mode,
+                gateway_key_id=result.created_key.gateway_key_id,
+                one_time_secret_id=result.created_key.one_time_secret_id,
+                owner_id=result.created_key.owner_id,
+                actor_admin_id=action_context.admin_user.id,
+                reason=reason,
+            )
+    except (EmailError, KeyTemplateError, KeyManagementError, ValueError) as exc:
+        diagnostic_id = _admin_diagnostic_id(request)
+        _log_admin_action_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            owner_id=_uuid_for_log(owner_id),
+            cohort_id=_uuid_for_log(cohort_id),
+            email_delivery_mode=_email_delivery_mode_for_log(email_delivery_mode),
+        )
+        return _render_template_detail_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            template=template,
+            current_revision=current_revision,
+            options=options,
+            form=form,
+            error=str(exc) if isinstance(exc, (KeyTemplateError, ValueError)) else "Gateway key creation failed.",
+            diagnostic_id=diagnostic_id,
+        )
+
+    celery_task_id: str | None = None
+    if parsed_email_delivery_mode == "send-now" and delivery_result is not None:
+        try:
+            async with _admin_email_delivery_action_scope(request) as email_delivery_service:
+                delivery_result = await email_delivery_service.send_pending_key_email(
+                    one_time_secret_id=delivery_result.one_time_secret_id,
+                    email_delivery_id=delivery_result.email_delivery_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=reason,
+                )
+        except EmailError as exc:
+            _log_admin_action_failure(
+                request,
+                exc=exc,
+                admin_id=action_context.admin_user.id,
+                owner_id=parsed_owner_id,
+                cohort_id=parsed_cohort_id,
+                email_delivery_mode=parsed_email_delivery_mode,
+            )
+            delivery_result = PendingKeyEmailResult(
+                email_delivery_id=delivery_result.email_delivery_id,
+                one_time_secret_id=delivery_result.one_time_secret_id,
+                gateway_key_id=delivery_result.gateway_key_id,
+                owner_id=delivery_result.owner_id,
+                recipient_email=delivery_result.recipient_email,
+                status="failed",
+                error_code="email_delivery_failed",
+            )
+
+    if parsed_email_delivery_mode == "enqueue" and delivery_result is not None:
+        celery_task_id = _enqueue_admin_pending_key_email(
+            one_time_secret_id=delivery_result.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=action_context.admin_user.id,
+        )
+        delivery_result = PendingKeyEmailResult(
+            email_delivery_id=delivery_result.email_delivery_id,
+            one_time_secret_id=delivery_result.one_time_secret_id,
+            gateway_key_id=delivery_result.gateway_key_id,
+            owner_id=delivery_result.owner_id,
+            recipient_email=delivery_result.recipient_email,
+            status="queued",
+        )
+
+    if parsed_email_delivery_mode in {"send-now", "enqueue"}:
+        response = templates.TemplateResponse(
+            request,
+            "keys/email_delivery_result.html",
+            {
+                "admin": action_context.admin_user,
+                "workflow": "created",
+                "email_delivery_mode": parsed_email_delivery_mode,
+                "key_result": _safe_created_key_result(result.created_key),
+                "delivery": delivery_result,
+                "celery_task_id": celery_task_id,
+            },
+        )
+        _set_no_store_headers(response)
+        return response
+
+    response = templates.TemplateResponse(
+        request,
+        "keys/create_result.html",
+        {
+            "admin": action_context.admin_user,
+            "created": result.created_key,
+            "owner": owner,
+            "cohort": cohort,
+            "limits": {
+                "cost_limit_eur": result.revision.cost_limit_eur,
+                "token_limit_total": result.revision.token_limit_total,
+                "request_limit_total": result.revision.request_limit_total,
+            },
+            "policy": {
+                "allowed_models": result.revision.allowed_models,
+                "allowed_endpoints": result.revision.allowed_endpoints,
+                "allow_all_models": False,
+                "allow_all_endpoints": False,
+                "rate_limit_policy": result.revision.rate_limit_policy,
+            },
+            "key_purpose": result.created_key.key_purpose,
+            "capability_policy_mode": result.created_key.capability_policy_mode,
+            "template_provenance": {
+                "template_id": result.template.id,
+                "template_name": result.template.name,
+                "template_revision_id": result.revision.id,
+                "template_revision_number": result.revision.revision_number,
+            },
+            "email_delivery_mode": parsed_email_delivery_mode,
+            "delivery": delivery_result,
+            "celery_task_id": celery_task_id,
         },
     )
     _set_no_store_headers(response)
@@ -5669,6 +5903,46 @@ async def _key_template_service_scope(request: Request) -> AsyncIterator[KeyTemp
 
 
 @asynccontextmanager
+async def _admin_template_key_creation_runtime_scope(
+    request: Request,
+) -> AsyncIterator[tuple[OwnersRepository, CohortsRepository, KeyTemplateService, EmailDeliveryService]]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            settings = _settings(request)
+            keys_repository = GatewayKeysRepository(session)
+            one_time_secrets_repository = OneTimeSecretsRepository(session)
+            owners_repository = OwnersRepository(session)
+            audit_repository = AuditRepository(session)
+            key_service = KeyService(
+                settings=settings,
+                gateway_keys_repository=keys_repository,
+                one_time_secrets_repository=one_time_secrets_repository,
+                audit_repository=audit_repository,
+                model_routes_repository=ModelRoutesRepository(session),
+            )
+            yield (
+                owners_repository,
+                CohortsRepository(session),
+                KeyTemplateService(
+                    key_templates_repository=KeyTemplatesRepository(session),
+                    audit_repository=audit_repository,
+                    key_service=key_service,
+                ),
+                EmailDeliveryService(
+                    settings=settings,
+                    one_time_secrets_repository=one_time_secrets_repository,
+                    email_deliveries_repository=EmailDeliveriesRepository(session),
+                    gateway_keys_repository=keys_repository,
+                    owners_repository=owners_repository,
+                    audit_repository=audit_repository,
+                    email_service=EmailService(settings),
+                    session=session,
+                ),
+            )
+
+
+@asynccontextmanager
 async def _admin_key_management_service_scope(request: Request) -> AsyncIterator[KeyService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -6021,6 +6295,20 @@ async def _load_key_create_form_options(request: Request) -> dict[str, object]:
     return {"owners": owners, "cohorts": cohorts}
 
 
+async def _load_key_create_form_options_or_empty(request: Request) -> dict[str, object]:
+    try:
+        return await _load_key_create_form_options(request)
+    except (AttributeError, RuntimeError):
+        return {"owners": [], "cohorts": []}
+
+
+async def _load_template_for_render(request: Request, template_id: uuid.UUID) -> object | None:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            return await KeyTemplatesRepository(session).get_template_for_admin_detail(template_id)
+
+
 async def _load_key_policy_route_options(request: Request) -> dict[str, list[object]]:
     try:
         session_factory = get_sessionmaker_from_app(request)
@@ -6066,6 +6354,40 @@ def _render_key_detail(
         },
         status_code=status_code,
     )
+
+
+def _render_template_detail_error(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    template: object,
+    current_revision: object | None,
+    options: dict[str, object],
+    form: dict[str, str],
+    error: str,
+    diagnostic_id: str | None = None,
+    status_code: int = 400,
+) -> Response:
+    response = templates.TemplateResponse(
+        request,
+        "templates/detail.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "template": template,
+            "current_revision": current_revision,
+            "owners": options["owners"],
+            "cohorts": options["cohorts"],
+            "form": form,
+            "error": error,
+            "diagnostic_id": diagnostic_id,
+            "admin_status_message": _admin_status_message(request),
+        },
+        status_code=status_code,
+    )
+    _set_no_store_headers(response)
+    return response
 
 
 def _render_key_calibration_form(
@@ -6330,6 +6652,21 @@ def _default_key_calibration_form() -> dict[str, str]:
         "start_at": "",
         "end_at": "",
         "multiplier": "3",
+    }
+
+
+def _default_template_key_create_form(revision: object | None = None) -> dict[str, str]:
+    default_email_mode = getattr(revision, "email_delivery_mode_default", None) if revision is not None else None
+    default_validity_days = getattr(revision, "validity_days_default", None) if revision is not None else None
+    return {
+        "owner_id": "",
+        "cohort_id": "",
+        "valid_from": "",
+        "valid_until": "",
+        "valid_days": str(default_validity_days) if default_validity_days is not None else "",
+        "email_delivery_mode": str(default_email_mode or "none"),
+        "confirm_create_key_from_template": "",
+        "reason": "",
     }
 
 
@@ -7970,6 +8307,8 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
         "valid_until": created.valid_until,
         "key_purpose": created.key_purpose,
         "capability_policy_mode": created.capability_policy_mode,
+        "template_id": created.template_id,
+        "template_revision_id": created.template_revision_id,
     }
 
 

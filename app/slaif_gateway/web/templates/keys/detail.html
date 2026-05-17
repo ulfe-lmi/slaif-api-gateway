@@ -27,6 +27,19 @@
   </section>
   {% endif %}
 
+  {% if key.template_id or key.template_revision_id %}
+  <section class="action-panel" aria-labelledby="template-provenance-heading">
+    <h2 id="template-provenance-heading">Template Provenance</h2>
+    <p class="warning-text">This is a normal standard gateway key created from an immutable key template revision. Later template edits do not silently change this key.</p>
+    <dl class="compact-dl">
+      <dt>Template ID</dt>
+      <dd>{{ key.template_id or "Not set" }}</dd>
+      <dt>Template revision ID</dt>
+      <dd>{{ key.template_revision_id or "Not set" }}</dd>
+    </dl>
+  </section>
+  {% endif %}
+
   <div class="detail-grid">
     <section class="detail-section">
       <h2>Identity</h2>

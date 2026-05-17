@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 
 from slaif_gateway.db.models import AuditLog, KeyTemplate, KeyTemplateRevision
+from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
 from slaif_gateway.services.calibration_summary_service import CalibrationPreviewResult
 from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
@@ -23,6 +24,14 @@ class KeyTemplateError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class KeyTemplateCreationResult:
+    template: KeyTemplate
+    revision: KeyTemplateRevision
+    audit_log: AuditLog
+
+
+@dataclass(frozen=True, slots=True)
+class KeyFromTemplateCreationResult:
+    created_key: CreatedGatewayKey
     template: KeyTemplate
     revision: KeyTemplateRevision
     audit_log: AuditLog
@@ -82,6 +91,12 @@ class _KeyTemplatesRepository(Protocol):
     ) -> KeyTemplate | None:
         pass
 
+    async def get_revision_for_admin_detail(
+        self,
+        revision_id: uuid.UUID,
+    ) -> KeyTemplateRevision | None:
+        pass
+
 
 class _AuditRepository(Protocol):
     async def add_audit_log(
@@ -101,6 +116,11 @@ class _AuditRepository(Protocol):
         pass
 
 
+class _KeyService(Protocol):
+    async def create_gateway_key(self, payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        pass
+
+
 class KeyTemplateService:
     """Create durable key templates from reviewed safe calibration proposals."""
 
@@ -109,9 +129,11 @@ class KeyTemplateService:
         *,
         key_templates_repository: _KeyTemplatesRepository,
         audit_repository: _AuditRepository,
+        key_service: _KeyService | None = None,
     ) -> None:
         self._key_templates = key_templates_repository
         self._audit = audit_repository
+        self._key_service = key_service
 
     async def create_from_calibration_proposal(
         self,
@@ -226,6 +248,105 @@ class KeyTemplateService:
             audit_log=audit,
         )
 
+    async def create_key_from_revision(
+        self,
+        *,
+        template_revision_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        cohort_id: uuid.UUID | None = None,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str,
+        confirm_create_key_from_template: bool,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        valid_days: int | None = None,
+    ) -> KeyFromTemplateCreationResult:
+        if self._key_service is None:
+            raise KeyTemplateError("Key service is required for template key creation.")
+        cleaned_reason = _clean_required_reason(reason)
+        if not confirm_create_key_from_template:
+            raise KeyTemplateError("Confirm key creation from template before continuing.")
+
+        revision = await self._key_templates.get_revision_for_admin_detail(template_revision_id)
+        if revision is None:
+            raise KeyTemplateError("Template revision not found.")
+        template = getattr(revision, "template", None)
+        if template is None:
+            raise KeyTemplateError("Template revision is not attached to a template.")
+        if getattr(template, "status", None) != "active":
+            raise KeyTemplateError("Archived or inactive templates cannot create keys.")
+        if revision.allowed_hosted_capabilities or revision.hosted_capabilities_requiring_review:
+            raise KeyTemplateError(
+                "This template contains hosted capabilities that require review; "
+                "participant keys are not created from it yet."
+            )
+
+        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _UNIMPLEMENTED_ENDPOINTS
+        allowed_endpoints = [endpoint for endpoint in revision.allowed_endpoints if endpoint in implemented]
+        if not allowed_endpoints:
+            raise KeyTemplateError("Template revision has no implemented participant endpoints.")
+        if set(revision.allowed_endpoints) - set(allowed_endpoints):
+            raise KeyTemplateError("Template revision includes unsupported endpoints.")
+
+        start = _coerce_valid_from(valid_from)
+        until = _resolve_template_valid_until(
+            valid_from=start,
+            valid_until=valid_until,
+            valid_days=valid_days,
+            default_validity_days=revision.validity_days_default,
+        )
+        if until <= start:
+            raise KeyTemplateError("Template key validity window is invalid.")
+
+        payload = CreateGatewayKeyInput(
+            owner_id=owner_id,
+            cohort_id=cohort_id,
+            created_by_admin_id=actor_admin_id,
+            valid_from=start,
+            valid_until=until,
+            cost_limit_eur=revision.cost_limit_eur,
+            token_limit_total=revision.token_limit_total,
+            request_limit_total=revision.request_limit_total,
+            allowed_models=list(revision.allowed_models or []),
+            allowed_endpoints=allowed_endpoints,
+            allow_all_models=False,
+            allow_all_endpoints=False,
+            key_purpose="standard",
+            capability_policy_mode="standard",
+            template_id=template.id,
+            template_revision_id=revision.id,
+            allowed_providers=list(revision.allowed_providers) if revision.allowed_providers else None,
+            rate_limit_policy=_rate_limit_policy_for_key(revision.rate_limit_policy),
+            note=cleaned_reason,
+        )
+        created = await self._key_service.create_gateway_key(payload)
+        audit = await self._audit.add_audit_log(
+            action="gateway_key.created_from_template",
+            entity_type="gateway_key",
+            admin_user_id=actor_admin_id,
+            entity_id=created.gateway_key_id,
+            new_values={
+                "gateway_key_id": str(created.gateway_key_id),
+                "owner_id": str(owner_id),
+                "cohort_id": str(cohort_id) if cohort_id else None,
+                "template_id": str(template.id),
+                "template_revision_id": str(revision.id),
+                "template_revision_number": revision.revision_number,
+                "allowed_endpoint_count": len(allowed_endpoints),
+                "allowed_model_count": len(revision.allowed_models or []),
+                "request_limit_total": revision.request_limit_total,
+                "token_limit_total": revision.token_limit_total,
+                "cost_limit_eur": str(revision.cost_limit_eur) if revision.cost_limit_eur else None,
+            },
+            note=cleaned_reason,
+        )
+        return KeyFromTemplateCreationResult(
+            created_key=created,
+            template=template,
+            revision=revision,
+            audit_log=audit,
+        )
+
 
 def _safe_snapshot(preview: CalibrationPreviewResult) -> dict[str, object]:
     payload = {
@@ -324,3 +445,53 @@ def _clean_email_mode(value: str | None) -> str | None:
     if cleaned not in _ALLOWED_DEFAULT_EMAIL_MODES:
         raise KeyTemplateError("Default email delivery mode must be none or pending.")
     return cleaned
+
+
+def _coerce_valid_from(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(UTC)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _resolve_template_valid_until(
+    *,
+    valid_from: datetime,
+    valid_until: datetime | None,
+    valid_days: int | None,
+    default_validity_days: int | None,
+) -> datetime:
+    if valid_until is not None and valid_days is not None:
+        raise KeyTemplateError("Use either valid_until or valid_days, not both.")
+    if valid_days is not None:
+        if valid_days <= 0:
+            raise KeyTemplateError("valid_days must be positive.")
+        return valid_from + timedelta(days=valid_days)
+    if valid_until is not None:
+        if valid_until.tzinfo is None:
+            return valid_until.replace(tzinfo=UTC)
+        return valid_until.astimezone(UTC)
+    if default_validity_days is None:
+        raise KeyTemplateError("Template revision has no default validity; provide valid_days or valid_until.")
+    return valid_from + timedelta(days=default_validity_days)
+
+
+def _rate_limit_policy_for_key(value: object) -> dict[str, int | None] | None:
+    if not isinstance(value, dict):
+        return None
+    allowed_names = {
+        "requests_per_minute",
+        "tokens_per_minute",
+        "max_concurrent_requests",
+        "window_seconds",
+    }
+    policy: dict[str, int | None] = {}
+    for name in allowed_names:
+        item = value.get(name)
+        if item is None:
+            continue
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            raise KeyTemplateError("Template revision has an invalid rate-limit policy.")
+        policy[name] = item
+    return policy or None

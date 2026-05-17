@@ -91,6 +91,8 @@ def _detail(
         key_purpose="standard",
         capability_policy_mode="standard",
         calibration_metadata={},
+        template_id=None,
+        template_revision_id=None,
         allowed_models_summary="gpt-test",
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="All",

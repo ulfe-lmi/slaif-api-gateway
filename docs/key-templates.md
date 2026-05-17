@@ -1,13 +1,14 @@
 # Key Templates
 
-Status: template persistence and create-from-calibration are implemented for
-RC2-beta foundation work. Participant-key creation from templates is future
-work.
+Status: template persistence, create-from-calibration, and single-key creation
+from a selected template revision are implemented for RC2-beta foundation work.
+Bulk participant-key creation from templates is future work.
 
 Key templates make complex key policies repeatable and reviewable. Current
 support stores durable template records and immutable revisions that can be
-created from a reviewed trusted-calibration proposal. The template tables store
-safe policy metadata only; they do not create participant keys yet.
+created from a reviewed trusted-calibration proposal. Admins can create exactly
+one normal gateway key from a selected revision. The template tables store safe
+policy metadata only and do not bulk-create participant keys.
 
 ## Why Templates Exist
 
@@ -36,8 +37,8 @@ Current and planned workflow:
 3. Review the proposal, warnings, assumptions, and local accounting limits.
 4. Create a durable key template and immutable revision from the reviewed
    proposal with confirmation and an audit reason.
-5. Future work: create individual test/participant keys from a template
-   revision.
+5. Create one normal participant/test key from a selected immutable template
+   revision with confirmation and an audit reason.
 6. Future work: bulk-create workshop keys from an approved template revision.
 
 ## Deriving Templates From Calibration-Key Usage
@@ -88,6 +89,13 @@ Generated templates are normal templates. They create an immutable template
 revision and record safe provenance: source key, source owner display metadata,
 source time window, multiplier, observed summary snapshot, proposed strict
 policy snapshot, warnings, assumptions, actor admin id, and audit linkage.
+Admins can create one normal `standard` gateway key from a selected template
+revision. The key inherits supported policy and limits from the immutable
+revision, records `template_id` and `template_revision_id` provenance, and uses
+the normal key creation path for HMAC storage, one-time plaintext display,
+one-time secret creation, optional email delivery, and audit. Creating the key
+does not mutate the template, the revision, or any existing keys.
+
 Bulk key creation from templates remains future work.
 
 Recommendations must not mutate existing keys automatically. Admins must review
@@ -101,8 +109,8 @@ Templates are versioned.
 Rules:
 
 - each edit creates a new template revision or immutable snapshot;
-- keys created from a template are future work and should record `template_id`
-  and `template_revision_id` or equivalent metadata;
+- keys created from a template are normal standard gateway keys and record
+  `template_id` and `template_revision_id` provenance;
 - historical keys remain explainable even after a template is edited;
 - editing a template does not silently change existing keys;
 - disabling a template prevents future key creation from that template but does
@@ -120,6 +128,30 @@ Current revision 1 stores:
 Observed hosted capabilities are not silently allowed for participant
 templates. They are preserved as review-required metadata. External
 MCP/connectors remain denied by default.
+
+## Creating One Key From A Template
+
+Admins can create one gateway key from a selected immutable revision through
+the CLI or dashboard. This is intentionally separate from bulk participant-key
+creation.
+
+Rules:
+
+- the created key is a normal `standard` gateway key, not a trusted calibration
+  key;
+- the selected revision is loaded server-side by revision ID, so browser hidden
+  fields cannot override policy;
+- supported endpoint/model/provider policy, request/token/cost limits, rate
+  limits, validity defaults, and email-delivery defaults are copied at creation
+  time;
+- existing keys, templates, and revisions are not mutated;
+- plaintext display and email delivery use the existing one-time key creation
+  behavior;
+- archived templates are rejected;
+- hosted capabilities requiring review are rejected rather than silently enabled
+  for participant keys;
+- `/v1/responses` and `/v1/completions` remain unsupported and are not allowed
+  through this workflow.
 
 ## Existing Keys
 

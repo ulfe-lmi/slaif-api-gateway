@@ -366,7 +366,10 @@ participant keys, key policy changes, routes, or pricing rows are created or
 updated. After review, admins can create a durable key template from the
 proposal with `slaif-gateway templates create-from-calibration` or the
 dashboard. That writes only template/revision rows and safe audit metadata; it
-does not create participant keys or mutate existing gateway keys.
+does not create participant keys or mutate existing gateway keys. Admins can
+then create exactly one normal key from a selected immutable revision with
+`slaif-gateway keys create-from-template` or the template detail page. Bulk
+template-based participant key creation remains future work.
 
 ## Planned Responses API Configuration
 

@@ -99,9 +99,10 @@ migrations automatically.
   keys, available from CLI and admin web creation, provide safe
   calibration-foundation metadata. Admins can now preview calibration usage
   summaries and strict participant-policy proposals from CLI and admin web, then
-  create durable key-template revisions from reviewed proposals. Participant-key
-  generation, policy mutation, and Responses support remain future work. See
-  `responses-compatibility.md`.
+  create durable key-template revisions from reviewed proposals. Single-key
+  creation from a selected template revision is implemented for normal standard
+  keys; bulk participant-key generation, policy mutation, and Responses support
+  remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
 - MFA is not implemented.
