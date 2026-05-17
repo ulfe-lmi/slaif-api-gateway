@@ -11,4 +11,5 @@ def test_openai_assisted_import_contract_stays_reviewed_and_local() -> None:
     assert "LLM-generated proposal files are not authoritative" in content
     assert "No silent replacement of production pricing rows" in normalized
     assert "No direct mutation from a web fetch or LLM call" in normalized
-    assert "actual OpenAI-calling proposal generator is a later PR" in normalized
+    assert "calls OpenAI only when an operator explicitly runs it" in normalized
+    assert "`OPENAI_API_KEY` remains reserved for client-side gateway-issued keys" in normalized

@@ -63,6 +63,8 @@ class Settings(BaseSettings):
 
     OPENAI_UPSTREAM_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
+    OPENAI_ADMIN_DISCOVERY_API_KEY: str | None = None
+    OPENAI_ASSISTED_CATALOG_MODEL: str = "gpt-5.5"
 
     ENABLE_OPENAI_PROVIDER: bool = True
     ENABLE_OPENROUTER_PROVIDER: bool = True
