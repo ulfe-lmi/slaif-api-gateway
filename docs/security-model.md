@@ -74,6 +74,13 @@ model responses, raw webpage text, prompts, completions, cookies, sessions, CSRF
 tokens, provider keys, encrypted payloads, nonces, raw request/response bodies,
 or generated full TSV content.
 
+The dashboard may submit the final validated TSV from the proposal result page
+to the existing pricing or route import preview route. That bridge is
+CSRF-protected, preview-only, and subject to the normal import byte limits. It
+does not store generated TSV in PostgreSQL, audit rows, cookies, or server-side
+admin sessions, and it does not bypass unknown-field, secret-looking-value,
+duplicate, conflict, unsupported-row, or update-classification checks.
+
 ## Quota And Accounting
 
 PostgreSQL is the hard quota source of truth. Redis rate limiting is operational

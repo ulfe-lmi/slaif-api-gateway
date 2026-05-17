@@ -67,11 +67,30 @@
 
   <section class="action-panel" aria-labelledby="openai-assisted-tsv-heading">
     <h2 id="openai-assisted-tsv-heading">Generated TSV</h2>
-    <p class="muted">Review these rows, then paste them into the import preview page. This page does not execute import.</p>
+    <p class="muted">Review these rows here before sending them to the deterministic import preview. This page does not execute import.</p>
     <textarea rows="18" spellcheck="false" readonly>{{ result.tsv_text }}</textarea>
-    <div class="header-actions">
-      <a class="button-link" href="{{ import_url }}">Continue to import preview</a>
+  </section>
+
+  <section class="action-panel danger-zone" aria-labelledby="openai-assisted-preview-bridge-heading">
+    <h2 id="openai-assisted-preview-bridge-heading">Import Preview</h2>
+    <p class="warning-text">This is an LLM-assisted proposal. Import preview is still non-mutating. Review every row before execution. Execution requires explicit confirmation and an audit reason. Imported pricing remains SLAIF local accounting assumptions, not invoice-grade provider truth.</p>
+    <p class="muted small">Source label: {{ import_bridge.source_label }}. TSV size: {{ import_bridge.tsv_bytes }} bytes. Preview limit: {{ import_bridge.max_bytes }} bytes.</p>
+    {% if import_bridge.form_enabled %}
+    <form method="post" action="{{ import_bridge.preview_url }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="import_format" value="tsv">
+      <input type="hidden" name="source_label" value="{{ import_bridge.source_label }}">
+      <textarea name="import_text" hidden>{{ result.tsv_text }}</textarea>
+      <button type="submit">{{ import_bridge.submit_label }}</button>
+    </form>
+    {% else %}
+    <div class="admin-flash admin-flash-error" role="alert">
+      This generated TSV is larger than the browser import preview limit. Download or copy the TSV, reduce the model scope, or use the CLI/file import workflow; this page will not render a hidden preview-submit payload that exceeds the configured limit.
     </div>
+    <div class="header-actions">
+      <a class="button-link" href="{{ import_url }}">Open import page</a>
+    </div>
+    {% endif %}
   </section>
 </section>
 {% endblock %}

@@ -246,7 +246,12 @@ restricted to official OpenAI domains where possible, ask for strict JSON,
 validate the JSON locally, and render TSV proposal content. They do not mutate
 `pricing_rules` or `model_routes`; import remains a separate
 preview/confirm/audit workflow through the existing pricing and route import
-pages. The dashboard result page is no-cache and must not store raw model
+pages. The dashboard result page is no-cache and can post a generated TSV
+directly into the existing import preview route when it fits the configured
+pricing or route import byte limit. That bridge is preview-only; execution still
+requires the existing confirmation checkbox plus audit reason and server-side
+re-validation. The result page must not store generated TSV in PostgreSQL,
+cookies, audit rows, or server-side sessions, and it must not store raw model
 responses, raw webpage text, prompts, completions, cookies, sessions, CSRF
 tokens, provider keys, encrypted payloads, nonces, or raw request/response
 bodies. Dashboard proposal generation is synchronous in the current
