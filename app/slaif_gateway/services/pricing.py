@@ -128,6 +128,11 @@ class PricingService:
             estimated_total_cost_eur=total_eur,
             pricing_rule_id=pricing.pricing_rule_id,
             fx_rate_id=fx.fx_rate_id,
+            input_price_per_1m=pricing.input_price_per_1m,
+            cached_input_price_per_1m=pricing.cached_input_price_per_1m,
+            output_price_per_1m=pricing.output_price_per_1m,
+            reasoning_price_per_1m=pricing.reasoning_price_per_1m,
+            fx_rate=fx.rate,
         )
 
 

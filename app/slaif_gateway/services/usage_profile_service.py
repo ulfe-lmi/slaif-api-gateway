@@ -75,12 +75,18 @@ class UsageProfileService:
         cost_source = _cost_source(
             provider_reported_cost=provider_reported_cost,
             slaif_calculated_cost=slaif_calculated_cost,
+            response_metadata=response_metadata,
         )
         metadata = _safe_profile_metadata(
             {
                 "profile_version": 1,
                 "source": "chat_completions_accounting_finalization",
                 "cost_source": cost_source,
+                "cost_confidence": response_metadata.get("cost_confidence"),
+                "reservation_overrun": response_metadata.get("reservation_overrun"),
+                "token_reservation_overrun": response_metadata.get("token_reservation_overrun"),
+                "cost_reservation_overrun": response_metadata.get("cost_reservation_overrun"),
+                "overrun_policy": response_metadata.get("overrun_policy"),
                 "provider_reported_currency": provider_reported_currency,
                 **dict(profile_metadata or {}),
             }
@@ -215,7 +221,15 @@ def _cost_source(
     *,
     provider_reported_cost: Decimal | None,
     slaif_calculated_cost: Decimal | None,
+    response_metadata: Mapping[str, Any] | None = None,
 ) -> str:
+    metadata_source = None
+    if response_metadata is not None:
+        raw_source = response_metadata.get("cost_source") or response_metadata.get("actual_cost_source")
+        if isinstance(raw_source, str) and raw_source in _COST_SOURCES:
+            metadata_source = raw_source
+    if metadata_source is not None:
+        return metadata_source
     if provider_reported_cost is not None and slaif_calculated_cost is not None:
         return "mixed"
     if provider_reported_cost is not None:

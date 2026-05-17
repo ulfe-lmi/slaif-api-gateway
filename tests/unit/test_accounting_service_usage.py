@@ -61,12 +61,17 @@ def _estimate(
     output_cost: Decimal = Decimal("0.200000000"),
     total_native: Decimal = Decimal("0.300000000"),
     total_eur: Decimal = Decimal("0.300000000"),
+    native_currency: str = "EUR",
+    input_price_per_1m: Decimal | None = None,
+    cached_input_price_per_1m: Decimal | None = None,
+    output_price_per_1m: Decimal | None = None,
+    reasoning_price_per_1m: Decimal | None = None,
 ) -> ChatCostEstimate:
     return ChatCostEstimate(
         provider="openai",
         requested_model="classroom-cheap",
         resolved_model="gpt-4.1-mini",
-        native_currency="EUR",
+        native_currency=native_currency,
         estimated_input_tokens=input_tokens,
         estimated_output_tokens=output_tokens,
         estimated_input_cost_native=input_cost,
@@ -75,6 +80,10 @@ def _estimate(
         estimated_total_cost_eur=total_eur,
         pricing_rule_id=None,
         fx_rate_id=None,
+        input_price_per_1m=input_price_per_1m,
+        cached_input_price_per_1m=cached_input_price_per_1m,
+        output_price_per_1m=output_price_per_1m,
+        reasoning_price_per_1m=reasoning_price_per_1m,
     )
 
 
@@ -188,8 +197,165 @@ def test_compute_actual_cost_records_provider_reported_cost_without_trusting_for
     )
 
     assert actual.actual_cost_eur == Decimal("0.1000000000")
+    assert actual.cost_source == "slaif_calculated"
+    assert actual.cost_confidence == "slaif_calculated_provider_cost_untrusted"
     assert actual.provider_reported_cost_native == Decimal("9.990000000")
     assert actual.provider_reported_currency == "USD"
+
+
+def test_compute_actual_cost_uses_cached_input_price_when_available() -> None:
+    usage = ActualUsage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        cached_tokens=40,
+    )
+
+    actual = _service().compute_actual_cost(
+        _response(ProviderUsage(prompt_tokens=100, completion_tokens=0, total_tokens=100)),
+        _route(),
+        usage,
+        _estimate(
+            input_price_per_1m=Decimal("2.000000000"),
+            cached_input_price_per_1m=Decimal("0.500000000"),
+            output_price_per_1m=Decimal("4.000000000"),
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.000140000000")
+    assert actual.component_token_counts["input_uncached_tokens"] == 60
+    assert actual.component_token_counts["input_cached_tokens"] == 40
+    assert actual.cost_confidence == "slaif_calculated"
+
+
+def test_compute_actual_cost_falls_back_for_cached_input_without_price() -> None:
+    usage = ActualUsage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        cached_tokens=40,
+    )
+
+    actual = _service().compute_actual_cost(
+        _response(ProviderUsage(prompt_tokens=100, completion_tokens=0, total_tokens=100)),
+        _route(),
+        usage,
+        _estimate(
+            input_price_per_1m=Decimal("2.000000000"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("4.000000000"),
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.000200000000")
+    assert actual.cost_confidence == "slaif_calculated_with_fallbacks"
+    assert "cached_input_price_fallback_to_input" in actual.cost_warnings
+
+
+def test_compute_actual_cost_uses_reasoning_price_without_double_charging_output() -> None:
+    usage = ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=100,
+        total_tokens=100,
+        reasoning_tokens=25,
+    )
+
+    actual = _service().compute_actual_cost(
+        _response(ProviderUsage(prompt_tokens=0, completion_tokens=100, total_tokens=100)),
+        _route(),
+        usage,
+        _estimate(
+            input_price_per_1m=Decimal("1.000000000"),
+            output_price_per_1m=Decimal("4.000000000"),
+            reasoning_price_per_1m=Decimal("6.000000000"),
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.000450000000")
+    assert actual.component_token_counts["output_non_reasoning_tokens"] == 75
+    assert actual.component_token_counts["output_reasoning_tokens"] == 25
+
+
+def test_compute_actual_cost_falls_back_for_reasoning_without_price() -> None:
+    usage = ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=100,
+        total_tokens=100,
+        reasoning_tokens=25,
+    )
+
+    actual = _service().compute_actual_cost(
+        _response(ProviderUsage(prompt_tokens=0, completion_tokens=100, total_tokens=100)),
+        _route(),
+        usage,
+        _estimate(
+            input_price_per_1m=Decimal("1.000000000"),
+            output_price_per_1m=Decimal("4.000000000"),
+            reasoning_price_per_1m=None,
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.000400000000")
+    assert "reasoning_price_fallback_to_output" in actual.cost_warnings
+
+
+def test_compute_actual_cost_prefers_openrouter_provider_reported_cost() -> None:
+    route = RouteResolutionResult(
+        requested_model="openrouter/model",
+        resolved_model="openrouter/model",
+        provider="openrouter",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern="openrouter/model",
+        priority=100,
+    )
+    usage = ActualUsage(prompt_tokens=50, completion_tokens=25, total_tokens=75)
+
+    actual = _service().compute_actual_cost(
+        ProviderResponse(
+            provider="openrouter",
+            upstream_model="openrouter/model",
+            status_code=200,
+            json_body={},
+            usage=ProviderUsage(prompt_tokens=50, completion_tokens=25, total_tokens=75),
+            raw_cost_native=Decimal("0.009000000"),
+            native_currency="USD",
+        ),
+        route,
+        usage,
+        _estimate(
+            native_currency="USD",
+            total_native=Decimal("0.300000000"),
+            total_eur=Decimal("0.276000000"),
+        ),
+    )
+
+    assert actual.actual_cost_eur == Decimal("0.008280000000000000")
+    assert actual.actual_cost_native == Decimal("0.009000000")
+    assert actual.native_currency == "USD"
+    assert actual.cost_source == "provider_reported"
+    assert actual.cost_confidence == "provider_reported_with_slaif_comparison"
+    assert actual.slaif_calculated_cost_eur == Decimal("0.092000000000000000")
+
+
+def test_compute_actual_cost_ignores_invalid_provider_reported_cost() -> None:
+    usage = ActualUsage(prompt_tokens=50, completion_tokens=25, total_tokens=75)
+
+    actual = _service().compute_actual_cost(
+        _response(
+            ProviderUsage(prompt_tokens=50, completion_tokens=25, total_tokens=75),
+            raw_cost_native=Decimal("-1"),
+            native_currency="USD",
+        ),
+        _route(),
+        usage,
+        _estimate(),
+    )
+
+    assert actual.actual_cost_eur == Decimal("0.1000000000")
+    assert actual.provider_reported_cost_native is None
+    assert actual.cost_source == "slaif_calculated"
+    assert "provider_reported_cost_invalid" in actual.cost_warnings
 
 
 def test_compute_actual_cost_fails_closed_when_pricing_data_is_missing() -> None:

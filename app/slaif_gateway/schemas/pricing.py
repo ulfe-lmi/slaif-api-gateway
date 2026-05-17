@@ -51,3 +51,8 @@ class ChatCostEstimate:
     estimated_total_cost_eur: Decimal
     pricing_rule_id: uuid.UUID | None
     fx_rate_id: uuid.UUID | None
+    input_price_per_1m: Decimal | None = None
+    cached_input_price_per_1m: Decimal | None = None
+    output_price_per_1m: Decimal | None = None
+    reasoning_price_per_1m: Decimal | None = None
+    fx_rate: Decimal | None = None

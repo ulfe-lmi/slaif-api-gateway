@@ -28,7 +28,6 @@ from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting_errors import (
     AccountingError,
     AccountingFinalizationRecoveryError,
-    ActualCostExceededReservationError,
     FinalizationRecoveryNotSupportedError,
     InvalidUsageError,
     LedgerWriteError,
@@ -43,9 +42,13 @@ from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 _EUR = "EUR"
+_ONE_MILLION = Decimal("1000000")
 _PROVIDER_COMPLETED_PENDING = "provider_completed_finalization_pending"
 _PROVIDER_COMPLETED_FAILED = "provider_completed_finalization_failed"
 _ACCOUNTING_FINALIZATION_FAILED = "accounting_finalization_failed"
+_OVERRUN_POLICY = "chat_completions_admit_then_finalize_v1"
+_COST_SOURCE_SLAIF = "slaif_calculated"
+_COST_SOURCE_PROVIDER = "provider_reported"
 
 
 class AccountingService:
@@ -130,42 +133,78 @@ class AccountingService:
         pricing_estimate: ChatCostEstimate,
         at: datetime | None = None,
     ) -> ActualCost:
-        """Compute actual cost from actual usage using prior pricing estimate details."""
-        _ = route, at
+        """Compute actual cost from actual usage and safe provider cost metadata."""
+        _ = at
         native_currency = _normalize_currency(pricing_estimate.native_currency)
-        provider_reported_cost = _provider_reported_cost(provider_response)
-        provider_reported_currency = _provider_reported_currency(provider_response)
+        warnings: list[str] = []
+        component_costs, component_tokens, component_warnings = _component_slaif_costs(
+            usage=usage,
+            pricing_estimate=pricing_estimate,
+        )
+        warnings.extend(component_warnings)
 
-        input_unit = _unit_cost(
-            estimated_cost=pricing_estimate.estimated_input_cost_native,
-            estimated_tokens=pricing_estimate.estimated_input_tokens,
-            actual_tokens=usage.prompt_tokens,
-            param="prompt_tokens",
-        )
-        output_unit = _unit_cost(
-            estimated_cost=pricing_estimate.estimated_output_cost_native,
-            estimated_tokens=pricing_estimate.estimated_output_tokens,
-            actual_tokens=usage.completion_tokens,
-            param="completion_tokens",
-        )
-        actual_native = (
-            Decimal(usage.prompt_tokens) * input_unit
-            + Decimal(usage.completion_tokens) * output_unit
-        )
-
-        actual_eur = _convert_estimate_native_to_eur(
-            actual_native=actual_native,
+        slaif_native = sum(component_costs.values(), Decimal("0"))
+        slaif_eur = _convert_estimate_native_to_eur(
+            actual_native=slaif_native,
             native_currency=native_currency,
             estimated_total_native=pricing_estimate.estimated_total_cost_native,
             estimated_total_eur=pricing_estimate.estimated_total_cost_eur,
         )
+        provider_reported_cost, provider_reported_currency, provider_warning = _provider_reported_cost(
+            provider_response
+        )
+        if provider_warning is not None:
+            warnings.append(provider_warning)
+
+        provider_reported_eur: Decimal | None = None
+        provider_cost_trusted = False
+        if provider_reported_cost is not None and provider_reported_currency is not None:
+            provider_reported_eur = _provider_reported_cost_to_eur(
+                provider_cost=provider_reported_cost,
+                provider_currency=provider_reported_currency,
+                native_currency=native_currency,
+                pricing_estimate=pricing_estimate,
+            )
+            provider_cost_trusted = (
+                provider_response.provider == "openrouter" and provider_reported_eur is not None
+            )
+            if provider_response.provider == "openrouter" and provider_reported_eur is None:
+                warnings.append("provider_reported_cost_currency_unsupported")
+
+        if provider_cost_trusted and provider_reported_eur is not None:
+            actual_eur = provider_reported_eur
+            actual_native = provider_reported_cost
+            actual_native_currency = provider_reported_currency
+            cost_source = _COST_SOURCE_PROVIDER
+            cost_confidence = "provider_reported_with_slaif_comparison"
+        else:
+            actual_eur = slaif_eur
+            actual_native = slaif_native
+            actual_native_currency = native_currency
+            cost_source = _COST_SOURCE_SLAIF
+            cost_confidence = (
+                "slaif_calculated_with_fallbacks" if warnings else "slaif_calculated"
+            )
+            if provider_reported_cost is not None and provider_response.provider != "openrouter":
+                warnings.append("provider_reported_cost_not_supported_for_provider")
+
+        if provider_reported_cost is not None and cost_source == _COST_SOURCE_SLAIF:
+            cost_confidence = "slaif_calculated_provider_cost_untrusted"
 
         return ActualCost(
             actual_cost_eur=actual_eur,
             actual_cost_native=actual_native,
-            native_currency=native_currency,
+            native_currency=actual_native_currency,
+            slaif_calculated_cost_eur=slaif_eur,
+            slaif_calculated_cost_native=slaif_native,
+            cost_source=cost_source,
+            cost_confidence=cost_confidence,
+            cost_warnings=tuple(dict.fromkeys(warnings)),
+            component_costs_native=component_costs,
+            component_token_counts=component_tokens,
             provider_reported_cost_native=provider_reported_cost,
             provider_reported_currency=provider_reported_currency,
+            provider_reported_cost_eur=provider_reported_eur,
         )
 
     async def finalize_successful_response(
@@ -203,7 +242,7 @@ class AccountingService:
             pricing_estimate,
             at=finished,
         )
-        _validate_actual_within_reservation(
+        overrun_metadata = _reservation_overrun_metadata(
             actual_cost_eur=actual_cost.actual_cost_eur,
             actual_tokens=usage.total_tokens,
             reserved_cost_eur=reservation.reserved_cost_eur,
@@ -230,7 +269,10 @@ class AccountingService:
             ledger = await self._mark_provider_completed_ledger_finalized(
                 usage_ledger_id=provider_completed_usage_ledger_id,
                 provider_response=provider_response,
+                usage=usage,
+                pricing_estimate=pricing_estimate,
                 actual_cost=actual_cost,
+                overrun_metadata=overrun_metadata,
                 finished_at=finished,
                 latency_ms=_latency_ms(started, finished),
             )
@@ -245,6 +287,7 @@ class AccountingService:
                 usage=usage,
                 pricing_estimate=pricing_estimate,
                 actual_cost=actual_cost,
+                overrun_metadata=overrun_metadata,
                 streaming=streaming,
                 started_at=started,
                 finished_at=finished,
@@ -300,6 +343,12 @@ class AccountingService:
             pricing_estimate,
             at=finished,
         )
+        overrun_metadata = _reservation_overrun_metadata(
+            actual_cost_eur=actual_cost.actual_cost_eur,
+            actual_tokens=usage.total_tokens,
+            reserved_cost_eur=reservation.reserved_cost_eur,
+            reserved_tokens=reservation.reserved_tokens,
+        )
 
         existing = await self._usage_ledger_repository.get_usage_record_by_request_id(request_id)
         if existing is not None:
@@ -349,7 +398,13 @@ class AccountingService:
                 native_currency=actual_cost.native_currency,
                 usage_raw=dict(usage.other_usage),
                 response_metadata={
-                    **_response_metadata(provider_response, actual_cost),
+                    **_response_metadata(
+                        provider_response,
+                        actual_cost,
+                        usage=usage,
+                        pricing_estimate=pricing_estimate,
+                        overrun_metadata=overrun_metadata,
+                    ),
                     "recovery_state": _PROVIDER_COMPLETED_PENDING,
                     "needs_reconciliation": False,
                 },
@@ -534,6 +589,7 @@ class AccountingService:
         usage: ActualUsage,
         pricing_estimate: ChatCostEstimate,
         actual_cost: ActualCost,
+        overrun_metadata: Mapping[str, object],
         streaming: bool,
         started_at: datetime,
         finished_at: datetime,
@@ -564,7 +620,13 @@ class AccountingService:
                 actual_cost_native=actual_cost.actual_cost_native,
                 native_currency=actual_cost.native_currency,
                 usage_raw=dict(usage.other_usage),
-                response_metadata=_response_metadata(provider_response, actual_cost),
+                response_metadata=_response_metadata(
+                    provider_response,
+                    actual_cost,
+                    usage=usage,
+                    pricing_estimate=pricing_estimate,
+                    overrun_metadata=overrun_metadata,
+                ),
                 started_at=started_at,
                 finished_at=finished_at,
                 latency_ms=_latency_ms(started_at, finished_at),
@@ -577,7 +639,10 @@ class AccountingService:
         *,
         usage_ledger_id: uuid.UUID,
         provider_response: ProviderResponse,
+        usage: ActualUsage,
+        pricing_estimate: ChatCostEstimate,
         actual_cost: ActualCost,
+        overrun_metadata: Mapping[str, object],
         finished_at: datetime,
         latency_ms: int | None,
     ):
@@ -586,7 +651,13 @@ class AccountingService:
                 usage_ledger_id,
                 http_status=provider_response.status_code,
                 response_metadata={
-                    **_response_metadata(provider_response, actual_cost),
+                    **_response_metadata(
+                        provider_response,
+                        actual_cost,
+                        usage=usage,
+                        pricing_estimate=pricing_estimate,
+                        overrun_metadata=overrun_metadata,
+                    ),
                     "recovery_state": "finalized",
                     "needs_reconciliation": False,
                 },
@@ -652,13 +723,21 @@ def _optional_token_count(value: int | None, field_name: str) -> int | None:
     return value
 
 
-def _provider_reported_cost(provider_response: ProviderResponse) -> Decimal | None:
+def _provider_reported_cost(
+    provider_response: ProviderResponse,
+) -> tuple[Decimal | None, str | None, str | None]:
     cost = provider_response.raw_cost_native
     if cost is None:
-        return None
+        return None, None, None
     if not isinstance(cost, Decimal) or cost < 0:
-        raise UnsupportedProviderCostError("Provider-reported cost is invalid", param="raw_cost_native")
-    return cost
+        return None, None, "provider_reported_cost_invalid"
+    try:
+        currency = _provider_reported_currency(provider_response)
+    except UnsupportedProviderCostError:
+        return None, None, "provider_reported_currency_invalid"
+    if currency is None:
+        return None, None, "provider_reported_currency_missing"
+    return cost, currency, None
 
 
 def _provider_reported_currency(provider_response: ProviderResponse) -> str | None:
@@ -667,29 +746,140 @@ def _provider_reported_currency(provider_response: ProviderResponse) -> str | No
     return _normalize_currency(provider_response.native_currency)
 
 
-def _unit_cost(
+def _component_slaif_costs(
     *,
-    estimated_cost: Decimal,
-    estimated_tokens: int,
-    actual_tokens: int,
+    usage: ActualUsage,
+    pricing_estimate: ChatCostEstimate,
+) -> tuple[dict[str, Decimal], dict[str, int], list[str]]:
+    input_price = _price_per_1m(
+        pricing_estimate.input_price_per_1m,
+        fallback_cost=pricing_estimate.estimated_input_cost_native,
+        fallback_tokens=pricing_estimate.estimated_input_tokens,
+        param="input_price_per_1m",
+    )
+    if (
+        pricing_estimate.input_price_per_1m is None
+        and pricing_estimate.estimated_input_tokens <= 0
+        and usage.prompt_tokens > 0
+    ):
+        raise UnsupportedProviderCostError(
+            "Actual input cost cannot be computed from a zero-token estimate",
+            param="prompt_tokens",
+        )
+    output_price = _price_per_1m(
+        pricing_estimate.output_price_per_1m,
+        fallback_cost=pricing_estimate.estimated_output_cost_native,
+        fallback_tokens=pricing_estimate.estimated_output_tokens,
+        param="output_price_per_1m",
+    )
+    if (
+        pricing_estimate.output_price_per_1m is None
+        and pricing_estimate.estimated_output_tokens <= 0
+        and usage.completion_tokens > 0
+    ):
+        raise UnsupportedProviderCostError(
+            "Actual output cost cannot be computed from a zero-token estimate",
+            param="completion_tokens",
+        )
+    warnings: list[str] = []
+
+    cached_tokens = min(usage.cached_tokens or 0, usage.prompt_tokens)
+    uncached_input_tokens = usage.prompt_tokens - cached_tokens
+    cached_input_price = pricing_estimate.cached_input_price_per_1m
+    if cached_tokens and cached_input_price is None:
+        cached_input_price = input_price
+        warnings.append("cached_input_price_fallback_to_input")
+    elif cached_input_price is None:
+        cached_input_price = input_price
+    _validate_price(cached_input_price, param="cached_input_price_per_1m")
+
+    reasoning_tokens = min(usage.reasoning_tokens or 0, usage.completion_tokens)
+    non_reasoning_output_tokens = usage.completion_tokens - reasoning_tokens
+    reasoning_price = pricing_estimate.reasoning_price_per_1m
+    if reasoning_tokens and reasoning_price is None:
+        reasoning_price = output_price
+        warnings.append("reasoning_price_fallback_to_output")
+    elif reasoning_price is None:
+        reasoning_price = output_price
+    _validate_price(reasoning_price, param="reasoning_price_per_1m")
+
+    if usage.cached_tokens is not None and usage.cached_tokens > usage.prompt_tokens:
+        warnings.append("cached_tokens_exceed_prompt_tokens_capped")
+    if usage.reasoning_tokens is not None and usage.reasoning_tokens > usage.completion_tokens:
+        warnings.append("reasoning_tokens_exceed_completion_tokens_capped")
+    if usage.prompt_tokens + usage.completion_tokens < usage.total_tokens:
+        warnings.append("total_tokens_include_unpriced_provider_components")
+
+    component_tokens = {
+        "input_uncached_tokens": uncached_input_tokens,
+        "input_cached_tokens": cached_tokens,
+        "output_non_reasoning_tokens": non_reasoning_output_tokens,
+        "output_reasoning_tokens": reasoning_tokens,
+        "total_tokens": usage.total_tokens,
+    }
+    component_costs = {
+        "input_uncached": _tokens_to_cost(uncached_input_tokens, input_price),
+        "input_cached": _tokens_to_cost(cached_tokens, cached_input_price),
+        "output_non_reasoning": _tokens_to_cost(non_reasoning_output_tokens, output_price),
+        "output_reasoning": _tokens_to_cost(reasoning_tokens, reasoning_price),
+    }
+    return component_costs, component_tokens, warnings
+
+
+def _price_per_1m(
+    value: Decimal | None,
+    *,
+    fallback_cost: Decimal,
+    fallback_tokens: int,
     param: str,
 ) -> Decimal:
-    if not isinstance(estimated_cost, Decimal):
+    if value is not None:
+        _validate_price(value, param=param)
+        return value
+    if not isinstance(fallback_cost, Decimal):
         raise UnsupportedProviderCostError("Estimated cost must use Decimal", param=param)
-    if estimated_cost < 0:
+    if fallback_cost < 0:
         raise UnsupportedProviderCostError("Estimated cost must be non-negative", param=param)
-    if isinstance(estimated_tokens, bool) or not isinstance(estimated_tokens, int):
+    if isinstance(fallback_tokens, bool) or not isinstance(fallback_tokens, int):
         raise UnsupportedProviderCostError("Estimated token count must be an integer", param=param)
-    if estimated_tokens < 0:
-        raise UnsupportedProviderCostError("Estimated token count must be non-negative", param=param)
-    if estimated_tokens == 0:
-        if actual_tokens == 0:
+    if fallback_tokens <= 0:
+        if fallback_cost == 0:
             return Decimal("0")
-        raise UnsupportedProviderCostError(
-            "Actual cost cannot be computed from a zero-token estimate",
-            param=param,
+        raise UnsupportedProviderCostError("Estimated token count must be positive", param=param)
+    return fallback_cost * _ONE_MILLION / Decimal(fallback_tokens)
+
+
+def _validate_price(value: Decimal, *, param: str) -> None:
+    if not isinstance(value, Decimal):
+        raise UnsupportedProviderCostError("Pricing component must use Decimal", param=param)
+    if value < 0:
+        raise UnsupportedProviderCostError("Pricing component must be non-negative", param=param)
+
+
+def _tokens_to_cost(tokens: int, price_per_1m: Decimal) -> Decimal:
+    return Decimal(tokens) / _ONE_MILLION * price_per_1m
+
+
+def _provider_reported_cost_to_eur(
+    *,
+    provider_cost: Decimal,
+    provider_currency: str,
+    native_currency: str,
+    pricing_estimate: ChatCostEstimate,
+) -> Decimal | None:
+    if provider_currency == _EUR:
+        return provider_cost
+    if provider_currency != native_currency:
+        return None
+    try:
+        return _convert_estimate_native_to_eur(
+            actual_native=provider_cost,
+            native_currency=native_currency,
+            estimated_total_native=pricing_estimate.estimated_total_cost_native,
+            estimated_total_eur=pricing_estimate.estimated_total_cost_eur,
         )
-    return estimated_cost / Decimal(estimated_tokens)
+    except UnsupportedProviderCostError:
+        return None
 
 
 def _convert_estimate_native_to_eur(
@@ -713,17 +903,25 @@ def _convert_estimate_native_to_eur(
     return actual_native * fx_ratio
 
 
-def _validate_actual_within_reservation(
+def _reservation_overrun_metadata(
     *,
     actual_cost_eur: Decimal,
     actual_tokens: int,
     reserved_cost_eur: Decimal,
     reserved_tokens: int,
-) -> None:
-    if actual_cost_eur > reserved_cost_eur:
-        raise ActualCostExceededReservationError(param="actual_cost_eur")
-    if actual_tokens > reserved_tokens:
-        raise ActualCostExceededReservationError(param="total_tokens")
+) -> dict[str, object]:
+    token_overrun = actual_tokens > reserved_tokens
+    cost_overrun = actual_cost_eur > reserved_cost_eur
+    return {
+        "reserved_tokens": reserved_tokens,
+        "actual_tokens": actual_tokens,
+        "reserved_cost_eur": str(reserved_cost_eur),
+        "actual_cost_eur": str(actual_cost_eur),
+        "token_reservation_overrun": token_overrun,
+        "cost_reservation_overrun": cost_overrun,
+        "reservation_overrun": token_overrun or cost_overrun,
+        "overrun_policy": _OVERRUN_POLICY,
+    }
 
 
 def _normalize_currency(value: str) -> str:
@@ -753,16 +951,48 @@ def _latency_ms(started_at: datetime, finished_at: datetime) -> int | None:
     return max(0, delta_ms)
 
 
-def _response_metadata(provider_response: ProviderResponse, actual_cost: ActualCost) -> dict[str, object]:
+def _response_metadata(
+    provider_response: ProviderResponse,
+    actual_cost: ActualCost,
+    *,
+    usage: ActualUsage | None = None,
+    pricing_estimate: ChatCostEstimate | None = None,
+    overrun_metadata: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     metadata: dict[str, object] = {
         "provider": provider_response.provider,
         "upstream_model": provider_response.upstream_model,
         "status_code": provider_response.status_code,
+        "actual_cost_source": actual_cost.cost_source,
+        "cost_source": actual_cost.cost_source,
+        "cost_confidence": actual_cost.cost_confidence,
+        "slaif_calculated_cost_native": str(actual_cost.slaif_calculated_cost_native),
+        "slaif_calculated_cost_eur": str(actual_cost.slaif_calculated_cost_eur),
     }
+    if actual_cost.component_token_counts:
+        metadata["component_token_counts"] = dict(actual_cost.component_token_counts)
+    if actual_cost.component_costs_native:
+        metadata["component_costs_native"] = {
+            key: str(value) for key, value in actual_cost.component_costs_native.items()
+        }
+    if actual_cost.cost_warnings:
+        metadata["cost_warnings"] = list(actual_cost.cost_warnings)
     if actual_cost.provider_reported_cost_native is not None:
         metadata["provider_reported_cost_native"] = str(actual_cost.provider_reported_cost_native)
     if actual_cost.provider_reported_currency is not None:
         metadata["provider_reported_currency"] = actual_cost.provider_reported_currency
+    if actual_cost.provider_reported_cost_eur is not None:
+        metadata["provider_reported_cost_eur"] = str(actual_cost.provider_reported_cost_eur)
+    if pricing_estimate is not None:
+        if pricing_estimate.pricing_rule_id is not None:
+            metadata["pricing_rule_id"] = str(pricing_estimate.pricing_rule_id)
+        if pricing_estimate.fx_rate_id is not None:
+            metadata["fx_rate_id"] = str(pricing_estimate.fx_rate_id)
+    if usage is not None:
+        metadata["actual_cached_tokens"] = usage.cached_tokens
+        metadata["actual_reasoning_tokens"] = usage.reasoning_tokens
+    if overrun_metadata:
+        metadata.update(dict(overrun_metadata))
     return _safe_json_mapping(metadata)
 
 

@@ -64,7 +64,13 @@ def test_openai_python_client_chat_completions_openrouter_env_e2e(
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15},
+        "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 8,
+            "total_tokens": 15,
+            "cost": "0.000123000",
+            "currency": "EUR",
+        },
     }
 
     with _run_uvicorn_server(app, port):
@@ -143,6 +149,12 @@ def test_openai_python_client_chat_completions_openrouter_env_e2e(
     assert state.usage_ledger.accounting_status == "finalized"
     assert state.usage_ledger.success is True
     assert state.usage_ledger.quota_reservation_id == state.reservation.id
+    assert state.usage_ledger.actual_cost_eur == Decimal("0.000123000")
+    assert state.usage_ledger.response_metadata["cost_source"] == "provider_reported"
+    assert (
+        state.usage_ledger.response_metadata["provider_reported_cost_native"]
+        == "0.000123000"
+    )
 
     usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
     metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)

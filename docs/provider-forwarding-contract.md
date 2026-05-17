@@ -68,7 +68,7 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
-| Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost; successful finalized requests also persist safe advisory usage-profile metadata |
+| Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost with cached/reasoning token handling where provider usage exposes it. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
 | Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored |
 
 `OPENAI_API_KEY` is reserved for client OpenAI-compatible configuration and is
@@ -92,7 +92,7 @@ provider, and route/provider config overrides must reference env var names only.
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
-| Usage/accounting | Token usage is parsed; OpenRouter `usage.cost` or `usage.cost_usd` is captured as provider-reported native cost metadata when supplied; gateway cost finalization still uses the configured pricing/FX estimate path; successful finalized requests also persist safe advisory usage-profile metadata |
+| Usage/accounting | Token usage is parsed; valid non-negative OpenRouter `usage.cost` or `usage.cost_usd` with supported currency is preferred for actual finalization while SLAIF-calculated cost remains comparison metadata. Invalid provider-reported cost falls back to SLAIF calculation. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
 | Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored |
 
 In production, `OPENROUTER_API_KEY` must be configured for the enabled built-in
@@ -229,9 +229,15 @@ For `POST /v1/chat/completions`:
 5. Pricing/FX lookup estimates maximum cost.
 6. PostgreSQL hard quota reservation is committed before the provider call.
 7. Provider forwarding happens after reservation. The provider call is not made while holding the quota row lock.
-8. Successful provider responses are finalized using provider usage.
+8. Successful provider responses are finalized using provider usage, even when
+   actual tokens or cost exceed the admitted reservation.
 9. Failed provider responses release the pending reservation and create a failed usage ledger row when a reservation exists.
 10. Successful accounting increments used counters, clears reserved counters, finalizes the reservation, writes/finalizes a ledger row, and records token/cost metrics.
+
+This is an admission-time budget check plus post-call spend accounting model,
+not hard real-time spend interruption inside one upstream call. If finalization
+puts the key above local token or cost limits, subsequent calls are blocked by
+normal quota admission until limits are raised or usage is reset.
 
 ### Streaming Accounting
 

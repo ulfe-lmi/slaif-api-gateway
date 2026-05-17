@@ -21,6 +21,7 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
+from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.quota_service import QuotaService
 
 pytestmark = pytest.mark.skipif(
@@ -33,7 +34,12 @@ def _usage_ledger_column_names(sync_connection) -> set[str]:
     return {column["name"] for column in inspect(sync_connection).get_columns("usage_ledger")}
 
 
-async def _create_gateway_key(async_test_session: AsyncSession):
+async def _create_gateway_key(
+    async_test_session: AsyncSession,
+    *,
+    cost_limit_eur: Decimal = Decimal("1.000000000"),
+    token_limit_total: int = 1000,
+):
     owner = await OwnersRepository(async_test_session).create_owner(
         name="Accounting",
         surname="Tester",
@@ -46,8 +52,8 @@ async def _create_gateway_key(async_test_session: AsyncSession):
         owner_id=owner.id,
         valid_from=now - timedelta(minutes=5),
         valid_until=now + timedelta(hours=1),
-        cost_limit_eur=Decimal("1.000000000"),
-        token_limit_total=1000,
+        cost_limit_eur=cost_limit_eur,
+        token_limit_total=token_limit_total,
         request_limit_total=5,
         allow_all_models=True,
         allow_all_endpoints=True,
@@ -176,6 +182,55 @@ async def test_postgres_finalize_success_updates_counters_and_ledger(
     columns = await connection.run_sync(_usage_ledger_column_names)
     assert "prompt_content" not in columns
     assert "completion_content" not in columns
+
+
+@pytest.mark.asyncio
+async def test_postgres_finalize_over_reservation_records_overrun_and_blocks_next_request(
+    async_test_session: AsyncSession,
+) -> None:
+    gateway_key = await _create_gateway_key(
+        async_test_session,
+        cost_limit_eur=Decimal("0.400000000"),
+        token_limit_total=300,
+    )
+    reservation = await _reserve(async_test_session, gateway_key, f"req-overrun-{uuid.uuid4()}")
+
+    result = await AccountingService(async_test_session).finalize_successful_response(
+        reservation.reservation_id,
+        _authenticated_key(gateway_key),
+        _route(),
+        _policy(),
+        _estimate(),
+        ProviderResponse(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            status_code=200,
+            json_body={},
+            upstream_request_id="upstream_overrun",
+            usage=ProviderUsage(prompt_tokens=300, completion_tokens=100, total_tokens=400),
+        ),
+        request_id=reservation.request_id,
+    )
+
+    await async_test_session.refresh(gateway_key)
+    ledger = await UsageLedgerRepository(async_test_session).get_usage_record_by_request_id(
+        reservation.request_id
+    )
+
+    assert result.accounting_status == "finalized"
+    assert gateway_key.cost_reserved_eur == Decimal("0E-9")
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.cost_used_eur == Decimal("0.500000000")
+    assert gateway_key.tokens_used_total == 400
+    assert ledger is not None
+    assert ledger.accounting_status == "finalized"
+    assert ledger.response_metadata["reservation_overrun"] is True
+    assert ledger.response_metadata["token_reservation_overrun"] is True
+    assert ledger.response_metadata["cost_reservation_overrun"] is True
+    assert ledger.response_metadata["overrun_policy"] == "chat_completions_admit_then_finalize_v1"
+
+    with pytest.raises(QuotaLimitExceededError):
+        await _reserve(async_test_session, gateway_key, f"req-after-overrun-{uuid.uuid4()}")
 
 
 @pytest.mark.asyncio

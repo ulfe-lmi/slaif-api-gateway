@@ -27,6 +27,10 @@ but are not a production certification.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - PostgreSQL-backed gateway key, quota, reservation, accounting, usage ledger,
   audit, catalog, routing, pricing, FX, admin, and email delivery metadata.
+- Chat Completions accounting uses admission-time budget checks plus post-call
+  finalization. A successful call can finalize above its reservation; the
+  ledger records safe overrun/cost-source metadata and subsequent calls are
+  blocked when finalized counters exceed key limits.
 - Optional Redis operational rate limiting for request, estimated-token, and
   concurrency throttles.
 - Admin dashboard for keys, records, providers, routes, pricing, FX, usage,

@@ -78,6 +78,14 @@ The existing reserve-before-provider-call model remains mandatory:
 5. Forward to the selected provider after reservation.
 6. Finalize actual usage and cost from provider usage metadata.
 
+Current Chat Completions already uses admission-time budget checks plus
+post-call spend accounting. Successful Chat Completions calls finalize actual
+usage even when actual tokens or cost exceed the reservation, record safe
+reservation-overrun and cost-source metadata, and rely on negative-balance
+lockout for subsequent calls. This hardening does not implement
+`/v1/responses` or `/v1/completions`, and it does not add multimodal/audio/file
+pricing.
+
 With tool-enabled Responses, a request that starts under a key limit may exceed
 the remaining limit because the model can spend the bounded tool budget before
 final usage is known. RC2 may allow this only when:

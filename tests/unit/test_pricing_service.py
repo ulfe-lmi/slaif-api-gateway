@@ -320,6 +320,10 @@ async def test_cost_estimate_calculates_native_and_eur_totals() -> None:
     assert estimate.estimated_output_cost_native == Decimal("0.001200000000")
     assert estimate.estimated_total_cost_native == Decimal("0.001350000000")
     assert estimate.estimated_total_cost_eur == Decimal("0.001242000000000000000")
+    assert estimate.input_price_per_1m == Decimal("0.150000000")
+    assert estimate.cached_input_price_per_1m == Decimal("0.010000000")
+    assert estimate.output_price_per_1m == Decimal("0.600000000")
+    assert estimate.fx_rate == Decimal("0.920000000")
 
 
 @pytest.mark.asyncio
