@@ -7,15 +7,20 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.openai import ChatCompletionRequest
+from slaif_gateway.services.chat_completion_field_policy import (
+    ChatCompletionFieldClassification,
+    ChatCompletionFieldPolicyError,
+    classify_chat_completion_request_fields,
+)
 from slaif_gateway.services.hosted_tool_policy import ChatCompletionCapabilityPolicyError
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidOutputTokenLimitError,
     InvalidChoiceCountError,
-    InvalidRequestBodyError,
     InvalidStreamOptionsError,
     OutputTokenLimitExceededError,
+    RequestPolicyError,
 )
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.key_modes import CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
@@ -239,7 +244,7 @@ def test_input_estimate_handles_plain_text_messages() -> None:
     assert result.estimated_input_tokens > 0
 
 
-def test_input_estimate_handles_structured_content_blocks() -> None:
+def test_input_estimate_handles_text_content_blocks() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
 
     result = policy.apply(
@@ -250,7 +255,6 @@ def test_input_estimate_handles_structured_content_blocks() -> None:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "hello world"},
-                        {"type": "input_image", "image_url": "https://example.test/image.png"},
                     ],
                 }
             ],
@@ -258,6 +262,31 @@ def test_input_estimate_handles_structured_content_blocks() -> None:
     )
 
     assert result.estimated_input_tokens > 0
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}},
+        {"type": "input_image", "image_url": "https://example.test/image.png"},
+        {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}},
+        {"type": "file", "file": {"file_id": "file_123"}},
+        {"type": "video", "video": {"url": "https://example.test/video.mp4"}},
+    ],
+)
+def test_non_text_message_content_parts_are_rejected(part: dict[str, object]) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
+
+    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, part]}],
+            }
+        )
+
+    assert exc_info.value.error_code == "unsupported_chat_completion_modality"
+    assert exc_info.value.param == "messages[0].content[1].type"
 
 
 def test_service_does_not_mutate_original_request() -> None:
@@ -272,7 +301,7 @@ def test_service_does_not_mutate_original_request() -> None:
     assert "max_completion_tokens" not in original
 
 
-def test_non_serializable_extra_field_is_rejected_without_mutating_original() -> None:
+def test_unknown_extra_field_is_rejected_without_mutating_original() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
     original = {
         "model": "gpt-4.1-mini",
@@ -281,44 +310,45 @@ def test_non_serializable_extra_field_is_rejected_without_mutating_original() ->
     }
     body = copy.deepcopy(original)
 
-    with pytest.raises(InvalidRequestBodyError) as exc_info:
+    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
         policy.apply(body)
 
-    assert exc_info.value.param == "request"
-    assert "not JSON-serializable" in exc_info.value.safe_message
+    assert exc_info.value.error_code == "unknown_chat_completion_field"
+    assert exc_info.value.param == "x_bad"
     assert body.keys() == original.keys()
     assert body["model"] == original["model"]
     assert body["messages"] == original["messages"]
 
 
-def test_unrelated_fields_are_preserved() -> None:
+def test_known_supported_fields_are_preserved_and_classified() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    request = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+        "seed": 123,
+        "stream_options": {"include_usage": True},
+        "user": "student-1",
+        "logprobs": True,
+        "top_logprobs": 2,
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.2,
+        "n": 1,
+        "reasoning_effort": "low",
+        "modalities": ["text"],
+        "parallel_tool_calls": True,
+        "metadata": {"course": "week-1"},
+        "store": False,
+        "prediction": {"type": "content", "content": "hello"},
+        "service_tier": "auto",
+    }
 
-    result = policy.apply(
-        {
-            "model": "gpt-4.1-mini",
-            "messages": [{"role": "user", "content": "hi"}],
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "tools": [{"type": "function", "function": {"name": "lookup"}}],
-            "tool_choice": "auto",
-            "response_format": {"type": "json_object"},
-            "seed": 123,
-            "user": "student-1",
-            "logprobs": True,
-            "top_logprobs": 2,
-            "presence_penalty": 0.1,
-            "frequency_penalty": 0.2,
-            "n": 1,
-            "reasoning_effort": "low",
-            "modalities": ["text"],
-            "parallel_tool_calls": True,
-            "metadata": {"course": "week-1"},
-            "store": False,
-            "prediction": {"type": "content", "content": "hello"},
-            "service_tier": "auto",
-        }
-    )
+    classifications = classify_chat_completion_request_fields(request)
+    result = policy.apply(request)
 
     assert result.effective_body["temperature"] == 0.2
     assert result.effective_body["top_p"] == 0.9
@@ -326,6 +356,7 @@ def test_unrelated_fields_are_preserved() -> None:
     assert result.effective_body["tool_choice"] == "auto"
     assert result.effective_body["response_format"] == {"type": "json_object"}
     assert result.effective_body["seed"] == 123
+    assert result.effective_body["stream_options"] == {"include_usage": True}
     assert result.effective_body["user"] == "student-1"
     assert result.effective_body["logprobs"] is True
     assert result.effective_body["top_logprobs"] == 2
@@ -339,6 +370,9 @@ def test_unrelated_fields_are_preserved() -> None:
     assert result.effective_body["store"] is False
     assert result.effective_body["prediction"]["content"] == "hello"
     assert result.effective_body["service_tier"] == "auto"
+    assert classifications["messages"] == ChatCompletionFieldClassification.FORWARDED_SUPPORTED
+    assert classifications["stream_options"] == ChatCompletionFieldClassification.GATEWAY_MUTATED
+    assert classifications["tools"] == ChatCompletionFieldClassification.LOCAL_TOOL_FEATURE
     assert result.estimated_non_message_input_tokens > 0
     assert set(result.estimated_non_message_input_fields) >= {
         "metadata",
@@ -347,6 +381,31 @@ def test_unrelated_fields_are_preserved() -> None:
         "response_format",
         "tools",
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("x_future_object", {"feature": "raw future value"}),
+        ("x_future_list", [{"feature": "raw future value"}]),
+        ("x_future_scalar", True),
+    ],
+)
+def test_unknown_top_level_fields_are_rejected(field: str, value: object) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                field: value,
+            }
+        )
+
+    assert exc_info.value.error_code == "unknown_chat_completion_field"
+    assert exc_info.value.param == field
+    assert "raw future value" not in exc_info.value.safe_message
 
 
 def test_local_function_tool_with_scary_name_is_allowed() -> None:
@@ -426,7 +485,11 @@ def test_function_tool_schema_with_provider_marker_property_names_is_allowed() -
         ({"tools": [{"type": "tool_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "custom_tool"}]}, "unknown_tool_type_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "custom"}]}, "custom_tool_not_supported", "tools[0].type"),
         ({"background": True}, "background_not_allowed", "background"),
+        ({"store": True}, "background_not_allowed", "store"),
+        ({"previous_response_id": "resp_123"}, "background_not_allowed", "previous_response_id"),
+        ({"conversation": "conv_123"}, "background_not_allowed", "conversation"),
         ({"external_web_access": True}, "web_search_not_allowed", "external_web_access"),
         ({"defer_loading": True}, "hosted_tool_not_allowed", "defer_loading"),
         (
@@ -448,7 +511,7 @@ def test_hosted_tool_capability_surfaces_are_rejected(
         **request_overrides,
     }
 
-    with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(request)
 
     assert exc_info.value.error_code == expected_code
@@ -559,7 +622,7 @@ def test_trusted_calibration_policy_still_rejects_mcp_and_background_state() -> 
         ({"store": True}, "background_not_allowed"),
         ({"previous_response_id": "resp_123"}, "background_not_allowed"),
     ]:
-        with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+        with pytest.raises(RequestPolicyError) as exc_info:
             policy.apply(
                 {
                     "model": "gpt-4.1-mini",
@@ -569,6 +632,58 @@ def test_trusted_calibration_policy_still_rejects_mcp_and_background_state() -> 
                 capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
             )
         assert exc_info.value.error_code == expected_code
+
+
+def test_trusted_calibration_still_rejects_unknown_top_level_fields() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS=True,
+        )
+    )
+
+    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "x_vendor_future_feature": {"enabled": True},
+            },
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    assert exc_info.value.error_code == "unknown_chat_completion_field"
+    assert exc_info.value.param == "x_vendor_future_feature"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param"),
+    [
+        ({"modalities": ["text", "audio"]}, "unsupported_chat_completion_modality", "modalities"),
+        ({"audio": {"voice": "alloy"}}, "unsupported_chat_completion_modality", "audio"),
+        ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
+        ({"metadata": ["not", "object"]}, "invalid_chat_completion_metadata", "metadata"),
+        ({"metadata": {"too_large": "x" * 9000}}, "chat_completion_metadata_too_large", "metadata"),
+    ],
+)
+def test_field_registry_rejects_explicit_unsupported_fields(
+    overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=20000))
+
+    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                **overrides,
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
 
 
 def test_choice_count_omitted_is_allowed() -> None:

@@ -94,7 +94,6 @@ def test_openai_python_client_chat_completions_openrouter_streaming_e2e(
                 response_format={"type": "json_object"},
                 extra_body={
                     "metadata": {"course": "week-1"},
-                    "x_unknown_json_compatible": {"preserved": True},
                 },
             )
             streamed_text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
@@ -118,7 +117,6 @@ def test_openai_python_client_chat_completions_openrouter_streaming_e2e(
     assert upstream_body["tool_choice"] == "auto"
     assert upstream_body["response_format"] == {"type": "json_object"}
     assert upstream_body["metadata"] == {"course": "week-1"}
-    assert upstream_body["x_unknown_json_compatible"] == {"preserved": True}
     assert PROMPT_TEXT in json.dumps(upstream_body)
 
     state = asyncio.run(

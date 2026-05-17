@@ -373,6 +373,10 @@ Tool policy:
   legacy `functions` / `function_call`, `response_format`, JSON mode, and
   ordinary streaming. SLAIF does not police what the downstream application does
   when it receives a local function/tool call from the model.
+- Current Chat Completions request fields are fail-closed by registry. Unknown
+  top-level fields, custom tools, non-default service tiers, and non-text
+  multimodal/audio/file content must not be silently forwarded until policy,
+  pricing/accounting, forwarding, and tests explicitly support them.
 - Current Chat Completions policy denies hosted/provider-side tools by default:
   `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
   `code_interpreter`, `computer` / `computer_use`, `image_generation`,

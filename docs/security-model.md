@@ -64,6 +64,16 @@ legacy `functions` / `function_call`, `response_format`, JSON mode, and
 ordinary streaming. SLAIF does not execute local tools and does not police what
 a downstream application does when it receives a local function call.
 
+The Chat Completions field registry is fail-closed. Endpoint and model
+authorization do not authorize unknown future request features. Standard keys
+and trusted calibration keys reject unknown top-level fields before Redis rate
+limiting, route resolution, pricing lookup, PostgreSQL quota reservation,
+usage-profile insertion, or provider forwarding. The error includes the field
+name as a safe `param`, but not the raw value. Current policy also rejects
+custom tools, non-default `service_tier`, audio/image/file/video content,
+provider-side lifecycle/state fields, and other unclassified feature-bearing
+fields until pricing, accounting, forwarding, and tests exist.
+
 Hosted/provider-side tools are denied by default because no persisted per-key
 hosted-tool policy exists. Chat Completions requests with `web_search_options`,
 `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
@@ -223,7 +233,8 @@ provider forwarding. The estimate includes message content plus conservative
 canonical JSON byte-size upper bounds for serialized non-message object/list
 fields that are forwarded to providers, including `tools`, `functions`,
 object-shaped `tool_choice` / `function_call`, `response_format` JSON schemas,
-`stream_options`, and unknown object/list passthrough fields.
+`prediction`, `metadata`, and `stream_options`. Unknown top-level fields are
+rejected before this estimation step and are not forwarded.
 
 Large tool/function/schema payloads may be rejected before provider calls. The
 estimator stores and exposes only safe count metadata such as token estimate,
