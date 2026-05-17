@@ -122,6 +122,12 @@ Route proposal TSV files use the current route import fields:
 requested_model	match_type	endpoint	provider	upstream_model	priority	enabled	visible_in_models	supports_streaming	capabilities	notes
 ```
 
+OpenAI-assisted route proposals must not turn search-specific models such as
+`gpt-5-search-api`, `gpt-4o-search-preview`, or
+`gpt-4o-mini-search-preview` into ordinary Chat Completions routes. Those models
+require future hosted web-search policy, pricing, and audit controls; the
+proposal workflow should omit them or report them as warnings.
+
 No silent replacement of production pricing rows is allowed. No direct mutation
 from a web fetch or LLM call is allowed. Imports are preview-first and
 create-only in the current dashboard workflow: invalid, duplicate, conflicting,
@@ -205,6 +211,8 @@ pricing catalog should be able to represent, where applicable:
 - pricing source and operator note.
 
 Tool pricing must be explicit before a tool is enabled for quota-limited keys.
+Current Chat Completions web search and other hosted/provider-side tools are
+denied by default; model and endpoint allowlists do not enable them.
 
 ## Worst-Case Single-Request Cost
 

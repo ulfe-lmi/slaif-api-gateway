@@ -366,6 +366,20 @@ Stateful/background exclusions for RC2:
 
 Tool policy:
 
+- Endpoint and model permission are not tool/capability permission. A key that
+  may call `/v1/chat/completions` with a model is not thereby allowed to use
+  hosted/provider-side tools.
+- Current Chat Completions policy allows client-side/local `function` tools,
+  legacy `functions` / `function_call`, `response_format`, JSON mode, and
+  ordinary streaming. SLAIF does not police what the downstream application does
+  when it receives a local function/tool call from the model.
+- Current Chat Completions policy denies hosted/provider-side tools by default:
+  `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
+  `code_interpreter`, `computer` / `computer_use`, `image_generation`,
+  `tool_search`, unknown tool types, background execution, external web access,
+  MCP/connectors, provider-side authorization/connectors markers, and
+  search-specific Chat Completions models such as `gpt-5-search-api` unless a
+  future explicit hosted web-search policy is implemented.
 - Do not blindly pass through Responses tools.
 - Supported tool types must be explicitly allowlisted per key or key template.
 - MCP is out of scope for RC2.
@@ -570,15 +584,17 @@ For every `/v1` request:
 6. Verify stored status is `active`.
 7. Verify current time is within validity window.
 8. Verify requested endpoint is allowed.
-9. Verify requested model is allowed.
-10. Resolve route/provider.
-11. Verify provider is allowed.
-12. Verify rate limit.
-13. Apply gateway token/output/input caps.
-14. Estimate maximum possible token/cost consumption.
-15. Atomically reserve quota before forwarding.
-16. Forward request to selected provider with upstream provider secret.
-17. Finalize accounting after response or mark reservation released/expired on error.
+9. Verify request capabilities/tool policy. Endpoint and model permission do not
+   imply hosted-tool permission.
+10. Verify requested model is allowed.
+11. Resolve route/provider.
+12. Verify provider is allowed.
+13. Verify rate limit.
+14. Apply gateway token/output/input caps.
+15. Estimate maximum possible token/cost consumption.
+16. Atomically reserve quota before forwarding.
+17. Forward request to selected provider with upstream provider secret.
+18. Finalize accounting after response or mark reservation released/expired on error.
 
 Failure must return an OpenAI-style error.
 
@@ -2127,38 +2143,42 @@ The implemented core includes:
    and OpenRouter adapters, including provider-secret substitution, provider
    header/body policy, final streaming usage handling, and mocked official
    OpenAI-client E2E coverage.
-4. Gateway key generation/authentication with HMAC-only storage, configurable
+4. Chat Completions hosted-tool request policy that permits client-side
+   function tools but denies provider-side hosted tools, MCP/connectors,
+   web-search fields, background execution, and search-specific models before
+   rate limiting, routing, pricing, quota reservation, or provider forwarding.
+5. Gateway key generation/authentication with HMAC-only storage, configurable
    key prefixes, endpoint/model/provider policy checks, editable key request
    policy, and no plaintext key persistence after creation/rotation flows.
-5. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
-   pricing/FX lookup, route resolution, audit records, reconciliation helpers,
-   and integration-test coverage. `docs/database-schema.md` remains the schema
-   source of truth; do not duplicate table, column, index, or constraint details
-   here.
-6. Redis-backed operational rate limiting when enabled, including request,
+6. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
+   advisory safe usage profiles for current Chat Completions, pricing/FX lookup,
+   route resolution, audit records, reconciliation helpers, and integration-test
+   coverage. `docs/database-schema.md` remains the schema source of truth; do
+   not duplicate table, column, index, or constraint details here.
+7. Redis-backed operational rate limiting when enabled, including request,
    estimated-token, and active-concurrency throttles. Redis is operational
    state only; PostgreSQL remains authoritative for hard quota/accounting.
-7. Admin dashboard pages/actions for the current scope: login/logout, keys and
+8. Admin dashboard pages/actions for the current scope: login/logout, keys and
    key lifecycle actions, bulk key import preview/execution, owner,
    institution, and cohort metadata, provider/route/pricing/FX metadata,
    usage/audit CSV exports, and one-time-secret-backed email-delivery actions,
    with CSRF protection on state-changing forms.
-8. CLI administration commands for the implemented admin bootstrap, owner,
+9. CLI administration commands for the implemented admin bootstrap, owner,
    institution, cohort, key lifecycle, provider/route/pricing/FX, usage export,
    reconciliation, email, and database migration workflows.
-9. Email delivery for newly generated or rotated keys through encrypted
+10. Email delivery for newly generated or rotated keys through encrypted
    one-time secrets, SMTP via `aiosmtplib`, Celery workers, ID-only Celery
    payloads, Mailpit for local development, and fail-closed ambiguous delivery
    handling.
-10. Metrics, structured logging, request IDs, redaction, sanitized provider
+11. Metrics, structured logging, request IDs, redaction, sanitized provider
     diagnostics, and controlled `/metrics` exposure foundation.
-11. Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis,
+12. Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis,
     Mailpit, and optional Nginx; migrations remain explicit operator actions.
-12. Production/operator runbooks for the current system, plus local Docker
+13. Production/operator runbooks for the current system, plus local Docker
     debug/refresh workflow documentation and scripts.
-13. OpenAI Completions catalog bootstrap for local OpenAI Chat Completions
+14. OpenAI Completions catalog bootstrap for local OpenAI Chat Completions
     provider, route, and pricing metadata seeding.
-14. Public documentation for current compatibility, OpenAI-compatible usage,
+15. Public documentation for current compatibility, OpenAI-compatible usage,
     security model, RC-beta readiness, release checklist, and known limitations.
 
 Remaining work should be treated as future scoped projects, not as missing
@@ -2168,8 +2188,8 @@ foundation for the current RC-beta:
    controls, bounded-overrun cost estimates, unsupported stateful/background
    field rejection, and provider/accounting/dashboard tests.
 2. Versioned key templates and template-derived bulk key workflows.
-3. Safe detailed usage profiling, calibration keys, and usage-derived quota or
-   template recommendations.
+3. Calibration keys and usage-derived quota or template recommendations built
+   from the existing safe usage-profile rows.
 4. Pricing catalog and fetch-preview workflows, including OpenRouter metadata
    proposals and curated/manual OpenAI pricing imports with confirmation and
    audit before production use.

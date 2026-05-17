@@ -561,6 +561,58 @@ def test_openai_python_client_rejects_multi_choice_chat_before_upstream(
 
 
 @pytest.mark.e2e
+def test_openai_python_client_rejects_hosted_tool_chat_before_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url))
+
+    from openai import BadRequestError, OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    500,
+                    json={"error": {"message": "upstream should not be called"}},
+                )
+            )
+
+            client = OpenAI()
+            with pytest.raises(BadRequestError) as exc_info:
+                client.chat.completions.create(
+                    model=TEST_MODEL,
+                    messages=[{"role": "user", "content": PROMPT_TEXT}],
+                    extra_body={"web_search_options": {"search_context_size": "low"}},
+                )
+
+    error = exc_info.value
+    assert error.status_code == 400
+    assert error.body is not None
+    assert error.body["type"] == "invalid_request_error"
+    assert error.body["code"] == "web_search_not_allowed"
+    assert error.body["param"] == "web_search_options"
+    assert len(upstream_route.calls) == 0
+
+    reservation_count, usage_ledger_count = asyncio.run(
+        _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
+    )
+    assert reservation_count == 0
+    assert usage_ledger_count == 0
+
+
+@pytest.mark.e2e
 def test_chat_completions_rejects_oversized_response_schema_before_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

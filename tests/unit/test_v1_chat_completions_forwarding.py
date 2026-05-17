@@ -275,8 +275,22 @@ def test_nonstreaming_request_preserves_openai_sdk_fields_to_upstream(
         **_chat_request(),
         "temperature": 0.2,
         "top_p": 0.9,
-        "tools": [{"type": "function", "function": {"name": "lookup"}}],
-        "tool_choice": "auto",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "delete_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "authorization": {"type": "string"},
+                            "path": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "delete_file"}},
         "response_format": {"type": "json_object"},
         "seed": 123,
         "user": "student-1",

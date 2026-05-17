@@ -53,6 +53,30 @@ Client `Authorization` headers contain gateway-issued keys and are never
 forwarded upstream. Provider adapters construct a new upstream `Authorization`
 header from the server-side provider secret and use an outbound header allowlist.
 
+## Chat Completions Capability Policy
+
+SLAIF permissions are endpoint, model, provider, and capability permissions. A
+model allowlist or `/v1/chat/completions` endpoint allowlist does not grant
+hosted-tool permission.
+
+Current Chat Completions policy allows local/client-side `function` tools,
+legacy `functions` / `function_call`, `response_format`, JSON mode, and
+ordinary streaming. SLAIF does not execute local tools and does not police what
+a downstream application does when it receives a local function call.
+
+Hosted/provider-side tools are denied by default because no persisted per-key
+hosted-tool policy exists. Chat Completions requests with `web_search_options`,
+`web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
+`computer` / `computer_use`, `image_generation`, `tool_search`, MCP/connectors,
+provider-side `server_url`, `connector_id`, `authorization`, or
+`require_approval` markers, unknown tool types, `background=true`,
+`external_web_access`, or search-specific models such as `gpt-5-search-api` are
+rejected before Redis rate limiting, route resolution, pricing lookup,
+PostgreSQL quota reservation, usage-profile insertion, or provider forwarding.
+The rejection path returns OpenAI-shaped errors and does not log raw request
+bodies, prompts, completions, tool schemas, provider keys, gateway keys,
+cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
+
 ## Admin OpenAI Assisted Proposal Boundary
 
 OpenAI-assisted catalog proposal generation is an admin-only operator workflow,

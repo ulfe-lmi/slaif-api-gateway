@@ -51,6 +51,10 @@ first candidate, web search requires explicit `max_tool_calls` and cost bounds,
 and file search/code interpreter require separate pricing, ownership, and audit
 treatment before support is claimed.
 
+Endpoint and model permission are separate from capability permission. A key
+that is allowed to call `/v1/chat/completions` with a model is not thereby
+allowed to use hosted/provider-side tools.
+
 ## Model Catalog Visibility
 
 `GET /v1/models` returns an OpenAI-shaped list containing only enabled, visible route metadata allowed for the authenticated gateway key. The endpoint does not call upstream providers and does not create usage or quota records.
@@ -113,6 +117,19 @@ The schema preserves extra JSON-compatible fields instead of silently dropping t
 
 Unknown ordinary JSON-compatible fields are also preserved unless a gateway policy explicitly rejects them. Current request policy rejects malformed `messages`, invalid output-token controls, input estimates over the configured hard input cap, non-object `stream_options` when `stream=true`, and Chat Completions `n` values other than integer `1`.
 
+Current Chat Completions capability policy allows local/client-side function
+tools, legacy `functions` / `function_call`, `response_format`, JSON mode, and
+ordinary streaming. SLAIF does not police what a downstream application does
+when it receives a local function-tool call from the model. Hosted/provider-side
+tools are denied by default because there is no persisted hosted-tool allowlist:
+`web_search_options`, `web_search`, `web_search_preview`, `file_search`,
+`code_interpreter`, `computer` / `computer_use`, `image_generation`,
+`tool_search`, MCP/connectors, provider-side connector/authorization markers,
+unknown tool types, `background=true`, `external_web_access`, and
+search-specific Chat Completions models such as `gpt-5-search-api` are rejected
+before Redis rate limiting, route resolution, pricing lookup, quota
+reservation, or provider forwarding.
+
 Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
 object/list fields such as `tools`, legacy `functions`, object-shaped
@@ -146,7 +163,7 @@ For `POST /v1/chat/completions`, the implemented order is:
 1. Authenticate the gateway key from `Authorization: Bearer ...`.
 2. Check endpoint allow-list policy.
 3. Validate request shape with the permissive Chat Completions schema.
-4. Apply request policy and token caps, including serialized non-message
+4. Apply request policy, capability policy, and token caps, including serialized non-message
    provider-forwarded Chat Completions fields in the input estimate.
 5. Apply Redis operational rate limits when enabled.
 6. Resolve the model route and provider.
@@ -167,6 +184,10 @@ They are not invoice-grade provider billing truth and do not implement
 `/v1/responses`.
 
 Redis rate limiting is temporary operational throttling only. PostgreSQL remains authoritative for hard quota and usage accounting.
+Billing is admission-time reservation plus post-call finalization, not hard
+real-time interruption of provider spend after a call starts. If a finalized
+request leaves a key above its local limit, subsequent calls are blocked until
+limits are raised or usage is reset.
 
 ## Streaming Compatibility
 
@@ -212,6 +233,8 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Responses API in RC1. It is planned for RC2 under
   `docs/responses-compatibility.md`, with stateful/background/provider-side
   storage features and MCP excluded from the initial scope.
+- Hosted/provider-side tool support and Chat Completions web search. Local
+  function tools remain allowed as ordinary client-side behavior.
 - Embeddings API.
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.

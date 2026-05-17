@@ -8,6 +8,7 @@ from typing import Any
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.services.hosted_tool_policy import enforce_chat_completion_capability_policy
 from slaif_gateway.services.input_token_estimation import estimate_chat_completion_input_tokens
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
@@ -37,6 +38,10 @@ class ChatCompletionRequestPolicy:
             self._resolve_output_token_limit(effective_body)
         )
         self._force_streaming_usage_metadata(effective_body)
+        enforce_chat_completion_capability_policy(
+            effective_body,
+            requested_model=str(effective_body.get("model") or ""),
+        )
 
         try:
             input_estimate = estimate_chat_completion_input_tokens(

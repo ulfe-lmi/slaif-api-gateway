@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from slaif_gateway.services.hosted_tool_policy import is_search_specific_chat_completion_model
 from slaif_gateway.services.model_route_service import normalize_endpoint
 from slaif_gateway.utils.redaction import redact_text
 
@@ -534,6 +535,13 @@ def _route_rows_from_payload(
             warnings.append(f"row {index} skipped by include/exclude model filters: {requested_model}")
             continue
         category = _optional_safe_text(raw_row.get("model_category"), field_name="model_category", row_number=index)
+        if is_search_specific_chat_completion_model(requested_model):
+            warnings.append(
+                "row "
+                f"{index} omitted search-specific model requiring future hosted_web_search policy: "
+                f"{requested_model}"
+            )
+            continue
         if _is_disallowed_route_category(requested_model, category):
             warnings.append(f"row {index} omitted unsupported model category: {requested_model}")
             continue
