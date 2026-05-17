@@ -17,6 +17,7 @@ from slaif_gateway.cli.email import app as email_app
 from slaif_gateway.cli.fx import app as fx_app
 from slaif_gateway.cli.institutions import app as institutions_app
 from slaif_gateway.cli.keys import app as keys_app
+from slaif_gateway.cli.openai_assisted import app as openai_assisted_app
 from slaif_gateway.cli.owners import app as owners_app
 from slaif_gateway.cli.pricing import app as pricing_app
 from slaif_gateway.cli.quota import app as quota_app
@@ -43,6 +44,7 @@ app.add_typer(fx_app, name="fx")
 app.add_typer(usage_app, name="usage")
 app.add_typer(quota_app, name="quota")
 app.add_typer(secrets_app, name="secrets")
+app.add_typer(openai_assisted_app, name="openai-assisted")
 
 _ACCEPTED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 logger = structlog.get_logger(__name__)

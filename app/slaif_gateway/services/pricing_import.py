@@ -31,6 +31,7 @@ PRICING_IMPORT_ALLOWED_FIELDS = {
     "valid_from",
     "valid_until",
     "source_url",
+    "source_retrieved_at",
     "notes",
     "enabled",
 }
@@ -455,6 +456,13 @@ def _validate_one_row(row: Mapping[str, object], *, index: int, now: datetime) -
         raise ValueError("valid_until must be after valid_from")
 
     pricing_metadata = _optional_import_metadata(row.get("pricing_metadata"))
+    source_retrieved_at = _optional_import_datetime(
+        row.get("source_retrieved_at"),
+        field_name="source_retrieved_at",
+    )
+    if source_retrieved_at is not None:
+        pricing_metadata = dict(pricing_metadata)
+        pricing_metadata.setdefault("source_retrieved_at", source_retrieved_at.isoformat())
     return PricingImportRowPreview(
         row_number=index,
         status="valid",

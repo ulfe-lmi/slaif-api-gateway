@@ -48,12 +48,34 @@ separate reviewed implementation contract.
 
 ## OpenAI Assisted Pricing And Route Proposals
 
-SLAIF may later add an admin-only workflow that calls OpenAI to help draft
-pricing and route proposal files. This repository state provides only the
-deterministic proposal import substrate: reviewed CSV, JSON, or TSV files can be
-previewed and confirmed through the existing local import paths. It does not
-generate proposals, call OpenAI, call OpenRouter, fetch provider pricing pages,
-or mutate rows from a web fetch or LLM response.
+SLAIF includes an admin-only CLI workflow that can call OpenAI to help draft
+pricing and route proposal files:
+
+```bash
+slaif-gateway openai-assisted pricing-proposal \
+  --output openai-pricing-proposal.tsv \
+  --acknowledge-llm-proposal-risk
+
+slaif-gateway openai-assisted route-proposal \
+  --output openai-routes-proposal.tsv \
+  --acknowledge-llm-proposal-risk
+```
+
+The command calls OpenAI only when an operator explicitly runs it. It is disabled
+unless the server-side admin discovery environment variable is configured; the
+default is `OPENAI_ADMIN_DISCOVERY_API_KEY`. Do not use `OPENAI_API_KEY` for
+this tool: `OPENAI_API_KEY` remains reserved for client-side gateway-issued
+keys. The default proposal model is controlled by
+`OPENAI_ASSISTED_CATALOG_MODEL`, and the CLI accepts `--model` for an explicit
+override.
+
+Proposal generation uses official OpenAI documentation URLs by default:
+`https://platform.openai.com/docs/pricing` and
+`https://platform.openai.com/docs/models/compare`. The command asks OpenAI for
+strict JSON, validates the JSON deterministically, and renders local TSV files.
+It does not directly mutate `pricing_rules` or `model_routes`, does not call
+OpenRouter, does not fetch external FX data, and does not import rows from a web
+fetch or LLM response.
 
 LLM-generated proposal files are not authoritative. They are draft operator
 inputs. Imported rows become local SLAIF accounting and routing assumptions only
@@ -71,8 +93,11 @@ provider	model	endpoint	currency	input_price_per_1m	output_price_per_1m
 Where the current pricing schema supports them, proposal files may also include:
 
 ```text
-cached_input_price_per_1m	reasoning_price_per_1m	request_price	valid_from	valid_until	source_url	notes	pricing_metadata
+cached_input_price_per_1m	reasoning_price_per_1m	request_price	valid_from	valid_until	source_url	source_retrieved_at	notes	pricing_metadata
 ```
+
+`source_retrieved_at` is explicit proposal metadata and is preserved inside
+`pricing_metadata` during import validation.
 
 Route proposal TSV files use the current route import fields:
 
@@ -95,10 +120,12 @@ over the gateway's accounting model, not a provider billing attestation.
 Request, token, output, model, and rate limits remain the safer primary controls
 for workshops and courses, with money limits acting as an additional guardrail.
 
-The actual OpenAI-calling proposal generator is a later PR. It must keep preview
-and confirmation in the admin workflow, must reject secret-looking input and
-metadata, and must preserve the rule that provider keys come only from
-server-side environment variables or deployment secrets.
+The proposal generator deliberately stops at a reviewed file. Operators must
+inspect the TSV, run the existing pricing or route import preview, and execute
+the import only with explicit confirmation and an audit reason. The generator
+must reject secret-looking input and metadata and preserves the rule that
+provider keys come only from server-side environment variables or deployment
+secrets.
 
 ## OpenAI Completions Bootstrap CSV
 

@@ -222,6 +222,31 @@ actual provider key values. Model routes, pricing, and FX rates are configured
 through CLI/database metadata and the implemented admin metadata forms; those
 forms do not accept provider key values or call upstream providers.
 
+## OpenAI Assisted Catalog Proposals
+
+The admin-only proposal generator uses a separate discovery key:
+
+- `OPENAI_ADMIN_DISCOVERY_API_KEY` is the default environment variable read by
+  `slaif-gateway openai-assisted pricing-proposal` and
+  `slaif-gateway openai-assisted route-proposal`.
+- `OPENAI_ASSISTED_CATALOG_MODEL` defaults the proposal model when `--model` is
+  omitted. Operators can override it per command with `--model`.
+
+This key is only read when an operator explicitly runs the proposal command with
+`--acknowledge-llm-proposal-risk`. It is not used by gateway user traffic, is
+not read from provider config rows, and must not be named `OPENAI_API_KEY`.
+`OPENAI_API_KEY` remains the OpenAI-compatible client variable for
+gateway-issued user keys.
+
+The proposal commands call OpenAI Responses with web search restricted to
+official OpenAI domains where possible, ask for strict JSON, validate the JSON
+locally, and write TSV proposal files. They do not mutate `pricing_rules` or
+`model_routes`; import remains a separate preview/confirm/audit workflow.
+Generated OpenAI pricing rows are operator-reviewed local accounting
+assumptions, not authoritative provider pricing or invoice-grade guarantees.
+Request, token, output, model, and rate limits remain important controls even
+when local cost limits are configured.
+
 ## OpenAI Completions Catalog Bootstrap
 
 For the implemented OpenAI-compatible Completions flow, operators should seed
