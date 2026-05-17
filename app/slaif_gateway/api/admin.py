@@ -6179,7 +6179,7 @@ def _render_openai_assisted_result(
     result: OpenAIAssistedProposalTextResult,
     status_code: int = 200,
 ) -> Response:
-    import_url = "/admin/pricing/import" if result.proposal_type == "pricing" else "/admin/routes/import"
+    bridge = _openai_assisted_import_bridge(result, settings=_settings(request))
     return _render_openai_assisted_page(
         request,
         "openai_assisted/result.html",
@@ -6189,10 +6189,40 @@ def _render_openai_assisted_result(
             "result": result,
             "warning": _OPENAI_ASSISTED_UI_WARNING,
             "proposal_warning": PROPOSAL_WARNING,
-            "import_url": import_url,
+            "import_url": bridge["import_url"],
+            "import_bridge": bridge,
         },
         status_code=status_code,
     )
+
+
+def _openai_assisted_import_bridge(
+    result: OpenAIAssistedProposalTextResult,
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    if result.proposal_type == "pricing":
+        import_url = "/admin/pricing/import"
+        preview_url = "/admin/pricing/import/preview"
+        source_label = "OpenAI assisted pricing proposal"
+        submit_label = "Preview pricing import"
+        max_bytes = settings.PRICING_IMPORT_MAX_BYTES
+    else:
+        import_url = "/admin/routes/import"
+        preview_url = "/admin/routes/import/preview"
+        source_label = "OpenAI assisted route proposal"
+        submit_label = "Preview route import"
+        max_bytes = settings.ROUTE_IMPORT_MAX_BYTES
+    tsv_bytes = len(result.tsv_text.encode("utf-8"))
+    return {
+        "import_url": import_url,
+        "preview_url": preview_url,
+        "source_label": source_label,
+        "submit_label": submit_label,
+        "max_bytes": max_bytes,
+        "tsv_bytes": tsv_bytes,
+        "form_enabled": tsv_bytes <= max_bytes,
+    }
 
 
 def _render_openai_assisted_failure(

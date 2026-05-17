@@ -65,10 +65,15 @@ The dashboard exposes the same boundary under `/admin/openai-assisted`, with
 separate pricing and route proposal pages. It requires an authenticated admin
 session, CSRF, and an explicit acknowledgement checkbox before calling OpenAI.
 The result page shows cited source URLs, warnings, row counts, and generated TSV
-for review, then links to the existing pricing or route import page. It does
-not execute import. Proposal generation is synchronous in the current dashboard
-implementation and uses the service HTTP timeout; if OpenAI or web search is
-slow, the admin should retry later or use the CLI workflow.
+for review, then can submit the generated TSV directly to the existing pricing
+or route import preview page. That bridge is still preview-only and non-mutating:
+it posts `import_format=tsv`, a safe source label, and the generated TSV to the
+deterministic import validator, never to an execution route. If the TSV exceeds
+the configured import size limit, the page does not render a hidden preview
+payload; the admin must reduce scope or use the copy/download and file-import
+workflow. It does not execute import. Proposal generation is synchronous in the
+current dashboard implementation and uses the service HTTP timeout; if OpenAI or
+web search is slow, the admin should retry later or use the CLI workflow.
 
 The CLI command and dashboard action call OpenAI only when an operator
 explicitly runs them. They are disabled unless the server-side admin discovery
@@ -134,10 +139,13 @@ for workshops and courses, with money limits acting as an additional guardrail.
 
 The proposal generator deliberately stops at reviewed TSV content. Operators
 must inspect the TSV, run the existing pricing or route import preview, and
-execute the import only with explicit confirmation and an audit reason. The
-generator must reject secret-looking input and metadata and preserves the rule
-that provider keys come only from server-side environment variables or
-deployment secrets.
+execute the import only with explicit confirmation and an audit reason. The web
+UI can carry the reviewed TSV into preview without copy/paste, but it does not
+create a trusted path: unknown fields, secret-looking values, conflicts,
+duplicates, unsupported rows, and update-classified rows are handled by the same
+validators as uploaded or pasted imports. The generator must reject
+secret-looking input and metadata and preserves the rule that provider keys come
+only from server-side environment variables or deployment secrets.
 
 ## OpenAI Completions Bootstrap CSV
 

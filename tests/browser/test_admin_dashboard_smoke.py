@@ -407,6 +407,10 @@ def test_admin_dashboard_browser_smoke() -> None:
                 if path == "/admin/audit":
                     assert 'action="/admin/audit/export.csv"' in html
                     assert 'name="confirm_export"' in html
+                if path in {"/admin/openai-assisted/pricing", "/admin/openai-assisted/routes"}:
+                    assert "Review Required" in html
+                    assert 'name="acknowledge_proposal"' in html
+                    assert "not authoritative pricing or route truth" in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')
