@@ -1,10 +1,13 @@
 # Key Templates
 
-Status: planned for RC2-beta; not implemented on current `main`.
+Status: template persistence and create-from-calibration are implemented for
+RC2-beta foundation work. Participant-key creation from templates is future
+work.
 
-Key templates are the planned way to make complex key policies repeatable and
-reviewable, especially for Responses API policies that include model, provider,
-tool, quota, and bounded-overrun controls.
+Key templates make complex key policies repeatable and reviewable. Current
+support stores durable template records and immutable revisions that can be
+created from a reviewed trusted-calibration proposal. The template tables store
+safe policy metadata only; they do not create participant keys yet.
 
 ## Why Templates Exist
 
@@ -26,14 +29,16 @@ many keys from the same reviewed snapshot.
 
 ## Workshop Organizer Workflow
 
-Planned workflow:
+Current and planned workflow:
 
-1. Create a key template for a workshop, course, or cohort.
-2. Configure endpoint/model/provider/tool policy.
-3. Review the quota and bounded-overrun preview.
-4. Create a test key from the template.
-5. Run normal OpenAI-compatible client examples against the test key.
-6. Bulk-create workshop keys from the approved template revision.
+1. Run a trusted calibration key through the intended workflow.
+2. Preview the calibration summary and strict participant-policy proposal.
+3. Review the proposal, warnings, assumptions, and local accounting limits.
+4. Create a durable key template and immutable revision from the reviewed
+   proposal with confirmation and an audit reason.
+5. Future work: create individual test/participant keys from a template
+   revision.
+6. Future work: bulk-create workshop keys from an approved template revision.
 
 ## Deriving Templates From Calibration-Key Usage
 
@@ -55,14 +60,18 @@ include safe key purpose, policy mode, and observed capability type names.
 Missing provider metrics remain unknown/null and the rows are not invoice-grade
 billing truth.
 
-Admins can now preview a calibration summary and strict participant-policy
-proposal from the CLI and from a trusted calibration key detail page. The
-preview accepts a source key, optional time window, and multiplier, then shows
-observed endpoints/models/providers/capabilities plus proposed request, token,
-per-request, and local-accounting cost limits. This proposal is advisory and
-non-mutating: it does not create templates, create participant keys, or update
-existing gateway key policies. Admins must review and narrow the values before
-any future template or key creation workflow uses them.
+Admins can preview a calibration summary and strict participant-policy proposal
+from the CLI and from a trusted calibration key detail page. The preview accepts
+a source key, optional time window, and multiplier, then shows observed
+endpoints/models/providers/capabilities plus proposed request, token,
+per-request, and local-accounting cost limits. Preview remains non-mutating.
+
+After review, admins can create a durable key template from that proposal in
+the CLI or dashboard. Creation re-runs/re-validates the proposal server-side,
+requires explicit confirmation and a non-empty audit reason, creates a
+`key_templates` row plus revision 1 in `key_template_revisions`, and writes a
+safe audit row. It does not create participant keys, update existing gateway
+keys, alter routes/pricing, or apply policy changes.
 
 The recommendation workflow should capture:
 
@@ -75,29 +84,42 @@ The recommendation workflow should capture:
 - bounded-overrun assumptions;
 - admin edits and final confirmation.
 
-Generated templates remain normal templates. They should create an immutable
-template revision and record the source key, source owner, source time window,
-multiplier, and observed summary used to generate the proposal. Bulk key
-creation can then issue classroom, workshop, seminar, or worksite participant
-keys from that generated template revision.
+Generated templates are normal templates. They create an immutable template
+revision and record safe provenance: source key, source owner display metadata,
+source time window, multiplier, observed summary snapshot, proposed strict
+policy snapshot, warnings, assumptions, actor admin id, and audit linkage.
+Bulk key creation from templates remains future work.
 
 Recommendations must not mutate existing keys automatically. Admins must review
-the assumptions, edit values if needed, and explicitly confirm template creation
-or bulk key creation.
+the assumptions and explicitly confirm template creation. Editing templates or
+bulk key creation are separate future workflows.
 
 ## Snapshot And Revision Semantics
 
-Templates should be versioned.
+Templates are versioned.
 
 Rules:
 
 - each edit creates a new template revision or immutable snapshot;
-- keys created from a template record `template_id` and `template_revision_id`
-  or equivalent metadata;
+- keys created from a template are future work and should record `template_id`
+  and `template_revision_id` or equivalent metadata;
 - historical keys remain explainable even after a template is edited;
 - editing a template does not silently change existing keys;
 - disabling a template prevents future key creation from that template but does
   not alter existing keys.
+
+Current revision 1 stores:
+
+- allowed endpoints, models, and providers from the reviewed proposal;
+- hosted capabilities requiring review;
+- an empty participant hosted-capability allowlist by default;
+- request, token, per-request, and cost limits from local accounting metadata;
+- optional validity and email-delivery defaults;
+- a safe proposal snapshot with warnings and assumptions.
+
+Observed hosted capabilities are not silently allowed for participant
+templates. They are preserved as review-required metadata. External
+MCP/connectors remain denied by default.
 
 ## Existing Keys
 

@@ -411,6 +411,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 ("/admin/openai-assisted", "OpenAI Assisted Proposals", 1),
                 ("/admin/openai-assisted/pricing", "OpenAI Pricing Proposal", 2),
                 ("/admin/openai-assisted/routes", "OpenAI Route Proposal", 2),
+                ("/admin/templates", "Key Templates", 1),
                 (f"/admin/routes/{data['route_id']}", "browser-gpt", 2),
                 (f"/admin/routes/{data['route_id']}/edit", "Edit Model Route", 2),
                 ("/admin/pricing", "Pricing Rules", 1),
@@ -448,6 +449,11 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert 'name="trusted_calibration"' in html
                     assert 'name="confirm_trusted_calibration"' in html
                     assert "Do not issue them to participants" in html
+                if path == "/admin":
+                    assert 'href="/admin/templates"' in html
+                if path == "/admin/templates":
+                    assert "participant keys from templates is future work" in html
+                    assert "No key templates found" in html
                 if path == f"/admin/keys/{data['key_id']}":
                     assert "key_purpose" not in html
                     assert "trusted_calibration" not in html

@@ -3,6 +3,7 @@ import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -454,6 +455,174 @@ def test_calibration_preview_returns_no_cache_safe_result(monkeypatch) -> None:
     assert "csrf_token" in response.text
     assert "session_token" not in response.text
     assert "raw request" not in response.text.lower()
+
+
+def test_calibration_preview_shows_create_template_form(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        return _calibration_preview(key.id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.calibration_summary_service.CalibrationSummaryService.summarize_calibration_key_usage",
+        summarize_calibration_key_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{key.id}/calibration/preview",
+        data={"csrf_token": "dashboard-csrf", "multiplier": "2"},
+    )
+
+    assert response.status_code == 200
+    assert "Create Key Template From This Proposal" in response.text
+    assert f'action="/admin/keys/{key.id}/calibration/create-template"' in response.text
+    assert 'name="template_name"' in response.text
+    assert 'name="confirm_create_template"' in response.text
+    assert "does not create participant keys" in response.text
+
+
+def test_create_template_from_calibration_requires_csrf(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(f"/admin/keys/{key.id}/calibration/create-template")
+
+    assert response.status_code in {400, 403}
+
+
+def test_create_template_from_calibration_creates_and_redirects(monkeypatch) -> None:
+    key = _trusted_detail()
+    template_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    audit_id = uuid.uuid4()
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        assert kwargs["gateway_key_id"] == key.id
+        assert kwargs["multiplier"] == Decimal("2")
+        return _calibration_preview(key.id)
+
+    async def create_from_calibration_proposal(self, **kwargs):
+        assert kwargs["name"] == "Workshop template"
+        assert kwargs["reason"] == "Reviewed"
+        assert kwargs["confirm_create_template"] is True
+        return SimpleNamespace(
+            template=SimpleNamespace(id=template_id, name="Workshop template"),
+            revision=SimpleNamespace(id=revision_id, revision_number=1),
+            audit_log=SimpleNamespace(id=audit_id),
+        )
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.calibration_summary_service.CalibrationSummaryService.summarize_calibration_key_usage",
+        summarize_calibration_key_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_template_service.KeyTemplateService.create_from_calibration_proposal",
+        create_from_calibration_proposal,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{key.id}/calibration/create-template",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "multiplier": "2",
+            "template_name": "Workshop template",
+            "confirm_create_template": "true",
+            "reason": "Reviewed",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/templates/{template_id}?message=template_created"
+
+
+def test_template_pages_require_login() -> None:
+    client = TestClient(_app())
+
+    list_response = client.get("/admin/templates", follow_redirects=False)
+    detail_response = client.get(f"/admin/templates/{uuid.uuid4()}", follow_redirects=False)
+
+    assert list_response.status_code in {302, 303}
+    assert detail_response.status_code in {302, 303}
+
+
+def test_template_detail_page_shows_safe_metadata(monkeypatch) -> None:
+    template_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    revision = SimpleNamespace(
+        id=revision_id,
+        revision_number=1,
+        source_type="calibration_proposal",
+        source_calibration_gateway_key_id=uuid.uuid4(),
+        source_time_window_start=datetime.now(UTC),
+        source_time_window_end=datetime.now(UTC),
+        source_multiplier=Decimal("2"),
+        created_audit_log_id=uuid.uuid4(),
+        allowed_endpoints=["/v1/chat/completions"],
+        allowed_models=["gpt-4.1-mini"],
+        allowed_providers=["openai"],
+        allowed_hosted_capabilities=[],
+        hosted_capabilities_requiring_review=["web_search_options"],
+        request_limit_total=2,
+        token_limit_total=22,
+        input_token_limit_total=10,
+        output_token_limit_total=12,
+        reasoning_token_limit_total=None,
+        cost_limit_eur=Decimal("0.002000000"),
+        max_total_tokens_per_request=22,
+        max_single_request_cost_eur=Decimal("0.002000000"),
+        validity_days_default=None,
+        email_delivery_mode_default=None,
+        template_snapshot={
+            "warnings": ["review hosted capabilities"],
+            "proposal": {"assumptions": ["safe metadata only"]},
+        },
+    )
+    template = SimpleNamespace(
+        id=template_id,
+        name="Workshop template",
+        description="Reviewed proposal",
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        current_revision_id=revision_id,
+        revisions=[revision],
+    )
+
+    async def get_template_for_admin_detail(self, parsed_template_id):
+        assert parsed_template_id == template_id
+        return template
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.key_templates.KeyTemplatesRepository.get_template_for_admin_detail",
+        get_template_for_admin_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/templates/{template_id}")
+
+    assert response.status_code == 200
+    assert "Workshop template" in response.text
+    assert "Participant Keys Are Future Work" in response.text
+    assert "gpt-4.1-mini" in response.text
+    assert "web_search_options" in response.text
+    assert "prompt text" not in response.text
+    assert "sk-live" not in response.text
 
 
 def _calibration_preview(gateway_key_id: uuid.UUID) -> CalibrationPreviewResult:

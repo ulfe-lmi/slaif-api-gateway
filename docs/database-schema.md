@@ -797,7 +797,137 @@ Rules:
 
 ---
 
-## 5.10 `provider_configs`
+## 5.10 `key_templates`
+
+Durable policy template metadata. A template is a named container for immutable
+policy revisions; creating or editing templates must not mutate existing
+`gateway_keys` rows or create participant keys.
+
+Columns:
+
+```text
+id UUID primary key
+name text not null
+description text null
+status text not null default 'active'
+created_by_admin_id UUID null references admin_users(id) on delete set null
+created_at timestamptz not null
+updated_at timestamptz not null
+archived_at timestamptz null
+archived_by_admin_id UUID null references admin_users(id) on delete set null
+notes text null
+current_revision_id UUID null
+```
+
+Constraints/indexes:
+
+```text
+unique(lower(name))
+index(status, created_at)
+index(current_revision_id)
+index(created_by_admin_id)
+check(length(btrim(name)) > 0)
+check(status in ('active', 'archived'))
+```
+
+Rules:
+
+- Templates are policy snapshot containers. A template's current revision may
+  advance later, but existing revisions remain immutable.
+- Template creation from calibration is allowed only after admin review,
+  explicit confirmation, and an audit reason.
+- Template creation does not create participant keys, does not change existing
+  gateway keys, and does not silently apply policy edits.
+- Template metadata must not store prompts, completions, messages, raw request
+  bodies, raw response bodies, tool schemas, tool arguments, tool results,
+  provider keys, gateway plaintext keys, encrypted payloads, nonces, cookies,
+  CSRF/session tokens, password hashes, email bodies, or raw chain-of-thought.
+
+## 5.11 `key_template_revisions`
+
+Immutable key-template policy snapshots. Calibration-derived revisions preserve
+safe provenance from the reviewed calibration proposal.
+
+Columns:
+
+```text
+id UUID primary key
+template_id UUID not null references key_templates(id) on delete cascade
+revision_number integer not null
+created_by_admin_id UUID null references admin_users(id) on delete set null
+created_at timestamptz not null
+source_type text not null default 'manual'
+source_calibration_gateway_key_id UUID null references gateway_keys(id) on delete set null
+source_time_window_start timestamptz null
+source_time_window_end timestamptz null
+source_multiplier numeric(18,9) null
+
+allowed_endpoints jsonb not null default '[]'
+allowed_models jsonb not null default '[]'
+allowed_providers jsonb not null default '[]'
+allowed_hosted_capabilities jsonb not null default '[]'
+hosted_capabilities_requiring_review jsonb not null default '[]'
+
+request_limit_total bigint not null
+token_limit_total bigint not null
+input_token_limit_total bigint null
+output_token_limit_total bigint null
+reasoning_token_limit_total bigint null
+cost_limit_eur numeric(18,9) null
+max_input_tokens_per_request bigint null
+max_output_tokens_per_request bigint null
+max_total_tokens_per_request bigint null
+max_single_request_cost_eur numeric(18,9) null
+rate_limit_policy jsonb not null default '{}'
+validity_days_default integer null
+email_delivery_mode_default text null
+template_snapshot jsonb not null default '{}'
+created_audit_log_id UUID null references audit_log(id) on delete set null
+```
+
+Constraints/indexes:
+
+```text
+unique(template_id, revision_number)
+index(template_id, created_at)
+index(source_calibration_gateway_key_id)
+index(created_by_admin_id)
+check(revision_number > 0)
+check(source_type in ('manual', 'calibration_proposal'))
+check(request_limit_total > 0)
+check(token_limit_total >= 0)
+check(input_token_limit_total is null or input_token_limit_total >= 0)
+check(output_token_limit_total is null or output_token_limit_total >= 0)
+check(reasoning_token_limit_total is null or reasoning_token_limit_total >= 0)
+check(cost_limit_eur is null or cost_limit_eur >= 0)
+check(max_input_tokens_per_request is null or max_input_tokens_per_request >= 0)
+check(max_output_tokens_per_request is null or max_output_tokens_per_request >= 0)
+check(max_total_tokens_per_request is null or max_total_tokens_per_request >= 0)
+check(max_single_request_cost_eur is null or max_single_request_cost_eur >= 0)
+check(source_multiplier is null or source_multiplier > 0)
+check(validity_days_default is null or validity_days_default > 0)
+```
+
+Rules:
+
+- Revisions are immutable policy snapshots. Later edits must create a new
+  revision rather than changing the meaning of an existing revision.
+- Calibration-derived revisions record source calibration key id, source time
+  window, multiplier, observed/proposed safe summary snapshots, warnings,
+  assumptions, actor admin id, and audit linkage.
+- `/v1/responses` and `/v1/completions` must not be persisted as allowed
+  endpoints unless those gateway endpoints are actually implemented.
+- Hosted capabilities observed during calibration are persisted as
+  review-required metadata, not silently moved into
+  `allowed_hosted_capabilities` for participant templates.
+- External MCP/connectors remain denied by default.
+- `template_snapshot` is safe metadata only. It must not include prompts,
+  completions, messages, raw request/response bodies, raw tool schemas,
+  arguments, results, provider keys, gateway plaintext keys, encrypted
+  payloads, nonces, cookies, sessions, CSRF tokens, password hashes, email
+  bodies, or raw chain-of-thought.
+
+## 5.12 `provider_configs`
 
 Configuration metadata for upstream providers.
 
@@ -853,7 +983,7 @@ Rules:
 
 ---
 
-## 5.11 `model_routes`
+## 5.13 `model_routes`
 
 Maps user-requested model names to provider/upstream model names.
 
@@ -921,7 +1051,7 @@ Rules:
 
 ---
 
-## 5.12 `pricing_rules`
+## 5.14 `pricing_rules`
 
 Approved pricing table used for cost estimation and final accounting.
 
@@ -972,7 +1102,7 @@ Rules:
 
 ---
 
-## 5.13 `fx_rates`
+## 5.15 `fx_rates`
 
 Currency conversion table for converting native upstream costs to EUR limits.
 
@@ -1013,7 +1143,7 @@ Rules:
 
 ---
 
-## 5.14 `one_time_secrets`
+## 5.16 `one_time_secrets`
 
 Short-lived encrypted secrets used for workflows that temporarily need recoverable plaintext, especially email delivery of newly generated or rotated gateway keys.
 
@@ -1061,7 +1191,7 @@ Rules:
 
 ---
 
-## 5.15 `email_deliveries`
+## 5.17 `email_deliveries`
 
 Tracks outbound key emails and other administrative emails.
 
@@ -1116,7 +1246,7 @@ Rules:
 
 ---
 
-## 5.16 `audit_log`
+## 5.18 `audit_log`
 
 Security-relevant administrative action log.
 
@@ -1178,7 +1308,7 @@ Rules:
 
 ---
 
-## 5.17 `background_jobs`
+## 5.19 `background_jobs`
 
 Optional but recommended table for tracking Celery jobs visible from the admin dashboard.
 

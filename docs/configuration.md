@@ -361,8 +361,12 @@ create trusted calibration keys.
 Admins can summarize observed trusted-calibration usage with
 `slaif-gateway calibration summarize` or from the trusted key detail page. That
 preview uses a source key, optional time window, and multiplier to propose
-strict participant policy values. It is read-only: no templates, participant
-keys, key policy changes, routes, or pricing rows are created or updated.
+strict participant policy values. Preview is read-only: no templates,
+participant keys, key policy changes, routes, or pricing rows are created or
+updated. After review, admins can create a durable key template from the
+proposal with `slaif-gateway templates create-from-calibration` or the
+dashboard. That writes only template/revision rows and safe audit metadata; it
+does not create participant keys or mutate existing gateway keys.
 
 ## Planned Responses API Configuration
 

@@ -107,19 +107,23 @@ resolution, pricing, quota reservation, or provider forwarding.
 
 ## Key Templates
 
-Usable Responses policies require key templates.
+Usable Responses policies require key templates. Durable template records and
+immutable revisions now exist for reviewed calibration-derived Chat Completions
+policy snapshots; Responses-specific template policy remains future work.
 
 Template requirements:
 
 - templates are versioned/snapshotted;
-- a key created from a template records template and revision metadata;
+- a future key created from a template records template and revision metadata;
 - editing a template never silently mutates existing keys;
 - applying a template update to existing keys is a separate audited workflow;
-- organizers can create a test key from a template before issuing workshop keys;
-- bulk key creation can reference a template revision instead of duplicating
-  every policy field per row.
+- future workflows should let organizers create a test key from a template
+  before issuing workshop keys;
+- future bulk key creation can reference a template revision instead of
+  duplicating every policy field per row.
 
-See `docs/key-templates.md` for the planned template contract.
+See `docs/key-templates.md` for the current template contract and future
+template-to-key workflow.
 
 ## Usage Tracking And Calibration Keys
 
@@ -152,10 +156,10 @@ The table is the first persistence foundation for recommendations; it is
 advisory and not invoice-grade billing truth. Admins can now generate a
 preview-only calibration usage summary and strict participant-policy proposal
 from CLI or admin web by selecting a trusted calibration key, time window, and
-multiplier. That preview does not create templates, create participant keys,
-mutate existing key policy, or update routes/pricing. Future Responses work
-must extend the same safe metadata boundary rather than storing request or
-response content.
+multiplier. After review, admins can create a durable template revision from the
+proposal. That template creation does not create participant keys, mutate
+existing key policy, or update routes/pricing. Future Responses work must extend
+the same safe metadata boundary rather than storing request or response content.
 
 Recommendation workflows need safe operational metadata such as:
 

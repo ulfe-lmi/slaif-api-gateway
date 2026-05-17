@@ -153,10 +153,14 @@ results, prompts, completions, raw bodies, or secrets.
 Admins may summarize trusted calibration-key usage from the CLI or dashboard.
 That preview reads safe `usage_profiles` rows only and proposes strict
 participant policy values with an explicit multiplier. It is non-mutating: it
-does not create templates or participant keys, does not change gateway key
-policy, and does not update routes or pricing. Hosted capabilities observed
-during calibration are shown as review-required rather than silently enabled
-for normal participant keys; external MCP/connectors remain denied by default.
+does not create participant keys, does not change gateway key policy, and does
+not update routes or pricing. After review, admins may create a durable
+versioned key template from the proposal with confirmation and an audit reason.
+Template creation mutates only `key_templates`, `key_template_revisions`, and
+safe audit metadata. It does not create participant keys, mutate existing
+gateway keys, or apply policy updates. Hosted capabilities observed during
+calibration are stored as review-required rather than silently enabled for
+normal participant keys; external MCP/connectors remain denied by default.
 
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not
