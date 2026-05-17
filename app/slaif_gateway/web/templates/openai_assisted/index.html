@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}OpenAI Assisted Proposals{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="openai-assisted-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Proposals</p>
+      <h1 id="openai-assisted-heading">OpenAI Assisted Proposals</h1>
+      <p class="muted">Generate reviewed TSV proposal files, then import them through the existing preview and audit flow.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing/import">Pricing import</a>
+      <a class="button-link secondary" href="/admin/routes/import">Route import</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel danger-zone" aria-labelledby="openai-assisted-warning-heading">
+    <h2 id="openai-assisted-warning-heading">Review Required</h2>
+    <p class="warning-text">{{ warning }}</p>
+    <p class="muted">Admin discovery uses the {{ api_key_env_var }} environment variable and proposal model {{ proposal_model }}. The key value is never displayed.</p>
+  </section>
+
+  <div class="summary-grid" aria-label="OpenAI assisted proposal choices">
+    <section class="metric-card">
+      <h2>Pricing proposal</h2>
+      <p class="muted">Draft local OpenAI Chat Completions accounting assumptions from official pricing and model documentation.</p>
+      <p class="muted small">Sources: {% for source_url in source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      <a class="button-link" href="/admin/openai-assisted/pricing">Generate pricing proposal</a>
+    </section>
+    <section class="metric-card">
+      <h2>Route proposal</h2>
+      <p class="muted">Draft OpenAI Chat Completions route metadata for models that remain inside the implemented gateway endpoint scope.</p>
+      <p class="muted small">Sources: {% for source_url in route_source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      <a class="button-link" href="/admin/openai-assisted/routes">Generate route proposal</a>
+    </section>
+  </div>
+</section>
+{% endblock %}

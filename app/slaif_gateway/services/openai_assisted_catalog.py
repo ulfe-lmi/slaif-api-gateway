@@ -111,6 +111,22 @@ class OpenAIAssistedProposalResult:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAIAssistedProposalTextResult:
+    """Safe proposal text returned to admin UI without writing local metadata."""
+
+    proposal_type: str
+    tsv_text: str
+    row_count: int
+    warnings: tuple[str, ...]
+    source_urls: tuple[str, ...]
+    next_steps: tuple[str, ...] = (
+        "inspect TSV",
+        "run pricing/routes import preview",
+        "execute import only with confirmation and audit reason",
+    )
+
+
 async def generate_openai_pricing_proposal(
     *,
     output_path: Path,
@@ -129,6 +145,45 @@ async def generate_openai_pricing_proposal(
 ) -> OpenAIAssistedProposalResult:
     """Generate a reviewed pricing TSV proposal file without touching local metadata."""
     _validate_output_path(output_path, overwrite=overwrite)
+    text_result = await generate_openai_pricing_proposal_text(
+        source_url=source_url,
+        models_source_url=models_source_url,
+        api_key_env_var=api_key_env_var,
+        proposal_model=proposal_model,
+        currency=currency,
+        endpoint=endpoint,
+        include_models=include_models,
+        exclude_models=exclude_models,
+        max_web_calls=max_web_calls,
+        http_client=http_client,
+        now=now,
+    )
+    _write_proposal_file(output_path, text_result.tsv_text, overwrite=overwrite)
+    return OpenAIAssistedProposalResult(
+        output_path=output_path,
+        proposal_type=text_result.proposal_type,
+        row_count=text_result.row_count,
+        warnings=text_result.warnings,
+        source_urls=text_result.source_urls,
+        next_steps=text_result.next_steps,
+    )
+
+
+async def generate_openai_pricing_proposal_text(
+    *,
+    source_url: str,
+    models_source_url: str,
+    api_key_env_var: str,
+    proposal_model: str,
+    currency: str,
+    endpoint: str,
+    include_models: Sequence[str],
+    exclude_models: Sequence[str],
+    max_web_calls: int,
+    http_client: httpx.AsyncClient | None = None,
+    now: datetime | None = None,
+) -> OpenAIAssistedProposalTextResult:
+    """Generate a reviewed pricing TSV proposal text without touching local metadata."""
     _validate_official_source_url(source_url)
     _validate_official_source_url(models_source_url)
     normalized_currency = _normalize_currency(currency)
@@ -168,10 +223,9 @@ async def generate_openai_pricing_proposal(
         raise ValueError("OpenAI pricing proposal contained no importable rows")
 
     text = _render_tsv(_PRICING_TSV_FIELDS, rows)
-    _write_proposal_file(output_path, text, overwrite=overwrite)
-    return OpenAIAssistedProposalResult(
-        output_path=output_path,
+    return OpenAIAssistedProposalTextResult(
         proposal_type="pricing",
+        tsv_text=text,
         row_count=len(rows),
         warnings=tuple(warnings),
         source_urls=tuple(source_urls),
@@ -192,6 +246,37 @@ async def generate_openai_route_proposal(
 ) -> OpenAIAssistedProposalResult:
     """Generate a reviewed route TSV proposal file without touching local metadata."""
     _validate_output_path(output_path, overwrite=overwrite)
+    text_result = await generate_openai_route_proposal_text(
+        source_url=source_url,
+        api_key_env_var=api_key_env_var,
+        proposal_model=proposal_model,
+        include_models=include_models,
+        exclude_models=exclude_models,
+        implemented_endpoints_only=implemented_endpoints_only,
+        http_client=http_client,
+    )
+    _write_proposal_file(output_path, text_result.tsv_text, overwrite=overwrite)
+    return OpenAIAssistedProposalResult(
+        output_path=output_path,
+        proposal_type=text_result.proposal_type,
+        row_count=text_result.row_count,
+        warnings=text_result.warnings,
+        source_urls=text_result.source_urls,
+        next_steps=text_result.next_steps,
+    )
+
+
+async def generate_openai_route_proposal_text(
+    *,
+    source_url: str,
+    api_key_env_var: str,
+    proposal_model: str,
+    include_models: Sequence[str],
+    exclude_models: Sequence[str],
+    implemented_endpoints_only: bool,
+    http_client: httpx.AsyncClient | None = None,
+) -> OpenAIAssistedProposalTextResult:
+    """Generate a reviewed route TSV proposal text without touching local metadata."""
     _validate_official_source_url(source_url)
 
     payload = await _call_openai_for_json(
@@ -216,10 +301,9 @@ async def generate_openai_route_proposal(
         raise ValueError("OpenAI route proposal contained no importable rows")
 
     text = _render_tsv(_ROUTE_TSV_FIELDS, rows)
-    _write_proposal_file(output_path, text, overwrite=overwrite)
-    return OpenAIAssistedProposalResult(
-        output_path=output_path,
+    return OpenAIAssistedProposalTextResult(
         proposal_type="route",
+        tsv_text=text,
         row_count=len(rows),
         warnings=tuple(warnings),
         source_urls=tuple(source_urls),
