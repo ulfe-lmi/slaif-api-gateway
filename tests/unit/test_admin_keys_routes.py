@@ -10,6 +10,11 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.models import AdminSession, AdminUser
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
+from slaif_gateway.services.calibration_summary_service import (
+    CalibrationObservedSummary,
+    CalibrationPolicyProposal,
+    CalibrationPreviewResult,
+)
 from slaif_gateway.services.admin_key_dashboard import AdminKeyNotFoundError
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 
@@ -284,6 +289,240 @@ def test_admin_key_detail_shows_trusted_calibration_metadata(monkeypatch) -> Non
     assert "trusted_calibration_discovery" in response.text
     assert "created_from" in response.text
     assert "admin_web" in response.text
+    assert f'href="/admin/keys/{key.id}/calibration"' in response.text
+
+
+def test_standard_key_detail_does_not_offer_calibration_preview(monkeypatch) -> None:
+    key = _detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/keys/{key.id}")
+
+    assert response.status_code == 200
+    assert f"/admin/keys/{key.id}/calibration" not in response.text
+
+
+def test_calibration_form_requires_login() -> None:
+    response = TestClient(_app()).get(f"/admin/keys/{uuid.uuid4()}/calibration", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+
+def test_trusted_calibration_form_renders_preview_controls(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/keys/{key.id}/calibration")
+
+    assert response.status_code == 200
+    assert "Calibration Policy Preview" in response.text
+    assert "Preview Only" in response.text
+    assert f'action="/admin/keys/{key.id}/calibration/preview"' in response.text
+    assert 'name="csrf_token" value="dashboard-csrf"' in response.text
+    assert 'name="multiplier"' in response.text
+    assert "does not mutate gateway key policy" in response.text
+
+
+def test_standard_key_calibration_form_is_rejected(monkeypatch) -> None:
+    key = _detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/keys/{key.id}/calibration")
+
+    assert response.status_code == 400
+    assert "trusted calibration keys" in response.text
+
+
+def test_standard_key_calibration_preview_is_rejected(monkeypatch) -> None:
+    key = _detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    async def summarize_calibration_key_usage(self, **kwargs):
+        from slaif_gateway.services.calibration_summary_service import CalibrationSummaryError
+
+        raise CalibrationSummaryError("Calibration summaries are available only for trusted calibration keys.")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.calibration_summary_service.CalibrationSummaryService.summarize_calibration_key_usage",
+        summarize_calibration_key_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{key.id}/calibration/preview",
+        data={"csrf_token": "dashboard-csrf", "multiplier": "2"},
+    )
+
+    assert response.status_code == 400
+    assert "trusted calibration keys" in response.text
+
+
+def test_calibration_preview_requires_csrf(monkeypatch) -> None:
+    key = _trusted_detail()
+    called = False
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.calibration_summary_service.CalibrationSummaryService.summarize_calibration_key_usage",
+        summarize_calibration_key_usage,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(f"/admin/keys/{key.id}/calibration/preview")
+
+    assert response.status_code == 400
+    assert "Invalid CSRF token." in response.text
+    assert called is False
+
+
+def test_calibration_preview_returns_no_cache_safe_result(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        assert kwargs["gateway_key_id"] == key.id
+        assert kwargs["multiplier"] == Decimal("2")
+        return _calibration_preview(key.id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.calibration_summary_service.CalibrationSummaryService.summarize_calibration_key_usage",
+        summarize_calibration_key_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{key.id}/calibration/preview",
+        data={"csrf_token": "dashboard-csrf", "multiplier": "2"},
+    )
+
+    assert response.status_code == 200
+    assert "Strict Policy Proposal Preview" in response.text
+    assert "Observed Usage Summary" in response.text
+    assert "Strict Participant Policy Proposal" in response.text
+    assert "No templates, keys, routes, pricing rows, or gateway key policies were changed" in response.text
+    assert "gpt-4.1-mini" in response.text
+    assert "no-store" in response.headers["cache-control"]
+    assert "sk-provider-secret-placeholder" not in response.text
+    assert "Authorization: Bearer" not in response.text
+    assert "csrf_token" in response.text
+    assert "session_token" not in response.text
+    assert "raw request" not in response.text.lower()
+
+
+def _calibration_preview(gateway_key_id: uuid.UUID) -> CalibrationPreviewResult:
+    now = datetime.now(UTC)
+    summary = CalibrationObservedSummary(
+        gateway_key_id=gateway_key_id,
+        public_key_id="public-calibration",
+        owner_id=uuid.uuid4(),
+        owner_email="ada@example.org",
+        owner_display_name="Ada Lovelace",
+        institution_id=None,
+        institution_name=None,
+        cohort_id=None,
+        cohort_name=None,
+        time_window_start=None,
+        time_window_end=None,
+        observed_request_count=1,
+        observed_endpoints=("/v1/chat/completions",),
+        observed_providers=("openai",),
+        observed_requested_models=("gpt-4.1-mini",),
+        observed_resolved_upstream_models=("gpt-4.1-mini",),
+        observed_provider_hosts=("api.openai.com",),
+        observed_provider_endpoint_paths=("/v1/chat/completions",),
+        observed_hosted_capabilities=(),
+        observed_unknown_hosted_capabilities=(),
+        observed_denied_capabilities=(),
+        total_input_tokens=5,
+        total_output_tokens=6,
+        total_tokens=11,
+        total_reasoning_tokens=None,
+        total_cached_tokens=None,
+        max_input_tokens_per_request=5,
+        max_output_tokens_per_request=6,
+        max_total_tokens_per_request=11,
+        max_reasoning_tokens_per_request=None,
+        max_cached_tokens_per_request=None,
+        total_slaif_calculated_cost=Decimal("0.001000000"),
+        total_provider_reported_cost=None,
+        max_slaif_calculated_cost_per_request=Decimal("0.001000000"),
+        max_provider_reported_cost_per_request=None,
+        cost_currencies=("EUR",),
+        cost_confidence="slaif_calculated",
+        warnings=(),
+    )
+    proposal = CalibrationPolicyProposal(
+        proposed_allowed_endpoints=("/v1/chat/completions",),
+        proposed_allowed_models=("gpt-4.1-mini",),
+        proposed_allowed_providers=("openai",),
+        proposed_allowed_hosted_capabilities=(),
+        hosted_capabilities_requiring_review=(),
+        proposed_request_limit_total=2,
+        proposed_token_limit_total=22,
+        proposed_input_token_limit_total=10,
+        proposed_output_token_limit_total=12,
+        proposed_reasoning_token_limit_total=None,
+        proposed_cost_limit_eur=Decimal("0.002000000"),
+        proposed_max_input_tokens_per_request=10,
+        proposed_max_output_tokens_per_request=12,
+        proposed_max_total_tokens_per_request=22,
+        proposed_max_single_request_cost_eur=Decimal("0.002000000"),
+        proposed_rate_limit_policy=None,
+        warnings=(),
+        assumptions=("Preview only",),
+        source_gateway_key_id=gateway_key_id,
+        source_time_window_start=now,
+        source_time_window_end=now,
+        multiplier=Decimal("2"),
+    )
+    return CalibrationPreviewResult(summary=summary, proposal=proposal, is_empty=False)
 
 
 def test_admin_key_detail_missing_or_invalid_is_safe(monkeypatch) -> None:

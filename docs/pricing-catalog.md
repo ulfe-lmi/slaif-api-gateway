@@ -249,8 +249,10 @@ No unlimited or unbounded tool policy is acceptable for cost-limited keys.
 The pricing catalog supports money estimates for Responses policies and
 calibration-derived templates, but usage-derived recommendations can be based
 primarily on operational limits rather than money. Trusted calibration keys can
-produce safe observed Chat Completions usage rows for this future workflow, but
-those rows are local assumptions until an admin reviews them. For workshop
+produce safe observed Chat Completions usage rows and preview strict
+participant-policy proposals from CLI or admin web, but those proposals are
+local assumptions until an admin reviews them. They do not create templates,
+participant keys, routes, pricing rows, or key policy changes. For workshop
 participant keys, token, request, and tool-call limits are often easier to
 explain and enforce than exact currency estimates.
 

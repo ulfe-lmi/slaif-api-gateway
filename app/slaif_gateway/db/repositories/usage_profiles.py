@@ -92,7 +92,7 @@ class UsageProfilesRepository:
         *,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[UsageProfile]:
         statement: Select[tuple[UsageProfile]] = select(UsageProfile).where(
             UsageProfile.gateway_key_id == gateway_key_id
@@ -101,6 +101,8 @@ class UsageProfilesRepository:
             statement = statement.where(UsageProfile.created_at >= start_at)
         if end_at is not None:
             statement = statement.where(UsageProfile.created_at <= end_at)
-        statement = statement.order_by(UsageProfile.created_at.desc()).limit(limit)
+        statement = statement.order_by(UsageProfile.created_at.desc())
+        if limit is not None:
+            statement = statement.limit(limit)
         result = await self._session.execute(statement)
         return list(result.scalars().all())

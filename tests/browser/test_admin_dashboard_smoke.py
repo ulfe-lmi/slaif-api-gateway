@@ -30,6 +30,10 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.main import create_app
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 from slaif_gateway.utils.passwords import hash_admin_password
 from tests.integration.db_test_utils import run_alembic_upgrade_head
 
@@ -145,6 +149,22 @@ async def _create_dashboard_data(database_url: str) -> dict[str, object]:
                     request_limit_total=100,
                     allow_all_models=True,
                     allow_all_endpoints=True,
+                    created_by_admin_user_id=admin.id,
+                )
+                trusted_key = await GatewayKeysRepository(session).create_gateway_key_record(
+                    public_key_id=f"browser-cal-{suffix[:12]}",
+                    token_hash=f"trusted_calibration_hash_{suffix}",
+                    owner_id=owner.id,
+                    cohort_id=cohort.id,
+                    valid_from=now - timedelta(minutes=5),
+                    valid_until=now + timedelta(days=3),
+                    key_hint="sk-slaif-browser-calibration-hint",
+                    request_limit_total=3,
+                    allow_all_models=True,
+                    allow_all_endpoints=True,
+                    key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+                    capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+                    calibration_metadata={"created_from": "browser_smoke"},
                     created_by_admin_user_id=admin.id,
                 )
                 provider = await ProviderConfigsRepository(session).create_provider_config(
@@ -266,6 +286,8 @@ async def _create_dashboard_data(database_url: str) -> dict[str, object]:
                 return {
                     "admin_email": admin.email,
                     "key_id": key.id,
+                    "trusted_key_id": trusted_key.id,
+                    "trusted_public_key_id": trusted_key.public_key_id,
                     "public_key_id": key.public_key_id,
                     "owner_id": owner.id,
                     "institution_id": institution.id,
@@ -355,6 +377,16 @@ def test_admin_dashboard_browser_smoke() -> None:
                 ("/admin", "Admin Dashboard", 1),
                 ("/admin/keys", "Gateway Keys", 1),
                 (f"/admin/keys/{data['key_id']}", str(data["public_key_id"]), 7),
+                (
+                    f"/admin/keys/{data['trusted_key_id']}",
+                    str(data["trusted_public_key_id"]),
+                    7,
+                ),
+                (
+                    f"/admin/keys/{data['trusted_key_id']}/calibration",
+                    "Calibration Policy Preview",
+                    2,
+                ),
                 ("/admin/keys/create", "Create Gateway Key", 2),
                 ("/admin/keys/bulk-import", "Bulk Key Import Preview", 2),
                 ("/admin/owners", "Owners", 1),
@@ -419,6 +451,13 @@ def test_admin_dashboard_browser_smoke() -> None:
                 if path == f"/admin/keys/{data['key_id']}":
                     assert "key_purpose" not in html
                     assert "trusted_calibration" not in html
+                if path == f"/admin/keys/{data['trusted_key_id']}":
+                    assert "Preview calibration policy" in html
+                    assert "Trusted Calibration Key" in html
+                if path == f"/admin/keys/{data['trusted_key_id']}/calibration":
+                    assert "Preview strict participant policy" in html
+                    assert 'name="multiplier"' in html
+                    assert "does not mutate gateway key policy" in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')

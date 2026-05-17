@@ -34,6 +34,7 @@ from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_activity_dashboard import AdminActivityDashboardService, AdminActivityNotFoundError
 from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
@@ -51,6 +52,10 @@ from slaif_gateway.services.admin_session_service import (
     AdminSessionContext,
     AdminSessionError,
     AdminSessionService,
+)
+from slaif_gateway.services.calibration_summary_service import (
+    CalibrationSummaryError,
+    CalibrationSummaryService,
 )
 from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
@@ -999,6 +1004,117 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
         key=key,
         available_model_routes=available_model_routes,
     )
+
+
+@router.get("/keys/{gateway_key_id}/calibration", response_class=HTMLResponse)
+async def admin_key_calibration_form(request: Request, gateway_key_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(parsed_key_id)
+    except AdminKeyNotFoundError:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+    if key.key_purpose != KEY_PURPOSE_TRUSTED_CALIBRATION:
+        return HTMLResponse("Calibration summaries are available only for trusted calibration keys.", status_code=400)
+
+    return _render_key_calibration_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        key=key,
+        form=_default_key_calibration_form(),
+    )
+
+
+@router.post("/keys/{gateway_key_id}/calibration/preview", response_class=HTMLResponse)
+async def preview_admin_key_calibration(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    start_at: str = Form(""),
+    end_at: str = Form(""),
+    multiplier: str = Form("3"),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = {"start_at": start_at, "end_at": end_at, "multiplier": multiplier}
+    try:
+        parsed_start_at = _parse_admin_datetime(start_at)
+        parsed_end_at = _parse_admin_datetime(end_at)
+        parsed_multiplier = _parse_required_admin_decimal(multiplier, field_name="multiplier")
+        async with _calibration_summary_service_scope(request) as service:
+            result = await service.summarize_calibration_key_usage(
+                gateway_key_id=parsed_key_id,
+                start_at=parsed_start_at,
+                end_at=parsed_end_at,
+                multiplier=parsed_multiplier,
+            )
+    except (CalibrationSummaryError, ValueError) as exc:
+        diagnostic_id = _admin_diagnostic_id(request)
+        logger.warning(
+            "admin.calibration_preview_failed",
+            admin_id=str(action_context.admin_user.id),
+            gateway_key_id=str(parsed_key_id),
+            error=exc.__class__.__name__,
+            diagnostic_id=diagnostic_id,
+        )
+        try:
+            async with _admin_key_dashboard_service_scope(request) as service:
+                key = await service.get_key_detail(parsed_key_id)
+        except AdminKeyNotFoundError:
+            return HTMLResponse("Gateway key not found.", status_code=404)
+        if key.key_purpose != KEY_PURPOSE_TRUSTED_CALIBRATION:
+            return HTMLResponse(
+                "Calibration summaries are available only for trusted calibration keys.",
+                status_code=400,
+            )
+        return _render_key_calibration_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            key=key,
+            form=form,
+            error=str(exc),
+            diagnostic_id=diagnostic_id,
+            status_code=400,
+        )
+
+    response = templates.TemplateResponse(
+        request,
+        "keys/calibration_preview.html",
+        {
+            "admin": action_context.admin_user,
+            "csrf_token": csrf_token,
+            "result": result,
+            "summary": result.summary,
+            "proposal": result.proposal,
+            "form": form,
+        },
+    )
+    _set_no_store_headers(response)
+    return response
 
 
 @router.post("/keys/{gateway_key_id}/policy", response_class=HTMLResponse)
@@ -5378,6 +5494,17 @@ async def _admin_key_dashboard_service_scope(request: Request) -> AsyncIterator[
 
 
 @asynccontextmanager
+async def _calibration_summary_service_scope(request: Request) -> AsyncIterator[CalibrationSummaryService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield CalibrationSummaryService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                usage_profiles_repository=UsageProfilesRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_key_management_service_scope(request: Request) -> AsyncIterator[KeyService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -5777,6 +5904,34 @@ def _render_key_detail(
     )
 
 
+def _render_key_calibration_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    key: object,
+    form: dict[str, str],
+    error: str | None = None,
+    diagnostic_id: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    response = templates.TemplateResponse(
+        request,
+        "keys/calibration.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "key": key,
+            "form": form,
+            "error": error,
+            "diagnostic_id": diagnostic_id,
+        },
+        status_code=status_code,
+    )
+    _set_no_store_headers(response)
+    return response
+
+
 async def _render_key_policy_error(
     request: Request,
     *,
@@ -5992,6 +6147,14 @@ def _default_key_create_form() -> dict[str, str]:
         "confirm_trusted_calibration": "",
         "email_delivery_mode": "none",
         "reason": "",
+    }
+
+
+def _default_key_calibration_form() -> dict[str, str]:
+    return {
+        "start_at": "",
+        "end_at": "",
+        "multiplier": "3",
     }
 
 
@@ -7816,6 +7979,13 @@ def _parse_optional_admin_decimal(value: str | None) -> tuple[bool, Decimal | No
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("invalid decimal") from exc
     return True, parsed
+
+
+def _parse_required_admin_decimal(value: str | None, *, field_name: str) -> Decimal:
+    provided, parsed = _parse_optional_admin_decimal(value)
+    if not provided or parsed is None:
+        raise ValueError(f"{field_name} is required.")
+    return parsed
 
 
 def _parse_required_non_negative_admin_decimal(value: str | None, *, field_name: str) -> Decimal:

@@ -149,8 +149,13 @@ discovery mode can observe routed Chat Completions capability needs, but they
 are not participant keys and do not enable Responses API.
 
 The table is the first persistence foundation for recommendations; it is
-advisory and not invoice-grade billing truth. Future Responses work must extend
-the same safe metadata boundary rather than storing request or response content.
+advisory and not invoice-grade billing truth. Admins can now generate a
+preview-only calibration usage summary and strict participant-policy proposal
+from CLI or admin web by selecting a trusted calibration key, time window, and
+multiplier. That preview does not create templates, create participant keys,
+mutate existing key policy, or update routes/pricing. Future Responses work
+must extend the same safe metadata boundary rather than storing request or
+response content.
 
 Recommendation workflows need safe operational metadata such as:
 

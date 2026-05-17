@@ -358,6 +358,12 @@ page exposes the same trusted-calibration mode with an explicit warning and
 confirmation checkbox, then calls the same key service. Bulk key import does not
 create trusted calibration keys.
 
+Admins can summarize observed trusted-calibration usage with
+`slaif-gateway calibration summarize` or from the trusted key detail page. That
+preview uses a source key, optional time window, and multiplier to propose
+strict participant policy values. It is read-only: no templates, participant
+keys, key policy changes, routes, or pricing rows are created or updated.
+
 ## Planned Responses API Configuration
 
 Responses API settings are planned for RC2 and are not implemented unless a

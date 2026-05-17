@@ -193,6 +193,11 @@ encrypted payloads, nonces, password hashes, session tokens, or email bodies.
 They are not invoice-grade provider billing truth and do not implement
 `/v1/responses`.
 
+Trusted calibration usage can be summarized from the CLI or admin dashboard to
+preview strict participant policy values. The preview is advisory and
+non-mutating: it does not create key templates, participant keys, or gateway key
+policy changes, and it does not make additional provider calls.
+
 Redis rate limiting is temporary operational throttling only. PostgreSQL remains authoritative for hard quota and usage accounting.
 Billing is admission-time reservation plus post-call finalization, not hard
 real-time interruption of provider spend after a call starts. If a finalized
