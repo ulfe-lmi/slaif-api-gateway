@@ -5,10 +5,15 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from slaif_gateway.config import Settings
 from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.email_errors import EmailError
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 
@@ -31,6 +36,8 @@ def _created_key(
     gateway_key_id: uuid.UUID | None = None,
     owner_id: uuid.UUID | None = None,
     plaintext_key: str = "sk-slaif-newpublic.once-only-created",
+    key_purpose: str = "standard",
+    capability_policy_mode: str = "standard",
 ) -> CreatedGatewayKey:
     now = datetime.now(UTC)
     return CreatedGatewayKey(
@@ -43,6 +50,8 @@ def _created_key(
         valid_from=now,
         valid_until=now + timedelta(days=30),
         rate_limit_policy={"requests_per_minute": 60},
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
     )
 
 
@@ -385,6 +394,255 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
         "max_concurrent_requests": 3,
         "window_seconds": 30,
     }
+    assert payload.key_purpose == "standard"
+    assert payload.capability_policy_mode == "standard"
+
+
+def test_create_trusted_calibration_calls_key_service_and_renders_warning(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    owner = _owner(owner_id)
+    plaintext_key = "sk-slaif-calibration.once-only-created"
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        seen["payload"] = payload
+        return _created_key(
+            owner_id=owner_id,
+            plaintext_key=plaintext_key,
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    monkeypatch.setattr("slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id", get_owner_by_id)
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        TRUSTED_CALIBRATION_MAX_REQUESTS=10,
+        TRUSTED_CALIBRATION_MAX_VALID_DAYS=7,
+    )
+    client = TestClient(_app(settings))
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "7",
+            "request_limit_total": "10",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text.count(plaintext_key) == 1
+    assert "Trusted calibration key" in response.text
+    assert "Do not issue to participants" in response.text
+
+    payload = seen["payload"]
+    assert payload.created_by_admin_id == admin_user.id
+    assert payload.key_purpose == KEY_PURPOSE_TRUSTED_CALIBRATION
+    assert payload.capability_policy_mode == CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+    assert payload.confirm_trusted_calibration is True
+    assert payload.request_limit_total == 10
+    assert payload.note == "trusted discovery"
+    assert payload.calibration_metadata["created_from"] == "admin_web"
+
+
+def test_create_trusted_calibration_fails_without_confirmation(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "request_limit_total": "5",
+            "trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Confirm trusted calibration mode" in response.text
+    assert called is False
+
+
+def test_create_trusted_calibration_fails_without_request_limit(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Trusted calibration keys require request_limit_total" in response.text
+    assert called is False
+
+
+def test_create_trusted_calibration_fails_when_request_limit_exceeds_max(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        TRUSTED_CALIBRATION_MAX_REQUESTS=3,
+    )
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "request_limit_total": "4",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Trusted calibration request limit exceeds" in response.text
+    assert called is False
+
+
+def test_create_trusted_calibration_fails_when_validity_exceeds_max(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        TRUSTED_CALIBRATION_MAX_VALID_DAYS=2,
+    )
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "3",
+            "request_limit_total": "2",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Trusted calibration validity exceeds" in response.text
+    assert called is False
+
+
+def test_create_trusted_calibration_rejects_unsafe_email_modes(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        ENABLE_EMAIL_DELIVERY=True,
+        SMTP_HOST="localhost",
+        SMTP_FROM="admin@example.org",
+    )
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "request_limit_total": "2",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "email_delivery_mode": "send-now",
+            "reason": "trusted discovery",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "may only use none or pending email delivery modes" in response.text
+    assert called is False
 
 
 def test_create_rejects_swapped_model_and_endpoint_values_before_service_call(monkeypatch) -> None:

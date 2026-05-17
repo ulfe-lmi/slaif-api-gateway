@@ -78,8 +78,9 @@ bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
 Trusted calibration keys are the narrow exception for discovery. They are real
-gateway keys, created only with explicit confirmation, a short validity window,
-and a small request limit. They still use normal authentication, route
+gateway keys, created through the CLI or admin key creation page only with
+explicit confirmation, a short validity window, and a small request limit. They
+still use normal authentication, route
 resolution, provider-secret isolation, PostgreSQL request reservation and
 finalization, usage ledger, usage profiling, and audit behavior. Their
 `trusted_calibration_discovery` mode may pass hosted/provider-side Chat

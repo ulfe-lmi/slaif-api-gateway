@@ -86,6 +86,10 @@ from slaif_gateway.services.key_import import (
     validate_key_import_rows,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 from slaif_gateway.services.key_policy_validation import (
     IMPLEMENTED_CLIENT_ENDPOINTS,
     MODELS_ENDPOINT,
@@ -518,6 +522,8 @@ async def create_admin_key(
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
     rate_limit_window_seconds: str = Form(""),
+    trusted_calibration: str = Form(""),
+    confirm_trusted_calibration: str = Form(""),
     email_delivery_mode: str = Form("none"),
     reason: str = Form(""),
 ) -> Response:
@@ -546,6 +552,8 @@ async def create_admin_key(
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
         "rate_limit_window_seconds": rate_limit_window_seconds,
+        "trusted_calibration": trusted_calibration,
+        "confirm_trusted_calibration": confirm_trusted_calibration,
         "email_delivery_mode": email_delivery_mode,
         "reason": reason,
     }
@@ -555,9 +563,17 @@ async def create_admin_key(
         parsed_input = _parse_key_create_form(
             form,
             actor_admin_id=action_context.admin_user.id,
+            settings=settings,
         )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
+        if (
+            parsed_input.key_purpose == KEY_PURPOSE_TRUSTED_CALIBRATION
+            and parsed_email_delivery_mode in {"send-now", "enqueue"}
+        ):
+            raise ValueError(
+                "Trusted calibration keys may only use none or pending email delivery modes."
+            )
     except (KeyManagementError, ValueError) as exc:
         diagnostic_id = _admin_diagnostic_id(request)
         _log_admin_action_failure(
@@ -744,8 +760,12 @@ async def create_admin_key(
             "policy": {
                 "allowed_models": parsed_input.allowed_models,
                 "allowed_endpoints": parsed_input.allowed_endpoints,
+                "allow_all_models": parsed_input.allow_all_models,
+                "allow_all_endpoints": parsed_input.allow_all_endpoints,
                 "rate_limit_policy": parsed_input.rate_limit_policy,
             },
+            "key_purpose": created.key_purpose,
+            "capability_policy_mode": created.capability_policy_mode,
             "email_delivery_mode": parsed_email_delivery_mode,
             "delivery": delivery_result,
             "celery_task_id": celery_task_id,
@@ -5876,6 +5896,7 @@ def _render_key_create_form(
     diagnostic_id: str | None = None,
     status_code: int = 200,
 ) -> Response:
+    settings = _settings(request)
     return templates.TemplateResponse(
         request,
         "keys/create.html",
@@ -5887,6 +5908,13 @@ def _render_key_create_form(
             "form": form,
             "error": error,
             "diagnostic_id": diagnostic_id,
+            "trusted_calibration_settings": {
+                "enabled": settings.CALIBRATION_KEYS_ENABLED,
+                "max_requests": settings.TRUSTED_CALIBRATION_MAX_REQUESTS,
+                "max_valid_days": settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS,
+                "allow_unknown_hosted_tools": settings.TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS,
+                "allow_external_authority": settings.TRUSTED_CALIBRATION_ALLOW_EXTERNAL_AUTHORITY,
+            },
         },
         status_code=status_code,
     )
@@ -5960,6 +5988,8 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_tokens_per_minute": "",
         "rate_limit_concurrent_requests": "",
         "rate_limit_window_seconds": "",
+        "trusted_calibration": "",
+        "confirm_trusted_calibration": "",
         "email_delivery_mode": "none",
         "reason": "",
     }
@@ -7449,6 +7479,7 @@ def _parse_key_create_form(
     form: dict[str, str],
     *,
     actor_admin_id: uuid.UUID,
+    settings: Settings | None = None,
 ) -> CreateGatewayKeyInput:
     owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
@@ -7476,14 +7507,42 @@ def _parse_key_create_form(
     except ValueError as exc:
         raise ValueError("Enter valid positive quota and rate-limit values.") from exc
 
+    trusted_calibration = _is_checked(form.get("trusted_calibration"))
     request_policy = validate_gateway_key_policy_values(
         GatewayKeyPolicy(
             allowed_models=_parse_admin_text_list(form.get("allowed_models")),
             allowed_endpoints=_parse_admin_text_list(form.get("allowed_endpoints")),
-            allow_all_models=_is_checked(form.get("allow_all_models")),
-            allow_all_endpoints=_is_checked(form.get("allow_all_endpoints")),
+            allow_all_models=trusted_calibration or _is_checked(form.get("allow_all_models")),
+            allow_all_endpoints=trusted_calibration
+            or _is_checked(form.get("allow_all_endpoints")),
         )
     )
+
+    key_purpose = "standard"
+    capability_policy_mode = "standard"
+    calibration_metadata: dict[str, object] = {}
+    if trusted_calibration:
+        if settings is not None and not settings.CALIBRATION_KEYS_ENABLED:
+            raise ValueError("Trusted calibration keys are disabled by configuration.")
+        if not _is_checked(form.get("confirm_trusted_calibration")):
+            raise ValueError("Confirm trusted calibration mode before creating this key.")
+        if request_limit_total is None:
+            raise ValueError("Trusted calibration keys require request_limit_total.")
+        if (
+            settings is not None
+            and request_limit_total > settings.TRUSTED_CALIBRATION_MAX_REQUESTS
+        ):
+            raise ValueError("Trusted calibration request limit exceeds the configured maximum.")
+        if settings is not None and valid_until - valid_from > timedelta(
+            days=settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS
+        ):
+            raise ValueError("Trusted calibration validity exceeds the configured maximum.")
+        key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION
+        capability_policy_mode = CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+        calibration_metadata = {
+            "created_from": "admin_web",
+            "operator_review_required": True,
+        }
 
     return CreateGatewayKeyInput(
         owner_id=owner_id,
@@ -7498,6 +7557,10 @@ def _parse_key_create_form(
         allowed_endpoints=request_policy.allowed_endpoints,
         allow_all_models=request_policy.allow_all_models,
         allow_all_endpoints=request_policy.allow_all_endpoints,
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
+        calibration_metadata=calibration_metadata,
+        confirm_trusted_calibration=_is_checked(form.get("confirm_trusted_calibration")),
         rate_limit_policy=rate_limit_policy,
         note=cleaned_reason,
     )
@@ -7567,6 +7630,8 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
         "owner_id": created.owner_id,
         "valid_from": created.valid_from,
         "valid_until": created.valid_until,
+        "key_purpose": created.key_purpose,
+        "capability_policy_mode": created.capability_policy_mode,
     }
 
 

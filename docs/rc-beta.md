@@ -96,7 +96,8 @@ migrations automatically.
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
   estimates. Current Chat Completions usage profiling and trusted calibration
-  keys provide safe calibration-foundation metadata, but calibration
+  keys, available from CLI and admin web creation, provide safe
+  calibration-foundation metadata, but calibration
   recommendations, key templates, and Responses support remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.

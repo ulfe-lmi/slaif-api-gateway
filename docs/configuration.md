@@ -353,8 +353,10 @@ keys and do not enable `/v1/responses` or `/v1/completions`.
 
 CLI creation requires `--trusted-calibration`,
 `--confirm-trusted-calibration`, a non-empty `--reason`, a small
-`--request-limit-total`, and a short validity window. Admin web creation remains
-a follow-up; bulk key import does not create trusted calibration keys.
+`--request-limit-total`, and a short validity window. The admin key creation
+page exposes the same trusted-calibration mode with an explicit warning and
+confirmation checkbox, then calls the same key service. Bulk key import does not
+create trusted calibration keys.
 
 ## Planned Responses API Configuration
 

@@ -73,6 +73,9 @@
           <td>
             <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
             {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
+            {% if key.key_purpose == "trusted_calibration" %}
+            <div class="muted small"><span class="status-pill status-suspended">Trusted calibration</span></div>
+            {% endif %}
           </td>
           <td>
             {{ key.owner_display_name or "Unknown owner" }}

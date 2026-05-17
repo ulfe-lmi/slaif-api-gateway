@@ -130,6 +130,11 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         allowed_endpoints=tuple(row.allowed_endpoints or ()),
         allow_all_models=row.allow_all_models,
         allow_all_endpoints=row.allow_all_endpoints,
+        key_purpose=str(getattr(row, "key_purpose", "standard") or "standard"),
+        capability_policy_mode=str(
+            getattr(row, "capability_policy_mode", "standard") or "standard"
+        ),
+        calibration_metadata=_safe_metadata(getattr(row, "calibration_metadata", None)),
         allowed_models_summary=_allowed_values_summary(row.allow_all_models, row.allowed_models),
         allowed_endpoints_summary=_allowed_values_summary(row.allow_all_endpoints, row.allowed_endpoints),
         allowed_providers_summary=_allowed_providers_summary(row.metadata_json),
@@ -171,6 +176,12 @@ def _allowed_values_summary(allow_all: bool, values: list[str] | tuple[str, ...]
         return "All"
     cleaned = [str(value) for value in values or [] if str(value).strip()]
     return ", ".join(cleaned) if cleaned else "None"
+
+
+def _safe_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(key, str)}
 
 
 def _allowed_providers_summary(metadata_json: dict[str, object] | None) -> str:

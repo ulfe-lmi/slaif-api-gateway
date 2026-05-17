@@ -41,8 +41,10 @@ Admins should also be able to derive a template from observed trusted
 calibration-key usage. Trusted calibration keys are real gateway keys for
 trusted organizers/admins only; they are short-lived, request-limited, use
 normal gateway auth/routing/accounting/profiling, and may use broad Chat
-Completions discovery policy to observe routed hosted-capability needs. They
-are not safe participant keys.
+Completions discovery policy to observe routed hosted-capability needs. They can
+be created from the CLI or admin key creation page, both with explicit
+confirmation. They are not safe participant keys, and bulk key import does not
+create them.
 
 Current Chat Completions requests persist safe `usage_profiles` rows after
 successful accounting finalization. Those rows provide the first source table

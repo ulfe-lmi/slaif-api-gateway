@@ -103,6 +103,9 @@ def _row() -> AdminKeyListRow:
         allowed_endpoints=("/v1/chat/completions",),
         allow_all_models=False,
         allow_all_endpoints=False,
+        key_purpose="standard",
+        capability_policy_mode="standard",
+        calibration_metadata={},
         allowed_models_summary="gpt-test",
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="openai",
@@ -116,6 +119,24 @@ def _detail() -> AdminKeyDetail:
     row = _row()
     return AdminKeyDetail(
         **asdict(row),
+        revoked_at=None,
+        revoked_reason=None,
+        created_by_admin_user_id=uuid.uuid4(),
+        last_used_at=None,
+        last_quota_reset_at=None,
+        quota_reset_count=0,
+    )
+
+
+def _trusted_detail() -> AdminKeyDetail:
+    row = _row()
+    return AdminKeyDetail(
+        **{
+            **asdict(row),
+            "key_purpose": "trusted_calibration",
+            "capability_policy_mode": "trusted_calibration_discovery",
+            "calibration_metadata": {"created_from": "admin_web"},
+        },
         revoked_at=None,
         revoked_reason=None,
         created_by_admin_user_id=uuid.uuid4(),
@@ -194,6 +215,25 @@ def test_admin_keys_list_returns_html_and_accepts_filters(monkeypatch) -> None:
     assert seen["offset"] == 5
 
 
+def test_admin_keys_list_marks_trusted_calibration(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    async def list_keys(self, **kwargs):
+        return [key]
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.list_keys",
+        list_keys,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get("/admin/keys")
+
+    assert response.status_code == 200
+    assert "Trusted calibration" in response.text
+
+
 def test_admin_key_detail_returns_html(monkeypatch) -> None:
     key = _detail()
 
@@ -221,6 +261,29 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     assert 'name="allow_all_models" value="true"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
     assert "Models must not start with" in response.text
+
+
+def test_admin_key_detail_shows_trusted_calibration_metadata(monkeypatch) -> None:
+    key = _trusted_detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/keys/{key.id}")
+
+    assert response.status_code == 200
+    assert "Trusted Calibration Key" in response.text
+    assert "trusted_calibration" in response.text
+    assert "trusted_calibration_discovery" in response.text
+    assert "created_from" in response.text
+    assert "admin_web" in response.text
 
 
 def test_admin_key_detail_missing_or_invalid_is_safe(monkeypatch) -> None:

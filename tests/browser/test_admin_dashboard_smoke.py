@@ -411,6 +411,14 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert "Review Required" in html
                     assert 'name="acknowledge_proposal"' in html
                     assert "not authoritative pricing or route truth" in html
+                if path == "/admin/keys/create":
+                    assert "Trusted Calibration Key" in html
+                    assert 'name="trusted_calibration"' in html
+                    assert 'name="confirm_trusted_calibration"' in html
+                    assert "Do not issue them to participants" in html
+                if path == f"/admin/keys/{data['key_id']}":
+                    assert "key_purpose" not in html
+                    assert "trusted_calibration" not in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')

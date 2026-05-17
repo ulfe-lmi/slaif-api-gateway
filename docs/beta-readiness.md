@@ -123,7 +123,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Trusted calibration keys are available for trusted organizers/admins as real,
   short-lived, request-limited gateway keys that use normal auth, routing,
   accounting, profiling, and audit while applying broad Chat Completions
-  discovery policy. They are not participant keys.
+  discovery policy. They can be created from the CLI or admin key creation
+  page. They are not participant keys.
 - Provider keys are referenced by environment variable names and are not stored
   or displayed by dashboard metadata forms.
 - One-time plaintext gateway keys are only shown on explicit no-cache

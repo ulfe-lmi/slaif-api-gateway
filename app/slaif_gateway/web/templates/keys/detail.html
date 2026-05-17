@@ -19,6 +19,13 @@
     </div>
   </header>
 
+  {% if key.key_purpose == "trusted_calibration" %}
+  <section class="action-panel" aria-labelledby="trusted-calibration-warning-heading">
+    <h2 id="trusted-calibration-warning-heading">Trusted Calibration Key</h2>
+    <p class="warning-text">This key is for trusted organizer/admin discovery only. It is a real gateway key with normal authentication, routing, PostgreSQL accounting, usage ledger, and safe usage profiling, but it is not a participant key.</p>
+  </section>
+  {% endif %}
+
   <div class="detail-grid">
     <section class="detail-section">
       <h2>Identity</h2>
@@ -35,6 +42,15 @@
         <dd>{{ key.status }}</dd>
         <dt>Display status</dt>
         <dd><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></dd>
+        <dt>Purpose</dt>
+        <dd>
+          {{ key.key_purpose }}
+          {% if key.key_purpose == "trusted_calibration" %}
+          <span class="status-pill status-suspended">Trusted calibration key</span>
+          {% endif %}
+        </dd>
+        <dt>Capability policy mode</dt>
+        <dd>{{ key.capability_policy_mode }}</dd>
       </dl>
     </section>
 
@@ -95,6 +111,14 @@
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
         <dd>{{ key.rate_limit_policy_summary }}</dd>
+        {% if key.calibration_metadata %}
+        <dt>Calibration metadata</dt>
+        <dd>
+          {% for name, value in key.calibration_metadata.items() %}
+          <div><code>{{ name }}</code>: {{ value }}</div>
+          {% endfor %}
+        </dd>
+        {% endif %}
       </dl>
     </section>
 

@@ -19,6 +19,9 @@
   <section class="action-panel" aria-labelledby="created-plaintext-heading">
     <h2 id="created-plaintext-heading">Plaintext Gateway Key</h2>
     <p class="warning-text">Copy this key now. It will not be shown again. If it is lost, rotate the key.</p>
+    {% if key_purpose == "trusted_calibration" %}
+    <p class="warning-text">Trusted calibration key: broad discovery policy, small request limit, short validity. Do not issue to participants.</p>
+    {% endif %}
     <div class="secret-display" aria-label="Plaintext gateway key">
       <code>{{ created.plaintext_key }}</code>
     </div>
@@ -38,6 +41,15 @@
         <dd>{{ created.valid_from.isoformat() }}</dd>
         <dt>Valid until</dt>
         <dd>{{ created.valid_until.isoformat() }}</dd>
+        <dt>Purpose</dt>
+        <dd>
+          {{ key_purpose }}
+          {% if key_purpose == "trusted_calibration" %}
+          <span class="status-pill status-suspended">Trusted calibration key</span>
+          {% endif %}
+        </dd>
+        <dt>Capability policy</dt>
+        <dd>{{ capability_policy_mode }}</dd>
       </dl>
     </section>
 
@@ -71,9 +83,21 @@
       <h2>Policy</h2>
       <dl>
         <dt>Allowed models</dt>
-        <dd>{{ ", ".join(policy.allowed_models) if policy.allowed_models else "None" }}</dd>
+        <dd>
+          {% if policy.allow_all_models %}
+          All route-backed models
+          {% else %}
+          {{ ", ".join(policy.allowed_models) if policy.allowed_models else "None" }}
+          {% endif %}
+        </dd>
         <dt>Allowed endpoints</dt>
-        <dd>{{ ", ".join(policy.allowed_endpoints) if policy.allowed_endpoints else "None" }}</dd>
+        <dd>
+          {% if policy.allow_all_endpoints %}
+          All implemented endpoints
+          {% else %}
+          {{ ", ".join(policy.allowed_endpoints) if policy.allowed_endpoints else "None" }}
+          {% endif %}
+        </dd>
         <dt>Rate limits</dt>
         <dd>
           {% if policy.rate_limit_policy %}
