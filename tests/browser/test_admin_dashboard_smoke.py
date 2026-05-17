@@ -452,7 +452,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 if path == "/admin":
                     assert 'href="/admin/templates"' in html
                 if path == "/admin/templates":
-                    assert "participant keys from templates is future work" in html
+                    assert "bulk participant key creation is future work" in html
                     assert "No key templates found" in html
                 if path == f"/admin/keys/{data['key_id']}":
                     assert "key_purpose" not in html

@@ -21,9 +21,18 @@
   </header>
 
   <section class="action-panel" aria-labelledby="template-warning-heading">
-    <h2 id="template-warning-heading">Participant Keys Are Future Work</h2>
-    <p class="warning-text">This template is a durable policy snapshot. It does not create participant keys, mutate existing gateway keys, or silently allow hosted capabilities.</p>
+    <h2 id="template-warning-heading">Single-Key Creation Only</h2>
+    <p class="warning-text">This template is a durable policy snapshot. Creating one key from a selected revision does not mutate this template, mutate existing gateway keys, bulk-create participants, or silently allow hosted capabilities.</p>
   </section>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+    {% if diagnostic_id %}
+    <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <div class="detail-grid">
     <section class="detail-section">
@@ -108,6 +117,76 @@
     </section>
     {% endif %}
   </div>
+
+  {% if current_revision %}
+  <section class="action-panel" aria-labelledby="create-key-from-template-heading">
+    <h2 id="create-key-from-template-heading">Create One Key From This Template Revision</h2>
+    <p class="warning-text">The created key is a normal standard gateway key that inherits this immutable revision's supported policy and limits. Existing keys and template revisions are not changed. Bulk creation from templates is future work.</p>
+    {% if current_revision.hosted_capabilities_requiring_review or current_revision.allowed_hosted_capabilities %}
+    <p class="warning-text">This revision has hosted capabilities requiring review. Single-key creation is blocked until a later explicit hosted-capability participant policy workflow exists.</p>
+    {% endif %}
+    <form method="post" action="/admin/templates/{{ template.id }}/revisions/{{ current_revision.id }}/create-key">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>
+          Owner
+          <select name="owner_id" required>
+            <option value="">Select owner</option>
+            {% for owner in owners %}
+            <option value="{{ owner.id }}" {% if form.owner_id == owner.id|string %}selected{% endif %}>
+              {{ owner.display_name }} / {{ owner.email }}{% if owner.institution_name %} / {{ owner.institution_name }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Cohort
+          <select name="cohort_id">
+            <option value="">No cohort</option>
+            {% for cohort in cohorts %}
+            <option value="{{ cohort.id }}" {% if form.cohort_id == cohort.id|string %}selected{% endif %}>
+              {{ cohort.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="form-grid">
+        <label>
+          Valid from
+          <input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" placeholder="Defaults to now">
+        </label>
+        <label>
+          Valid until
+          <input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" placeholder="Optional override">
+        </label>
+        <label>
+          Valid days
+          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="{{ current_revision.validity_days_default or 'Required if no default' }}">
+        </label>
+      </div>
+      <label>
+        Email delivery mode
+        <select name="email_delivery_mode">
+          <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - show key once in browser</option>
+          <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - create delivery row and show key once</option>
+          <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - email is the delivery channel</option>
+          <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>Enqueue - Celery email delivery</option>
+        </select>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_create_key_from_template" value="true" {% if form.confirm_create_key_from_template %}checked{% endif %} required>
+        I understand this creates exactly one normal key from this immutable revision
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <p class="muted small">Server-side creation reloads the template revision by ID and does not trust hidden policy values from this browser form.</p>
+      <button type="submit">Create one key from template</button>
+    </form>
+  </section>
+  {% endif %}
 
   {% if current_revision and current_revision.template_snapshot %}
   <section class="action-panel" aria-labelledby="template-warnings-heading">

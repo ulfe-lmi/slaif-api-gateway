@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Key Templates</p>
       <h1 id="templates-heading">Key Templates</h1>
-      <p class="muted">Versioned policy snapshots. Creating participant keys from templates is future work.</p>
+      <p class="muted">Versioned policy snapshots. Single-key creation is available; bulk participant key creation is future work.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/keys">Keys</a>
@@ -22,7 +22,7 @@
 
   <section class="action-panel" aria-labelledby="templates-warning-heading">
     <h2 id="templates-warning-heading">Snapshot Only</h2>
-    <p class="warning-text">Templates do not create participant keys in this release and do not mutate existing gateway keys. Revisions are immutable policy snapshots.</p>
+    <p class="warning-text">Templates can create one normal key from a selected immutable revision. They do not mutate existing gateway keys, and bulk creation from templates remains future work.</p>
   </section>
 
   <div class="table-wrap">
@@ -48,7 +48,7 @@
           <td>{{ template.created_at.isoformat() }}</td>
           <td>
             <div>{{ template.revisions|length }} revision{{ "" if template.revisions|length == 1 else "s" }}</div>
-            <div class="muted small">Participant key creation is future work.</div>
+            <div class="muted small">Bulk key creation is future work.</div>
           </td>
         </tr>
         {% else %}

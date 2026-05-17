@@ -261,6 +261,13 @@ class GatewayKey(Base):
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
 
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("key_templates.id", ondelete="SET NULL"), nullable=True
+    )
+    template_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("key_template_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     quota_reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
@@ -284,6 +291,8 @@ class GatewayKey(Base):
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="gateway_key")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
+    template: Mapped[KeyTemplate | None] = relationship(foreign_keys=[template_id])
+    template_revision: Mapped[KeyTemplateRevision | None] = relationship(foreign_keys=[template_revision_id])
 
     __table_args__ = (
         CheckConstraint(
@@ -330,6 +339,8 @@ class GatewayKey(Base):
         Index("ix_gateway_keys_valid_until", "valid_until"),
         Index("ix_gateway_keys_key_purpose", "key_purpose"),
         Index("ix_gateway_keys_capability_policy_mode", "capability_policy_mode"),
+        Index("ix_gateway_keys_template_id", "template_id"),
+        Index("ix_gateway_keys_template_revision_id", "template_revision_id"),
     )
 
 

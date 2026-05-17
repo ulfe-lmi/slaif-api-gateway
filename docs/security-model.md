@@ -161,6 +161,10 @@ safe audit metadata. It does not create participant keys, mutate existing
 gateway keys, or apply policy updates. Hosted capabilities observed during
 calibration are stored as review-required rather than silently enabled for
 normal participant keys; external MCP/connectors remain denied by default.
+Admins may also create one normal standard gateway key from a selected
+immutable template revision. That workflow uses normal key creation, records
+template provenance on the key, and does not mutate existing keys or template
+revisions. Bulk participant-key generation remains future work.
 
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not
@@ -265,7 +269,8 @@ email bodies. Reasoning or thinking token counts are safe operational metadata
 when a provider exposes them.
 
 Recommendations are never automatic mutations. An admin must review assumptions
-and explicitly confirm any generated template or key creation.
+and explicitly confirm any generated template or single-key creation. Bulk key
+creation from templates remains future work.
 
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).

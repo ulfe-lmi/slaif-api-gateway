@@ -47,6 +47,8 @@ class AdminKeyListRow:
     key_purpose: str
     capability_policy_mode: str
     calibration_metadata: dict[str, object]
+    template_id: uuid.UUID | None
+    template_revision_id: uuid.UUID | None
     allowed_models_summary: str
     allowed_endpoints_summary: str
     allowed_providers_summary: str

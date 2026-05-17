@@ -15,6 +15,7 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationPreviewResult,
 )
 from slaif_gateway.services.key_template_service import KeyTemplateError, KeyTemplateService
+from slaif_gateway.schemas.keys import CreatedGatewayKey
 
 PROMPT_TEXT = "prompt text must not persist"
 COMPLETION_TEXT = "completion text must not persist"
@@ -49,6 +50,12 @@ class FakeTemplatesRepository:
                 return template
         return None
 
+    async def get_revision_for_admin_detail(self, revision_id):
+        for revision in self.revisions:
+            if revision.id == revision_id:
+                return revision
+        return None
+
 
 class FakeAuditRepository:
     def __init__(self) -> None:
@@ -58,6 +65,29 @@ class FakeAuditRepository:
         row = SimpleNamespace(id=uuid.uuid4(), **kwargs)
         self.rows.append(row)
         return row
+
+
+class FakeKeyService:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def create_gateway_key(self, payload):
+        self.payloads.append(payload)
+        return CreatedGatewayKey(
+            gateway_key_id=uuid.uuid4(),
+            owner_id=payload.owner_id,
+            public_key_id="templatepublic",
+            display_prefix="sk-slaif-templatepublic",
+            plaintext_key="sk-slaif-templatepublic.once-only",
+            one_time_secret_id=uuid.uuid4(),
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            rate_limit_policy=payload.rate_limit_policy,
+            key_purpose=payload.key_purpose,
+            capability_policy_mode=payload.capability_policy_mode,
+            template_id=payload.template_id,
+            template_revision_id=payload.template_revision_id,
+        )
 
 
 def test_create_template_from_calibration_proposal_creates_template_revision_and_audit() -> None:
@@ -213,6 +243,109 @@ def test_does_not_mutate_existing_gateway_keys() -> None:
     assert not hasattr(templates, "gateway_keys")
 
 
+def test_create_key_from_template_revision_creates_standard_key_with_provenance() -> None:
+    templates = FakeTemplatesRepository()
+    audit = FakeAuditRepository()
+    key_service = FakeKeyService()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=audit,
+        key_service=key_service,
+    )
+    template, revision = _template_revision(templates)
+    owner_id = uuid.uuid4()
+
+    result = asyncio.run(
+        service.create_key_from_revision(
+            template_revision_id=revision.id,
+            owner_id=owner_id,
+            reason="Reviewed template",
+            confirm_create_key_from_template=True,
+        )
+    )
+
+    assert result.template is template
+    assert result.revision is revision
+    assert result.created_key.key_purpose == "standard"
+    assert result.created_key.capability_policy_mode == "standard"
+    assert result.created_key.template_id == template.id
+    assert result.created_key.template_revision_id == revision.id
+    payload = key_service.payloads[0]
+    assert payload.allowed_endpoints == ["/v1/chat/completions"]
+    assert payload.allowed_models == ["gpt-4.1-mini"]
+    assert payload.allowed_providers == ["openai"]
+    assert payload.request_limit_total == 6
+    assert payload.token_limit_total == 90
+    assert payload.cost_limit_eur == Decimal("0.030000000")
+    assert payload.template_id == template.id
+    assert payload.template_revision_id == revision.id
+    assert audit.rows[-1].action == "gateway_key.created_from_template"
+
+
+def test_create_key_from_template_rejects_confirmation_archived_and_missing_owner_policy() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    template, revision = _template_revision(templates)
+    owner_id = uuid.uuid4()
+
+    with pytest.raises(KeyTemplateError, match="Confirm"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=owner_id,
+                reason="Reviewed",
+                confirm_create_key_from_template=False,
+            )
+        )
+
+    template.status = "archived"
+    with pytest.raises(KeyTemplateError, match="Archived"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=owner_id,
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+    template.status = "active"
+    revision.allowed_endpoints = ["/v1/responses"]
+    with pytest.raises(KeyTemplateError, match="no implemented"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=owner_id,
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+
+def test_create_key_from_template_rejects_review_required_hosted_capabilities() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    _template, revision = _template_revision(templates)
+    revision.hosted_capabilities_requiring_review = ["web_search_options"]
+
+    with pytest.raises(KeyTemplateError, match="hosted capabilities"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+
 def _preview(
     *,
     empty: bool = False,
@@ -289,3 +422,34 @@ def _preview(
     )
     warnings = tuple(filter(None, (extra_warning,)))
     return CalibrationPreviewResult(summary=summary, proposal=proposal, is_empty=empty, warnings=warnings)
+
+
+def _template_revision(templates: FakeTemplatesRepository):
+    template = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Participants",
+        status="active",
+        current_revision_id=None,
+        revisions=[],
+    )
+    revision = SimpleNamespace(
+        id=uuid.uuid4(),
+        template_id=template.id,
+        template=template,
+        revision_number=1,
+        allowed_endpoints=["/v1/chat/completions"],
+        allowed_models=["gpt-4.1-mini"],
+        allowed_providers=["openai"],
+        allowed_hosted_capabilities=[],
+        hosted_capabilities_requiring_review=[],
+        request_limit_total=6,
+        token_limit_total=90,
+        cost_limit_eur=Decimal("0.030000000"),
+        rate_limit_policy={"requests_per_minute": 20},
+        validity_days_default=14,
+    )
+    template.current_revision_id = revision.id
+    template.revisions.append(revision)
+    templates.templates.append(template)
+    templates.revisions.append(revision)
+    return template, revision

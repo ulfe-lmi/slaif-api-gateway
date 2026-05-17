@@ -27,6 +27,9 @@ class CreateGatewayKeyInput:
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
     calibration_metadata: dict[str, object] = field(default_factory=dict)
+    template_id: uuid.UUID | None = None
+    template_revision_id: uuid.UUID | None = None
+    allowed_providers: list[str] | None = None
     confirm_trusted_calibration: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
     note: str | None = None
@@ -47,6 +50,8 @@ class CreatedGatewayKey:
     rate_limit_policy: dict[str, int | None] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
+    template_id: uuid.UUID | None = None
+    template_revision_id: uuid.UUID | None = None
 
 
 @dataclass(slots=True)

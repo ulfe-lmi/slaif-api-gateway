@@ -21,6 +21,7 @@ from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
+from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
@@ -50,6 +51,11 @@ from slaif_gateway.services.key_modes import (
     KEY_PURPOSE_TRUSTED_CALIBRATION,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_template_service import (
+    KeyFromTemplateCreationResult,
+    KeyTemplateError,
+    KeyTemplateService,
+)
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
@@ -142,6 +148,52 @@ async def _key_email_runtime() -> AsyncIterator[
                 email_service=EmailService(settings),
             )
             yield settings, key_service, email_delivery_service
+
+
+@asynccontextmanager
+async def _template_key_runtime() -> AsyncIterator[
+    tuple[Settings, KeyTemplateService, EmailDeliveryService]
+]:
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        async with session.begin():
+            keys_repository = GatewayKeysRepository(session)
+            one_time_secrets_repository = OneTimeSecretsRepository(session)
+            owners_repository = OwnersRepository(session)
+            audit_repository = AuditRepository(session)
+            key_service = KeyService(
+                settings=settings,
+                gateway_keys_repository=keys_repository,
+                one_time_secrets_repository=one_time_secrets_repository,
+                audit_repository=audit_repository,
+                model_routes_repository=ModelRoutesRepository(session),
+            )
+            email_delivery_service = EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=one_time_secrets_repository,
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=keys_repository,
+                owners_repository=owners_repository,
+                audit_repository=audit_repository,
+                email_service=EmailService(settings),
+            )
+            yield (
+                settings,
+                KeyTemplateService(
+                    key_templates_repository=KeyTemplatesRepository(session),
+                    audit_repository=audit_repository,
+                    key_service=key_service,
+                ),
+                email_delivery_service,
+            )
 
 
 def _run_async(coro: Any) -> Any:
@@ -286,6 +338,8 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "key_purpose": getattr(gateway_key, "key_purpose", "standard"),
         "capability_policy_mode": getattr(gateway_key, "capability_policy_mode", "standard"),
         "calibration_metadata": dict(getattr(gateway_key, "calibration_metadata", {}) or {}),
+        "template_id": getattr(gateway_key, "template_id", None),
+        "template_revision_id": getattr(gateway_key, "template_revision_id", None),
         "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
         "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
@@ -352,6 +406,8 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "allow_all_endpoints": result.allow_all_endpoints,
         "key_purpose": result.key_purpose,
         "capability_policy_mode": result.capability_policy_mode,
+        "template_id": getattr(result, "template_id", None),
+        "template_revision_id": getattr(result, "template_revision_id", None),
     }
 
 
@@ -452,6 +508,9 @@ def _handle_cli_error(exc: Exception, *, json_output: bool = False) -> None:
     if isinstance(exc, KeyManagementError):
         message = exc.safe_message
         code = exc.error_code
+    elif isinstance(exc, KeyTemplateError):
+        message = str(exc)
+        code = "key_template_error"
     elif isinstance(exc, EmailError):
         message = exc.safe_message
         code = exc.error_code
@@ -606,6 +665,64 @@ async def _create_gateway_key_with_email_delivery(
         delivery_result=delivery_result,
         celery_task_id=celery_task_id,
     )
+
+
+async def _create_key_from_template(
+    *,
+    template_revision_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    cohort_id: uuid.UUID | None,
+    valid_from: datetime | None,
+    valid_until: datetime | None,
+    valid_days: int | None,
+    email_delivery_mode: EmailDeliveryMode,
+    actor_admin_id: uuid.UUID | None,
+    reason: str,
+    confirm_create_key_from_template: bool,
+) -> tuple[KeyFromTemplateCreationResult, PendingKeyEmailResult | None, str | None]:
+    async with _template_key_runtime() as (settings, template_service, email_delivery_service):
+        _validate_email_delivery_preconditions(settings, email_delivery_mode)
+        result = await template_service.create_key_from_revision(
+            template_revision_id=template_revision_id,
+            owner_id=owner_id,
+            cohort_id=cohort_id,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            confirm_create_key_from_template=confirm_create_key_from_template,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            valid_days=valid_days,
+        )
+        delivery_result = await _create_pending_delivery_for_created_key(
+            email_delivery_service,
+            key_result=result.created_key,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        ) if email_delivery_mode != EmailDeliveryMode.none else None
+
+    if email_delivery_mode == EmailDeliveryMode.send_now and delivery_result is not None:
+        delivery_result = await _send_pending_key_email_now(
+            one_time_secret_id=result.created_key.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+    celery_task_id = None
+    if email_delivery_mode == EmailDeliveryMode.enqueue and delivery_result is not None:
+        celery_task_id = _enqueue_pending_key_email(
+            one_time_secret_id=result.created_key.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=actor_admin_id,
+        )
+        delivery_result = PendingKeyEmailResult(
+            email_delivery_id=delivery_result.email_delivery_id,
+            one_time_secret_id=delivery_result.one_time_secret_id,
+            gateway_key_id=delivery_result.gateway_key_id,
+            owner_id=delivery_result.owner_id,
+            recipient_email=delivery_result.recipient_email,
+            status="queued",
+        )
+    return result, delivery_result, celery_task_id
 
 
 async def _create_pending_delivery_for_created_key(
@@ -1134,6 +1251,140 @@ def create(
 
     _echo_kv(payload_dict)
     _exit_if_email_delivery_failed(cli_result.delivery_result)
+
+
+@app.command("create-from-template")
+def create_from_template(
+    template_revision_id: Annotated[
+        str,
+        typer.Option("--template-revision-id", help="Immutable key template revision UUID"),
+    ],
+    owner_id: Annotated[str, typer.Option("--owner-id", help="Owner UUID")],
+    cohort_id: Annotated[str | None, typer.Option("--cohort-id", help="Cohort UUID")] = None,
+    valid_from: Annotated[
+        str | None,
+        typer.Option("--valid-from", help="ISO datetime; defaults to now"),
+    ] = None,
+    valid_until: Annotated[
+        str | None,
+        typer.Option("--valid-until", help="ISO datetime override"),
+    ] = None,
+    valid_days: Annotated[
+        int | None,
+        typer.Option("--valid-days", help="Validity duration override in days"),
+    ] = None,
+    email_delivery: Annotated[
+        EmailDeliveryMode,
+        typer.Option(
+            "--email-delivery",
+            help="Key email delivery mode: none, pending, send-now, or enqueue",
+        ),
+    ] = EmailDeliveryMode.none,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str, typer.Option("--reason", help="Required audit reason")] = "",
+    confirm_create_key_from_template: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-create-key-from-template",
+            help="Confirm single key creation from the selected immutable template revision",
+        ),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+    show_plaintext: Annotated[
+        bool,
+        typer.Option("--show-plaintext", help="Include the one-time plaintext key in JSON output"),
+    ] = False,
+    secret_output_file: Annotated[
+        Path | None,
+        typer.Option("--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"),
+    ] = None,
+) -> None:
+    """Create one normal gateway key from an immutable key template revision."""
+    try:
+        _validate_secret_output_options(
+            json_output=json_output,
+            show_plaintext=show_plaintext,
+            secret_output_file=secret_output_file,
+            email_delivery_mode=email_delivery,
+        )
+        if not confirm_create_key_from_template:
+            raise typer.BadParameter(
+                "Confirm key creation from template with --confirm-create-key-from-template."
+            )
+        if not reason.strip():
+            raise typer.BadParameter("--reason is required for key creation from template.")
+        result, delivery_result, celery_task_id = _run_async(
+            _create_key_from_template(
+                template_revision_id=_parse_uuid(
+                    template_revision_id,
+                    field_name="template_revision_id",
+                ),
+                owner_id=_parse_uuid(owner_id, field_name="owner_id"),
+                cohort_id=_parse_uuid(cohort_id, field_name="cohort_id") if cohort_id else None,
+                valid_from=_parse_datetime(valid_from, field_name="valid_from"),
+                valid_until=_parse_datetime(valid_until, field_name="valid_until"),
+                valid_days=valid_days,
+                email_delivery_mode=email_delivery,
+                actor_admin_id=(
+                    _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                    if actor_admin_id
+                    else None
+                ),
+                reason=reason,
+                confirm_create_key_from_template=confirm_create_key_from_template,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    created = result.created_key
+    if email_delivery in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}:
+        _warn_email_delivery_channel(email_delivery)
+    elif secret_output_file is not None:
+        try:
+            write_secret_file(secret_output_file, created.plaintext_key)
+        except Exception as exc:  # noqa: BLE001
+            _handle_cli_error(exc, json_output=json_output)
+            return
+        _warn_secret_file(secret_output_file)
+    elif show_plaintext or not json_output:
+        _warn_plaintext_display()
+    if email_delivery == EmailDeliveryMode.pending:
+        _warn_email_delivery_channel(email_delivery)
+
+    include_plaintext = (
+        email_delivery not in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}
+        and secret_output_file is None
+        and (show_plaintext or not json_output)
+    )
+    payload_dict = _created_key_dict(created, include_plaintext=include_plaintext)
+    payload_dict.update(
+        {
+            "template_id": result.template.id,
+            "template_revision_id": result.revision.id,
+            "template_revision_number": result.revision.revision_number,
+            "message": (
+                "One standard gateway key created from the selected template revision. "
+                "No templates, revisions, or existing keys were changed."
+            ),
+        }
+    )
+    payload_dict = _append_email_delivery_payload(
+        payload_dict,
+        delivery_result=delivery_result,
+        celery_task_id=celery_task_id,
+    )
+    if json_output:
+        _emit_json(payload_dict)
+        _exit_if_email_delivery_failed(delivery_result)
+        return
+
+    _echo_kv(payload_dict)
+    _exit_if_email_delivery_failed(delivery_result)
 
 
 @app.command("list")

@@ -135,6 +135,8 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
             getattr(row, "capability_policy_mode", "standard") or "standard"
         ),
         calibration_metadata=_safe_metadata(getattr(row, "calibration_metadata", None)),
+        template_id=getattr(row, "template_id", None),
+        template_revision_id=getattr(row, "template_revision_id", None),
         allowed_models_summary=_allowed_values_summary(row.allow_all_models, row.allowed_models),
         allowed_endpoints_summary=_allowed_values_summary(row.allow_all_endpoints, row.allowed_endpoints),
         allowed_providers_summary=_allowed_providers_summary(row.metadata_json),

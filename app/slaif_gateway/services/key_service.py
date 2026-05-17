@@ -143,10 +143,15 @@ class KeyService:
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
             calibration_metadata=self._safe_calibration_metadata(payload.calibration_metadata),
+            template_id=payload.template_id,
+            template_revision_id=payload.template_revision_id,
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
-            metadata_json=self._metadata_with_rate_limit_window({}, rate_limit_policy),
+            metadata_json=self._metadata_with_rate_limit_window(
+                self._metadata_with_provider_policy({}, payload.allowed_providers),
+                rate_limit_policy,
+            ),
             created_by_admin_user_id=payload.created_by_admin_id,
             hmac_key_version=int(active_hmac_version),
         )
@@ -206,6 +211,13 @@ class KeyService:
                 "calibration_metadata": self._safe_calibration_metadata(
                     payload.calibration_metadata
                 ),
+                "template_id": str(payload.template_id) if payload.template_id else None,
+                "template_revision_id": (
+                    str(payload.template_revision_id) if payload.template_revision_id else None
+                ),
+                "allowed_providers": list(payload.allowed_providers)
+                if payload.allowed_providers is not None
+                else None,
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
@@ -222,6 +234,8 @@ class KeyService:
             rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
+            template_id=payload.template_id,
+            template_revision_id=payload.template_revision_id,
         )
 
     async def suspend_gateway_key(self, payload: SuspendGatewayKeyInput) -> GatewayKeyManagementResult:
@@ -887,6 +901,20 @@ class KeyService:
             metadata["rate_limit_policy"] = rate_policy
         else:
             metadata.pop("rate_limit_policy", None)
+        return metadata
+
+    @staticmethod
+    def _metadata_with_provider_policy(
+        metadata_json: dict[str, object] | None,
+        allowed_providers: list[str] | None,
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        if allowed_providers is None:
+            metadata.pop("allowed_providers", None)
+            return metadata
+        metadata["allowed_providers"] = [
+            str(provider).strip() for provider in allowed_providers if str(provider).strip()
+        ]
         return metadata
 
     async def _audit_gateway_key_change(

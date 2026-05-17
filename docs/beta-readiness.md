@@ -130,6 +130,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   dashboard. The preview uses safe usage-profile metadata only, applies an
   explicit multiplier, and does not create templates, participant keys, or key
   policy changes.
+- Admins can create durable key templates from reviewed calibration proposals
+  and can create exactly one normal standard gateway key from a selected
+  immutable template revision. Bulk participant-key creation from templates
+  remains future work.
 - Provider keys are referenced by environment variable names and are not stored
   or displayed by dashboard metadata forms.
 - One-time plaintext gateway keys are only shown on explicit no-cache
@@ -149,9 +153,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   allowed tool controls, pricing catalog support, and bounded-overrun cost
   estimates. Safe Chat Completions usage profiling, trusted calibration keys,
   calibration proposal previews, and durable key-template snapshots now provide
-  the first persisted foundation for usage-derived participant policies, but
-  participant key generation, policy mutation, and Responses support remain
-  future work. See `responses-compatibility.md`.
+  the first persisted foundation for usage-derived participant policies.
+  Single-key creation from a selected template revision is implemented, but
+  bulk participant-key generation, policy mutation, and Responses support
+  remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

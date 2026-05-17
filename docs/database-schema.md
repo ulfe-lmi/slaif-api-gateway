@@ -448,6 +448,9 @@ last_used_at timestamptz null
 last_quota_reset_at timestamptz null
 quota_reset_count integer not null default 0
 
+template_id UUID null references key_templates(id) on delete set null
+template_revision_id UUID null references key_template_revisions(id) on delete set null
+
 created_at timestamptz not null
 updated_at timestamptz not null
 revoked_at timestamptz null
@@ -473,6 +476,8 @@ index(owner_id)
 index(cohort_id)
 index(status)
 index(valid_until)
+index(template_id)
+index(template_revision_id)
 check(status in ('active', 'suspended', 'revoked'))
 check(cost_used_eur >= 0)
 check(cost_reserved_eur >= 0)
@@ -537,6 +542,12 @@ Trusted calibration key rules:
   keys, gateway plaintext keys, encrypted payloads, nonces, cookies, CSRF
   tokens, session tokens, password hashes, email bodies, or raw
   chain-of-thought.
+- Keys created from templates are normal `standard` keys. They record the
+  selected template and immutable template revision, inherit supported policy
+  and limits at creation time, and are not changed by later template edits.
+- Template creation and key creation are separate audited workflows. Creating
+  one key from a template must not mutate the template revision or any existing
+  gateway keys.
 
 Quota rule:
 

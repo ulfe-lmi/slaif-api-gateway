@@ -12,16 +12,20 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from slaif_gateway.config import Settings
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.services.calibration_summary_service import (
     CalibrationObservedSummary,
     CalibrationPolicyProposal,
     CalibrationPreviewResult,
 )
+from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.key_template_service import KeyTemplateService
+from slaif_gateway.utils.secrets import generate_secret_key
 
 PROMPT_TEXT = "prompt text must not persist"
 COMPLETION_TEXT = "completion text must not persist"
@@ -42,17 +46,31 @@ def _key_template_indexes(sync_connection) -> set[str]:
     return {index["name"] for index in inspect(sync_connection).get_indexes("key_templates")}
 
 
+def _gateway_key_columns(sync_connection) -> set[str]:
+    return {column["name"] for column in inspect(sync_connection).get_columns("gateway_keys")}
+
+
+def _gateway_key_indexes(sync_connection) -> set[str]:
+    return {index["name"] for index in inspect(sync_connection).get_indexes("gateway_keys")}
+
+
 @pytest.mark.asyncio
 async def test_migration_creates_key_template_tables_and_indexes(migrated_engine) -> None:
     async with migrated_engine.connect() as connection:
         template_columns = await connection.run_sync(_key_template_columns)
         revision_columns = await connection.run_sync(_key_template_revision_columns)
+        gateway_key_columns = await connection.run_sync(_gateway_key_columns)
         indexes = await connection.run_sync(_key_template_indexes)
+        gateway_key_indexes = await connection.run_sync(_gateway_key_indexes)
 
     assert "current_revision_id" in template_columns
     assert "template_snapshot" in revision_columns
     assert "hosted_capabilities_requiring_review" in revision_columns
     assert "uq_key_templates_name_lower" in indexes
+    assert "template_id" in gateway_key_columns
+    assert "template_revision_id" in gateway_key_columns
+    assert "ix_gateway_keys_template_id" in gateway_key_indexes
+    assert "ix_gateway_keys_template_revision_id" in gateway_key_indexes
 
 
 @pytest.mark.asyncio
@@ -145,6 +163,62 @@ async def test_service_creates_audit_and_safe_snapshot(async_test_session: Async
     assert SECRET_VALUE not in payload
 
 
+@pytest.mark.asyncio
+async def test_service_creates_standard_key_from_template_revision(async_test_session: AsyncSession) -> None:
+    source_key = await _create_gateway_key(async_test_session)
+    owner = await OwnersRepository(async_test_session).create_owner(
+        name="Participant",
+        surname="Key",
+        email=f"participant-{uuid.uuid4()}@example.test",
+    )
+    template_service = KeyTemplateService(
+        key_templates_repository=KeyTemplatesRepository(async_test_session),
+        audit_repository=AuditRepository(async_test_session),
+    )
+    template_result = await template_service.create_from_calibration_proposal(
+        preview=_preview(source_key.id, hosted_review=()),
+        name=f"Creatable template {uuid.uuid4()}",
+        reason="Reviewed calibration proposal",
+        confirm_create_template=True,
+        validity_days_default=7,
+    )
+    key_service = KeyService(
+        settings=Settings(
+            APP_ENV="test",
+            TOKEN_HMAC_SECRET="hmac-secret-for-template-key-tests",
+            ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+        ),
+        gateway_keys_repository=GatewayKeysRepository(async_test_session),
+        one_time_secrets_repository=OneTimeSecretsRepository(async_test_session),
+        audit_repository=AuditRepository(async_test_session),
+    )
+    template_key_service = KeyTemplateService(
+        key_templates_repository=KeyTemplatesRepository(async_test_session),
+        audit_repository=AuditRepository(async_test_session),
+        key_service=key_service,
+    )
+
+    created = await template_key_service.create_key_from_revision(
+        template_revision_id=template_result.revision.id,
+        owner_id=owner.id,
+        reason="Create one participant key",
+        confirm_create_key_from_template=True,
+    )
+    key = await async_test_session.get(type(source_key), created.created_key.gateway_key_id)
+
+    assert key is not None
+    assert key.key_purpose == "standard"
+    assert key.capability_policy_mode == "standard"
+    assert key.template_id == template_result.template.id
+    assert key.template_revision_id == template_result.revision.id
+    assert key.allowed_endpoints == ["/v1/chat/completions"]
+    assert key.allowed_models == ["gpt-4.1-mini"]
+    assert key.request_limit_total == template_result.revision.request_limit_total
+    assert key.token_limit_total == template_result.revision.token_limit_total
+    assert key.metadata_json["allowed_providers"] == ["openai"]
+    assert created.audit_log.action == "gateway_key.created_from_template"
+
+
 async def _create_gateway_key(async_test_session: AsyncSession):
     owner = await OwnersRepository(async_test_session).create_owner(
         name="Template",
@@ -166,7 +240,11 @@ async def _create_gateway_key(async_test_session: AsyncSession):
     )
 
 
-def _preview(key_id: uuid.UUID) -> CalibrationPreviewResult:
+def _preview(
+    key_id: uuid.UUID,
+    *,
+    hosted_review: tuple[str, ...] = ("web_search_options",),
+) -> CalibrationPreviewResult:
     now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     summary = CalibrationObservedSummary(
         gateway_key_id=key_id,
@@ -213,7 +291,7 @@ def _preview(key_id: uuid.UUID) -> CalibrationPreviewResult:
         proposed_allowed_models=("gpt-4.1-mini",),
         proposed_allowed_providers=("openai",),
         proposed_allowed_hosted_capabilities=(),
-        hosted_capabilities_requiring_review=("web_search_options",),
+        hosted_capabilities_requiring_review=hosted_review,
         proposed_request_limit_total=6,
         proposed_token_limit_total=90,
         proposed_input_token_limit_total=30,

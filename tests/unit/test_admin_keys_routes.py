@@ -1,5 +1,6 @@
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -11,6 +12,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.models import AdminSession, AdminUser
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
+from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.calibration_summary_service import (
     CalibrationObservedSummary,
     CalibrationPolicyProposal,
@@ -112,6 +114,8 @@ def _row() -> AdminKeyListRow:
         key_purpose="standard",
         capability_policy_mode="standard",
         calibration_metadata={},
+        template_id=None,
+        template_revision_id=None,
         allowed_models_summary="gpt-test",
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="openai",
@@ -291,6 +295,40 @@ def test_admin_key_detail_shows_trusted_calibration_metadata(monkeypatch) -> Non
     assert "created_from" in response.text
     assert "admin_web" in response.text
     assert f'href="/admin/keys/{key.id}/calibration"' in response.text
+
+
+def test_admin_key_detail_shows_template_provenance(monkeypatch) -> None:
+    key = AdminKeyDetail(
+        **{
+            **asdict(_row()),
+            "template_id": uuid.uuid4(),
+            "template_revision_id": uuid.uuid4(),
+        },
+        revoked_at=None,
+        revoked_reason=None,
+        created_by_admin_user_id=uuid.uuid4(),
+        last_used_at=None,
+        last_quota_reset_at=None,
+        quota_reset_count=0,
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/keys/{key.id}")
+
+    assert response.status_code == 200
+    assert "Template Provenance" in response.text
+    assert str(key.template_id) in response.text
+    assert str(key.template_revision_id) in response.text
+    assert "normal standard gateway key" in response.text
 
 
 def test_standard_key_detail_does_not_offer_calibration_preview(monkeypatch) -> None:
@@ -618,11 +656,314 @@ def test_template_detail_page_shows_safe_metadata(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert "Workshop template" in response.text
-    assert "Participant Keys Are Future Work" in response.text
+    assert "Single-Key Creation Only" in response.text
     assert "gpt-4.1-mini" in response.text
     assert "web_search_options" in response.text
     assert "prompt text" not in response.text
     assert "sk-live" not in response.text
+
+
+def test_template_detail_page_shows_create_one_key_form(monkeypatch) -> None:
+    template_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    revision = SimpleNamespace(
+        id=revision_id,
+        revision_number=1,
+        source_type="calibration_proposal",
+        source_calibration_gateway_key_id=uuid.uuid4(),
+        source_time_window_start=None,
+        source_time_window_end=None,
+        source_multiplier=Decimal("2"),
+        created_audit_log_id=uuid.uuid4(),
+        allowed_endpoints=["/v1/chat/completions"],
+        allowed_models=["gpt-4.1-mini"],
+        allowed_providers=["openai"],
+        allowed_hosted_capabilities=[],
+        hosted_capabilities_requiring_review=[],
+        request_limit_total=2,
+        token_limit_total=22,
+        input_token_limit_total=None,
+        output_token_limit_total=None,
+        reasoning_token_limit_total=None,
+        cost_limit_eur=Decimal("0.002000000"),
+        max_input_tokens_per_request=None,
+        max_output_tokens_per_request=None,
+        max_total_tokens_per_request=None,
+        max_single_request_cost_eur=None,
+        rate_limit_policy={},
+        validity_days_default=7,
+        email_delivery_mode_default="none",
+        template_snapshot={},
+    )
+    template = SimpleNamespace(
+        id=template_id,
+        name="Workshop template",
+        description=None,
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        current_revision_id=revision_id,
+        revisions=[revision],
+    )
+    owner = SimpleNamespace(
+        id=owner_id,
+        display_name="Ada Lovelace",
+        email="ada@example.org",
+        institution_name=None,
+    )
+
+    async def get_template_for_admin_detail(self, parsed_template_id):
+        return template
+
+    async def load_options(request):
+        return {"owners": [owner], "cohorts": []}
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.key_templates.KeyTemplatesRepository.get_template_for_admin_detail",
+        get_template_for_admin_detail,
+    )
+    monkeypatch.setattr("slaif_gateway.api.admin._load_key_create_form_options_or_empty", load_options)
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(f"/admin/templates/{template_id}")
+
+    assert response.status_code == 200
+    assert "Create One Key From This Template Revision" in response.text
+    assert f'action="/admin/templates/{template_id}/revisions/{revision_id}/create-key"' in response.text
+    assert 'name="owner_id"' in response.text
+    assert str(owner_id) in response.text
+    assert 'name="confirm_create_key_from_template"' in response.text
+    assert "Bulk creation from templates is future work" in response.text
+
+
+def test_create_key_from_template_requires_csrf(monkeypatch) -> None:
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(f"/admin/templates/{uuid.uuid4()}/revisions/{uuid.uuid4()}/create-key")
+
+    assert response.status_code in {400, 403}
+
+
+def test_create_key_from_template_creates_one_key_result(monkeypatch) -> None:
+    template_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    gateway_key_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    revision = SimpleNamespace(
+        id=revision_id,
+        revision_number=1,
+        allowed_models=["gpt-4.1-mini"],
+        allowed_endpoints=["/v1/chat/completions"],
+        allowed_providers=["openai"],
+        allowed_hosted_capabilities=[],
+        hosted_capabilities_requiring_review=[],
+        request_limit_total=2,
+        token_limit_total=22,
+        cost_limit_eur=Decimal("0.002000000"),
+        rate_limit_policy={},
+        validity_days_default=7,
+        email_delivery_mode_default="none",
+    )
+    template = SimpleNamespace(
+        id=template_id,
+        name="Workshop template",
+        description=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+        current_revision_id=revision_id,
+        revisions=[revision],
+    )
+    owner = SimpleNamespace(
+        id=owner_id,
+        name="Ada",
+        surname="Lovelace",
+        email="ada@example.org",
+    )
+
+    async def load_template(request, parsed_template_id):
+        assert parsed_template_id == template_id
+        return template
+
+    async def load_options(request):
+        return {"owners": [], "cohorts": []}
+
+    class FakeOwners:
+        async def get_owner_by_id(self, parsed_owner_id):
+            assert parsed_owner_id == owner_id
+            return owner
+
+    class FakeCohorts:
+        async def get_cohort_by_id(self, parsed_cohort_id):
+            return None
+
+    class FakeTemplateService:
+        async def create_key_from_revision(self, **kwargs):
+            assert kwargs["template_revision_id"] == revision_id
+            assert kwargs["owner_id"] == owner_id
+            assert kwargs["reason"] == "Reviewed"
+            assert kwargs["confirm_create_key_from_template"] is True
+            created = CreatedGatewayKey(
+                gateway_key_id=gateway_key_id,
+                owner_id=owner_id,
+                public_key_id="templated",
+                display_prefix="sk-slaif-templated",
+                plaintext_key="sk-slaif-templated.once-only",
+                one_time_secret_id=uuid.uuid4(),
+                valid_from=now,
+                valid_until=now + timedelta(days=7),
+                key_purpose="standard",
+                capability_policy_mode="standard",
+                template_id=template_id,
+                template_revision_id=revision_id,
+            )
+            return SimpleNamespace(
+                created_key=created,
+                template=template,
+                revision=revision,
+                audit_log=SimpleNamespace(id=uuid.uuid4()),
+            )
+
+    class FakeEmailDelivery:
+        pass
+
+    @asynccontextmanager
+    async def fake_runtime(request):
+        yield FakeOwners(), FakeCohorts(), FakeTemplateService(), FakeEmailDelivery()
+
+    async def fake_email_delivery(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("slaif_gateway.api.admin._load_template_for_render", load_template)
+    monkeypatch.setattr("slaif_gateway.api.admin._load_key_create_form_options_or_empty", load_options)
+    monkeypatch.setattr("slaif_gateway.api.admin._admin_template_key_creation_runtime_scope", fake_runtime)
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._handle_admin_key_email_delivery_in_transaction",
+        fake_email_delivery,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/templates/{template_id}/revisions/{revision_id}/create-key",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "7",
+            "email_delivery_mode": "none",
+            "confirm_create_key_from_template": "true",
+            "reason": "Reviewed",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Gateway Key Created" in response.text
+    assert "sk-slaif-templated.once-only" in response.text
+    assert "Created from immutable key template revision" in response.text
+    assert str(template_id) in response.text
+    assert str(revision_id) in response.text
+    assert "token_hash" not in response.text
+    assert "encrypted_payload" not in response.text
+    assert "nonce" not in response.text
+
+
+def test_create_key_from_template_safe_error_for_hosted_review(monkeypatch) -> None:
+    template_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    revision = SimpleNamespace(
+        id=revision_id,
+        revision_number=1,
+        source_type="calibration_proposal",
+        source_calibration_gateway_key_id=None,
+        source_time_window_start=None,
+        source_time_window_end=None,
+        source_multiplier=None,
+        created_audit_log_id=None,
+        allowed_endpoints=["/v1/chat/completions"],
+        allowed_models=["gpt-4.1-mini"],
+        allowed_providers=["openai"],
+        allowed_hosted_capabilities=[],
+        hosted_capabilities_requiring_review=["web_search_options"],
+        request_limit_total=2,
+        token_limit_total=22,
+        input_token_limit_total=None,
+        output_token_limit_total=None,
+        reasoning_token_limit_total=None,
+        cost_limit_eur=None,
+        max_total_tokens_per_request=None,
+        max_single_request_cost_eur=None,
+        rate_limit_policy={},
+        validity_days_default=7,
+        email_delivery_mode_default="none",
+        template_snapshot={},
+    )
+    template = SimpleNamespace(
+        id=template_id,
+        name="Hosted review template",
+        description=None,
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        current_revision_id=revision_id,
+        revisions=[revision],
+    )
+
+    async def load_template(request, parsed_template_id):
+        return template
+
+    async def load_options(request):
+        return {"owners": [], "cohorts": []}
+
+    @asynccontextmanager
+    async def fake_runtime(request):
+        class FakeOwners:
+            async def get_owner_by_id(self, parsed_owner_id):
+                return SimpleNamespace(id=parsed_owner_id)
+
+        class FakeCohorts:
+            pass
+
+        class FakeTemplateService:
+            async def create_key_from_revision(self, **kwargs):
+                from slaif_gateway.services.key_template_service import KeyTemplateError
+
+                raise KeyTemplateError("This template contains hosted capabilities that require review.")
+
+        yield FakeOwners(), FakeCohorts(), FakeTemplateService(), object()
+
+    monkeypatch.setattr("slaif_gateway.api.admin._load_template_for_render", load_template)
+    monkeypatch.setattr("slaif_gateway.api.admin._load_key_create_form_options_or_empty", load_options)
+    monkeypatch.setattr("slaif_gateway.api.admin._admin_template_key_creation_runtime_scope", fake_runtime)
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        lambda self, admin_session, csrf_token: csrf_token == "dashboard-csrf",
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/templates/{template_id}/revisions/{revision_id}/create-key",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "confirm_create_key_from_template": "true",
+            "reason": "Reviewed",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "hosted capabilities" in response.text
+    assert "sk-provider-secret-placeholder" not in response.text
+    assert "token_hash" not in response.text
 
 
 def _calibration_preview(gateway_key_id: uuid.UUID) -> CalibrationPreviewResult:
