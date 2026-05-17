@@ -17,6 +17,10 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 
 
 class FakeSession:
@@ -27,7 +31,11 @@ class FakeSession:
         self.commit_calls += 1
 
 
-def _auth() -> AuthenticatedGatewayKey:
+def _auth(
+    *,
+    key_purpose: str = "standard",
+    capability_policy_mode: str = "standard",
+) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
     return AuthenticatedGatewayKey(
         gateway_key_id=uuid.uuid4(),
@@ -46,6 +54,8 @@ def _auth() -> AuthenticatedGatewayKey:
         token_limit_total=None,
         request_limit_total=None,
         rate_limit_policy={},
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
     )
 
 
@@ -102,6 +112,8 @@ def _wire_pipeline(
     resolved_model: str = "gpt-4.1-mini",
     provider_base_url: str | None = None,
     provider_api_key_env_var: str | None = None,
+    authenticated_key: AuthenticatedGatewayKey | None = None,
+    expected_requested_model: str = "classroom-cheap",
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as main_module
@@ -112,7 +124,7 @@ def _wire_pipeline(
         "finalize_calls": [],
         "provider_responses": [],
     }
-    auth = _auth()
+    auth = authenticated_key or _auth()
     route_result = _route(
         provider=provider,
         resolved_model=resolved_model,
@@ -129,7 +141,7 @@ def _wire_pipeline(
 
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (self, authenticated_key)
-        assert requested_model == "classroom-cheap"
+        assert requested_model == expected_requested_model
         return route_result
 
     async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
@@ -354,6 +366,50 @@ def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) 
     upstream_body = json.loads(upstream_request.content)
     assert upstream_body["model"] == "openai/gpt-4.1-mini"
     assert state["finalize_calls"]
+
+
+def test_trusted_calibration_hosted_tool_request_is_forwarded(monkeypatch, respx_mock) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-5-search-api",
+        authenticated_key=_auth(
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        ),
+        expected_requested_model="gpt-5-search-api",
+    )
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_search",
+                "object": "chat.completion",
+                "model": "gpt-5-search-api",
+                "choices": [],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            },
+        )
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            **_chat_request(),
+            "model": "gpt-5-search-api",
+            "web_search_options": {"search_context_size": "low"},
+            "tools": [{"type": "web_search_preview"}],
+        },
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    upstream_body = json.loads(route.calls[0].request.content)
+    assert upstream_body["web_search_options"] == {"search_context_size": "low"}
+    assert upstream_body["tools"] == [{"type": "web_search_preview"}]
 
 
 def test_route_provider_config_controls_adapter_base_url_and_key_env_var(

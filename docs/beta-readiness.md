@@ -120,6 +120,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   fields when available. They do not store prompts, completions, messages, raw
   bodies, tool schemas/arguments/results, secrets, session tokens, email
   bodies, or raw chain-of-thought, and they are not invoice-grade billing truth.
+- Trusted calibration keys are available for trusted organizers/admins as real,
+  short-lived, request-limited gateway keys that use normal auth, routing,
+  accounting, profiling, and audit while applying broad Chat Completions
+  discovery policy. They are not participant keys.
 - Provider keys are referenced by environment variable names and are not stored
   or displayed by dashboard metadata forms.
 - One-time plaintext gateway keys are only shown on explicit no-cache
@@ -137,10 +141,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Responses API is not implemented in RC1. RC2 is planned to focus on limited
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. Safe Chat Completions usage profiling now provides the first
-  persisted foundation for planned calibration keys and usage-derived key
-  templates, but template/recommendation UI and Responses support remain future
-  work. See `responses-compatibility.md`.
+  estimates. Safe Chat Completions usage profiling and trusted calibration keys
+  now provide the first persisted foundation for usage-derived key templates,
+  but template/recommendation UI and Responses support remain future work. See
+  `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

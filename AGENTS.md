@@ -413,14 +413,26 @@ Key templates:
 
 #### Usage-derived quota recommendations / calibration keys
 
-SLAIF should support an operator workflow where a semi-trusted organizer receives
-a lenient calibration key, runs the planned workflow, and the admin derives
-stricter participant keys from observed usage.
+SLAIF supports trusted calibration keys as real gateway-issued keys with a
+short-lived, low-request-count broad discovery policy for current implemented
+endpoints. They run through normal authentication, provider-secret isolation,
+route resolution, PostgreSQL reservation/finalization, usage ledger, safe usage
+profiling, and audit behavior. They are only for trusted organizers/admins, not
+participants, and they do not bypass content-storage prohibitions.
+
+The remaining operator workflow is to derive strict participant policies and
+templates from observed calibration usage.
 
 Rules:
 
 - Usage-derived recommendations are advisory until an admin confirms a template
   or key creation.
+- Trusted calibration keys may discover hosted/provider-side capability needs
+  for routed Chat Completions models, but external MCP/connectors,
+  provider-side authorization, connector IDs, server URLs, approval flows,
+  background/provider-state lifecycle features, and unsupported endpoints remain
+  denied by default.
+- Participant keys must use explicit endpoint/model/provider/capability policy.
 - The gateway must record safe detailed usage needed for recommendations:
   - endpoint path
   - provider
@@ -2188,8 +2200,8 @@ foundation for the current RC-beta:
    controls, bounded-overrun cost estimates, unsupported stateful/background
    field rejection, and provider/accounting/dashboard tests.
 2. Versioned key templates and template-derived bulk key workflows.
-3. Calibration keys and usage-derived quota or template recommendations built
-   from the existing safe usage-profile rows.
+3. Usage-derived quota or template recommendations built from trusted
+   calibration keys and the existing safe usage-profile rows.
 4. Pricing catalog and fetch-preview workflows, including OpenRouter metadata
    proposals and curated/manual OpenAI pricing imports with confirmation and
    audit before production use.

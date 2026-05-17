@@ -29,7 +29,12 @@ class ChatCompletionRequestPolicy:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def apply(self, body: Mapping[str, Any]) -> ChatCompletionPolicyResult:
+    def apply(
+        self,
+        body: Mapping[str, Any],
+        *,
+        capability_policy_mode: str = "standard",
+    ) -> ChatCompletionPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         self._validate_choice_count(effective_body.get("n"))
         messages = self._validate_messages(effective_body.get("messages"))
@@ -41,6 +46,9 @@ class ChatCompletionRequestPolicy:
         enforce_chat_completion_capability_policy(
             effective_body,
             requested_model=str(effective_body.get("model") or ""),
+            capability_policy_mode=capability_policy_mode,
+            allow_unknown_hosted_tools=self._settings.TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS,
+            allow_external_authority=self._settings.TRUSTED_CALIBRATION_ALLOW_EXTERNAL_AUTHORITY,
         )
 
         try:

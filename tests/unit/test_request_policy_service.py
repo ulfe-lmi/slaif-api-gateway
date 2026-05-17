@@ -18,6 +18,7 @@ from slaif_gateway.services.policy_errors import (
     OutputTokenLimitExceededError,
 )
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
+from slaif_gateway.services.key_modes import CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
 
 
 def _settings(**overrides) -> Settings:
@@ -471,6 +472,103 @@ def test_provider_side_tool_markers_are_rejected_at_tool_object_level(marker: st
 
     assert exc_info.value.error_code == "mcp_connectors_not_allowed"
     assert exc_info.value.param == f"tools[0].{marker}"
+
+
+def test_trusted_calibration_policy_allows_hosted_web_search_markers() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-5-search-api",
+            "messages": [{"role": "user", "content": "hi"}],
+            "web_search_options": {"search_context_size": "low"},
+            "tools": [{"type": "web_search_preview"}],
+        },
+        capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    )
+
+    assert result.effective_body["model"] == "gpt-5-search-api"
+
+
+def test_trusted_calibration_policy_allows_unknown_hosted_tool_when_enabled() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS=True,
+        )
+    )
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "vendor_discovery_tool"}],
+        },
+        capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    )
+
+    assert result.effective_body["tools"][0]["type"] == "vendor_discovery_tool"
+
+
+def test_trusted_calibration_policy_rejects_unknown_hosted_tool_when_disabled() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS=False,
+        )
+    )
+
+    with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "vendor_discovery_tool"}],
+            },
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    assert exc_info.value.error_code == "unknown_tool_type_not_allowed"
+
+
+@pytest.mark.parametrize("marker", ["server_url", "connector_id", "authorization", "require_approval"])
+def test_trusted_calibration_policy_still_rejects_external_authority_markers(
+    marker: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "web_search", marker: "configured"}],
+            },
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    assert exc_info.value.error_code == "mcp_connectors_not_allowed"
+
+
+def test_trusted_calibration_policy_still_rejects_mcp_and_background_state() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    for request_overrides, expected_code in [
+        ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed"),
+        ({"background": True}, "background_not_allowed"),
+        ({"store": True}, "background_not_allowed"),
+        ({"previous_response_id": "resp_123"}, "background_not_allowed"),
+    ]:
+        with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+            policy.apply(
+                {
+                    "model": "gpt-4.1-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    **request_overrides,
+                },
+                capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+            )
+        assert exc_info.value.error_code == expected_code
 
 
 def test_choice_count_omitted_is_allowed() -> None:

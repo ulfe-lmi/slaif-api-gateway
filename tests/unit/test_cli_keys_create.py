@@ -10,6 +10,10 @@ from typer.testing import CliRunner
 from slaif_gateway.cli import keys as keys_cli
 from slaif_gateway.cli.main import app
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 
 runner = CliRunner()
 
@@ -238,6 +242,122 @@ def test_keys_create_rejects_conflicting_secret_outputs(monkeypatch, tmp_path) -
     assert result.exit_code != 0
     assert called is False
     assert PLAINTEXT_KEY not in result.stdout
+
+
+def test_keys_create_trusted_calibration_requires_confirmation(monkeypatch) -> None:
+    called = False
+
+    async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        nonlocal called
+        called = True
+        return _created_result()
+
+    monkeypatch.setattr(keys_cli, "_create_gateway_key", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "2",
+            "--request-limit-total",
+            "5",
+            "--trusted-calibration",
+            "--reason",
+            "trusted organizer discovery",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert called is False
+    assert "trusted calibration" in result.stderr.lower() or "trusted calibration" in result.stdout.lower()
+
+
+def test_keys_create_trusted_calibration_builds_payload_and_warns(monkeypatch) -> None:
+    seen: dict[str, CreateGatewayKeyInput] = {}
+
+    async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        seen["payload"] = payload
+        return CreatedGatewayKey(
+            gateway_key_id=GATEWAY_KEY_ID,
+            owner_id=OWNER_ID,
+            public_key_id="public",
+            display_prefix="sk-slaif-public",
+            plaintext_key=PLAINTEXT_KEY,
+            one_time_secret_id=ONE_TIME_SECRET_ID,
+            valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+            valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    monkeypatch.setattr(keys_cli, "_create_gateway_key", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "2",
+            "--request-limit-total",
+            "5",
+            "--trusted-calibration",
+            "--confirm-trusted-calibration",
+            "--reason",
+            "trusted organizer discovery",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Trusted calibration key" in result.stderr
+    assert result.stdout.count(PLAINTEXT_KEY) == 1
+    payload = seen["payload"]
+    assert payload.key_purpose == KEY_PURPOSE_TRUSTED_CALIBRATION
+    assert payload.capability_policy_mode == CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+    assert payload.confirm_trusted_calibration is True
+    assert payload.request_limit_total == 5
+    assert payload.calibration_metadata == {"creation_channel": "cli"}
+
+
+def test_keys_create_trusted_calibration_rejects_send_now_email(monkeypatch) -> None:
+    called = False
+
+    async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        nonlocal called
+        called = True
+        return _created_result()
+
+    monkeypatch.setattr(keys_cli, "_create_gateway_key", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "2",
+            "--request-limit-total",
+            "5",
+            "--trusted-calibration",
+            "--confirm-trusted-calibration",
+            "--email-delivery",
+            "send-now",
+            "--reason",
+            "trusted organizer discovery",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert called is False
+    assert "email-delivery none or pending" in result.stderr
 
 
 def test_keys_create_rejects_existing_secret_output_file_before_service(monkeypatch, tmp_path) -> None:

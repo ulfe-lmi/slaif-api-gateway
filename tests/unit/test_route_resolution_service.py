@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import (
     ModelNotAllowedForKeyError,
@@ -56,6 +60,8 @@ def _make_key(
     allow_all_models: bool = True,
     allowed_models: tuple[str, ...] = (),
     allowed_providers: tuple[str, ...] | None = None,
+    key_purpose: str = "standard",
+    capability_policy_mode: str = "standard",
 ) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
     return AuthenticatedGatewayKey(
@@ -74,6 +80,8 @@ def _make_key(
         cost_limit_eur=None,
         token_limit_total=None,
         request_limit_total=None,
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
         rate_limit_policy={
             "requests_per_minute": None,
             "tokens_per_minute": None,
@@ -177,6 +185,27 @@ async def test_glob_route_resolves() -> None:
     result = await service.resolve_model("anthropic/claude-3.7-sonnet", _make_key())
 
     assert result.route_match_type == "glob"
+
+
+@pytest.mark.asyncio
+async def test_trusted_calibration_key_bypasses_model_and_provider_allowlists() -> None:
+    service = RouteResolutionService(
+        model_routes_repository=FakeModelRoutesRepository([_route("gpt-5-search-api")]),
+        provider_configs_repository=FakeProviderConfigsRepository([_provider("openai")]),
+    )
+
+    result = await service.resolve_model(
+        "gpt-5-search-api",
+        _make_key(
+            allow_all_models=False,
+            allowed_models=("participant-model",),
+            allowed_providers=("openrouter",),
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        ),
+    )
+
+    assert result.provider == "openai"
 
 
 @pytest.mark.asyncio

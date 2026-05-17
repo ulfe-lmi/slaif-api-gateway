@@ -39,8 +39,19 @@ from slaif_gateway.services.key_errors import (
     InvalidGatewayKeyUsageResetError,
     InvalidGatewayKeyValidityError,
 )
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_STANDARD,
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    CAPABILITY_POLICY_MODE_VALUES,
+    KEY_PURPOSE_STANDARD,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+    KEY_PURPOSE_VALUES,
+    default_capability_policy_mode_for_purpose,
+    is_trusted_calibration_key,
+)
 from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy, validate_gateway_key_policy
 from slaif_gateway.utils.crypto import generate_gateway_key, hmac_sha256_token
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.secrets import encrypt_secret
 
 
@@ -79,12 +90,38 @@ class KeyService:
             secret=active_hmac_secret,
         )
 
+        key_purpose, capability_policy_mode = self._validate_key_purpose_and_policy_mode(
+            key_purpose=payload.key_purpose,
+            capability_policy_mode=payload.capability_policy_mode,
+        )
+        self._validate_trusted_calibration_create_policy(
+            key_purpose=key_purpose,
+            capability_policy_mode=capability_policy_mode,
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            request_limit_total=payload.request_limit_total,
+            confirmed=payload.confirm_trusted_calibration,
+            reason=payload.note,
+        )
         rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
+        if is_trusted_calibration_key(
+            key_purpose=key_purpose,
+            capability_policy_mode=capability_policy_mode,
+        ):
+            allowed_models = []
+            allowed_endpoints = []
+            allow_all_models = True
+            allow_all_endpoints = True
+        else:
+            allowed_models = payload.allowed_models
+            allowed_endpoints = payload.allowed_endpoints
+            allow_all_models = payload.allow_all_models
+            allow_all_endpoints = payload.allow_all_endpoints
         request_policy = await self._validate_request_policy(
-            allowed_models=payload.allowed_models,
-            allowed_endpoints=payload.allowed_endpoints,
-            allow_all_models=payload.allow_all_models,
-            allow_all_endpoints=payload.allow_all_endpoints,
+            allowed_models=allowed_models,
+            allowed_endpoints=allowed_endpoints,
+            allow_all_models=allow_all_models,
+            allow_all_endpoints=allow_all_endpoints,
         )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
@@ -103,6 +140,9 @@ class KeyService:
             allowed_endpoints=request_policy.allowed_endpoints,
             allow_all_models=request_policy.allow_all_models,
             allow_all_endpoints=request_policy.allow_all_endpoints,
+            key_purpose=key_purpose,
+            capability_policy_mode=capability_policy_mode,
+            calibration_metadata=self._safe_calibration_metadata(payload.calibration_metadata),
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
@@ -161,6 +201,11 @@ class KeyService:
                 "allowed_endpoints": request_policy.allowed_endpoints,
                 "allow_all_models": request_policy.allow_all_models,
                 "allow_all_endpoints": request_policy.allow_all_endpoints,
+                "key_purpose": key_purpose,
+                "capability_policy_mode": capability_policy_mode,
+                "calibration_metadata": self._safe_calibration_metadata(
+                    payload.calibration_metadata
+                ),
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
@@ -175,6 +220,8 @@ class KeyService:
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
             rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
+            key_purpose=key_purpose,
+            capability_policy_mode=capability_policy_mode,
         )
 
     async def suspend_gateway_key(self, payload: SuspendGatewayKeyInput) -> GatewayKeyManagementResult:
@@ -719,6 +766,91 @@ class KeyService:
             normalized[key] = value
         return normalized
 
+    def _validate_key_purpose_and_policy_mode(
+        self,
+        *,
+        key_purpose: str,
+        capability_policy_mode: str,
+    ) -> tuple[str, str]:
+        purpose = str(key_purpose or KEY_PURPOSE_STANDARD).strip()
+        mode = str(
+            capability_policy_mode
+            or default_capability_policy_mode_for_purpose(purpose)
+        ).strip()
+        if purpose not in KEY_PURPOSE_VALUES:
+            raise InvalidGatewayKeyPolicyError("Unsupported key purpose.", param="key_purpose")
+        if mode not in CAPABILITY_POLICY_MODE_VALUES:
+            raise InvalidGatewayKeyPolicyError(
+                "Unsupported capability policy mode.",
+                param="capability_policy_mode",
+            )
+        if purpose == KEY_PURPOSE_STANDARD and mode != CAPABILITY_POLICY_MODE_STANDARD:
+            raise InvalidGatewayKeyPolicyError(
+                "Standard keys must use standard capability policy mode.",
+                param="capability_policy_mode",
+            )
+        if (
+            purpose == KEY_PURPOSE_TRUSTED_CALIBRATION
+            and mode != CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+        ):
+            raise InvalidGatewayKeyPolicyError(
+                "Trusted calibration keys must use trusted calibration discovery mode.",
+                param="capability_policy_mode",
+            )
+        return purpose, mode
+
+    def _validate_trusted_calibration_create_policy(
+        self,
+        *,
+        key_purpose: str,
+        capability_policy_mode: str,
+        valid_from: datetime,
+        valid_until: datetime,
+        request_limit_total: int | None,
+        confirmed: bool,
+        reason: str | None,
+    ) -> None:
+        if not is_trusted_calibration_key(
+            key_purpose=key_purpose,
+            capability_policy_mode=capability_policy_mode,
+        ):
+            return
+        if not self._settings.CALIBRATION_KEYS_ENABLED:
+            raise InvalidGatewayKeyPolicyError(
+                "Trusted calibration keys are disabled by configuration.",
+                param="key_purpose",
+            )
+        if not confirmed:
+            raise InvalidGatewayKeyPolicyError(
+                "Confirm trusted calibration mode before creating this key.",
+                param="confirm_trusted_calibration",
+            )
+        if not reason or not reason.strip():
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason for trusted calibration key creation.",
+                param="reason",
+            )
+        if request_limit_total is None:
+            raise InvalidGatewayKeyLimitsError(
+                "Trusted calibration keys require request_limit_total.",
+                param="request_limit_total",
+            )
+        if request_limit_total > self._settings.TRUSTED_CALIBRATION_MAX_REQUESTS:
+            raise InvalidGatewayKeyLimitsError(
+                "Trusted calibration request limit exceeds the configured maximum.",
+                param="request_limit_total",
+            )
+        max_validity = timedelta(days=self._settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS)
+        if valid_until - valid_from > max_validity:
+            raise InvalidGatewayKeyValidityError(
+                "Trusted calibration validity exceeds the configured maximum.",
+                param="valid_until",
+            )
+
+    @staticmethod
+    def _safe_calibration_metadata(metadata: dict[str, object] | None) -> dict[str, object]:
+        return sanitize_metadata_mapping(metadata or {}, drop_content_keys=True)
+
     async def _validate_request_policy(
         self,
         *,
@@ -876,6 +1008,8 @@ class KeyService:
             allowed_endpoints=list(gateway_key.allowed_endpoints or []),
             allow_all_models=gateway_key.allow_all_models,
             allow_all_endpoints=gateway_key.allow_all_endpoints,
+            key_purpose=gateway_key.key_purpose,
+            capability_policy_mode=gateway_key.capability_policy_mode,
         )
 
     @staticmethod

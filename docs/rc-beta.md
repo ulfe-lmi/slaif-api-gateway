@@ -95,9 +95,9 @@ migrations automatically.
 - Responses API is not implemented in RC1. RC2 is planned to focus on limited
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. Current Chat Completions usage profiling records safe
-  calibration-foundation metadata, but calibration recommendations, key
-  templates, and Responses support remain future work. See
+  estimates. Current Chat Completions usage profiling and trusted calibration
+  keys provide safe calibration-foundation metadata, but calibration
+  recommendations, key templates, and Responses support remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.

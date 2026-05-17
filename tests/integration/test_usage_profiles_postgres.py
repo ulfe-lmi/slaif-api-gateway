@@ -229,6 +229,73 @@ def test_chat_completions_e2e_creates_usage_profile_without_content(
     assert FAKE_OPENAI_UPSTREAM_KEY not in serialized
 
 
+def test_trusted_calibration_chat_completions_e2e_records_safe_profile_metadata(
+    migrated_postgres_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "gpt-5-search-api"
+    _configure_runtime_environment(monkeypatch, migrated_postgres_url)
+    created = asyncio.run(
+        _create_test_data(
+            migrated_postgres_url,
+            model=model,
+            trusted_calibration=True,
+            owner_label="Trusted Calibration",
+        )
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "chatcmpl-calibration-profile",
+        "object": "chat.completion",
+        "created": 123,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": COMPLETION_TEXT},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+    }
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        router.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=upstream_payload)
+        )
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": PROMPT_TEXT}],
+                    "web_search_options": {"search_context_size": "low"},
+                    "tools": [{"type": "web_search_preview"}],
+                },
+                headers={"Authorization": f"Bearer {created.plaintext_gateway_key}"},
+            )
+
+    assert response.status_code == 200, response.text
+    profile = asyncio.run(_latest_profile(migrated_postgres_url, created.gateway_key_id))
+
+    assert profile is not None
+    assert profile.profile_metadata["key_purpose"] == "trusted_calibration"
+    assert (
+        profile.profile_metadata["capability_policy_mode"]
+        == "trusted_calibration_discovery"
+    )
+    assert "web_search_options" in profile.profile_metadata["observed_hosted_capability_types"]
+    assert "web_search_preview" in profile.profile_metadata["observed_hosted_capability_types"]
+    serialized = json.dumps(profile.profile_metadata, sort_keys=True)
+    assert PROMPT_TEXT not in serialized
+    assert COMPLETION_TEXT not in serialized
+    assert created.plaintext_gateway_key not in serialized
+
+
 async def _latest_profile(database_url: str, gateway_key_id: uuid.UUID) -> UsageProfile | None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+)
 
 SEARCH_SPECIFIC_CHAT_COMPLETIONS_MODELS = frozenset(
     {
@@ -62,6 +65,9 @@ def classify_chat_completion_capabilities(
     payload: Mapping[str, Any],
     *,
     requested_model: str | None = None,
+    capability_policy_mode: str = "standard",
+    allow_unknown_hosted_tools: bool = False,
+    allow_external_authority: bool = False,
 ) -> tuple[ChatCompletionCapabilityFinding, ...]:
     """Return deterministic hosted-tool policy findings without inspecting raw content.
 
@@ -71,8 +77,15 @@ def classify_chat_completion_capabilities(
     execution and are not hosted provider capabilities.
     """
     findings: list[ChatCompletionCapabilityFinding] = []
+    trusted_discovery = (
+        capability_policy_mode == CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+    )
     model = (requested_model if requested_model is not None else payload.get("model"))
-    if isinstance(model, str) and is_search_specific_chat_completion_model(model):
+    if (
+        isinstance(model, str)
+        and is_search_specific_chat_completion_model(model)
+        and not trusted_discovery
+    ):
         findings.append(
             ChatCompletionCapabilityFinding(
                 rejected_capability="hosted_web_search",
@@ -85,7 +98,7 @@ def classify_chat_completion_capabilities(
             )
         )
 
-    if "web_search_options" in payload:
+    if "web_search_options" in payload and not trusted_discovery:
         findings.append(
             ChatCompletionCapabilityFinding(
                 rejected_capability="hosted_web_search",
@@ -104,6 +117,26 @@ def classify_chat_completion_capabilities(
                 rejected_field="background",
                 error_code="background_not_allowed",
                 safe_message="Background provider execution is not enabled by this gateway.",
+            )
+        )
+
+    if payload.get("store") is True:
+        findings.append(
+            ChatCompletionCapabilityFinding(
+                rejected_capability="provider_state",
+                rejected_field="store",
+                error_code="background_not_allowed",
+                safe_message="Provider-side stored state is not enabled by this gateway.",
+            )
+        )
+
+    if "previous_response_id" in payload:
+        findings.append(
+            ChatCompletionCapabilityFinding(
+                rejected_capability="provider_state",
+                rejected_field="previous_response_id",
+                error_code="background_not_allowed",
+                safe_message="Provider-side response state is not enabled by this gateway.",
             )
         )
 
@@ -136,21 +169,24 @@ def classify_chat_completion_capabilities(
                 continue
             marker = _provider_side_marker(tool)
             if marker is not None:
-                findings.append(
-                    ChatCompletionCapabilityFinding(
-                        rejected_capability="mcp_connectors",
-                        rejected_field=f"tools[{index}].{marker}",
-                        error_code="mcp_connectors_not_allowed",
-                        safe_message=(
-                            "Provider-side MCP/connectors are not enabled by this gateway."
-                        ),
+                if not allow_external_authority:
+                    findings.append(
+                        ChatCompletionCapabilityFinding(
+                            rejected_capability="mcp_connectors",
+                            rejected_field=f"tools[{index}].{marker}",
+                            error_code="mcp_connectors_not_allowed",
+                            safe_message=(
+                                "Provider-side MCP/connectors are not enabled by this gateway."
+                            ),
+                        )
                     )
-                )
-                continue
+                    continue
             tool_type = tool.get("type")
             if tool_type == "function":
                 continue
             if tool_type in _DENIED_WEB_SEARCH_TOOL_TYPES:
+                if trusted_discovery:
+                    continue
                 findings.append(
                     ChatCompletionCapabilityFinding(
                         rejected_capability="hosted_web_search",
@@ -175,6 +211,8 @@ def classify_chat_completion_capabilities(
                 )
                 continue
             if tool_type in _DENIED_HOSTED_TOOL_TYPES:
+                if trusted_discovery:
+                    continue
                 findings.append(
                     ChatCompletionCapabilityFinding(
                         rejected_capability=str(tool_type),
@@ -186,23 +224,33 @@ def classify_chat_completion_capabilities(
                     )
                 )
                 continue
+            if trusted_discovery and allow_unknown_hosted_tools:
+                continue
             findings.append(_unknown_tool_type_finding(field))
 
     tool_choice = payload.get("tool_choice")
     if isinstance(tool_choice, Mapping):
         marker = _provider_side_marker(tool_choice)
         if marker is not None:
-            findings.append(
-                ChatCompletionCapabilityFinding(
-                    rejected_capability="mcp_connectors",
-                    rejected_field=f"tool_choice.{marker}",
-                    error_code="mcp_connectors_not_allowed",
-                    safe_message="Provider-side MCP/connectors are not enabled by this gateway.",
+            if not allow_external_authority:
+                findings.append(
+                    ChatCompletionCapabilityFinding(
+                        rejected_capability="mcp_connectors",
+                        rejected_field=f"tool_choice.{marker}",
+                        error_code="mcp_connectors_not_allowed",
+                        safe_message="Provider-side MCP/connectors are not enabled by this gateway.",
+                    )
                 )
-            )
         choice_type = tool_choice.get("type")
         if choice_type is not None and choice_type != "function":
-            findings.append(_tool_choice_finding(choice_type))
+            if choice_type in _MCP_TOOL_TYPES:
+                findings.append(_tool_choice_finding(choice_type))
+            elif not trusted_discovery or (
+                choice_type not in _DENIED_WEB_SEARCH_TOOL_TYPES
+                and choice_type not in _DENIED_HOSTED_TOOL_TYPES
+                and not allow_unknown_hosted_tools
+            ):
+                findings.append(_tool_choice_finding(choice_type))
 
     return tuple(findings)
 
@@ -211,11 +259,63 @@ def enforce_chat_completion_capability_policy(
     payload: Mapping[str, Any],
     *,
     requested_model: str | None = None,
+    capability_policy_mode: str = "standard",
+    allow_unknown_hosted_tools: bool = False,
+    allow_external_authority: bool = False,
 ) -> None:
     """Raise on the first denied Chat Completions hosted-tool capability."""
-    findings = classify_chat_completion_capabilities(payload, requested_model=requested_model)
+    findings = classify_chat_completion_capabilities(
+        payload,
+        requested_model=requested_model,
+        capability_policy_mode=capability_policy_mode,
+        allow_unknown_hosted_tools=allow_unknown_hosted_tools,
+        allow_external_authority=allow_external_authority,
+    )
     if findings:
         raise ChatCompletionCapabilityPolicyError(findings[0])
+
+
+def summarize_chat_completion_hosted_capabilities(
+    payload: Mapping[str, Any],
+    *,
+    requested_model: str | None = None,
+) -> dict[str, object]:
+    """Return safe capability type names observed in an accepted request."""
+    observed: set[str] = set()
+    unknown: set[str] = set()
+    external_authority: set[str] = set()
+    model = requested_model if requested_model is not None else payload.get("model")
+    if isinstance(model, str) and is_search_specific_chat_completion_model(model):
+        observed.add("search_specific_model")
+    if "web_search_options" in payload:
+        observed.add("web_search_options")
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if not isinstance(tool, Mapping):
+                unknown.add("non_object_tool")
+                continue
+            marker = _provider_side_marker(tool)
+            if marker is not None:
+                external_authority.add(marker)
+            tool_type = tool.get("type")
+            if tool_type == "function":
+                continue
+            if isinstance(tool_type, str) and tool_type.strip():
+                normalized = tool_type.strip().lower().replace("-", "_")[:64]
+                if normalized in _DENIED_WEB_SEARCH_TOOL_TYPES or normalized in _DENIED_HOSTED_TOOL_TYPES:
+                    observed.add(normalized)
+                elif normalized in _MCP_TOOL_TYPES:
+                    external_authority.add("mcp")
+                else:
+                    unknown.add(normalized)
+            else:
+                unknown.add("missing_tool_type")
+    return {
+        "observed_hosted_capability_types": sorted(observed),
+        "unknown_hosted_capability_types": sorted(unknown),
+        "denied_external_authority_markers": sorted(external_authority),
+    }
 
 
 def is_search_specific_chat_completion_model(model: str) -> bool:

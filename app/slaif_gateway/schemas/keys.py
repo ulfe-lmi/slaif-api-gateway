@@ -24,6 +24,10 @@ class CreateGatewayKeyInput:
     allowed_endpoints: list[str] = field(default_factory=list)
     allow_all_models: bool = False
     allow_all_endpoints: bool = False
+    key_purpose: str = "standard"
+    capability_policy_mode: str = "standard"
+    calibration_metadata: dict[str, object] = field(default_factory=dict)
+    confirm_trusted_calibration: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
     note: str | None = None
 
@@ -41,6 +45,8 @@ class CreatedGatewayKey:
     valid_from: datetime
     valid_until: datetime
     rate_limit_policy: dict[str, int | None] | None = None
+    key_purpose: str = "standard"
+    capability_policy_mode: str = "standard"
 
 
 @dataclass(slots=True)
@@ -169,6 +175,8 @@ class GatewayKeyManagementResult:
     allowed_endpoints: list[str] | None = None
     allow_all_models: bool | None = None
     allow_all_endpoints: bool | None = None
+    key_purpose: str | None = None
+    capability_policy_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

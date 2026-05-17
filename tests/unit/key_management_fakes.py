@@ -41,6 +41,9 @@ class FakeGatewayKeyRow:
     allowed_models: list[str] = field(default_factory=lambda: ["gpt-test-mini"])
     allow_all_endpoints: bool = False
     allowed_endpoints: list[str] = field(default_factory=lambda: ["/v1/chat/completions"])
+    key_purpose: str = "standard"
+    capability_policy_mode: str = "standard"
+    calibration_metadata: dict[str, object] = field(default_factory=dict)
     last_used_at: datetime | None = field(default_factory=lambda: datetime.now(UTC))
     last_quota_reset_at: datetime | None = None
     quota_reset_count: int = 0
@@ -96,6 +99,9 @@ class FakeGatewayKeysRepository:
             allowed_models=list(kwargs.get("allowed_models") or []),
             allow_all_endpoints=bool(kwargs.get("allow_all_endpoints", False)),
             allowed_endpoints=list(kwargs.get("allowed_endpoints") or []),
+            key_purpose=str(kwargs.get("key_purpose") or "standard"),
+            capability_policy_mode=str(kwargs.get("capability_policy_mode") or "standard"),
+            calibration_metadata=dict(kwargs.get("calibration_metadata") or {}),
             rate_limit_requests_per_minute=kwargs.get("rate_limit_requests_per_minute"),
             rate_limit_tokens_per_minute=kwargs.get("rate_limit_tokens_per_minute"),
             max_concurrent_requests=kwargs.get("max_concurrent_requests"),

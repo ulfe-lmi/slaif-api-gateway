@@ -28,4 +28,4 @@ def test_alembic_has_exactly_one_head_revision_after_fifth_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0007_usage_profiles"]
+    assert heads == ["0008_trusted_calibration_keys"]

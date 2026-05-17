@@ -37,17 +37,21 @@ Planned workflow:
 
 ## Deriving Templates From Calibration-Key Usage
 
-Admins should also be able to derive a template from observed calibration-key
-usage. This supports cases where a trusted organizer, teacher, seminar lead, or
-foreman runs the real workflow first and participant limits are based on actual
-usage rather than a guess.
+Admins should also be able to derive a template from observed trusted
+calibration-key usage. Trusted calibration keys are real gateway keys for
+trusted organizers/admins only; they are short-lived, request-limited, use
+normal gateway auth/routing/accounting/profiling, and may use broad Chat
+Completions discovery policy to observe routed hosted-capability needs. They
+are not safe participant keys.
 
 Current Chat Completions requests persist safe `usage_profiles` rows after
 successful accounting finalization. Those rows provide the first source table
 for future recommendation summaries: endpoint, provider/model, sanitized
 provider host/path, token counts, safe tool counts/function names, and
-provider/SLAIF cost fields when available. Missing provider metrics remain
-unknown/null and the rows are not invoice-grade billing truth.
+provider/SLAIF cost fields when available. For calibration keys, rows may also
+include safe key purpose, policy mode, and observed capability type names.
+Missing provider metrics remain unknown/null and the rows are not invoice-grade
+billing truth.
 
 The recommendation workflow should capture:
 

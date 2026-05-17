@@ -10,11 +10,16 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.usage_profile_service import (
     UsageProfileService,
     build_chat_completion_tool_metadata,
     sanitize_provider_url_parts,
     validate_cost_source,
+)
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
 )
 
 PROMPT_TEXT = "user prompt should not persist"
@@ -240,6 +245,7 @@ def test_profile_insert_failure_is_logged_safely(monkeypatch) -> None:
             usage_ledger_id=usage_ledger_id,
             route=_route(),
             policy_result=policy,
+            authenticated_key=_auth(),
             request=None,
         )
     )
@@ -253,6 +259,33 @@ def test_profile_insert_failure_is_logged_safely(monkeypatch) -> None:
     assert SECRET_VALUE not in serialized
     assert PROMPT_TEXT not in serialized
     assert COMPLETION_TEXT not in serialized
+
+
+def test_calibration_usage_profile_metadata_is_safe() -> None:
+    import slaif_gateway.services.chat_completion_gateway as gateway_module
+
+    metadata = gateway_module._usage_profile_policy_metadata(
+        authenticated_key=_auth(
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        ),
+        effective_body={
+            "model": "gpt-5-search-api",
+            "messages": [{"role": "user", "content": PROMPT_TEXT}],
+            "web_search_options": {"search_context_size": "low"},
+            "tools": [
+                {"type": "web_search_preview"},
+                {"type": "vendor_unknown_tool"},
+            ],
+        },
+    )
+
+    serialized = json.dumps(metadata, sort_keys=True)
+    assert metadata["key_purpose"] == KEY_PURPOSE_TRUSTED_CALIBRATION
+    assert "web_search_options" in metadata["observed_hosted_capability_types"]
+    assert "vendor_unknown_tool" in metadata["unknown_hosted_capability_types"]
+    assert PROMPT_TEXT not in serialized
+    assert SECRET_VALUE not in serialized
 
 
 async def _record(
@@ -285,6 +318,34 @@ def _route() -> RouteResolutionResult:
         route_pattern="classroom-cheap",
         priority=100,
         provider_base_url="https://api.openai.com/v1?ignored=true",
+    )
+
+
+def _auth(
+    *,
+    key_purpose: str = "standard",
+    capability_policy_mode: str = "standard",
+) -> AuthenticatedGatewayKey:
+    now = datetime.now(UTC)
+    return AuthenticatedGatewayKey(
+        gateway_key_id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        cohort_id=None,
+        public_key_id="public",
+        status="active",
+        valid_from=now,
+        valid_until=now,
+        allow_all_models=True,
+        allowed_models=(),
+        allow_all_endpoints=True,
+        allowed_endpoints=(),
+        allowed_providers=None,
+        cost_limit_eur=None,
+        token_limit_total=None,
+        request_limit_total=None,
+        rate_limit_policy={},
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
     )
 
 

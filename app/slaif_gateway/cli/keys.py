@@ -45,6 +45,10 @@ from slaif_gateway.services.email_delivery_service import EmailDeliveryService, 
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.key_errors import GatewayKeyNotFoundError, KeyManagementError
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
@@ -279,6 +283,9 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
         "allow_all_models": gateway_key.allow_all_models,
         "allow_all_endpoints": gateway_key.allow_all_endpoints,
+        "key_purpose": getattr(gateway_key, "key_purpose", "standard"),
+        "capability_policy_mode": getattr(gateway_key, "capability_policy_mode", "standard"),
+        "calibration_metadata": dict(getattr(gateway_key, "calibration_metadata", {}) or {}),
         "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
         "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
@@ -343,6 +350,8 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "allowed_endpoints": result.allowed_endpoints,
         "allow_all_models": result.allow_all_models,
         "allow_all_endpoints": result.allow_all_endpoints,
+        "key_purpose": result.key_purpose,
+        "capability_policy_mode": result.capability_policy_mode,
     }
 
 
@@ -356,6 +365,8 @@ def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = Tr
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
         "rate_limit_policy": result.rate_limit_policy,
+        "key_purpose": result.key_purpose,
+        "capability_policy_mode": result.capability_policy_mode,
     }
     if include_plaintext:
         payload["plaintext_key"] = result.plaintext_key
@@ -530,6 +541,15 @@ def _warn_email_delivery_channel(mode: EmailDeliveryMode) -> None:
             fg=typer.colors.YELLOW,
             err=True,
         )
+
+
+def _warn_trusted_calibration_key() -> None:
+    typer.secho(
+        "Trusted calibration key: broad discovery policy, small request limit, short validity. "
+        "Do not issue to participants.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
 
 
 def _warn_reserved_counter_reset() -> None:
@@ -987,6 +1007,20 @@ def create(
             help="Key email delivery mode: none, pending, send-now, or enqueue",
         ),
     ] = EmailDeliveryMode.none,
+    trusted_calibration: Annotated[
+        bool,
+        typer.Option(
+            "--trusted-calibration/--standard",
+            help="Create a trusted organizer calibration key with broad discovery policy",
+        ),
+    ] = False,
+    confirm_trusted_calibration: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-trusted-calibration",
+            help="Required acknowledgement for trusted calibration keys",
+        ),
+    ] = False,
 ) -> None:
     """Create a gateway key and print the plaintext key once."""
     try:
@@ -996,11 +1030,28 @@ def create(
             secret_output_file=secret_output_file,
             email_delivery_mode=email_delivery,
         )
+        if trusted_calibration and email_delivery not in {
+            EmailDeliveryMode.none,
+            EmailDeliveryMode.pending,
+        }:
+            raise typer.BadParameter(
+                "Trusted calibration keys support only --email-delivery none or pending."
+            )
+        if trusted_calibration and not confirm_trusted_calibration:
+            raise typer.BadParameter(
+                "Trusted calibration keys require --confirm-trusted-calibration."
+            )
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
         return
 
     parsed_valid_from = _parse_datetime(valid_from, field_name="valid_from") or datetime.now(UTC)
+    key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION if trusted_calibration else "standard"
+    capability_policy_mode = (
+        CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+        if trusted_calibration
+        else "standard"
+    )
     payload = CreateGatewayKeyInput(
         owner_id=_parse_uuid(owner_id, field_name="owner_id"),
         cohort_id=_parse_uuid(cohort_id, field_name="cohort_id") if cohort_id else None,
@@ -1017,6 +1068,10 @@ def create(
         allowed_endpoints=list(allowed_endpoints or []),
         allow_all_models=allow_all_models,
         allow_all_endpoints=allow_all_endpoints,
+        key_purpose=key_purpose,
+        capability_policy_mode=capability_policy_mode,
+        calibration_metadata={"creation_channel": "cli"} if trusted_calibration else {},
+        confirm_trusted_calibration=confirm_trusted_calibration,
         rate_limit_policy=_rate_limit_policy_from_options(
             requests_per_minute=rate_limit_requests_per_minute,
             tokens_per_minute=rate_limit_tokens_per_minute,
@@ -1056,6 +1111,8 @@ def create(
         _warn_secret_file(secret_output_file)
     elif show_plaintext or not json_output:
         _warn_plaintext_display()
+    if trusted_calibration:
+        _warn_trusted_calibration_key()
     if email_delivery == EmailDeliveryMode.pending:
         _warn_email_delivery_channel(email_delivery)
 

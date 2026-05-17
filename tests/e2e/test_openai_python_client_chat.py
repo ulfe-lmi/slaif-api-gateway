@@ -83,6 +83,7 @@ async def _create_test_data(
     base_url: str = "https://api.openai.com/v1",
     api_key_env_var: str = "OPENAI_UPSTREAM_API_KEY",
     owner_label: str = "OpenAI",
+    trusted_calibration: bool = False,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -96,6 +97,10 @@ async def _create_test_data(
     from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
     from slaif_gateway.db.repositories.routing import ModelRoutesRepository
     from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+    from slaif_gateway.services.key_modes import (
+        CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        KEY_PURPOSE_TRUSTED_CALIBRATION,
+    )
     from slaif_gateway.services.key_service import KeyService
 
     engine = create_async_engine(database_url, future=True)
@@ -203,11 +208,21 @@ async def _create_test_data(
                     valid_until=now + timedelta(days=1),
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
-                    request_limit_total=100,
+                    request_limit_total=5 if trusted_calibration else 100,
                     allowed_models=[model] if allowed_models is None else allowed_models,
                     allowed_endpoints=[CHAT_COMPLETIONS_ENDPOINT]
                     if allowed_endpoints is None
                     else allowed_endpoints,
+                    key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION
+                    if trusted_calibration
+                    else "standard",
+                    capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+                    if trusted_calibration
+                    else "standard",
+                    calibration_metadata={"workflow": "e2e"}
+                    if trusted_calibration
+                    else {},
+                    confirm_trusted_calibration=trusted_calibration,
                     note=f"{notes_prefix} key",
                 )
             )
