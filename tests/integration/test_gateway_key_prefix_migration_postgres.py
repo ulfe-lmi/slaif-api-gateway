@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 TARGET_REVISION_0004 = "0004_email_secrets_and_background_jobs"
 TARGET_HEAD_0005 = "0005_fix_gateway_key_prefix_default"
-CURRENT_HEAD = "0006_email_delivery_attempt_state"
+CURRENT_HEAD = "0007_usage_profiles"
 
 
 

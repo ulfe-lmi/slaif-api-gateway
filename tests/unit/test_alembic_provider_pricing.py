@@ -30,10 +30,10 @@ def test_third_migration_down_revision_points_to_second_migration() -> None:
     assert 'down_revision = "0002_quota_reservations_and_usage_ledger"' in content
 
 
-def test_alembic_has_exactly_one_head_revision_after_third_migration() -> None:
+def test_alembic_has_exactly_one_head_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
     heads = script.get_heads()
 
-    assert heads == ["0006_email_delivery_attempt_state"]
+    assert heads == ["0007_usage_profiles"]

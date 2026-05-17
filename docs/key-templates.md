@@ -42,6 +42,13 @@ usage. This supports cases where a trusted organizer, teacher, seminar lead, or
 foreman runs the real workflow first and participant limits are based on actual
 usage rather than a guess.
 
+Current Chat Completions requests persist safe `usage_profiles` rows after
+successful accounting finalization. Those rows provide the first source table
+for future recommendation summaries: endpoint, provider/model, sanitized
+provider host/path, token counts, safe tool counts/function names, and
+provider/SLAIF cost fields when available. Missing provider metrics remain
+unknown/null and the rows are not invoice-grade billing truth.
+
 The recommendation workflow should capture:
 
 - source key and source owner;
@@ -105,6 +112,10 @@ preview and audit output. Silent overrides are not acceptable.
 Templates must not contain plaintext gateway keys, provider API keys, SMTP
 passwords, session tokens, token hashes, encrypted payloads, nonces, prompt
 content, completion content, or raw request/response bodies.
+
+Template derivation must also avoid storing messages, tool schemas, tool
+arguments, tool results, raw chain-of-thought, full URLs with query strings or
+fragments, signed URLs, bearer tokens, password hashes, or email bodies.
 
 Template previews should show safe summaries only:
 

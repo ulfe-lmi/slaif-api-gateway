@@ -131,7 +131,13 @@ The workflow is advisory until an admin confirms a template or key creation:
 6. Generate a proposed template with stricter per-key and per-request limits.
 7. Let the admin edit assumptions before creating a template or bulk keys.
 
-SLAIF should record safe operational metadata needed for recommendations:
+SLAIF now records a Chat Completions-first subset of safe operational metadata
+in `usage_profiles` after successful accounting finalization. That table is the
+first persistence foundation for recommendations; it is advisory and not
+invoice-grade billing truth. Future Responses work must extend the same safe
+metadata boundary rather than storing request or response content.
+
+Recommendation workflows need safe operational metadata such as:
 
 - gateway endpoint path;
 - provider and sanitized provider endpoint host/path;
@@ -143,12 +149,12 @@ SLAIF should record safe operational metadata needed for recommendations:
 - provider-reported and gateway-calculated cost fields when available;
 - request counts, per-request maxima, and bounded-overrun assumptions.
 
-SLAIF must not store prompts, completions, raw request bodies, raw response
-bodies, raw tool payloads, raw chain-of-thought, provider keys, plaintext gateway
-keys, encrypted payloads, nonces, password hashes, session tokens, email bodies,
-query strings, URL fragments, credentials, signed URLs, or bearer tokens for this
-workflow. Exact URL storage must be sanitized to gateway endpoints and provider
-host/path only.
+SLAIF must not store prompts, completions, messages, raw request bodies, raw
+response bodies, raw tool payloads, raw chain-of-thought, provider keys,
+plaintext gateway keys, encrypted payloads, nonces, password hashes, session
+tokens, email bodies, query strings, URL fragments, credentials, signed URLs, or
+bearer tokens for this workflow. Exact URL storage must be sanitized to gateway
+endpoints and provider host/path only.
 
 OpenAI exposes an input-token counting endpoint for Responses-compatible
 payloads, including request shapes with tools and schemas. Provider final usage

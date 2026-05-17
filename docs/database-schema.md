@@ -662,7 +662,104 @@ Rules:
 
 ---
 
-## 5.9 `provider_configs`
+## 5.9 `usage_profiles`
+
+Safe per-request usage-profile metadata for current Chat Completions requests.
+Rows are advisory RC2 foundation data for future calibration-key, key-template,
+and quota-recommendation workflows. They are populated after successful
+`usage_ledger` accounting finalization when enough safe metadata is available.
+They are not invoice-grade billing truth and must not replace the authoritative
+quota/accounting counters.
+
+Columns:
+
+```text
+id UUID primary key
+usage_ledger_id UUID not null references usage_ledger(id) on delete restrict
+
+gateway_key_id UUID not null references gateway_keys(id) on delete restrict
+owner_id UUID null references owners(id) on delete set null
+institution_id UUID null references institutions(id) on delete set null
+cohort_id UUID null references cohorts(id) on delete set null
+
+endpoint_path text not null
+provider text not null
+requested_model text null
+resolved_upstream_model text null
+provider_host text null
+provider_endpoint_path text null
+
+input_tokens bigint not null
+output_tokens bigint not null
+total_tokens bigint not null
+reasoning_tokens bigint null
+cached_tokens bigint null
+
+tool_call_counts jsonb not null default '{}'
+function_tool_names jsonb not null default '[]'
+
+provider_reported_cost numeric(18,9) null
+slaif_calculated_cost numeric(18,9) null
+cost_currency text null
+cost_source text not null default 'unknown'
+
+gateway_request_id text null
+profile_metadata jsonb not null default '{}'
+created_at timestamptz not null
+```
+
+Allowed `cost_source` values:
+
+```text
+provider_reported
+slaif_calculated
+mixed
+unknown
+```
+
+Constraints/indexes:
+
+```text
+unique(usage_ledger_id)
+index(gateway_key_id, created_at)
+index(owner_id, created_at)
+index(institution_id, created_at)
+index(cohort_id, created_at)
+index(endpoint_path, provider, requested_model, created_at)
+check(input_tokens >= 0)
+check(output_tokens >= 0)
+check(total_tokens >= 0)
+check(reasoning_tokens is null or reasoning_tokens >= 0)
+check(cached_tokens is null or cached_tokens >= 0)
+check(provider_reported_cost is null or provider_reported_cost >= 0)
+check(slaif_calculated_cost is null or slaif_calculated_cost >= 0)
+check(cost_source in ('provider_reported', 'slaif_calculated', 'mixed', 'unknown'))
+```
+
+Rules:
+
+- Current population is Chat Completions first; Responses API is still not implemented.
+- Store gateway endpoint paths and provider host/path only. Strip query strings,
+  fragments, credentials, signed URLs, bearer tokens, and arbitrary URL
+  metadata.
+- Record provider token metrics only when available. Missing cached,
+  reasoning/thinking, provider cost, or other provider metrics must remain
+  `null`/`unknown`, not guessed.
+- `provider_reported_cost` and `slaif_calculated_cost` are distinct fields.
+  SLAIF-calculated cost is local accounting metadata, not a provider invoice
+  guarantee.
+- `tool_call_counts` may contain safe counts only. `function_tool_names` may
+  contain safe function names only when already available without persisting
+  tool schemas or arguments.
+- Do not store prompts, completions, messages, tool arguments, tool schemas,
+  tool results, raw request bodies, raw response bodies, full URLs, query
+  strings, fragments, credentials, Authorization headers, cookies, provider key
+  values, gateway plaintext keys, token hashes, encrypted payloads, nonces,
+  email bodies, password hashes, session tokens, or raw chain-of-thought.
+
+---
+
+## 5.10 `provider_configs`
 
 Configuration metadata for upstream providers.
 
@@ -718,7 +815,7 @@ Rules:
 
 ---
 
-## 5.10 `model_routes`
+## 5.11 `model_routes`
 
 Maps user-requested model names to provider/upstream model names.
 
@@ -786,7 +883,7 @@ Rules:
 
 ---
 
-## 5.11 `pricing_rules`
+## 5.12 `pricing_rules`
 
 Approved pricing table used for cost estimation and final accounting.
 
@@ -837,7 +934,7 @@ Rules:
 
 ---
 
-## 5.12 `fx_rates`
+## 5.13 `fx_rates`
 
 Currency conversion table for converting native upstream costs to EUR limits.
 
@@ -878,7 +975,7 @@ Rules:
 
 ---
 
-## 5.13 `one_time_secrets`
+## 5.14 `one_time_secrets`
 
 Short-lived encrypted secrets used for workflows that temporarily need recoverable plaintext, especially email delivery of newly generated or rotated gateway keys.
 
@@ -926,7 +1023,7 @@ Rules:
 
 ---
 
-## 5.14 `email_deliveries`
+## 5.15 `email_deliveries`
 
 Tracks outbound key emails and other administrative emails.
 
@@ -981,7 +1078,7 @@ Rules:
 
 ---
 
-## 5.15 `audit_log`
+## 5.16 `audit_log`
 
 Security-relevant administrative action log.
 
@@ -1043,7 +1140,7 @@ Rules:
 
 ---
 
-## 5.16 `background_jobs`
+## 5.17 `background_jobs`
 
 Optional but recommended table for tracking Celery jobs visible from the admin dashboard.
 
@@ -1210,6 +1307,7 @@ admin_sessions
 gateway_keys
 quota_reservations
 usage_ledger
+usage_profiles
 provider_configs
 model_routes
 pricing_rules
@@ -1263,6 +1361,7 @@ admin_sessions
 gateway_keys
 quota_reservations
 usage_ledger
+usage_profiles
 provider_configs
 model_routes
 pricing_rules

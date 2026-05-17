@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 
 import anyio
+import structlog
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
@@ -30,6 +31,7 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderHTTPError
 from slaif_gateway.providers.factory import get_provider_adapter
@@ -69,10 +71,15 @@ from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.usage_profile_service import (
+    UsageProfileService,
+    build_chat_completion_tool_metadata,
+)
 from slaif_gateway.providers.streaming import format_openai_error_event
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -730,7 +737,67 @@ async def _finalize_successful_chat_completion(
         )
         if hasattr(session, "commit"):
             await session.commit()
+        usage_ledger_id = getattr(result, "usage_ledger_id", None)
+        if isinstance(usage_ledger_id, uuid.UUID):
+            await _record_usage_profile_after_finalization(
+                usage_ledger_id=usage_ledger_id,
+                route=route,
+                policy_result=policy_result,
+                request=request,
+            )
         return result
+    finally:
+        await session_iterator.aclose()
+
+
+async def _record_usage_profile_after_finalization(
+    *,
+    usage_ledger_id: uuid.UUID,
+    route: RouteResolutionResult,
+    policy_result: ChatCompletionPolicyResult,
+    request: Request | None,
+) -> None:
+    """Persist advisory usage profile metadata without affecting responses."""
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration:
+        logger.warning(
+            "usage_profile.record_skipped",
+            reason="database_session_unavailable",
+            usage_ledger_id=str(usage_ledger_id),
+        )
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "usage_profile.record_failed",
+            reason="database_session_error",
+            usage_ledger_id=str(usage_ledger_id),
+            error=exc.__class__.__name__,
+        )
+        return
+
+    try:
+        service = UsageProfileService(
+            usage_ledger_repository=UsageLedgerRepository(session),
+            usage_profiles_repository=UsageProfilesRepository(session),
+        )
+        await service.record_from_usage_ledger(
+            usage_ledger_id,
+            route=route,
+            tool_metadata=build_chat_completion_tool_metadata(policy_result.effective_body),
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "usage_profile.record_failed",
+            reason="profile_insert_failed",
+            usage_ledger_id=str(usage_ledger_id),
+            provider=route.provider,
+            requested_model=route.requested_model,
+            error=exc.__class__.__name__,
+        )
     finally:
         await session_iterator.aclose()
 

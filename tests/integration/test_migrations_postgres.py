@@ -18,6 +18,7 @@ EXPECTED_TABLES = {
     "gateway_keys",
     "quota_reservations",
     "usage_ledger",
+    "usage_profiles",
     "provider_configs",
     "model_routes",
     "pricing_rules",
