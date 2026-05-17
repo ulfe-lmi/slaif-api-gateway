@@ -55,6 +55,15 @@ include safe key purpose, policy mode, and observed capability type names.
 Missing provider metrics remain unknown/null and the rows are not invoice-grade
 billing truth.
 
+Admins can now preview a calibration summary and strict participant-policy
+proposal from the CLI and from a trusted calibration key detail page. The
+preview accepts a source key, optional time window, and multiplier, then shows
+observed endpoints/models/providers/capabilities plus proposed request, token,
+per-request, and local-accounting cost limits. This proposal is advisory and
+non-mutating: it does not create templates, create participant keys, or update
+existing gateway key policies. Admins must review and narrow the values before
+any future template or key creation workflow uses them.
+
 The recommendation workflow should capture:
 
 - source key and source owner;

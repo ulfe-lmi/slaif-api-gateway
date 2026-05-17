@@ -28,6 +28,7 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
+from slaif_gateway.services.calibration_summary_service import CalibrationSummaryService
 from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.usage_profile_service import UsageProfileService, build_chat_completion_tool_metadata
 from tests.e2e.test_openai_python_client_chat import (
@@ -294,6 +295,96 @@ def test_trusted_calibration_chat_completions_e2e_records_safe_profile_metadata(
     assert PROMPT_TEXT not in serialized
     assert COMPLETION_TEXT not in serialized
     assert created.plaintext_gateway_key not in serialized
+
+
+def test_calibration_summary_service_reads_trusted_profiles_from_postgres(
+    migrated_postgres_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "gpt-5-search-api"
+    _configure_runtime_environment(monkeypatch, migrated_postgres_url)
+    created = asyncio.run(
+        _create_test_data(
+            migrated_postgres_url,
+            model=model,
+            trusted_calibration=True,
+            owner_label="Trusted Calibration Summary",
+        )
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "chatcmpl-calibration-summary",
+        "object": "chat.completion",
+        "created": 123,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": COMPLETION_TEXT},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 9, "total_tokens": 17},
+    }
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        router.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=upstream_payload)
+        )
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": PROMPT_TEXT}],
+                    "web_search_options": {"search_context_size": "low"},
+                },
+                headers={"Authorization": f"Bearer {created.plaintext_gateway_key}"},
+            )
+
+    assert response.status_code == 200, response.text
+    result = asyncio.run(_summarize_calibration_profile(migrated_postgres_url, created.gateway_key_id))
+
+    assert result.summary.observed_request_count == 1
+    assert result.summary.observed_endpoints == ("/v1/chat/completions",)
+    assert result.summary.observed_requested_models == (model,)
+    assert "web_search_options" in result.summary.observed_hosted_capabilities
+    assert result.proposal.proposed_allowed_endpoints == ("/v1/chat/completions",)
+    assert result.proposal.proposed_allowed_models == (model,)
+    assert result.proposal.proposed_request_limit_total == 3
+    assert result.proposal.proposed_token_limit_total == 51
+    assert result.proposal.proposed_allowed_hosted_capabilities == ()
+    assert result.proposal.hosted_capabilities_requiring_review == (
+        "search_specific_model",
+        "web_search_options",
+    )
+    serialized = json.dumps(result, default=str, sort_keys=True)
+    assert PROMPT_TEXT not in serialized
+    assert COMPLETION_TEXT not in serialized
+    assert created.plaintext_gateway_key not in serialized
+
+
+async def _summarize_calibration_profile(database_url: str, gateway_key_id: uuid.UUID):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            service = CalibrationSummaryService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                usage_profiles_repository=UsageProfilesRepository(session),
+            )
+            return await service.summarize_calibration_key_usage(
+                gateway_key_id=gateway_key_id,
+                multiplier=Decimal("3"),
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _latest_profile(database_url: str, gateway_key_id: uuid.UUID) -> UsageProfile | None:

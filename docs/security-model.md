@@ -150,6 +150,14 @@ provenance such as `key_purpose`, `capability_policy_mode`, and observed hosted
 capability type names. It still must not include raw tool schemas, arguments,
 results, prompts, completions, raw bodies, or secrets.
 
+Admins may summarize trusted calibration-key usage from the CLI or dashboard.
+That preview reads safe `usage_profiles` rows only and proposes strict
+participant policy values with an explicit multiplier. It is non-mutating: it
+does not create templates or participant keys, does not change gateway key
+policy, and does not update routes or pricing. Hosted capabilities observed
+during calibration are shown as review-required rather than silently enabled
+for normal participant keys; external MCP/connectors remain denied by default.
+
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not
 go negative, repeated release/finalization/reconciliation attempts do not

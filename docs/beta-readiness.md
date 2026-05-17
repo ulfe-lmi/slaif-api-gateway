@@ -125,6 +125,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   accounting, profiling, and audit while applying broad Chat Completions
   discovery policy. They can be created from the CLI or admin key creation
   page. They are not participant keys.
+- Admins can now generate preview-only calibration usage summaries and strict
+  participant-policy proposals from trusted calibration keys in the CLI and
+  dashboard. The preview uses safe usage-profile metadata only, applies an
+  explicit multiplier, and does not create templates, participant keys, or key
+  policy changes.
 - Provider keys are referenced by environment variable names and are not stored
   or displayed by dashboard metadata forms.
 - One-time plaintext gateway keys are only shown on explicit no-cache
@@ -143,8 +148,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
   estimates. Safe Chat Completions usage profiling and trusted calibration keys
-  now provide the first persisted foundation for usage-derived key templates,
-  but template/recommendation UI and Responses support remain future work. See
+  now provide the first persisted foundation plus preview-only strict policy
+  proposals for usage-derived key templates, but template creation, participant
+  key generation, policy mutation, and Responses support remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.

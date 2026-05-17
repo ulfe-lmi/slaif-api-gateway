@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}Calibration Policy Proposal{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="calibration-preview-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Trusted Calibration</p>
+      <h1 id="calibration-preview-heading">Strict Policy Proposal Preview</h1>
+      <p class="muted">Preview-only result from safe usage-profile metadata. No templates, keys, routes, pricing rows, or gateway key policies were changed.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ summary.gateway_key_id }}/calibration">Adjust inputs</a>
+      <a class="button-link secondary" href="/admin/keys/{{ summary.gateway_key_id }}">Key detail</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="proposal-warning-heading">
+    <h2 id="proposal-warning-heading">Review Required</h2>
+    <p class="warning-text">This proposal is advisory and preview-only. It does not create key templates, participant keys, or key policy changes. Templates and recommendation execution are future work.</p>
+    <p class="warning-text">Cost limits are SLAIF local accounting assumptions, not invoice-grade provider guarantees. Admins must review every allowed endpoint, model, provider, and capability before using these values later.</p>
+  </section>
+
+  {% if result.warnings %}
+  <section class="action-panel" aria-labelledby="proposal-warnings-heading">
+    <h2 id="proposal-warnings-heading">Warnings</h2>
+    <ul class="compact-list">
+      {% for warning in result.warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Observed Usage Summary</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ summary.gateway_key_id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ summary.public_key_id }}</dd>
+        <dt>Owner</dt>
+        <dd>{{ summary.owner_display_name or "Unknown owner" }}{% if summary.owner_email %} / {{ summary.owner_email }}{% endif %}</dd>
+        <dt>Time window</dt>
+        <dd>{{ summary.time_window_start.isoformat() if summary.time_window_start else "beginning" }} to {{ summary.time_window_end.isoformat() if summary.time_window_end else "now" }}</dd>
+        <dt>Observed requests</dt>
+        <dd>{{ summary.observed_request_count }}</dd>
+        <dt>Observed endpoints</dt>
+        <dd>{{ summary.observed_endpoints|join(", ") or "None" }}</dd>
+        <dt>Observed providers</dt>
+        <dd>{{ summary.observed_providers|join(", ") or "None" }}</dd>
+        <dt>Observed requested models</dt>
+        <dd>{{ summary.observed_requested_models|join(", ") or "None" }}</dd>
+        <dt>Observed upstream models</dt>
+        <dd>{{ summary.observed_resolved_upstream_models|join(", ") or "None" }}</dd>
+        <dt>Observed provider hosts</dt>
+        <dd>{{ summary.observed_provider_hosts|join(", ") or "None" }}</dd>
+        <dt>Observed provider paths</dt>
+        <dd>{{ summary.observed_provider_endpoint_paths|join(", ") or "None" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Observed Totals And Maxima</h2>
+      <dl>
+        <dt>Total input tokens</dt>
+        <dd>{{ summary.total_input_tokens }}</dd>
+        <dt>Total output tokens</dt>
+        <dd>{{ summary.total_output_tokens }}</dd>
+        <dt>Total tokens</dt>
+        <dd>{{ summary.total_tokens }}</dd>
+        <dt>Total reasoning tokens</dt>
+        <dd>{{ summary.total_reasoning_tokens if summary.total_reasoning_tokens is not none else "Unknown" }}</dd>
+        <dt>Total cached tokens</dt>
+        <dd>{{ summary.total_cached_tokens if summary.total_cached_tokens is not none else "Unknown" }}</dd>
+        <dt>Max input per request</dt>
+        <dd>{{ summary.max_input_tokens_per_request }}</dd>
+        <dt>Max output per request</dt>
+        <dd>{{ summary.max_output_tokens_per_request }}</dd>
+        <dt>Max total per request</dt>
+        <dd>{{ summary.max_total_tokens_per_request }}</dd>
+        <dt>Total SLAIF cost</dt>
+        <dd>{{ summary.total_slaif_calculated_cost if summary.total_slaif_calculated_cost is not none else "Unknown" }}</dd>
+        <dt>Total provider-reported cost</dt>
+        <dd>{{ summary.total_provider_reported_cost if summary.total_provider_reported_cost is not none else "Unknown" }}</dd>
+        <dt>Cost confidence</dt>
+        <dd>{{ summary.cost_confidence }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Observed Capabilities</h2>
+      <dl>
+        <dt>Hosted capabilities</dt>
+        <dd>{{ summary.observed_hosted_capabilities|join(", ") or "None" }}</dd>
+        <dt>Unknown hosted capabilities</dt>
+        <dd>{{ summary.observed_unknown_hosted_capabilities|join(", ") or "None" }}</dd>
+        <dt>Denied external authority markers</dt>
+        <dd>{{ summary.observed_denied_capabilities|join(", ") or "None" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Strict Participant Policy Proposal</h2>
+      <dl>
+        <dt>Multiplier</dt>
+        <dd>{{ proposal.multiplier }}</dd>
+        <dt>Allowed endpoints</dt>
+        <dd>{{ proposal.proposed_allowed_endpoints|join(", ") or "None" }}</dd>
+        <dt>Allowed models</dt>
+        <dd>{{ proposal.proposed_allowed_models|join(", ") or "None" }}</dd>
+        <dt>Allowed providers</dt>
+        <dd>{{ proposal.proposed_allowed_providers|join(", ") or "None" }}</dd>
+        <dt>Allowed hosted capabilities</dt>
+        <dd>{{ proposal.proposed_allowed_hosted_capabilities|join(", ") or "None" }}</dd>
+        <dt>Hosted capabilities requiring review</dt>
+        <dd>{{ proposal.hosted_capabilities_requiring_review|join(", ") or "None" }}</dd>
+        <dt>Request limit</dt>
+        <dd>{{ proposal.proposed_request_limit_total }}</dd>
+        <dt>Total token limit</dt>
+        <dd>{{ proposal.proposed_token_limit_total }}</dd>
+        <dt>Input token limit</dt>
+        <dd>{{ proposal.proposed_input_token_limit_total }}</dd>
+        <dt>Output token limit</dt>
+        <dd>{{ proposal.proposed_output_token_limit_total }}</dd>
+        <dt>Reasoning token limit</dt>
+        <dd>{{ proposal.proposed_reasoning_token_limit_total if proposal.proposed_reasoning_token_limit_total is not none else "Unknown" }}</dd>
+        <dt>Cost limit EUR</dt>
+        <dd>{{ proposal.proposed_cost_limit_eur if proposal.proposed_cost_limit_eur is not none else "Unknown" }}</dd>
+        <dt>Max total tokens per request</dt>
+        <dd>{{ proposal.proposed_max_total_tokens_per_request }}</dd>
+        <dt>Max single-request cost EUR</dt>
+        <dd>{{ proposal.proposed_max_single_request_cost_eur if proposal.proposed_max_single_request_cost_eur is not none else "Unknown" }}</dd>
+      </dl>
+    </section>
+  </div>
+
+  <section class="action-panel" aria-labelledby="proposal-assumptions-heading">
+    <h2 id="proposal-assumptions-heading">Assumptions</h2>
+    <ul class="compact-list">
+      {% for assumption in proposal.assumptions %}
+      <li>{{ assumption }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+</section>
+{% endblock %}

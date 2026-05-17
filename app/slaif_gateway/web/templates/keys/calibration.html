@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Calibration Policy Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="calibration-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Trusted Calibration</p>
+      <h1 id="calibration-heading">Calibration Policy Preview</h1>
+      <p class="muted">Summarize safe usage-profile metadata and preview a strict participant policy. This page does not create templates, participant keys, routes, or pricing rows.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}">Key detail</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="calibration-warning-heading">
+    <h2 id="calibration-warning-heading">Preview Only</h2>
+    <p class="warning-text">This workflow reads safe usage-profile metadata for a trusted calibration key. It does not mutate gateway key policy, create key templates, create participant keys, or mark any proposal as approved.</p>
+    <p class="muted">Cost proposals are SLAIF local accounting assumptions, not invoice-grade provider guarantees. Admins must review and narrow participant policies before issuing keys.</p>
+  </section>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+    {% if diagnostic_id %}
+    <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Source Key</h2>
+      <dl>
+        <dt>Gateway key ID</dt>
+        <dd>{{ key.id }}</dd>
+        <dt>Public key ID</dt>
+        <dd>{{ key.public_key_id }}</dd>
+        <dt>Purpose</dt>
+        <dd>{{ key.key_purpose }}</dd>
+        <dt>Capability policy mode</dt>
+        <dd>{{ key.capability_policy_mode }}</dd>
+        <dt>Owner</dt>
+        <dd>{{ key.owner_display_name or "Unknown owner" }}{% if key.owner_email %} / {{ key.owner_email }}{% endif %}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Preview Inputs</h2>
+      <form method="post" action="/admin/keys/{{ key.id }}/calibration/preview">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          Start at
+          <input name="start_at" value="{{ form.start_at }}" autocomplete="off" placeholder="Optional ISO datetime">
+        </label>
+        <label>
+          End at
+          <input name="end_at" value="{{ form.end_at }}" autocomplete="off" placeholder="Optional ISO datetime">
+        </label>
+        <label>
+          Multiplier
+          <input name="multiplier" required value="{{ form.multiplier or '3' }}" autocomplete="off">
+        </label>
+        <p class="warning-text">Multiplier must be between 1.0 and 10.0. Importantly, this is still a preview and creates no templates or participant keys.</p>
+        <button type="submit">Preview strict participant policy</button>
+      </form>
+    </section>
+  </div>
+</section>
+{% endblock %}

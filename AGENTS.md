@@ -420,13 +420,18 @@ route resolution, PostgreSQL reservation/finalization, usage ledger, safe usage
 profiling, and audit behavior. They are only for trusted organizers/admins, not
 participants, and they do not bypass content-storage prohibitions.
 
-The remaining operator workflow is to derive strict participant policies and
-templates from observed calibration usage.
+Admins can now summarize observed trusted-calibration usage and preview strict
+participant-policy proposals from the CLI and admin dashboard with an explicit
+multiplier. This preview is advisory and non-mutating: it does not create key
+templates, create participant keys, update existing gateway key policies, or
+update routes/pricing. The remaining operator workflow is to turn reviewed
+proposals into versioned templates or participant keys through an explicit
+future confirmation path.
 
 Rules:
 
-- Usage-derived recommendations are advisory until an admin confirms a template
-  or key creation.
+- Usage-derived recommendations are advisory until an admin confirms a future
+  template or key creation workflow.
 - Trusted calibration keys may discover hosted/provider-side capability needs
   for routed Chat Completions models, but external MCP/connectors,
   provider-side authorization, connector IDs, server URLs, approval flows,

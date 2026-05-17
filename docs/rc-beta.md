@@ -97,8 +97,10 @@ migrations automatically.
   allowed tool controls, pricing catalog support, and bounded-overrun cost
   estimates. Current Chat Completions usage profiling and trusted calibration
   keys, available from CLI and admin web creation, provide safe
-  calibration-foundation metadata, but calibration
-  recommendations, key templates, and Responses support remain future work. See
+  calibration-foundation metadata. Admins can now preview calibration usage
+  summaries and strict participant-policy proposals from CLI and admin web, but
+  key template creation, participant-key generation, policy mutation, and
+  Responses support remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
