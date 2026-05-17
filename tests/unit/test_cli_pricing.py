@@ -235,6 +235,41 @@ def test_pricing_import_supports_json_and_dry_run(tmp_path, monkeypatch) -> None
     assert payload["validated_count"] == 1
 
 
+def test_pricing_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
+    import_path = tmp_path / "pricing.tsv"
+    import_path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\toutput_price_per_1m\n"
+        "openai\tgpt-test-mini\tchat.completions\tEUR\t0.10\t0.20\n",
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_import_pricing_rules(*, rows: list[dict[str, object]], dry_run: bool) -> PricingImportResult:
+        seen["rows"] = rows
+        seen["dry_run"] = dry_run
+        return PricingImportResult(imported_count=0, dry_run=True, rows=tuple(rows))
+
+    monkeypatch.setattr(pricing_cli, "_import_pricing_rules", fake_import_pricing_rules)
+
+    result = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(import_path), "--dry-run", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert seen["dry_run"] is True
+    assert seen["rows"] == [
+        {
+            "provider": "openai",
+            "model": "gpt-test-mini",
+            "endpoint": "chat.completions",
+            "currency": "EUR",
+            "input_price_per_1m": "0.10",
+            "output_price_per_1m": "0.20",
+        }
+    ]
+
+
 def test_pricing_import_invalid_file_fails_cleanly(tmp_path) -> None:
     import_path = tmp_path / "bad.json"
     import_path.write_text("{not-json", encoding="utf-8")

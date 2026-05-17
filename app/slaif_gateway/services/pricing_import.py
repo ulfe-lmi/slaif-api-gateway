@@ -126,13 +126,28 @@ class PricingImportExecutionResult:
 
 def parse_pricing_import_csv(text: str) -> list[dict[str, object]]:
     """Parse pricing CSV text into raw row mappings."""
+    return _parse_pricing_import_delimited(text, delimiter=",", format_label="CSV")
+
+
+def parse_pricing_import_tsv(text: str) -> list[dict[str, object]]:
+    """Parse pricing TSV text into raw row mappings."""
+    return _parse_pricing_import_delimited(text, delimiter="\t", format_label="TSV")
+
+
+def _parse_pricing_import_delimited(
+    text: str,
+    *,
+    delimiter: str,
+    format_label: str,
+) -> list[dict[str, object]]:
+    """Parse pricing delimited text into raw row mappings."""
     try:
-        reader = csv.DictReader(StringIO(text))
+        reader = csv.DictReader(StringIO(text), delimiter=delimiter)
         if not reader.fieldnames:
-            raise ValueError("Pricing CSV import must include a header row")
+            raise ValueError(f"Pricing {format_label} import must include a header row")
         return [dict(row) for row in reader]
     except csv.Error as exc:
-        raise ValueError("Pricing import content is not valid CSV") from exc
+        raise ValueError(f"Pricing import content is not valid {format_label}") from exc
 
 
 def parse_pricing_import_json(text: str) -> list[dict[str, object]]:
@@ -149,19 +164,22 @@ def parse_pricing_import_json(text: str) -> list[dict[str, object]]:
 
 
 def detect_pricing_import_format(*, filename: str | None, requested_format: str, text: str) -> str:
-    """Resolve csv/json/auto format selection."""
+    """Resolve csv/json/tsv/auto format selection."""
     normalized = requested_format.strip().lower()
-    if normalized not in {"auto", "csv", "json"}:
-        raise ValueError("Import format must be auto, csv, or json")
-    if normalized in {"csv", "json"}:
+    if normalized not in {"auto", "csv", "json", "tsv"}:
+        raise ValueError("Import format must be auto, csv, json, or tsv")
+    if normalized in {"csv", "json", "tsv"}:
         return normalized
 
     suffix = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
-    if suffix in {"csv", "json"}:
+    if suffix in {"csv", "json", "tsv"}:
         return suffix
     stripped = text.lstrip()
     if stripped.startswith("["):
         return "json"
+    first_line = next((line for line in text.splitlines() if line.strip()), "")
+    if "\t" in first_line:
+        return "tsv"
     return "csv"
 
 

@@ -575,8 +575,8 @@ reconciliation remains available and is still the operator review path for
 unexpected accounting failures.
 
 Dashboard pricing import preview is CSRF-protected and dry-run only. It accepts
-CSV or JSON content, validates every row, parses money values from strings, and
-rejects unknown fields or secret-looking source/metadata values. It does not
+CSV, JSON, or TSV content, validates every row, parses money values from strings, and
+rejects unknown fields or secret-looking source/notes/metadata values. It does not
 write `pricing_rules`, does not create audit rows, and does not call external
 pricing or provider APIs.
 
@@ -628,10 +628,10 @@ FX service and write safe audit rows. Confirmed FX imports affect future EUR
 conversion through the existing FX lookup path.
 
 Dashboard route import preview is CSRF-protected and dry-run only. It accepts
-CSV or JSON content, validates every row, verifies provider references against
+CSV, JSON, or TSV content, validates every row, verifies provider references against
 provider config rows, and rejects unknown fields, invalid match types, invalid
 endpoints, negative priorities, and secret-looking capabilities/metadata/source
-values. It does not write `model_routes`, does not create audit rows, does not
+or notes values. It does not write `model_routes`, does not create audit rows, does not
 call providers, and does not change route resolution runtime behavior.
 
 Dashboard route import execution is also CSRF-protected and uses the same

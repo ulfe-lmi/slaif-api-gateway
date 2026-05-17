@@ -46,6 +46,60 @@ preview/confirm/audit pattern.
 Do not scrape or silently refresh OpenAI prices into production rows without a
 separate reviewed implementation contract.
 
+## OpenAI Assisted Pricing And Route Proposals
+
+SLAIF may later add an admin-only workflow that calls OpenAI to help draft
+pricing and route proposal files. This repository state provides only the
+deterministic proposal import substrate: reviewed CSV, JSON, or TSV files can be
+previewed and confirmed through the existing local import paths. It does not
+generate proposals, call OpenAI, call OpenRouter, fetch provider pricing pages,
+or mutate rows from a web fetch or LLM response.
+
+LLM-generated proposal files are not authoritative. They are draft operator
+inputs. Imported rows become local SLAIF accounting and routing assumptions only
+after an authenticated admin previews the parsed rows, explicitly confirms the
+import, supplies an audit reason, and every row passes the normal validation and
+create-only classification checks.
+
+Pricing proposal files should use reviewed decimal strings. For pricing TSV,
+the supported core columns are:
+
+```text
+provider	model	endpoint	currency	input_price_per_1m	output_price_per_1m
+```
+
+Where the current pricing schema supports them, proposal files may also include:
+
+```text
+cached_input_price_per_1m	reasoning_price_per_1m	request_price	valid_from	valid_until	source_url	notes	pricing_metadata
+```
+
+Route proposal TSV files use the current route import fields:
+
+```text
+requested_model	match_type	endpoint	provider	upstream_model	priority	enabled	visible_in_models	supports_streaming	capabilities	notes
+```
+
+No silent replacement of production pricing rows is allowed. No direct mutation
+from a web fetch or LLM call is allowed. Imports are preview-first and
+create-only in the current dashboard workflow: invalid, duplicate, conflicting,
+overlapping, disabled, or update-classified rows block the whole import with no
+mutation. Unknown fields are rejected unless a future proposal contract
+explicitly adds them to the schema.
+
+OpenAI prices in proposal files are informative, operator-reviewed local
+assumptions. They are not invoice-grade guarantees and do not prove that an
+upstream provider invoice will exactly match SLAIF's local accounting. SLAIF
+cost limits are hard against local pricing and FX rows; they are budget controls
+over the gateway's accounting model, not a provider billing attestation.
+Request, token, output, model, and rate limits remain the safer primary controls
+for workshops and courses, with money limits acting as an additional guardrail.
+
+The actual OpenAI-calling proposal generator is a later PR. It must keep preview
+and confirmation in the admin workflow, must reject secret-looking input and
+metadata, and must preserve the rule that provider keys come only from
+server-side environment variables or deployment secrets.
+
 ## OpenAI Completions Bootstrap CSV
 
 The first-run OpenAI Completions bootstrap command uses local pricing metadata

@@ -311,15 +311,15 @@ def disable_model(
 
 @app.command("import")
 def import_pricing(
-    file: Annotated[Path, typer.Option("--file", help="Local JSON or CSV pricing file")],
+    file: Annotated[Path, typer.Option("--file", help="Local JSON, CSV, or TSV pricing file")],
     input_format: Annotated[
         str | None,
-        typer.Option("--format", help="json or csv; auto-detected from file extension if omitted"),
+        typer.Option("--format", help="json, csv, or tsv; auto-detected from file extension if omitted"),
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate without writing rows")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Import pricing rules from a local JSON or CSV file."""
+    """Import pricing rules from a local JSON, CSV, or TSV file."""
     try:
         rows = _load_import_file(file, input_format=input_format)
         result = run_async(_import_pricing_rules(rows=rows, dry_run=dry_run))
@@ -362,7 +362,10 @@ def _load_import_file(path: Path, *, input_format: str | None) -> list[dict[str,
     if file_format == "csv":
         with path.open("r", encoding="utf-8", newline="") as handle:
             return [dict(row) for row in csv.DictReader(handle)]
-    raise ValueError("--format must be json or csv")
+    if file_format == "tsv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
+    raise ValueError("--format must be json, csv, or tsv")
 
 
 def _detect_format(path: Path, input_format: str | None) -> str:
@@ -370,6 +373,6 @@ def _detect_format(path: Path, input_format: str | None) -> str:
         normalized = input_format.strip().lower()
     else:
         normalized = path.suffix.lower().removeprefix(".")
-    if normalized not in {"json", "csv"}:
-        raise ValueError("--format must be json or csv")
+    if normalized not in {"json", "csv", "tsv"}:
+        raise ValueError("--format must be json, csv, or tsv")
     return normalized

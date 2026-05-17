@@ -106,6 +106,7 @@ from slaif_gateway.services.pricing_import import (
     execute_pricing_import_plan,
     parse_pricing_import_csv,
     parse_pricing_import_json,
+    parse_pricing_import_tsv,
     validate_pricing_import_rows,
 )
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
@@ -121,6 +122,7 @@ from slaif_gateway.services.route_import import (
     execute_route_import_plan,
     parse_route_import_csv,
     parse_route_import_json,
+    parse_route_import_tsv,
     provider_refs_from_rows,
     validate_route_import_rows,
 )
@@ -2780,11 +2782,7 @@ async def admin_route_import_preview(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = (
-            parse_route_import_json(text)
-            if detected_format == "json"
-            else parse_route_import_csv(text)
-        )
+        raw_rows = _parse_route_import_rows_for_format(text, import_format=detected_format)
         preview = await _build_route_import_preview(
             request,
             raw_rows,
@@ -2880,11 +2878,7 @@ async def admin_route_import_execute(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = (
-            parse_route_import_json(text)
-            if detected_format == "json"
-            else parse_route_import_csv(text)
-        )
+        raw_rows = _parse_route_import_rows_for_format(text, import_format=detected_format)
         preview = await _build_route_import_preview(
             request,
             raw_rows,
@@ -3424,11 +3418,7 @@ async def admin_pricing_import_preview(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = (
-            parse_pricing_import_json(text)
-            if detected_format == "json"
-            else parse_pricing_import_csv(text)
-        )
+        raw_rows = _parse_pricing_import_rows_for_format(text, import_format=detected_format)
         preview = validate_pricing_import_rows(
             raw_rows,
             max_rows=settings.PRICING_IMPORT_MAX_ROWS,
@@ -3524,11 +3514,7 @@ async def admin_pricing_import_execute(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = (
-            parse_pricing_import_json(text)
-            if detected_format == "json"
-            else parse_pricing_import_csv(text)
-        )
+        raw_rows = _parse_pricing_import_rows_for_format(text, import_format=detected_format)
         preview = validate_pricing_import_rows(
             raw_rows,
             max_rows=settings.PRICING_IMPORT_MAX_ROWS,
@@ -5890,6 +5876,14 @@ def _render_pricing_import_form(
     )
 
 
+def _parse_pricing_import_rows_for_format(text: str, *, import_format: str) -> list[dict[str, object]]:
+    if import_format == "json":
+        return parse_pricing_import_json(text)
+    if import_format == "tsv":
+        return parse_pricing_import_tsv(text)
+    return parse_pricing_import_csv(text)
+
+
 def _render_pricing_import_result(
     request: Request,
     *,
@@ -6030,6 +6024,14 @@ def _render_route_import_form(
         },
         status_code=status_code,
     )
+
+
+def _parse_route_import_rows_for_format(text: str, *, import_format: str) -> list[dict[str, object]]:
+    if import_format == "json":
+        return parse_route_import_json(text)
+    if import_format == "tsv":
+        return parse_route_import_tsv(text)
+    return parse_route_import_csv(text)
 
 
 def _render_route_import_result(
