@@ -16,6 +16,7 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 
 __all__ = [
     "AdminSessionsRepository",
@@ -34,4 +35,5 @@ __all__ = [
     "ProviderConfigsRepository",
     "QuotaReservationsRepository",
     "UsageLedgerRepository",
+    "UsageProfilesRepository",
 ]

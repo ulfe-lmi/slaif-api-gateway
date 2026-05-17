@@ -37,6 +37,7 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
     "interrupted",
     "released",
 )
+SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
 PURPOSE_VALUES_ONE_TIME_SECRETS = ("gateway_key_email", "gateway_key_rotation_email")
@@ -63,6 +64,7 @@ class Institution(Base):
 
     owners: Mapped[list[Owner]] = relationship(back_populates="institution")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="institution")
+    usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="institution")
 
     __table_args__ = (
         Index("uq_institutions_name_lower", func.lower(name), unique=True),
@@ -84,6 +86,7 @@ class Cohort(Base):
 
     gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="cohort")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="cohort")
+    usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="cohort")
 
     __table_args__ = (Index("ix_cohorts_starts_at_ends_at", "starts_at", "ends_at"),)
 
@@ -110,6 +113,7 @@ class Owner(Base):
     institution: Mapped[Institution | None] = relationship(back_populates="owners")
     gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="owner")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="owner")
+    usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="owner")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="owner")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="owner")
 
@@ -257,6 +261,7 @@ class GatewayKey(Base):
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
+    usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="gateway_key")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
 
@@ -393,6 +398,7 @@ class UsageLedger(Base):
     owner: Mapped[Owner | None] = relationship(back_populates="usage_ledger_rows")
     institution: Mapped[Institution | None] = relationship(back_populates="usage_ledger_rows")
     cohort: Mapped[Cohort | None] = relationship(back_populates="usage_ledger_rows")
+    usage_profile: Mapped[UsageProfile | None] = relationship(back_populates="usage_ledger")
 
     __table_args__ = (
         CheckConstraint(
@@ -421,6 +427,96 @@ class UsageLedger(Base):
         Index("ix_usage_ledger_provider_resolved_model", "provider", "resolved_model"),
         Index("ix_usage_ledger_endpoint_created_at", "endpoint", "created_at"),
         Index("ix_usage_ledger_accounting_status_created_at", "accounting_status", "created_at"),
+    )
+
+
+class UsageProfile(Base):
+    __tablename__ = "usage_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    usage_ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usage_ledger.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="SET NULL"), nullable=True
+    )
+    cohort_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cohorts.id", ondelete="SET NULL"), nullable=True
+    )
+    endpoint_path: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_upstream_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_host: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_endpoint_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reasoning_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cached_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tool_call_counts: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    function_tool_names: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    provider_reported_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    slaif_calculated_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    cost_currency: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_source: Mapped[str] = mapped_column(Text, nullable=False, default="unknown", server_default=text("'unknown'"))
+    gateway_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    usage_ledger: Mapped[UsageLedger] = relationship(back_populates="usage_profile")
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="usage_profile_rows")
+    owner: Mapped[Owner | None] = relationship(back_populates="usage_profile_rows")
+    institution: Mapped[Institution | None] = relationship(back_populates="usage_profile_rows")
+    cohort: Mapped[Cohort | None] = relationship(back_populates="usage_profile_rows")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"cost_source in {SOURCE_VALUES_USAGE_PROFILES_COST}",
+            name="usage_profiles_cost_source_allowed_values",
+        ),
+        CheckConstraint("input_tokens >= 0", name="usage_profiles_input_tokens_non_negative"),
+        CheckConstraint("output_tokens >= 0", name="usage_profiles_output_tokens_non_negative"),
+        CheckConstraint("total_tokens >= 0", name="usage_profiles_total_tokens_non_negative"),
+        CheckConstraint(
+            "reasoning_tokens is null or reasoning_tokens >= 0",
+            name="usage_profiles_reasoning_tokens_non_negative",
+        ),
+        CheckConstraint(
+            "cached_tokens is null or cached_tokens >= 0",
+            name="usage_profiles_cached_tokens_non_negative",
+        ),
+        CheckConstraint(
+            "provider_reported_cost is null or provider_reported_cost >= 0",
+            name="usage_profiles_provider_reported_cost_non_negative",
+        ),
+        CheckConstraint(
+            "slaif_calculated_cost is null or slaif_calculated_cost >= 0",
+            name="usage_profiles_slaif_calculated_cost_non_negative",
+        ),
+        Index("ix_usage_profiles_gateway_key_id_created_at", "gateway_key_id", "created_at"),
+        Index("ix_usage_profiles_owner_id_created_at", "owner_id", "created_at"),
+        Index("ix_usage_profiles_institution_id_created_at", "institution_id", "created_at"),
+        Index("ix_usage_profiles_cohort_id_created_at", "cohort_id", "created_at"),
+        Index(
+            "ix_usage_profiles_endpoint_provider_model_created_at",
+            "endpoint_path",
+            "provider",
+            "requested_model",
+            "created_at",
+        ),
     )
 
 

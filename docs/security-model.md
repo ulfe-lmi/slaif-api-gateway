@@ -95,6 +95,20 @@ The usage ledger records metadata, token counts, cost, provider/model status,
 and safe diagnostics. It does not store prompt text, completion text, uploaded
 files, tool payloads, or raw provider bodies by default.
 
+Current Chat Completions requests also create advisory `usage_profiles` rows
+after successful accounting finalization when safe metadata is available. These
+rows support future calibration-key and key-template recommendation workflows;
+they are not invoice-grade billing truth. They store gateway endpoint path,
+provider, requested/resolved model, sanitized provider host/path, token counts,
+safe tool counts/function names, provider-reported cost when exposed, and
+SLAIF-calculated local cost. Missing provider metrics remain `null`/`unknown`
+instead of guessed. Usage profiles do not store prompts, completions, messages,
+raw request bodies, raw response bodies, full URLs with query strings/fragments,
+credentials, provider keys, plaintext gateway keys, token hashes, encrypted
+payloads, nonces, password hashes, session tokens, email bodies, raw
+chain-of-thought, tool schemas, tool arguments, or tool results. This is Chat
+Completions-only RC2 foundation work; it does not implement Responses API.
+
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not
 go negative, repeated release/finalization/reconciliation attempts do not

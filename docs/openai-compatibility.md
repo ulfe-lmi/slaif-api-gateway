@@ -155,7 +155,16 @@ For `POST /v1/chat/completions`, the implemented order is:
 9. Forward to OpenAI or OpenRouter.
 10. Parse provider usage.
 11. Finalize or release accounting.
-12. Record metrics and safe usage ledger metadata.
+12. Record metrics, safe usage ledger metadata, and advisory Chat
+    Completions usage-profile metadata when final usage is available.
+
+Usage-profile rows are safe calibration-foundation metadata only. They do not
+store prompts, completions, messages, raw request bodies, raw response bodies,
+full provider URLs, tool schemas, tool arguments, tool results, raw
+chain-of-thought, provider keys, gateway plaintext keys, token hashes,
+encrypted payloads, nonces, password hashes, session tokens, or email bodies.
+They are not invoice-grade provider billing truth and do not implement
+`/v1/responses`.
 
 Redis rate limiting is temporary operational throttling only. PostgreSQL remains authoritative for hard quota and usage accounting.
 

@@ -68,7 +68,7 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
-| Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost |
+| Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost; successful finalized requests also persist safe advisory usage-profile metadata |
 | Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored |
 
 `OPENAI_API_KEY` is reserved for client OpenAI-compatible configuration and is
@@ -92,7 +92,7 @@ provider, and route/provider config overrides must reference env var names only.
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
-| Usage/accounting | Token usage is parsed; OpenRouter `usage.cost` or `usage.cost_usd` is captured as provider-reported native cost metadata when supplied; gateway cost finalization still uses the configured pricing/FX estimate path |
+| Usage/accounting | Token usage is parsed; OpenRouter `usage.cost` or `usage.cost_usd` is captured as provider-reported native cost metadata when supplied; gateway cost finalization still uses the configured pricing/FX estimate path; successful finalized requests also persist safe advisory usage-profile metadata |
 | Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored |
 
 In production, `OPENROUTER_API_KEY` must be configured for the enabled built-in
