@@ -49,6 +49,29 @@ def test_docker_refresh_script_is_executable_safe_and_syntax_valid() -> None:
     subprocess.run(["bash", "-n", str(script)], cwd=REPO_ROOT, check=True)
 
 
+def test_parallel_test_scripts_are_explicit_and_syntax_valid() -> None:
+    unit_script = REPO_ROOT / "scripts/test-unit-parallel.sh"
+    safe_script = REPO_ROOT / "scripts/test-parallel-safe.sh"
+
+    for script in (unit_script, safe_script):
+        content = script.read_text()
+        assert script.stat().st_mode & stat.S_IXUSR
+        assert "DATABASE_URL=" not in content
+        assert "pytest -n auto" not in content
+        assert "PYTEST_XDIST_WORKERS" in content or script == safe_script
+        subprocess.run(["bash", "-n", str(script)], cwd=REPO_ROOT, check=True)
+
+    unit_content = unit_script.read_text()
+    assert "(cores * 3) // 4" in unit_content
+    assert '--dist loadscope' in unit_content
+    assert 'pytest tests/unit -n "$WORKERS"' in unit_content
+
+    safe_content = safe_script.read_text()
+    assert "tests/integration" in safe_content
+    assert "tests/e2e" in safe_content
+    assert "tests/browser" in safe_content
+
+
 def test_openai_gateway_smoke_example_compiles_and_uses_openai_env_convention() -> None:
     example = REPO_ROOT / "examples/openai_gateway_smoke.py"
     content = example.read_text()

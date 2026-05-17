@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
+from slaif_gateway.config import Settings
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 
@@ -36,7 +37,7 @@ def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
 
 
 def test_health_and_readiness_routes_remain_unauthenticated() -> None:
-    app = create_app()
+    app = create_app(Settings(DATABASE_URL=None))
     client = TestClient(app)
 
     health = client.get("/healthz")

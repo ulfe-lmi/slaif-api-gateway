@@ -28,6 +28,9 @@ OWNER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 INSTITUTION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 COHORT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 ADMIN_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
+UNKNOWN_OWNER_ID = uuid.UUID("55555555-5555-4555-8555-555555555555")
+UNKNOWN_INSTITUTION_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
+UNKNOWN_COHORT_ID = uuid.UUID("77777777-7777-4777-8777-777777777777")
 
 
 def _context(**overrides) -> KeyImportReadOnlyContext:
@@ -118,10 +121,10 @@ def test_valid_row_resolves_owner_policy_and_rate_limits() -> None:
         ("key_purpose", "trusted_calibration", "unknown fields"),
         ("capability_policy_mode", "trusted_calibration_discovery", "unknown fields"),
         ("trusted_calibration", "true", "unknown fields"),
-        ("owner_id", str(uuid.uuid4()), "owner_id must reference an existing owner"),
+        ("owner_id", str(UNKNOWN_OWNER_ID), "owner_id must reference an existing owner"),
         ("owner_email", "not-an-email", "owner_email must be a valid email address"),
-        ("institution_id", str(uuid.uuid4()), "institution_id must match"),
-        ("cohort_id", str(uuid.uuid4()), "cohort_id must reference an existing cohort"),
+        ("institution_id", str(UNKNOWN_INSTITUTION_ID), "institution_id must match"),
+        ("cohort_id", str(UNKNOWN_COHORT_ID), "cohort_id must reference an existing cohort"),
         ("cost_limit_eur", "not-decimal", "cost_limit_eur must be a decimal string"),
         ("cost_limit_eur", "-1", "cost_limit_eur must be positive"),
         ("token_limit_total", "zero", "token_limit must be a positive integer"),

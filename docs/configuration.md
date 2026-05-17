@@ -771,13 +771,44 @@ The suite starts a local FastAPI server and uses safe dummy data only. It does
 not use `DATABASE_URL` for destructive setup, call real OpenAI/OpenRouter
 providers, or send real email.
 
+## Parallel Test Workflow
+
+Serial pytest commands remain supported. For faster local and CI unit runs,
+install development dependencies and use the explicit pytest-xdist wrapper:
+
+```bash
+python -m pip install -e ".[dev]"
+scripts/test-unit-parallel.sh
+```
+
+The unit wrapper computes the default worker count as three quarters of visible
+CPU cores, rounded down with a minimum of one worker. Override the worker count
+or distribution strategy when needed:
+
+```bash
+PYTEST_XDIST_WORKERS=1 scripts/test-unit-parallel.sh
+PYTEST_XDIST_WORKERS=auto scripts/test-unit-parallel.sh
+PYTEST_XDIST_WORKERS=12 scripts/test-unit-parallel.sh
+PYTEST_XDIST_ARGS="--dist loadscope" scripts/test-unit-parallel.sh
+```
+
+`make test-unit-parallel` calls the same wrapper. `scripts/test-parallel-safe.sh`
+and `make test-parallel-safe` run unit tests in parallel, then run integration,
+E2E, and Playwright browser suites serially. The database and browser suites stay
+serial by default because they share PostgreSQL, Redis, and browser resources
+unless a future per-worker isolation workflow proves parallel execution safe.
+Skipped browser tests still do not count as browser coverage. DB-backed tests
+must use `TEST_DATABASE_URL`; the parallel wrappers do not create, drop, or
+mutate databases and must not use `DATABASE_URL` for destructive setup.
+
 ## GitHub CI Configuration
 
 The checked-in GitHub Actions workflows install the package with `.[dev]`, run
-the normal unit/lint/Alembic checks, and run PostgreSQL-backed integration,
-OpenAI-compatible E2E, Playwright browser, and Docker Compose smoke jobs without
-real provider keys. CI database jobs use `TEST_DATABASE_URL`, not `DATABASE_URL`,
-and Redis-backed tests use `TEST_REDIS_URL`.
+unit tests through `scripts/test-unit-parallel.sh`, run lint/Alembic checks, and
+run PostgreSQL-backed integration, OpenAI-compatible E2E, Playwright browser, and
+Docker Compose smoke jobs without real provider keys. CI database jobs use
+`TEST_DATABASE_URL`, not `DATABASE_URL`, and Redis-backed tests use
+`TEST_REDIS_URL`.
 
 The Docker smoke job copies `.env.example` to `.env` and uses only development
 placeholders. It does not call providers or send real external email.
