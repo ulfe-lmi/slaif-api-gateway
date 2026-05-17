@@ -10,9 +10,11 @@ from slaif_gateway.services.route_import import (
     RouteImportProviderRef,
     build_route_import_execution_plan,
     classify_route_import_preview,
+    detect_route_import_format,
     execute_route_import_plan,
     parse_route_import_csv,
     parse_route_import_json,
+    parse_route_import_tsv,
     route_import_execution_result_to_dict,
     route_import_preview_to_dict,
     validate_route_import_rows,
@@ -65,6 +67,34 @@ def test_valid_csv_and_json_parse() -> None:
     assert json_rows[0]["provider"] == "openai"
 
 
+def test_valid_tsv_parse_and_auto_detect() -> None:
+    text = (
+        "requested_model\tmatch_type\tendpoint\tprovider\tupstream_model\tpriority\t"
+        "enabled\tvisible_in_models\tsupports_streaming\tcapabilities\tnotes\n"
+        'gpt-4.1-mini\texact\tchat.completions\topenai\tgpt-4.1-mini\t10\t'
+        'true\ttrue\ttrue\t{"vision": false}\treviewed local route\n'
+    )
+
+    assert detect_route_import_format(filename=None, requested_format="auto", text=text) == "tsv"
+    assert detect_route_import_format(filename="routes.tsv", requested_format="auto", text="requested_model\tprovider\n") == "tsv"
+    rows = parse_route_import_tsv(text)
+    preview = _preview(rows)
+
+    assert preview.valid_count == 1
+    row = preview.rows[0]
+    assert row.requested_model == "gpt-4.1-mini"
+    assert row.match_type == "exact"
+    assert row.endpoint == "/v1/chat/completions"
+    assert row.provider == "openai"
+    assert row.upstream_model == "gpt-4.1-mini"
+    assert row.priority == 10
+    assert row.enabled is True
+    assert row.visible_in_models is True
+    assert row.supports_streaming is True
+    assert row.capabilities == {"vision": False}
+    assert row.notes == "reviewed local route"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -110,6 +140,25 @@ def test_secret_looking_capabilities_and_notes_are_rejected() -> None:
     assert "capabilities must not contain secret-looking values" in metadata.rows[0].errors[0]
     assert notes.invalid_count == 1
     assert "notes must not contain secret-looking values" in notes.rows[0].errors[0]
+
+
+def test_route_tsv_import_rejects_unknown_secret_and_provider_key_values() -> None:
+    rows = [
+        _valid_row(extra="nope"),
+        _valid_row(capabilities='{"authorization":"Bearer sk-provider-secret"}'),
+        _valid_row(notes="csrf_token=secret"),
+        _valid_row(provider="sk-provider-secret"),
+    ]
+
+    preview = _preview(rows)
+
+    assert preview.valid_count == 0
+    assert preview.invalid_count == 4
+    error_text = "\n".join(row.errors[0] for row in preview.rows)
+    assert "unknown fields: extra" in error_text
+    assert "capabilities must not contain secret-looking values" in error_text
+    assert "notes must not contain secret-looking values" in error_text
+    assert "provider must not contain secret-looking values" in error_text
 
 
 def test_max_rows_enforced() -> None:
@@ -237,6 +286,39 @@ def test_route_import_execution_plan_blocks_non_create_rows() -> None:
     assert "update rows are not supported" in error_text
     assert "conflict rows are not supported" in error_text
     assert "provider must reference an existing provider config" in error_text
+
+
+def test_route_tsv_import_blocks_mixed_valid_invalid_rows_with_no_mutation() -> None:
+    class FakeRouteService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_model_route(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    rows = parse_route_import_tsv(
+        "requested_model\tmatch_type\tprovider\tupstream_model\n"
+        "gpt-create\texact\topenai\tgpt-create\n"
+        "gpt-invalid\tregex\topenai\tgpt-invalid\n"
+    )
+    preview = _preview(rows)
+    plan = build_route_import_execution_plan(preview)
+    service = FakeRouteService()
+
+    result = asyncio.run(
+        execute_route_import_plan(
+            plan,
+            model_route_service=service,
+            actor_admin_id=uuid.uuid4(),
+            reason="reviewed TSV import",
+        )
+    )
+
+    assert plan.executable is False
+    assert result.created_count == 0
+    assert result.error_count == 1
+    assert service.calls == []
 
 
 def test_route_import_execution_plan_executes_create_only_rows_without_raw_content() -> None:

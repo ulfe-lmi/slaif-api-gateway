@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Pricing Catalog</p>
       <h1 id="pricing-import-heading">Pricing Import Preview</h1>
-      <p class="muted">Validate CSV or JSON pricing rows without writing pricing rules.</p>
+      <p class="muted">Validate CSV, JSON, or TSV pricing rows without writing pricing rules.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
@@ -37,12 +37,13 @@
             <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
+            <option value="tsv" {% if form['format'] == "tsv" %}selected{% endif %}>TSV</option>
           </select>
         </label>
         <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
-        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,text/csv,application/json"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values"></label>
       </div>
-      <label>Paste CSV or JSON<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
+      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
       <p class="muted small">Use either upload or pasted content. Maximum {{ settings.PRICING_IMPORT_MAX_BYTES }} bytes and {{ settings.PRICING_IMPORT_MAX_ROWS }} rows. Money fields must be decimal strings.</p>
       <button type="submit">Preview import</button>
     </section>
@@ -61,12 +62,13 @@
             <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
+            <option value="tsv" {% if form['format'] == "tsv" %}selected{% endif %}>TSV</option>
           </select>
         </label>
         <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
-        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,text/csv,application/json"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values"></label>
       </div>
-      <label>Paste CSV or JSON<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
+      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
       <label>Audit reason<input name="reason" value="{{ form.get('reason', '') }}" required autocomplete="off"></label>
       <label class="checkbox-label">
         <input type="checkbox" name="confirm_import" value="true">

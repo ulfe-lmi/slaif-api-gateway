@@ -330,9 +330,9 @@ routes. Key creation, suspend, activate, revoke, validity-window update, hard
 quota limit update, usage-counter reset, rotation, owner/institution/cohort
 metadata changes, provider config, route, pricing, and FX metadata mutation forms require a valid authenticated session
 plus the per-session CSRF token. The dashboard route import preview form
-requires CSRF, validates CSV/JSON rows, verifies provider references against
+requires CSRF, validates CSV/JSON/TSV rows, verifies provider references against
 provider config rows, rejects unknown fields and secret-looking
-capabilities/metadata/source values, and does not write `model_routes`, audit
+capabilities/metadata/notes values, and does not write `model_routes`, audit
 rows, or uploaded content. Route import execution also requires CSRF, explicit
 confirmation, and a non-empty audit reason. It re-parses and re-validates the
 submitted upload or pasted content server-side, does not trust preview HTML or
@@ -343,8 +343,8 @@ creates are audited through the route service. Route import preview/execution
 does not call providers, does not store raw uploaded content, and changes future
 model resolution only after confirmed local route rows are created. The
 dashboard pricing import preview form also
-requires CSRF, validates CSV/JSON rows with Decimal money values parsed from
-strings, rejects unknown fields and secret-looking source/metadata values, and
+requires CSRF, validates CSV/JSON/TSV rows with Decimal money values parsed from
+strings, rejects unknown fields and secret-looking source/notes/metadata values, and
 does not write `pricing_rules`, audit rows, or uploaded content. Dashboard
 pricing import execution requires CSRF, explicit confirmation, and a non-empty
 audit reason. It re-parses and re-validates the submitted upload or pasted

@@ -10,10 +10,12 @@ import pytest
 from slaif_gateway.services.pricing_import import (
     build_pricing_import_execution_plan,
     classify_pricing_import_preview,
+    detect_pricing_import_format,
     execute_pricing_import_plan,
     pricing_import_execution_result_to_dict,
     parse_pricing_import_csv,
     parse_pricing_import_json,
+    parse_pricing_import_tsv,
     pricing_import_preview_to_dict,
     validate_pricing_import_rows,
 )
@@ -66,6 +68,41 @@ def test_parse_pricing_import_csv_validates_rows_without_mutation() -> None:
     assert row.classification == "create"
 
 
+def test_parse_pricing_import_tsv_validates_rows_without_mutation() -> None:
+    text = (
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\t"
+        "cached_input_price_per_1m\toutput_price_per_1m\treasoning_price_per_1m\t"
+        "request_price\tvalid_from\tvalid_until\tsource_url\tnotes\tpricing_metadata\n"
+        'openai\tgpt-4.1-mini\tchat.completions\tusd\t0.10\t0.05\t0.20\t0.30\t'
+        '0\t2026-01-01T00:00:00Z\t\thttps://pricing.example.org/openai\t'
+        'reviewed local assumption\t{"proposal":"operator-reviewed"}\n'
+    )
+
+    assert detect_pricing_import_format(filename=None, requested_format="auto", text=text) == "tsv"
+    assert detect_pricing_import_format(filename="pricing.tsv", requested_format="auto", text="provider\tmodel\n") == "tsv"
+    rows = parse_pricing_import_tsv(text)
+    preview = validate_pricing_import_rows(
+        rows,
+        max_rows=10,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert preview.total_rows == 1
+    assert preview.valid_count == 1
+    row = preview.rows[0]
+    assert row.provider == "openai"
+    assert row.model == "gpt-4.1-mini"
+    assert row.endpoint == "/v1/chat/completions"
+    assert row.currency == "USD"
+    assert row.input_price_per_1m == "0.10"
+    assert row.cached_input_price_per_1m == "0.05"
+    assert row.output_price_per_1m == "0.20"
+    assert row.reasoning_price_per_1m == "0.30"
+    assert row.request_price == "0"
+    assert row.pricing_metadata == {"proposal": "operator-reviewed"}
+    assert row.notes == "reviewed local assumption"
+
+
 def test_parse_pricing_import_json_rejects_numeric_money_values() -> None:
     rows = parse_pricing_import_json(
         '[{"provider":"openai","model":"gpt-4.1-mini",'
@@ -77,6 +114,27 @@ def test_parse_pricing_import_json_rejects_numeric_money_values() -> None:
     assert preview.valid_count == 0
     assert preview.invalid_count == 1
     assert "decimal string" in preview.rows[0].errors[0]
+
+
+def test_pricing_tsv_import_rejects_unknown_secret_and_provider_key_values() -> None:
+    rows = [
+        _valid_row(extra="nope"),
+        _valid_row(source_url="Bearer sk-provider-secret"),
+        _valid_row(notes="Authorization: Bearer sk-provider-secret"),
+        _valid_row(pricing_metadata='{"session_token":"secret"}'),
+        _valid_row(provider="sk-provider-secret"),
+    ]
+
+    preview = validate_pricing_import_rows(rows, max_rows=10)
+
+    assert preview.valid_count == 0
+    assert preview.invalid_count == 5
+    error_text = "\n".join(row.errors[0] for row in preview.rows)
+    assert "unknown fields: extra" in error_text
+    assert "source_url must not contain secret-looking values" in error_text
+    assert "notes must not contain secret-looking values" in error_text
+    assert "pricing_metadata must not contain secret-looking values" in error_text
+    assert "provider must not contain secret-looking values" in error_text
 
 
 def test_pricing_import_rejects_unknown_secret_negative_and_window_errors() -> None:
@@ -160,6 +218,39 @@ def test_pricing_import_execution_plan_blocks_invalid_duplicate_and_overlap_rows
     assert "duplicate rows are not supported" in error_text
     assert "overlap rows are not supported" in error_text
     assert "decimal string" in error_text
+
+
+def test_pricing_tsv_import_blocks_mixed_valid_invalid_rows_with_no_mutation() -> None:
+    class FakePricingService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_pricing_rule(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    rows = parse_pricing_import_tsv(
+        "provider\tmodel\tinput_price_per_1m\toutput_price_per_1m\n"
+        "openai\tgpt-create\t0.10\t0.20\n"
+        "openai\tgpt-invalid\t0.10\tBearer sk-provider-secret\n"
+    )
+    preview = validate_pricing_import_rows(rows, max_rows=10)
+    plan = build_pricing_import_execution_plan(preview)
+    service = FakePricingService()
+
+    result = asyncio.run(
+        execute_pricing_import_plan(
+            plan,
+            pricing_rule_service=service,
+            actor_admin_id=uuid.uuid4(),
+            reason="reviewed TSV import",
+        )
+    )
+
+    assert plan.executable is False
+    assert result.created_count == 0
+    assert result.error_count == 1
+    assert service.calls == []
 
 
 def test_pricing_import_execution_plan_executes_create_only_rows_without_raw_content() -> None:
