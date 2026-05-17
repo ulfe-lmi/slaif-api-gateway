@@ -197,10 +197,29 @@ non-mutating: it does not create key templates, participant keys, or gateway key
 policy changes, and it does not make additional provider calls.
 
 Redis rate limiting is temporary operational throttling only. PostgreSQL remains authoritative for hard quota and usage accounting.
-Billing is admission-time reservation plus post-call finalization, not hard
-real-time interruption of provider spend after a call starts. If a finalized
-request leaves a key above its local limit, subsequent calls are blocked until
-limits are raised or usage is reset.
+Chat Completions billing is an admission-time budget check plus post-call spend
+accounting. It is not hard real-time spend interruption inside one upstream
+call. If a request is admitted under the current balance, final provider usage
+is still finalized even when the actual token or cost usage exceeds the
+pre-call reservation. The usage ledger records safe `reservation_overrun`,
+`token_reservation_overrun`, `cost_reservation_overrun`, `reserved_*`,
+`actual_*`, and overrun-policy metadata. A finalized call may therefore leave a
+key above its configured local limits or with a negative remaining balance;
+subsequent calls are blocked by the normal PostgreSQL quota admission checks
+until limits are raised, usage is reset, or the key otherwise becomes compliant
+again.
+
+Actual Chat Completions cost finalization uses safe component-aware metadata:
+cached input tokens use `cached_input_price_per_1m` when available and otherwise
+fall back to ordinary input pricing with reduced cost confidence; reasoning
+tokens are treated as part of output tokens for current Chat Completions and use
+`reasoning_price_per_1m` for the reasoning subset when configured, otherwise
+ordinary output pricing with reduced confidence. OpenRouter provider-reported
+cost is preferred for actual finalization when the provider returns a valid
+non-negative cost and supported currency; the SLAIF-calculated cost is retained
+as comparison metadata. OpenAI requests use SLAIF-calculated cost unless an
+explicitly supported provider-reported cost path is added later. These values
+are SLAIF local accounting assumptions, not provider invoice certification.
 
 ## Streaming Compatibility
 

@@ -640,6 +640,7 @@ Rules:
 - If the request body exceeds the configured input-token limit, reject before forwarding.
 - Quota reservation must be based on the effective request after gateway policy is applied.
 - Endpoint-specific names must be handled carefully: Chat Completions may use `max_tokens` or `max_completion_tokens`; Responses may use `max_output_tokens`.
+- Chat Completions cost enforcement is an admission-time budget check plus post-call spend accounting. Do not reject a successful provider response solely because actual tokens or cost exceed the reservation; finalize actual usage, record safe overrun metadata, and let subsequent quota admission block negative-balance keys.
 
 ### 4.5 Provider router
 

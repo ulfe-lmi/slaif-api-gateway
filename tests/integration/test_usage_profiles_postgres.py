@@ -211,6 +211,9 @@ def test_chat_completions_e2e_creates_usage_profile_without_content(
     assert profile.total_tokens == 11
     assert profile.cached_tokens == 2
     assert profile.reasoning_tokens == 1
+    assert profile.cost_source == "slaif_calculated"
+    assert profile.profile_metadata["cost_confidence"] == "slaif_calculated_with_fallbacks"
+    assert profile.profile_metadata["reservation_overrun"] is False
     assert profile.tool_call_counts == {"function": 1}
     assert profile.function_tool_names == ["lookup_profile"]
 

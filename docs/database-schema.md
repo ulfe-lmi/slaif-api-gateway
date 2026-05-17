@@ -707,6 +707,16 @@ Rules:
 - Do not store prompts or completions in this table.
 - `usage_raw` may store provider usage fields only, not message content.
 - `response_metadata` must be redacted.
+- Chat Completions finalization metadata may include safe accounting
+  provenance such as `cost_source`, `cost_confidence`,
+  `slaif_calculated_cost_*`, `provider_reported_cost_*`, component token/cost
+  counts, pricing/FX row IDs, `reserved_tokens`, `actual_tokens`,
+  `reserved_cost_eur`, `actual_cost_eur`, reservation-overrun flags, and the
+  overrun policy name. It must not include prompts, completions, messages, raw
+  request bodies, raw response bodies, raw tool schemas, tool arguments, tool
+  results, provider keys, gateway plaintext keys, encrypted payloads, nonces,
+  cookies, sessions, CSRF tokens, password hashes, email bodies, or raw
+  chain-of-thought.
 - For interrupted streams where final usage is unavailable, mark `accounting_status='interrupted'` or `estimated` and finalize according to the reservation policy.
 
 ---
@@ -1403,6 +1413,14 @@ After upstream response:
 9. Insert or finalize usage_ledger row.
 10. Commit.
 ```
+
+Finalization is allowed to record actual token or cost usage above the admitted
+reservation for a successful provider response. The reservation is still marked
+`finalized`, used counters reflect actual usage, and safe overrun metadata is
+stored in `usage_ledger.response_metadata`. This preserves the agreed
+admission-time budget check plus post-call spend accounting model: SLAIF does
+not interrupt spend in real time inside a single upstream call, and subsequent
+requests are blocked when finalized counters exceed configured key limits.
 
 If upstream fails before usage is known:
 

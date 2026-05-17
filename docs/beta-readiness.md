@@ -113,6 +113,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Redis rate limiting is operational throttling only and is optional/configured.
 - Provider calls happen after quota reservation and outside the quota row-lock
   transaction.
+- Chat Completions billing uses admission-time budget checks plus post-call
+  spend accounting, not hard real-time spend interruption inside a single
+  upstream call. Successful responses finalize actual usage even above the
+  reservation; safe overrun metadata is recorded and subsequent calls are
+  blocked when finalized counters exceed key limits.
 - Usage ledger metadata does not store prompts or completions by default.
 - Current Chat Completions usage-profile rows persist safe calibration
   foundation metadata only: endpoint, provider/model, sanitized provider

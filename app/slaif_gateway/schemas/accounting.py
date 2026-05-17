@@ -27,8 +27,16 @@ class ActualCost:
     actual_cost_eur: Decimal
     actual_cost_native: Decimal
     native_currency: str
+    slaif_calculated_cost_eur: Decimal
+    slaif_calculated_cost_native: Decimal
+    cost_source: str = "slaif_calculated"
+    cost_confidence: str = "slaif_calculated"
+    cost_warnings: tuple[str, ...] = ()
+    component_costs_native: Mapping[str, Decimal] = field(default_factory=dict)
+    component_token_counts: Mapping[str, int] = field(default_factory=dict)
     provider_reported_cost_native: Decimal | None = None
     provider_reported_currency: str | None = None
+    provider_reported_cost_eur: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -138,6 +138,16 @@ checks policy, estimates input/output/cost, reserves PostgreSQL quota before
 forwarding, forwards the request, then finalizes or releases the reservation
 after provider response/error handling.
 
+Chat Completions billing is an admission-time budget check plus post-call spend
+accounting. It is not hard real-time spend interruption inside one upstream
+call. If a successful provider response reports actual tokens or cost above the
+reservation, SLAIF finalizes the actual usage, marks the reservation finalized,
+updates used counters, and records safe overrun metadata in the usage ledger.
+That may leave a key above its configured local limits or with negative
+remaining balance. Subsequent calls are then blocked by normal PostgreSQL quota
+admission checks until limits are raised, usage is reset, or the key otherwise
+becomes compliant.
+
 The usage ledger records metadata, token counts, cost, provider/model status,
 and safe diagnostics. It does not store prompt text, completion text, uploaded
 files, tool payloads, or raw provider bodies by default.

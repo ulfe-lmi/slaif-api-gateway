@@ -166,6 +166,37 @@ def test_cost_fields_distinguish_provider_reported_and_slaif_calculated() -> Non
     assert created["cost_source"] == "provider_reported"
 
 
+def test_usage_profile_preserves_safe_cost_confidence_and_overrun_metadata() -> None:
+    ledger = _ledger(
+        response_metadata={
+            "cost_source": "provider_reported",
+            "cost_confidence": "provider_reported_with_slaif_comparison",
+            "reservation_overrun": True,
+            "token_reservation_overrun": True,
+            "cost_reservation_overrun": False,
+            "overrun_policy": "chat_completions_admit_then_finalize_v1",
+            "provider_reported_cost_native": "0.05",
+            "provider_reported_currency": "EUR",
+        }
+    )
+    profiles = FakeUsageProfilesRepository()
+    service = UsageProfileService(
+        usage_ledger_repository=FakeUsageLedgerRepository(ledger),
+        usage_profiles_repository=profiles,
+    )
+
+    asyncio.run(_record(service, ledger))
+
+    created = profiles.created[0]
+    assert created["cost_source"] == "provider_reported"
+    assert created["profile_metadata"]["cost_confidence"] == (
+        "provider_reported_with_slaif_comparison"
+    )
+    assert created["profile_metadata"]["reservation_overrun"] is True
+    assert created["profile_metadata"]["token_reservation_overrun"] is True
+    assert created["profile_metadata"]["cost_reservation_overrun"] is False
+
+
 def test_tool_metadata_stores_only_safe_counts_and_function_names() -> None:
     metadata = build_chat_completion_tool_metadata(
         {

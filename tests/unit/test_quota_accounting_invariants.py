@@ -19,11 +19,14 @@ from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import (
-    ActualCostExceededReservationError,
     InvalidUsageError,
     ReservationAlreadyFinalizedError,
 )
-from slaif_gateway.services.quota_errors import InvalidQuotaEstimateError, QuotaCounterInvariantError
+from slaif_gateway.services.quota_errors import (
+    InvalidQuotaEstimateError,
+    QuotaCounterInvariantError,
+    QuotaLimitExceededError,
+)
 from slaif_gateway.services.quota_service import QuotaService
 
 
@@ -441,6 +444,61 @@ def test_release_finalize_and_failure_paths_are_idempotent_or_fail_safe() -> Non
     asyncio.run(_run())
 
 
+def test_overrun_finalization_blocks_next_quota_reservation() -> None:
+    async def _run() -> None:
+        key = FakeGatewayKeyRow(
+            id=uuid.uuid4(),
+            cost_limit_eur=Decimal("0.400000000"),
+            token_limit_total=300,
+        )
+        key_repo = FakeGatewayKeysRepository(key)
+        quota_repo = FakeQuotaReservationsRepository()
+        usage_repo = FakeUsageLedgerRepository()
+        quota_service = QuotaService(
+            gateway_keys_repository=key_repo,  # type: ignore[arg-type]
+            quota_reservations_repository=quota_repo,  # type: ignore[arg-type]
+        )
+        accounting = AccountingService(
+            gateway_keys_repository=key_repo,  # type: ignore[arg-type]
+            quota_reservations_repository=quota_repo,  # type: ignore[arg-type]
+            usage_ledger_repository=usage_repo,  # type: ignore[arg-type]
+        )
+
+        reservation = await quota_service.reserve_for_chat_completion(
+            authenticated_key=_auth(key.id),
+            route=_route(),
+            policy=_policy(input_tokens=20, output_tokens=30),
+            cost_estimate=_estimate(input_tokens=20, output_tokens=30),
+            request_id="req-admitted",
+        )
+
+        await accounting.finalize_successful_response(
+            reservation.reservation_id,
+            _auth(key.id),
+            _route(),
+            _policy(input_tokens=20, output_tokens=30),
+            _estimate(input_tokens=20, output_tokens=30),
+            _response(prompt_tokens=200, completion_tokens=200),
+            request_id="req-admitted",
+        )
+
+        assert key.cost_used_eur > key.cost_limit_eur
+        assert key.tokens_used_total == 400
+        ledger = next(iter(usage_repo.rows.values()))
+        assert ledger.response_metadata["reservation_overrun"] is True
+
+        with pytest.raises(QuotaLimitExceededError):
+            await quota_service.reserve_for_chat_completion(
+                authenticated_key=_auth(key.id),
+                route=_route(),
+                policy=_policy(input_tokens=1, output_tokens=1),
+                cost_estimate=_estimate(input_tokens=1, output_tokens=1),
+                request_id="req-blocked",
+            )
+
+    asyncio.run(_run())
+
+
 def test_actual_usage_and_cost_invariants_reject_invalid_values() -> None:
     service = AccountingService(
         gateway_keys_repository=FakeGatewayKeysRepository(FakeGatewayKeyRow(id=uuid.uuid4())),  # type: ignore[arg-type]
@@ -478,16 +536,17 @@ def test_actual_usage_and_cost_invariants_reject_invalid_values() -> None:
         + Decimal(4) * (Decimal("987654321.987654321") / Decimal(10))
     )
 
-    with pytest.raises(ActualCostExceededReservationError):
-        # The response cost is above this reservation in finalize paths.
-        from slaif_gateway.services.accounting import _validate_actual_within_reservation
+    from slaif_gateway.services.accounting import _reservation_overrun_metadata
 
-        _validate_actual_within_reservation(
-            actual_cost_eur=Decimal("2"),
-            actual_tokens=1,
-            reserved_cost_eur=Decimal("1"),
-            reserved_tokens=1,
-        )
+    metadata = _reservation_overrun_metadata(
+        actual_cost_eur=Decimal("2"),
+        actual_tokens=2,
+        reserved_cost_eur=Decimal("1"),
+        reserved_tokens=1,
+    )
+    assert metadata["cost_reservation_overrun"] is True
+    assert metadata["token_reservation_overrun"] is True
+    assert metadata["reservation_overrun"] is True
 
 
 def _auth(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:

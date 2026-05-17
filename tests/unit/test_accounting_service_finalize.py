@@ -17,7 +17,6 @@ from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services import accounting
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import (
-    ActualCostExceededReservationError,
     ReservationAlreadyFinalizedError,
 )
 from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
@@ -303,6 +302,12 @@ async def test_finalize_successful_response_moves_counters_and_writes_ledger() -
     assert usage_repo.success_calls[0]["upstream_request_id"] == "upstream_req_1"
     assert usage_repo.success_calls[0]["actual_cost_eur"] == Decimal("0.1000000000")
     assert usage_repo.success_calls[0]["usage_raw"] == {"prompt_tokens": 50}
+    assert usage_repo.success_calls[0]["response_metadata"]["cost_source"] == "slaif_calculated"
+    assert (
+        usage_repo.success_calls[0]["response_metadata"]["cost_confidence"]
+        == "slaif_calculated"
+    )
+    assert usage_repo.success_calls[0]["response_metadata"]["reservation_overrun"] is False
     assert "provider_api_key" not in usage_repo.success_calls[0]
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
@@ -394,20 +399,57 @@ async def test_provider_completed_finalization_failure_marks_recovery_record() -
 
 
 @pytest.mark.asyncio
-async def test_finalize_rejects_actual_usage_beyond_reservation() -> None:
-    service, key, reservation, *_ = _service()
+async def test_finalize_allows_actual_usage_beyond_reservation_and_records_overrun() -> None:
+    service, key, reservation, _, _, usage_repo = _service()
     reservation.reserved_tokens = 10
+    key.tokens_reserved_total = 10
 
-    with pytest.raises(ActualCostExceededReservationError):
-        await service.finalize_successful_response(
-            reservation.id,
-            _auth(key.id),
-            _route(),
-            _policy(),
-            _estimate(),
-            _response(),
-            request_id="req_1",
-        )
+    result = await service.finalize_successful_response(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+    )
+
+    assert result.accounting_status == "finalized"
+    assert key.tokens_reserved_total == 0
+    assert key.tokens_used_total == 75
+    assert reservation.status == "finalized"
+    metadata = usage_repo.success_calls[0]["response_metadata"]
+    assert metadata["reserved_tokens"] == 10
+    assert metadata["actual_tokens"] == 75
+    assert metadata["token_reservation_overrun"] is True
+    assert metadata["reservation_overrun"] is True
+    assert metadata["overrun_policy"] == "chat_completions_admit_then_finalize_v1"
+
+
+@pytest.mark.asyncio
+async def test_finalize_allows_actual_cost_beyond_reservation_and_records_overrun() -> None:
+    service, key, reservation, _, _, usage_repo = _service()
+    reservation.reserved_cost_eur = Decimal("0.050000000")
+    key.cost_reserved_eur = Decimal("0.050000000")
+
+    result = await service.finalize_successful_response(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _policy(),
+        _estimate(),
+        _response(),
+        request_id="req_1",
+    )
+
+    assert result.actual_cost_eur == Decimal("0.1000000000")
+    assert key.cost_reserved_eur == Decimal("0E-9")
+    assert key.cost_used_eur == Decimal("0.1000000000")
+    metadata = usage_repo.success_calls[0]["response_metadata"]
+    assert metadata["reserved_cost_eur"] == "0.050000000"
+    assert Decimal(metadata["actual_cost_eur"]) == Decimal("0.1000000000")
+    assert metadata["cost_reservation_overrun"] is True
+    assert metadata["reservation_overrun"] is True
 
 
 @pytest.mark.asyncio
