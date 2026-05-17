@@ -2112,33 +2112,84 @@ Do not store prompts or completions as a workaround for reporting.
 ## 13. Implementation status and sequencing
 
 AGENTS.md is future-oriented guidance, but it should not send Codex back to
-completed foundation work. The current implemented core includes:
+completed RC-beta foundation work. The current implemented RC-beta scope is a
+credible beta implementation for the documented endpoint and operator surface,
+but it is not production certified and is not a formal security, penetration
+test, or compliance attestation.
 
-1. Python package skeleton, FastAPI app factory, `/healthz`, `/readyz`, and
-   OpenAI-compatible `/v1` routing modules.
-2. SQLAlchemy models, Alembic migrations, repository modules, and
-   TEST_DATABASE_URL-aware integration-test helpers for the schema currently in
-   `docs/database-schema.md`.
-3. Gateway key generation, HMAC validation, authentication, endpoint allow-list
-   checks, request policy checks, and configurable key prefixes.
-4. Admin/key/institution/cohort/owner CLI commands, provider/routing/pricing/FX
-   CLI commands, and safe usage summarize/export CLI commands.
-5. Non-streaming `/v1/chat/completions` forwarding through OpenAI/OpenRouter
-   adapters with provider-config-driven adapter construction, route resolution,
-   pricing/FX lookup, PostgreSQL quota reservation, accounting finalization, and
-   mocked OpenAI/OpenRouter E2E coverage.
-6. FastAPI lifespan-managed database engine/sessionmaker setup and realistic DB
-   readiness checks.
+The implemented core includes:
 
-Remaining major milestones include:
+1. FastAPI application setup with `/healthz`, `/readyz`, and OpenAI-compatible
+   `/v1` routing and OpenAI-shaped error handling.
+2. Authenticated `GET /v1/models`, filtered by local provider/route metadata
+   and the gateway key's effective model policy.
+3. Non-streaming and SSE streaming `POST /v1/chat/completions` through OpenAI
+   and OpenRouter adapters, including provider-secret substitution, provider
+   header/body policy, final streaming usage handling, and mocked official
+   OpenAI-client E2E coverage.
+4. Gateway key generation/authentication with HMAC-only storage, configurable
+   key prefixes, endpoint/model/provider policy checks, editable key request
+   policy, and no plaintext key persistence after creation/rotation flows.
+5. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
+   pricing/FX lookup, route resolution, audit records, reconciliation helpers,
+   and integration-test coverage. `docs/database-schema.md` remains the schema
+   source of truth; do not duplicate table, column, index, or constraint details
+   here.
+6. Redis-backed operational rate limiting when enabled, including request,
+   estimated-token, and active-concurrency throttles. Redis is operational
+   state only; PostgreSQL remains authoritative for hard quota/accounting.
+7. Admin dashboard pages/actions for the current scope: login/logout, keys and
+   key lifecycle actions, bulk key import preview/execution, owner,
+   institution, and cohort metadata, provider/route/pricing/FX metadata,
+   usage/audit CSV exports, and one-time-secret-backed email-delivery actions,
+   with CSRF protection on state-changing forms.
+8. CLI administration commands for the implemented admin bootstrap, owner,
+   institution, cohort, key lifecycle, provider/route/pricing/FX, usage export,
+   reconciliation, email, and database migration workflows.
+9. Email delivery for newly generated or rotated keys through encrypted
+   one-time secrets, SMTP via `aiosmtplib`, Celery workers, ID-only Celery
+   payloads, Mailpit for local development, and fail-closed ambiguous delivery
+   handling.
+10. Metrics, structured logging, request IDs, redaction, sanitized provider
+    diagnostics, and controlled `/metrics` exposure foundation.
+11. Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis,
+    Mailpit, and optional Nginx; migrations remain explicit operator actions.
+12. Production/operator runbooks for the current system, plus local Docker
+    debug/refresh workflow documentation and scripts.
+13. OpenAI Completions catalog bootstrap for local OpenAI Chat Completions
+    provider, route, and pricing metadata seeding.
+14. Public documentation for current compatibility, OpenAI-compatible usage,
+    security model, RC-beta readiness, release checklist, and known limitations.
 
-1. Streaming proxy support with SSE tests and interrupted-stream accounting.
-2. Redis-backed rate limiting.
-3. Admin dashboard routes/templates with CSRF-protected state changes.
-4. Email delivery through one-time secrets and Celery/Mailpit.
-5. Prometheus metrics, structured logging expansion, and deployment hardening.
-6. Full public docs and compatibility matrix.
-7. Optional upstream smoke tests, Playwright dashboard tests, and OpenTelemetry tracing.
+Remaining work should be treated as future scoped projects, not as missing
+foundation for the current RC-beta:
+
+1. Responses API support, including default-off key policy, explicit tool
+   controls, bounded-overrun cost estimates, unsupported stateful/background
+   field rejection, and provider/accounting/dashboard tests.
+2. Versioned key templates and template-derived bulk key workflows.
+3. Safe detailed usage profiling, calibration keys, and usage-derived quota or
+   template recommendations.
+4. Pricing catalog and fetch-preview workflows, including OpenRouter metadata
+   proposals and curated/manual OpenAI pricing imports with confirmation and
+   audit before production use.
+5. Legacy `POST /v1/completions`, if desired later, with its own forwarding,
+   pricing, accounting, compatibility, and test slice.
+6. `POST /v1/embeddings`, if desired later, with its own routing, pricing,
+   accounting, compatibility, and test slice.
+7. MFA and full RBAC. For now every active admin is a full operator, and
+   `superadmin` is metadata/future-proofing rather than an enforced boundary.
+8. Owner/institution/cohort delete or anonymization workflows that preserve
+   historical usage and audit integrity.
+9. Bulk key synchronous `send-now` execution. Bulk `none`, `pending`, and
+   `enqueue` modes are implemented; arbitrary old-key resend remains forbidden.
+10. External FX refresh workflows. Current FX import/edit workflows are local
+    metadata workflows and do not call external FX APIs.
+11. OpenTelemetry tracing.
+12. Production certification, formal penetration testing, and compliance
+    attestation. Production deployments still require operator-managed secrets,
+    HTTPS/Nginx hardening, backups, monitoring, alert routing, staging rehearsal,
+    and environment-specific review.
 
 At every stage, keep OpenAI-compatible client usage working.
 
