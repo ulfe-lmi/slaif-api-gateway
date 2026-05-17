@@ -149,5 +149,51 @@
       {% endfor %}
     </ul>
   </section>
+
+  <section class="action-panel" aria-labelledby="create-template-heading">
+    <h2 id="create-template-heading">Create Key Template From This Proposal</h2>
+    <p class="warning-text">This creates a durable template and immutable revision only. It does not create participant keys, apply policies to existing keys, or enable hosted capabilities for normal keys.</p>
+    <p class="muted">The server recomputes this calibration proposal before creating the template. Hidden form values identify only the source key, time window, and multiplier.</p>
+    {% if result.is_empty %}
+    <p class="warning-text">Template creation is disabled because this calibration proposal has no usage data.</p>
+    {% else %}
+    <form method="post" action="/admin/keys/{{ summary.gateway_key_id }}/calibration/create-template">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="start_at" value="{{ form.start_at }}">
+      <input type="hidden" name="end_at" value="{{ form.end_at }}">
+      <input type="hidden" name="multiplier" value="{{ form.multiplier }}">
+      <label>
+        Template name
+        <input name="template_name" required autocomplete="off" placeholder="Workshop participant policy">
+      </label>
+      <label>
+        Description
+        <textarea name="template_description" rows="3" autocomplete="off" placeholder="Optional safe description"></textarea>
+      </label>
+      <label>
+        Default validity days for future keys
+        <input name="validity_days_default" type="number" min="1" step="1" autocomplete="off">
+      </label>
+      <label>
+        Default email delivery mode
+        <select name="email_delivery_mode_default">
+          <option value="">No default</option>
+          <option value="none">none</option>
+          <option value="pending">pending</option>
+        </select>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_create_template" value="true" required>
+        I reviewed this calibration proposal and understand participant key creation is future work.
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <p class="warning-text">Hosted capabilities observed during calibration are stored as review-required warnings, not silently allowed participant capabilities. External MCP/connectors remain denied.</p>
+      <button type="submit">Create key template</button>
+    </form>
+    {% endif %}
+  </section>
 </section>
 {% endblock %}

@@ -8,6 +8,7 @@ from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
+from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
@@ -28,6 +29,7 @@ __all__ = [
     "FxRatesRepository",
     "GatewayKeysRepository",
     "InstitutionsRepository",
+    "KeyTemplatesRepository",
     "ModelRoutesRepository",
     "OneTimeSecretsRepository",
     "OwnersRepository",

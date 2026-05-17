@@ -27,6 +27,7 @@ from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
+from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
@@ -91,6 +92,7 @@ from slaif_gateway.services.key_import import (
     validate_key_import_rows,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_template_service import KeyTemplateError, KeyTemplateService
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
@@ -174,6 +176,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_policy_updated": ("success", "Gateway key request policy updated."),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
+    "template_created": ("success", "Key template created from reviewed calibration proposal."),
     "rotation_confirmation_required": ("error", "Confirm key rotation before continuing."),
     "rotation_reason_required": ("error", "Enter an audit reason before rotating this key."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
@@ -1111,6 +1114,156 @@ async def preview_admin_key_calibration(
             "summary": result.summary,
             "proposal": result.proposal,
             "form": form,
+        },
+    )
+    _set_no_store_headers(response)
+    return response
+
+
+@router.post("/keys/{gateway_key_id}/calibration/create-template", response_class=HTMLResponse)
+async def create_template_from_admin_key_calibration(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    start_at: str = Form(""),
+    end_at: str = Form(""),
+    multiplier: str = Form("3"),
+    template_name: str = Form(""),
+    template_description: str = Form(""),
+    validity_days_default: str = Form(""),
+    email_delivery_mode_default: str = Form(""),
+    confirm_create_template: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = {"start_at": start_at, "end_at": end_at, "multiplier": multiplier}
+    try:
+        parsed_start_at = _parse_admin_datetime(start_at)
+        parsed_end_at = _parse_admin_datetime(end_at)
+        parsed_multiplier = _parse_required_admin_decimal(multiplier, field_name="multiplier")
+        _, parsed_validity_days = _parse_optional_admin_int(validity_days_default)
+        async with _calibration_summary_service_scope(request) as service:
+            preview = await service.summarize_calibration_key_usage(
+                gateway_key_id=parsed_key_id,
+                start_at=parsed_start_at,
+                end_at=parsed_end_at,
+                multiplier=parsed_multiplier,
+            )
+        async with _key_template_service_scope(request) as template_service:
+            result = await template_service.create_from_calibration_proposal(
+                preview=preview,
+                name=template_name,
+                description=template_description,
+                actor_admin_id=action_context.admin_user.id,
+                reason=reason,
+                confirm_create_template=_is_checked(confirm_create_template),
+                validity_days_default=parsed_validity_days,
+                email_delivery_mode_default=_clean_admin_reason(email_delivery_mode_default),
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                request_id=_admin_diagnostic_id(request),
+            )
+    except (CalibrationSummaryError, KeyTemplateError, ValueError) as exc:
+        diagnostic_id = _admin_diagnostic_id(request)
+        logger.warning(
+            "admin.key_template_create_from_calibration_failed",
+            admin_id=str(action_context.admin_user.id),
+            gateway_key_id=str(parsed_key_id),
+            error=exc.__class__.__name__,
+            diagnostic_id=diagnostic_id,
+        )
+        try:
+            async with _admin_key_dashboard_service_scope(request) as service:
+                key = await service.get_key_detail(parsed_key_id)
+        except AdminKeyNotFoundError:
+            return HTMLResponse("Gateway key not found.", status_code=404)
+        return _render_key_calibration_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            key=key,
+            form=form,
+            error=str(exc),
+            diagnostic_id=diagnostic_id,
+            status_code=400,
+        )
+
+    return RedirectResponse(
+        url=f"/admin/templates/{result.template.id}?message=template_created",
+        status_code=303,
+    )
+
+
+@router.get("/templates", response_class=HTMLResponse)
+async def admin_key_templates_list(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            templates_rows = await KeyTemplatesRepository(session).list_templates_for_admin()
+
+    return templates.TemplateResponse(
+        request,
+        "templates/list.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "templates": templates_rows,
+        },
+    )
+
+
+@router.get("/templates/{template_id}", response_class=HTMLResponse)
+async def admin_key_template_detail(request: Request, template_id: str) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_template_id = _parse_gateway_key_id(template_id)
+    if parsed_template_id is None:
+        return HTMLResponse("Key template not found.", status_code=404)
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            template = await KeyTemplatesRepository(session).get_template_for_admin_detail(parsed_template_id)
+    if template is None:
+        return HTMLResponse("Key template not found.", status_code=404)
+
+    current_revision = _current_template_revision(template)
+    response = templates.TemplateResponse(
+        request,
+        "templates/detail.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "template": template,
+            "current_revision": current_revision,
+            "admin_status_message": _admin_status_message(request),
         },
     )
     _set_no_store_headers(response)
@@ -5505,6 +5658,17 @@ async def _calibration_summary_service_scope(request: Request) -> AsyncIterator[
 
 
 @asynccontextmanager
+async def _key_template_service_scope(request: Request) -> AsyncIterator[KeyTemplateService]:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield KeyTemplateService(
+                key_templates_repository=KeyTemplatesRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+
+
+@asynccontextmanager
 async def _admin_key_management_service_scope(request: Request) -> AsyncIterator[KeyService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
@@ -5930,6 +6094,17 @@ def _render_key_calibration_form(
     )
     _set_no_store_headers(response)
     return response
+
+
+def _current_template_revision(template: object) -> object | None:
+    revisions = list(getattr(template, "revisions", []) or [])
+    current_revision_id = getattr(template, "current_revision_id", None)
+    for revision in revisions:
+        if getattr(revision, "id", None) == current_revision_id:
+            return revision
+    if not revisions:
+        return None
+    return max(revisions, key=lambda revision: getattr(revision, "revision_number", 0))
 
 
 async def _render_key_policy_error(

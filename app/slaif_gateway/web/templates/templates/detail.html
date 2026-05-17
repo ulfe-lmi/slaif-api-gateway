@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Key Template Detail{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="template-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Template</p>
+      <h1 id="template-heading">{{ template.name }}</h1>
+      <p class="muted">Safe policy snapshot metadata only. No participant keys are created from this page.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/templates">All templates</a>
+      <a class="button-link secondary" href="/admin/keys">Keys</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="template-warning-heading">
+    <h2 id="template-warning-heading">Participant Keys Are Future Work</h2>
+    <p class="warning-text">This template is a durable policy snapshot. It does not create participant keys, mutate existing gateway keys, or silently allow hosted capabilities.</p>
+  </section>
+
+  <div class="detail-grid">
+    <section class="detail-section">
+      <h2>Template Metadata</h2>
+      <dl>
+        <dt>Template ID</dt>
+        <dd>{{ template.id }}</dd>
+        <dt>Name</dt>
+        <dd>{{ template.name }}</dd>
+        <dt>Description</dt>
+        <dd>{{ template.description or "Not set" }}</dd>
+        <dt>Status</dt>
+        <dd>{{ template.status }}</dd>
+        <dt>Created</dt>
+        <dd>{{ template.created_at.isoformat() }}</dd>
+        <dt>Updated</dt>
+        <dd>{{ template.updated_at.isoformat() }}</dd>
+      </dl>
+    </section>
+
+    {% if current_revision %}
+    <section class="detail-section">
+      <h2>Current Revision</h2>
+      <dl>
+        <dt>Revision ID</dt>
+        <dd>{{ current_revision.id }}</dd>
+        <dt>Revision number</dt>
+        <dd>{{ current_revision.revision_number }}</dd>
+        <dt>Source type</dt>
+        <dd>{{ current_revision.source_type }}</dd>
+        <dt>Source calibration key</dt>
+        <dd>{{ current_revision.source_calibration_gateway_key_id or "None" }}</dd>
+        <dt>Source time window</dt>
+        <dd>{{ current_revision.source_time_window_start.isoformat() if current_revision.source_time_window_start else "beginning" }} to {{ current_revision.source_time_window_end.isoformat() if current_revision.source_time_window_end else "now" }}</dd>
+        <dt>Multiplier</dt>
+        <dd>{{ current_revision.source_multiplier or "None" }}</dd>
+        <dt>Audit log ID</dt>
+        <dd>{{ current_revision.created_audit_log_id or "None" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Allowlists</h2>
+      <dl>
+        <dt>Allowed endpoints</dt>
+        <dd>{{ current_revision.allowed_endpoints|join(", ") or "None" }}</dd>
+        <dt>Allowed models</dt>
+        <dd>{{ current_revision.allowed_models|join(", ") or "None" }}</dd>
+        <dt>Allowed providers</dt>
+        <dd>{{ current_revision.allowed_providers|join(", ") or "None" }}</dd>
+        <dt>Allowed hosted capabilities</dt>
+        <dd>{{ current_revision.allowed_hosted_capabilities|join(", ") or "None" }}</dd>
+        <dt>Hosted capabilities requiring review</dt>
+        <dd>{{ current_revision.hosted_capabilities_requiring_review|join(", ") or "None" }}</dd>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h2>Limits</h2>
+      <dl>
+        <dt>Request limit</dt>
+        <dd>{{ current_revision.request_limit_total }}</dd>
+        <dt>Total token limit</dt>
+        <dd>{{ current_revision.token_limit_total }}</dd>
+        <dt>Input token limit</dt>
+        <dd>{{ current_revision.input_token_limit_total if current_revision.input_token_limit_total is not none else "Unknown" }}</dd>
+        <dt>Output token limit</dt>
+        <dd>{{ current_revision.output_token_limit_total if current_revision.output_token_limit_total is not none else "Unknown" }}</dd>
+        <dt>Reasoning token limit</dt>
+        <dd>{{ current_revision.reasoning_token_limit_total if current_revision.reasoning_token_limit_total is not none else "Unknown" }}</dd>
+        <dt>Cost limit EUR</dt>
+        <dd>{{ current_revision.cost_limit_eur if current_revision.cost_limit_eur is not none else "Unknown" }}</dd>
+        <dt>Max total tokens per request</dt>
+        <dd>{{ current_revision.max_total_tokens_per_request if current_revision.max_total_tokens_per_request is not none else "Unknown" }}</dd>
+        <dt>Max single request cost EUR</dt>
+        <dd>{{ current_revision.max_single_request_cost_eur if current_revision.max_single_request_cost_eur is not none else "Unknown" }}</dd>
+        <dt>Default validity days</dt>
+        <dd>{{ current_revision.validity_days_default if current_revision.validity_days_default is not none else "Not set" }}</dd>
+        <dt>Default email delivery mode</dt>
+        <dd>{{ current_revision.email_delivery_mode_default or "Not set" }}</dd>
+      </dl>
+    </section>
+    {% endif %}
+  </div>
+
+  {% if current_revision and current_revision.template_snapshot %}
+  <section class="action-panel" aria-labelledby="template-warnings-heading">
+    <h2 id="template-warnings-heading">Warnings And Assumptions</h2>
+    {% set snapshot = current_revision.template_snapshot %}
+    {% if snapshot.warnings %}
+    <h3>Warnings</h3>
+    <ul class="compact-list">
+      {% for warning in snapshot.warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if snapshot.proposal and snapshot.proposal.assumptions %}
+    <h3>Assumptions</h3>
+    <ul class="compact-list">
+      {% for assumption in snapshot.proposal.assumptions %}
+      <li>{{ assumption }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

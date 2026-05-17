@@ -147,11 +147,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Responses API is not implemented in RC1. RC2 is planned to focus on limited
   stateless `POST /v1/responses` support with explicit key/template policy,
   allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. Safe Chat Completions usage profiling and trusted calibration keys
-  now provide the first persisted foundation plus preview-only strict policy
-  proposals for usage-derived key templates, but template creation, participant
-  key generation, policy mutation, and Responses support remain future work. See
-  `responses-compatibility.md`.
+  estimates. Safe Chat Completions usage profiling, trusted calibration keys,
+  calibration proposal previews, and durable key-template snapshots now provide
+  the first persisted foundation for usage-derived participant policies, but
+  participant key generation, policy mutation, and Responses support remain
+  future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

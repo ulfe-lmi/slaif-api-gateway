@@ -46,6 +46,8 @@ PURPOSE_VALUES_ONE_TIME_SECRETS = ("gateway_key_email", "gateway_key_rotation_em
 STATUS_VALUES_ONE_TIME_SECRETS = ("pending", "consumed", "expired", "revoked")
 STATUS_VALUES_EMAIL_DELIVERIES = ("pending", "sending", "sent", "failed", "ambiguous", "cancelled")
 STATUS_VALUES_BACKGROUND_JOBS = ("queued", "running", "succeeded", "failed", "cancelled")
+STATUS_VALUES_KEY_TEMPLATES = ("active", "archived")
+SOURCE_VALUES_KEY_TEMPLATE_REVISIONS = ("manual", "calibration_proposal")
 
 
 def utcnow() -> datetime:
@@ -140,6 +142,14 @@ class AdminUser(Base):
     sessions: Mapped[list[AdminSession]] = relationship(back_populates="admin_user")
     gateway_keys_created: Mapped[list[GatewayKey]] = relationship(back_populates="created_by_admin_user")
     background_jobs: Mapped[list[BackgroundJob]] = relationship(back_populates="created_by_admin_user")
+    key_templates_created: Mapped[list[KeyTemplate]] = relationship(
+        back_populates="created_by_admin_user",
+        foreign_keys="KeyTemplate.created_by_admin_id",
+    )
+    key_template_revisions_created: Mapped[list[KeyTemplateRevision]] = relationship(
+        back_populates="created_by_admin_user",
+        foreign_keys="KeyTemplateRevision.created_by_admin_id",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -721,6 +731,181 @@ class AuditLog(Base):
         Index("ix_audit_log_entity_type_entity_id", "entity_type", "entity_id"),
         Index("ix_audit_log_action_created_at", "action", "created_at"),
         Index("ix_audit_log_request_id", "request_id"),
+    )
+
+
+class KeyTemplate(Base):
+    __tablename__ = "key_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    created_by_admin_user: Mapped[AdminUser | None] = relationship(
+        back_populates="key_templates_created",
+        foreign_keys=[created_by_admin_id],
+    )
+    archived_by_admin_user: Mapped[AdminUser | None] = relationship(foreign_keys=[archived_by_admin_id])
+    revisions: Mapped[list[KeyTemplateRevision]] = relationship(
+        back_populates="template",
+        cascade="all, delete-orphan",
+        foreign_keys="KeyTemplateRevision.template_id",
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(name)) > 0", name="key_templates_name_non_empty"),
+        CheckConstraint(
+            f"status in {STATUS_VALUES_KEY_TEMPLATES}",
+            name="key_templates_status_allowed_values",
+        ),
+        Index("ix_key_templates_status_created_at", "status", "created_at"),
+        Index("ix_key_templates_current_revision_id", "current_revision_id"),
+        Index("ix_key_templates_created_by_admin_id", "created_by_admin_id"),
+        Index("uq_key_templates_name_lower", func.lower(name), unique=True),
+    )
+
+
+class KeyTemplateRevision(Base):
+    __tablename__ = "key_template_revisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("key_templates.id", ondelete="CASCADE"), nullable=False
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    source_type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="manual",
+        server_default=text("'manual'"),
+    )
+    source_calibration_gateway_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="SET NULL"), nullable=True
+    )
+    source_time_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_time_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_multiplier: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    allowed_endpoints: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    allowed_models: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    allowed_providers: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    allowed_hosted_capabilities: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    hosted_capabilities_requiring_review: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    request_limit_total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    token_limit_total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    input_token_limit_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_token_limit_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reasoning_token_limit_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cost_limit_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    max_input_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_output_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_total_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_single_request_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    rate_limit_policy: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    validity_days_default: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    email_delivery_mode_default: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_snapshot: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_audit_log_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("audit_log.id", ondelete="SET NULL"), nullable=True
+    )
+
+    template: Mapped[KeyTemplate] = relationship(
+        back_populates="revisions",
+        foreign_keys=[template_id],
+    )
+    created_by_admin_user: Mapped[AdminUser | None] = relationship(
+        back_populates="key_template_revisions_created",
+        foreign_keys=[created_by_admin_id],
+    )
+    source_calibration_gateway_key: Mapped[GatewayKey | None] = relationship(foreign_keys=[source_calibration_gateway_key_id])
+    created_audit_log: Mapped[AuditLog | None] = relationship(foreign_keys=[created_audit_log_id])
+
+    __table_args__ = (
+        UniqueConstraint("template_id", "revision_number", name="uq_key_template_revisions_template_revision"),
+        CheckConstraint("revision_number > 0", name="key_template_revisions_revision_number_positive"),
+        CheckConstraint(
+            f"source_type in {SOURCE_VALUES_KEY_TEMPLATE_REVISIONS}",
+            name="key_template_revisions_source_type_allowed_values",
+        ),
+        CheckConstraint("request_limit_total > 0", name="key_template_revisions_request_limit_positive"),
+        CheckConstraint("token_limit_total >= 0", name="key_template_revisions_token_limit_non_negative"),
+        CheckConstraint(
+            "input_token_limit_total is null or input_token_limit_total >= 0",
+            name="key_template_revisions_input_token_limit_non_negative",
+        ),
+        CheckConstraint(
+            "output_token_limit_total is null or output_token_limit_total >= 0",
+            name="key_template_revisions_output_token_limit_non_negative",
+        ),
+        CheckConstraint(
+            "reasoning_token_limit_total is null or reasoning_token_limit_total >= 0",
+            name="key_template_revisions_reasoning_token_limit_non_negative",
+        ),
+        CheckConstraint(
+            "cost_limit_eur is null or cost_limit_eur >= 0",
+            name="key_template_revisions_cost_limit_non_negative",
+        ),
+        CheckConstraint(
+            "max_input_tokens_per_request is null or max_input_tokens_per_request >= 0",
+            name="key_template_revisions_max_input_non_negative",
+        ),
+        CheckConstraint(
+            "max_output_tokens_per_request is null or max_output_tokens_per_request >= 0",
+            name="key_template_revisions_max_output_non_negative",
+        ),
+        CheckConstraint(
+            "max_total_tokens_per_request is null or max_total_tokens_per_request >= 0",
+            name="key_template_revisions_max_total_non_negative",
+        ),
+        CheckConstraint(
+            "max_single_request_cost_eur is null or max_single_request_cost_eur >= 0",
+            name="key_template_revisions_max_cost_non_negative",
+        ),
+        CheckConstraint(
+            "source_multiplier is null or source_multiplier > 0",
+            name="key_template_revisions_source_multiplier_positive",
+        ),
+        CheckConstraint(
+            "validity_days_default is null or validity_days_default > 0",
+            name="key_template_revisions_validity_days_positive",
+        ),
+        Index("ix_key_template_revisions_template_id_created_at", "template_id", "created_at"),
+        Index(
+            "ix_key_template_revisions_source_calibration_key",
+            "source_calibration_gateway_key_id",
+        ),
+        Index("ix_key_template_revisions_created_by_admin_id", "created_by_admin_id"),
     )
 
 
