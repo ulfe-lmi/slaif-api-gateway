@@ -6,6 +6,7 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import OpenAIModel
+from slaif_gateway.services.key_modes import is_trusted_calibration_key
 
 
 class ModelCatalogService:
@@ -21,7 +22,15 @@ class ModelCatalogService:
         self._provider_configs_repository = provider_configs_repository
 
     async def list_visible_models(self, authenticated_key: AuthenticatedGatewayKey) -> list[OpenAIModel]:
-        if not authenticated_key.allow_all_models and not authenticated_key.allowed_models:
+        trusted_calibration = is_trusted_calibration_key(
+            key_purpose=authenticated_key.key_purpose,
+            capability_policy_mode=authenticated_key.capability_policy_mode,
+        )
+        if (
+            not trusted_calibration
+            and not authenticated_key.allow_all_models
+            and not authenticated_key.allowed_models
+        ):
             return []
 
         routes = await self._model_routes_repository.list_visible_model_routes()
@@ -30,10 +39,12 @@ class ModelCatalogService:
             provider_config.provider for provider_config in provider_configs if provider_config.enabled
         }
 
-        restrict_models = not authenticated_key.allow_all_models
+        restrict_models = not trusted_calibration and not authenticated_key.allow_all_models
         allowed_models = set(authenticated_key.allowed_models)
 
-        restrict_providers = authenticated_key.allowed_providers is not None
+        restrict_providers = (
+            not trusted_calibration and authenticated_key.allowed_providers is not None
+        )
         allowed_providers = set(authenticated_key.allowed_providers or ())
 
         models: list[OpenAIModel] = []

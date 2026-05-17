@@ -6,6 +6,7 @@ from typing import Final
 
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.endpoint_policy_errors import EndpointNotAllowedError
+from slaif_gateway.services.key_modes import is_trusted_calibration_key
 
 MODELS_LIST: Final[str] = "models.list"
 CHAT_COMPLETIONS: Final[str] = "chat.completions"
@@ -36,7 +37,10 @@ class EndpointPolicyService:
         authenticated_key: AuthenticatedGatewayKey,
         endpoint: str,
     ) -> None:
-        if authenticated_key.allow_all_endpoints:
+        if authenticated_key.allow_all_endpoints or is_trusted_calibration_key(
+            key_purpose=authenticated_key.key_purpose,
+            capability_policy_mode=authenticated_key.capability_policy_mode,
+        ):
             return
 
         allowed = {_normalize_endpoint_entry(item) for item in authenticated_key.allowed_endpoints}
@@ -58,4 +62,3 @@ def _normalize_endpoint_entry(value: str) -> str:
     if normalized.startswith("/"):
         return normalized.lower()
     return normalized.lower()
-

@@ -77,6 +77,18 @@ The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
+Trusted calibration keys are the narrow exception for discovery. They are real
+gateway keys, created only with explicit confirmation, a short validity window,
+and a small request limit. They still use normal authentication, route
+resolution, provider-secret isolation, PostgreSQL request reservation and
+finalization, usage ledger, usage profiling, and audit behavior. Their
+`trusted_calibration_discovery` mode may pass hosted/provider-side Chat
+Completions capability markers for routed models so a trusted organizer can
+discover workflow requirements, but it still denies unsupported endpoints,
+external MCP/connectors, provider-side authorization, connector IDs, server
+URLs, approval flows, and background/provider-state lifecycle features by
+default. Calibration keys are not participant keys.
+
 ## Admin OpenAI Assisted Proposal Boundary
 
 OpenAI-assisted catalog proposal generation is an admin-only operator workflow,
@@ -132,6 +144,10 @@ credentials, provider keys, plaintext gateway keys, token hashes, encrypted
 payloads, nonces, password hashes, session tokens, email bodies, raw
 chain-of-thought, tool schemas, tool arguments, or tool results. This is Chat
 Completions-only RC2 foundation work; it does not implement Responses API.
+For trusted calibration requests, usage-profile metadata may include safe
+provenance such as `key_purpose`, `capability_policy_mode`, and observed hosted
+capability type names. It still must not include raw tool schemas, arguments,
+results, prompts, completions, raw bodies, or secrets.
 
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import anyio
@@ -129,7 +130,10 @@ async def handle_chat_completion(
 
     policy = ChatCompletionRequestPolicy(settings=settings)
     try:
-        policy_result = policy.apply(body)
+        policy_result = policy.apply(
+            body,
+            capability_policy_mode=authenticated_key.capability_policy_mode,
+        )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
@@ -743,6 +747,7 @@ async def _finalize_successful_chat_completion(
                 usage_ledger_id=usage_ledger_id,
                 route=route,
                 policy_result=policy_result,
+                authenticated_key=authenticated_key,
                 request=request,
             )
         return result
@@ -755,6 +760,7 @@ async def _record_usage_profile_after_finalization(
     usage_ledger_id: uuid.UUID,
     route: RouteResolutionResult,
     policy_result: ChatCompletionPolicyResult,
+    authenticated_key: AuthenticatedGatewayKey,
     request: Request | None,
 ) -> None:
     """Persist advisory usage profile metadata without affecting responses."""
@@ -786,6 +792,10 @@ async def _record_usage_profile_after_finalization(
             usage_ledger_id,
             route=route,
             tool_metadata=build_chat_completion_tool_metadata(policy_result.effective_body),
+            profile_metadata=_usage_profile_policy_metadata(
+                authenticated_key=authenticated_key,
+                effective_body=policy_result.effective_body,
+            ),
         )
         if hasattr(session, "commit"):
             await session.commit()
@@ -800,6 +810,29 @@ async def _record_usage_profile_after_finalization(
         )
     finally:
         await session_iterator.aclose()
+
+
+def _usage_profile_policy_metadata(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    effective_body: Mapping[str, object],
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "key_purpose": authenticated_key.key_purpose,
+        "capability_policy_mode": authenticated_key.capability_policy_mode,
+    }
+    if authenticated_key.key_purpose == "trusted_calibration":
+        from slaif_gateway.services.hosted_tool_policy import (
+            summarize_chat_completion_hosted_capabilities,
+        )
+
+        metadata.update(
+            summarize_chat_completion_hosted_capabilities(
+                effective_body,
+                requested_model=str(effective_body.get("model") or ""),
+            )
+        )
+    return metadata
 
 
 async def _record_provider_completed_before_finalization(

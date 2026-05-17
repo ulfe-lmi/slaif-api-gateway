@@ -438,6 +438,10 @@ allowed_models jsonb not null default '[]'
 allow_all_endpoints boolean not null default false
 allowed_endpoints jsonb not null default '[]'
 
+key_purpose text not null default 'standard'
+capability_policy_mode text not null default 'standard'
+calibration_metadata jsonb not null default '{}'
+
 metadata jsonb not null default '{}'
 
 last_used_at timestamptz null
@@ -477,6 +481,14 @@ check(tokens_reserved_total >= 0)
 check(requests_used_total >= 0)
 check(requests_reserved_total >= 0)
 check(valid_until > valid_from)
+check(key_purpose in ('standard', 'trusted_calibration'))
+check(capability_policy_mode in ('standard', 'trusted_calibration_discovery'))
+check(
+  (key_purpose = 'standard' and capability_policy_mode = 'standard')
+  or
+  (key_purpose = 'trusted_calibration' and capability_policy_mode = 'trusted_calibration_discovery')
+)
+check(key_purpose != 'trusted_calibration' or request_limit_total is not null)
 ```
 
 Policy semantics:
@@ -487,6 +499,10 @@ token_limit_total null    means no token limit; avoid this for training keys
 request_limit_total null  means no request limit
 allow_all_models false + empty allowed_models means no models allowed
 allow_all_endpoints false + empty allowed_endpoints means no endpoints allowed
+key_purpose standard means an ordinary participant/admin-created gateway key
+key_purpose trusted_calibration means a short-lived, low-request-count key for trusted workflow discovery
+capability_policy_mode standard denies hosted/provider-side tools by default
+capability_policy_mode trusted_calibration_discovery allows broad hosted-capability discovery for implemented endpoints while still denying external authority
 ```
 
 Recommended default for training keys:
@@ -499,6 +515,28 @@ allowed_endpoints = ['/v1/chat/completions', '/v1/models']
 cost_limit_eur not null
 token_limit_total not null
 ```
+
+Trusted calibration key rules:
+
+- Trusted calibration keys are real `gateway_keys` rows, not a bypass token.
+- They still use normal gateway authentication, provider-secret isolation, route
+  resolution, PostgreSQL request-count reservation/finalization, usage ledger,
+  safe usage profiling, and audit behavior.
+- They are for trusted organizers/admins only, not participants.
+- They must be short-lived and must have a small `request_limit_total` enforced
+  by service settings.
+- They may bypass participant model allowlists and use broad hosted-capability
+  discovery for currently implemented endpoints, but local route metadata must
+  still resolve the requested model/provider.
+- External MCP/connectors, provider-side authorization fields, connector IDs,
+  server URLs, approval flows, background/provider-state lifecycle features, and
+  unsupported endpoints remain denied by default.
+- `calibration_metadata` may store safe provenance such as workflow labels,
+  creation channel, or admin-reviewed notes. Do not store prompts, completions,
+  raw request/response bodies, tool schemas, tool arguments/results, provider
+  keys, gateway plaintext keys, encrypted payloads, nonces, cookies, CSRF
+  tokens, session tokens, password hashes, email bodies, or raw
+  chain-of-thought.
 
 Quota rule:
 

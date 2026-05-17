@@ -328,6 +328,34 @@ this bootstrap command.
 These caps protect hard quota reservation by bounding worst-case usage before
 upstream forwarding.
 
+## Trusted Calibration Keys
+
+Trusted calibration keys are real gateway keys for trusted organizers/admins.
+They are short-lived, request-limited, and use normal authentication, routing,
+provider-secret isolation, PostgreSQL accounting, usage ledger, usage
+profiling, and audit behavior. Their discovery policy may pass routed Chat
+Completions hosted-capability markers so an admin can later derive strict
+participant policies/templates from observed usage. They are not participant
+keys and do not enable `/v1/responses` or `/v1/completions`.
+
+- `CALIBRATION_KEYS_ENABLED` defaults to `true` for development/test
+  convenience. Operators should treat production calibration keys as privileged
+  and issue them only to trusted organizers.
+- `TRUSTED_CALIBRATION_MAX_REQUESTS` defaults to `10` and bounds the required
+  `request_limit_total` for trusted calibration key creation.
+- `TRUSTED_CALIBRATION_MAX_VALID_DAYS` defaults to `7`.
+- `TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS` defaults to `true` so
+  discovery can observe provider-side tool type names. Normal keys still reject
+  unknown tool types.
+- `TRUSTED_CALIBRATION_ALLOW_EXTERNAL_AUTHORITY` defaults to `false`.
+  External MCP/connectors, provider-side authorization fields, connector IDs,
+  server URLs, and approval flows remain denied by default.
+
+CLI creation requires `--trusted-calibration`,
+`--confirm-trusted-calibration`, a non-empty `--reason`, a small
+`--request-limit-total`, and a short validity window. Admin web creation remains
+a follow-up; bulk key import does not create trusted calibration keys.
+
 ## Planned Responses API Configuration
 
 Responses API settings are planned for RC2 and are not implemented unless a

@@ -27,6 +27,8 @@ from slaif_gateway.db.base import Base
 
 
 STATUS_VALUES_GATEWAY_KEYS = ("active", "suspended", "revoked")
+PURPOSE_VALUES_GATEWAY_KEYS = ("standard", "trusted_calibration")
+CAPABILITY_POLICY_MODE_VALUES_GATEWAY_KEYS = ("standard", "trusted_calibration_discovery")
 ROLE_VALUES_ADMIN_USERS = ("viewer", "operator", "admin", "superadmin")
 STATUS_VALUES_QUOTA_RESERVATIONS = ("pending", "finalized", "released", "expired")
 STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
@@ -237,6 +239,14 @@ class GatewayKey(Base):
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
 
+    key_purpose: Mapped[str] = mapped_column(Text, nullable=False, default="standard", server_default=text("'standard'"))
+    capability_policy_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="standard", server_default=text("'standard'")
+    )
+    calibration_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -270,6 +280,24 @@ class GatewayKey(Base):
             f"status in {STATUS_VALUES_GATEWAY_KEYS}",
             name="gateway_keys_status_allowed_values",
         ),
+        CheckConstraint(
+            f"key_purpose in {PURPOSE_VALUES_GATEWAY_KEYS}",
+            name="gateway_keys_key_purpose_allowed_values",
+        ),
+        CheckConstraint(
+            f"capability_policy_mode in {CAPABILITY_POLICY_MODE_VALUES_GATEWAY_KEYS}",
+            name="gateway_keys_capability_policy_mode_allowed_values",
+        ),
+        CheckConstraint(
+            "((key_purpose = 'standard' and capability_policy_mode = 'standard') or "
+            "(key_purpose = 'trusted_calibration' and "
+            "capability_policy_mode = 'trusted_calibration_discovery'))",
+            name="gateway_keys_purpose_policy_mode_pair",
+        ),
+        CheckConstraint(
+            "key_purpose != 'trusted_calibration' or request_limit_total is not null",
+            name="gateway_keys_trusted_calibration_request_limit_required",
+        ),
         CheckConstraint("cost_used_eur >= 0", name="gateway_keys_cost_used_eur_non_negative"),
         CheckConstraint("cost_reserved_eur >= 0", name="gateway_keys_cost_reserved_eur_non_negative"),
         CheckConstraint("tokens_used_total >= 0", name="gateway_keys_tokens_used_total_non_negative"),
@@ -290,6 +318,8 @@ class GatewayKey(Base):
         Index("ix_gateway_keys_cohort_id", "cohort_id"),
         Index("ix_gateway_keys_status", "status"),
         Index("ix_gateway_keys_valid_until", "valid_until"),
+        Index("ix_gateway_keys_key_purpose", "key_purpose"),
+        Index("ix_gateway_keys_capability_policy_mode", "capability_policy_mode"),
     )
 
 

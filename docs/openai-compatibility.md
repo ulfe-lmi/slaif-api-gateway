@@ -130,6 +130,16 @@ search-specific Chat Completions models such as `gpt-5-search-api` are rejected
 before Redis rate limiting, route resolution, pricing lookup, quota
 reservation, or provider forwarding.
 
+Trusted calibration keys are the discovery exception. A trusted organizer/admin
+key in `trusted_calibration_discovery` mode may pass routed Chat Completions
+hosted-capability markers, including search-specific model IDs when a local
+route exists, so SLAIF can observe safe usage metadata. Normal keys keep the
+hosted-tool-deny behavior. Calibration mode does not implement `/v1/responses`
+or `/v1/completions`, does not create routes automatically, and still denies
+external MCP/connectors, provider-side authorization, connector IDs, server
+URLs, approval flows, and background/provider-state lifecycle features by
+default.
+
 Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
 object/list fields such as `tools`, legacy `functions`, object-shaped
@@ -233,8 +243,9 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 - Responses API in RC1. It is planned for RC2 under
   `docs/responses-compatibility.md`, with stateful/background/provider-side
   storage features and MCP excluded from the initial scope.
-- Hosted/provider-side tool support and Chat Completions web search. Local
-  function tools remain allowed as ordinary client-side behavior.
+- Hosted/provider-side tool support for normal participant keys. Local function
+  tools remain allowed as ordinary client-side behavior. Trusted calibration
+  keys can use broad discovery policy only for routed Chat Completions requests.
 - Embeddings API.
 - Files, images, audio, or batch endpoints.
 - Native Anthropic API.

@@ -10,6 +10,7 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.key_modes import is_trusted_calibration_key
 from slaif_gateway.services.routing_errors import (
     AmbiguousRouteError,
     ModelNotAllowedForKeyError,
@@ -79,8 +80,16 @@ class RouteResolutionService:
         if not requested_model:
             raise ModelNotFoundError("Model name is required")
 
-        if not authenticated_key.allow_all_models and requested_model not in set(
-            authenticated_key.allowed_models
+        trusted_calibration = is_trusted_calibration_key(
+            key_purpose=authenticated_key.key_purpose,
+            capability_policy_mode=authenticated_key.capability_policy_mode,
+        )
+
+        allowed_models = set(authenticated_key.allowed_models)
+        if (
+            not trusted_calibration
+            and not authenticated_key.allow_all_models
+            and requested_model not in allowed_models
         ):
             raise ModelNotAllowedForKeyError()
 
@@ -117,7 +126,7 @@ class RouteResolutionService:
                 continue
             ranked_matches.append(_RankedMatch(route=route, provider_config=provider_config))
 
-        if authenticated_key.allowed_providers is not None:
+        if authenticated_key.allowed_providers is not None and not trusted_calibration:
             allowed_providers = set(authenticated_key.allowed_providers)
             ranked_matches = [
                 match for match in ranked_matches if match.route.provider in allowed_providers

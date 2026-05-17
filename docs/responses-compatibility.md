@@ -140,10 +140,17 @@ The workflow is advisory until an admin confirms a template or key creation:
 7. Let the admin edit assumptions before creating a template or bulk keys.
 
 SLAIF now records a Chat Completions-first subset of safe operational metadata
-in `usage_profiles` after successful accounting finalization. That table is the
-first persistence foundation for recommendations; it is advisory and not
-invoice-grade billing truth. Future Responses work must extend the same safe
-metadata boundary rather than storing request or response content.
+in `usage_profiles` after successful accounting finalization. Trusted
+calibration keys are also available for trusted organizers/admins: they are real
+gateway keys with short validity and a small request limit, and they run through
+normal authentication, routing, provider-secret isolation, PostgreSQL
+accounting, usage ledger, usage profiling, and audit behavior. Their broad
+discovery mode can observe routed Chat Completions capability needs, but they
+are not participant keys and do not enable Responses API.
+
+The table is the first persistence foundation for recommendations; it is
+advisory and not invoice-grade billing truth. Future Responses work must extend
+the same safe metadata boundary rather than storing request or response content.
 
 Recommendation workflows need safe operational metadata such as:
 

@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     DEFAULT_MAX_OUTPUT_TOKENS: int = 1024
     HARD_MAX_OUTPUT_TOKENS: int = 4096
     HARD_MAX_INPUT_TOKENS: int = 128000
+    CALIBRATION_KEYS_ENABLED: bool = True
+    TRUSTED_CALIBRATION_MAX_REQUESTS: int = 10
+    TRUSTED_CALIBRATION_MAX_VALID_DAYS: int = 7
+    TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS: bool = True
+    TRUSTED_CALIBRATION_ALLOW_EXTERNAL_AUTHORITY: bool = False
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
@@ -161,6 +166,7 @@ class Settings(BaseSettings):
             self._validate_encryption_key_shape(self.ONE_TIME_SECRET_ENCRYPTION_KEY)
 
         self._validate_request_caps()
+        self._validate_calibration_settings()
         self._validate_request_id_header()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
@@ -317,6 +323,12 @@ class Settings(BaseSettings):
             raise ValueError("HARD_MAX_INPUT_TOKENS must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
+
+    def _validate_calibration_settings(self) -> None:
+        if self.TRUSTED_CALIBRATION_MAX_REQUESTS <= 0:
+            raise ValueError("TRUSTED_CALIBRATION_MAX_REQUESTS must be a positive integer")
+        if self.TRUSTED_CALIBRATION_MAX_VALID_DAYS <= 0:
+            raise ValueError("TRUSTED_CALIBRATION_MAX_VALID_DAYS must be a positive integer")
 
     def _validate_request_id_header(self) -> None:
         header = self.REQUEST_ID_HEADER.strip()

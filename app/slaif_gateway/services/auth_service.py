@@ -8,6 +8,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.services.key_modes import is_trusted_calibration_key
 from slaif_gateway.utils.crypto import parse_gateway_key_public_id, verify_hmac_sha256_token
 
 
@@ -134,6 +135,11 @@ class GatewayAuthService:
         if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
             window_seconds = None
 
+        trusted_calibration = is_trusted_calibration_key(
+            key_purpose=getattr(gateway_key, "key_purpose", "standard"),
+            capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
+        )
+
         return AuthenticatedGatewayKey(
             gateway_key_id=gateway_key.id,
             owner_id=gateway_key.owner_id,
@@ -142,9 +148,9 @@ class GatewayAuthService:
             status=gateway_key.status,
             valid_from=gateway_key.valid_from,
             valid_until=gateway_key.valid_until,
-            allow_all_models=gateway_key.allow_all_models,
+            allow_all_models=gateway_key.allow_all_models or trusted_calibration,
             allowed_models=tuple(gateway_key.allowed_models),
-            allow_all_endpoints=gateway_key.allow_all_endpoints,
+            allow_all_endpoints=gateway_key.allow_all_endpoints or trusted_calibration,
             allowed_endpoints=tuple(gateway_key.allowed_endpoints),
             allowed_providers=allowed_providers,
             cost_limit_eur=gateway_key.cost_limit_eur,
@@ -156,6 +162,8 @@ class GatewayAuthService:
                 "max_concurrent_requests": gateway_key.max_concurrent_requests,
                 "window_seconds": window_seconds,
             },
+            key_purpose=getattr(gateway_key, "key_purpose", "standard"),
+            capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
         )
 
     @staticmethod
