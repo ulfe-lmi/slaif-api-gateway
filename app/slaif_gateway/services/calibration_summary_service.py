@@ -23,7 +23,8 @@ class CalibrationSummaryError(ValueError):
 
 
 class _GatewayKeysRepository(Protocol):
-    async def get_key_for_admin_detail(self, gateway_key_id: uuid.UUID) -> GatewayKey | None: ...
+    async def get_key_for_admin_detail(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
+        pass
 
 
 class _UsageProfilesRepository(Protocol):
@@ -34,7 +35,8 @@ class _UsageProfilesRepository(Protocol):
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int | None = 100,
-    ) -> list[UsageProfile]: ...
+    ) -> list[UsageProfile]:
+        pass
 
 
 @dataclass(frozen=True, slots=True)

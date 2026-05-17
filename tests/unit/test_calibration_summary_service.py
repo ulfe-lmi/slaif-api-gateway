@@ -114,7 +114,7 @@ def test_summarizes_trusted_calibration_usage_and_policy_proposal() -> None:
     assert proposal.proposed_output_token_limit_total == 54
     assert proposal.proposed_reasoning_token_limit_total == 6
     assert proposal.proposed_cost_limit_eur == Decimal("0.060000000")
-    payload = json.dumps(result, default=lambda value: str(value), sort_keys=True)
+    payload = json.dumps(result, default=str, sort_keys=True)
     assert PROMPT_TEXT not in payload
     assert COMPLETION_TEXT not in payload
     assert SECRET_VALUE not in payload
