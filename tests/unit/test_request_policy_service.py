@@ -7,6 +7,7 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.openai import ChatCompletionRequest
+from slaif_gateway.services.hosted_tool_policy import ChatCompletionCapabilityPolicyError
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
@@ -345,6 +346,131 @@ def test_unrelated_fields_are_preserved() -> None:
         "response_format",
         "tools",
     }
+
+
+def test_local_function_tool_with_scary_name_is_allowed() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "delete_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "delete_file"}},
+        }
+    )
+
+    assert result.effective_body["tools"][0]["function"]["name"] == "delete_file"
+    assert result.effective_body["tool_choice"]["function"]["name"] == "delete_file"
+
+
+def test_function_tool_schema_with_provider_marker_property_names_is_allowed() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "inspect_record",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "authorization": {"type": "string"},
+                                "server_url": {"type": "string"},
+                                "connector_id": {"type": "string"},
+                            },
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    assert result.effective_body["tools"][0]["function"]["parameters"]["properties"][
+        "authorization"
+    ] == {"type": "string"}
+
+
+@pytest.mark.parametrize(
+    ("request_overrides", "expected_code", "expected_param"),
+    [
+        ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
+        (
+            {"tools": [{"type": "web_search_preview"}]},
+            "web_search_not_allowed",
+            "tools[0].type",
+        ),
+        ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
+        ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
+        ({"tools": [{"type": "file_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "code_interpreter"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "computer"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "computer_use"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "image_generation"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "tool_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "custom_tool"}]}, "unknown_tool_type_not_allowed", "tools[0].type"),
+        ({"background": True}, "background_not_allowed", "background"),
+        ({"external_web_access": True}, "web_search_not_allowed", "external_web_access"),
+        ({"defer_loading": True}, "hosted_tool_not_allowed", "defer_loading"),
+        (
+            {"tool_choice": {"type": "web_search"}},
+            "web_search_not_allowed",
+            "tool_choice.type",
+        ),
+    ],
+)
+def test_hosted_tool_capability_surfaces_are_rejected(
+    request_overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    request = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        **request_overrides,
+    }
+
+    with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+        policy.apply(request)
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+    assert "sk-" not in exc_info.value.safe_message
+    assert "Authorization" not in exc_info.value.safe_message
+
+
+@pytest.mark.parametrize("marker", ["server_url", "connector_id", "authorization", "require_approval"])
+def test_provider_side_tool_markers_are_rejected_at_tool_object_level(marker: str) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(ChatCompletionCapabilityPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}, marker: "configured"}],
+            }
+        )
+
+    assert exc_info.value.error_code == "mcp_connectors_not_allowed"
+    assert exc_info.value.param == f"tools[0].{marker}"
 
 
 def test_choice_count_omitted_is_allowed() -> None:

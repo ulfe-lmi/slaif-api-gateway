@@ -137,6 +137,25 @@ stateful/background/storage and hosted-tool surfaces. SLAIF must fail closed on
 those differences until the policy, pricing, ownership, and accounting contracts
 are implemented and tested.
 
+## Capability Policy Boundary
+
+SLAIF treats endpoint, model, provider, and capability permissions as separate
+checks. Current `/v1/chat/completions` forwarding allows local/client-side
+function tools, legacy `functions` / `function_call`, `response_format`, JSON
+mode, and normal streaming. SLAIF does not execute or police downstream
+application code that handles a local function call.
+
+Hosted/provider-side tools are denied by default for Chat Completions because no
+persisted hosted-tool policy exists. Requests are rejected before Redis rate
+limiting, route resolution, pricing lookup, PostgreSQL quota reservation, or
+provider forwarding when they include `web_search_options`, hosted tool types
+such as `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
+`computer` / `computer_use`, `image_generation`, or `tool_search`,
+MCP/connectors markers such as `server_url`, `connector_id`, provider-side
+`authorization`, or `require_approval`, unknown tool types,
+`background=true`, `external_web_access`, or search-specific Chat Completions
+models such as `gpt-5-search-api`.
+
 ## Header Contract
 
 | Header | Client to gateway | Gateway to provider | Gateway to client | Behavior |
@@ -163,7 +182,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
 | `stream_options` | Preserved, but `include_usage` forced to `true` for streaming | Required for reliable streaming accounting |
 | `n` | Preserved only when omitted or exactly `1`; rejected for any other value | Multi-choice accounting is not implemented, so `n > 1` is rejected before provider forwarding |
-| `tools` / `tool_choice` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions fields can affect provider context size |
+| `tools` / `tool_choice` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Local `function` tools are allowed as client-side behavior. Hosted/provider-side tools, MCP/connectors, web search tools, unknown tool types, and tool choices that force denied hosted tools are rejected before forwarding |
 | `functions` / `function_call` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
 | `response_format` | Preserved when accepted; serialized JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
 | `metadata` | Preserved to provider; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field |

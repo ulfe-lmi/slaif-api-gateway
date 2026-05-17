@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from slaif_gateway.config import Settings
@@ -445,6 +446,127 @@ def test_multi_choice_count_is_rejected_before_side_effects(monkeypatch) -> None
         "code": "invalid_choice_count",
     }
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("payload_extra", "expected_code", "expected_param"),
+    [
+        ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
+        (
+            {"tools": [{"type": "web_search_preview"}]},
+            "web_search_not_allowed",
+            "tools[0].type",
+        ),
+        ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
+        ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
+        ({"tools": [{"type": "file_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "code_interpreter"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "computer"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "computer_use"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "image_generation"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "tool_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
+        ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed", "tools[0].type"),
+        (
+            {"tools": [{"type": "function", "function": {"name": "lookup"}, "server_url": "https://mcp.test"}]},
+            "mcp_connectors_not_allowed",
+            "tools[0].server_url",
+        ),
+        (
+            {"tools": [{"type": "function", "function": {"name": "lookup"}, "connector_id": "conn_123"}]},
+            "mcp_connectors_not_allowed",
+            "tools[0].connector_id",
+        ),
+        (
+            {"tools": [{"type": "function", "function": {"name": "lookup"}, "authorization": "Bearer sk-live"}]},
+            "mcp_connectors_not_allowed",
+            "tools[0].authorization",
+        ),
+        (
+            {"tools": [{"type": "function", "function": {"name": "lookup"}, "require_approval": True}]},
+            "mcp_connectors_not_allowed",
+            "tools[0].require_approval",
+        ),
+        ({"tools": [{"type": "unknown_hosted"}]}, "unknown_tool_type_not_allowed", "tools[0].type"),
+        ({"background": True}, "background_not_allowed", "background"),
+    ],
+)
+def test_hosted_tool_policy_rejects_before_redis_route_pricing_quota_or_provider(
+    monkeypatch,
+    payload_extra: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    calls: list[str] = []
+
+    async def _fake_redis_reserve(**kwargs):
+        _ = kwargs
+        calls.append("redis")
+        return None
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, requested_model, authenticated_key)
+        calls.append("route")
+        return _route_result()
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, endpoint, at)
+        calls.append("pricing")
+        return object()
+
+    async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
+        _ = (self, authenticated_key, route, policy, cost_estimate, request_id, now)
+        calls.append("quota")
+        raise AssertionError("quota reservation should not be called")
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_redis_reserve)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    payload = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "raw request body marker sk-slaif-secret"}],
+        **payload_extra,
+    }
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=payload,
+        headers={
+            "Authorization": "Bearer sk-slaif-raw-gateway-key",
+            "Cookie": "session_token=raw-session-token",
+            "X-CSRF-Token": "csrf_token_raw",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["code"] == expected_code
+    assert response.json()["error"]["param"] == expected_param
+    assert calls == []
+    response_text = response.text
+    for forbidden in (
+        "raw request body marker",
+        "sk-slaif-raw-gateway-key",
+        "raw-session-token",
+        "csrf_token_raw",
+        "Bearer sk-live",
+        "https://mcp.test",
+    ):
+        assert forbidden not in response_text
 
 
 def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> None:

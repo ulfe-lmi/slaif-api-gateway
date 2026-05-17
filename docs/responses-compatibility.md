@@ -39,6 +39,7 @@ Responses tools must not be blindly passed through.
 
 Rules:
 
+- Endpoint and model permission do not imply capability permission.
 - Tools must be explicitly allowed by key or key template.
 - Function tools are the safest first supported class because execution remains
   in the caller's application instead of inside the provider.
@@ -55,6 +56,13 @@ OpenAI documents hosted tools including web search, file search, function
 calling, remote MCP, code interpreter/container, computer use, image generation,
 shell, tool search, and patch-style tools. RC2 must treat those as separate
 security and cost surfaces, not as generic JSON passthrough.
+
+Current Chat Completions policy already applies the same fail-closed boundary
+for implemented `/v1/chat/completions`: local function tools are allowed as
+client-side behavior, while hosted/provider-side tools, MCP/connectors,
+`web_search_options`, search-specific models, `background=true`, and
+`external_web_access` are denied before provider forwarding. This hardening does
+not implement `/v1/responses`.
 
 ## Accounting Model
 

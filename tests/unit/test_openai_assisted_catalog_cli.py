@@ -273,6 +273,7 @@ def test_route_proposal_excludes_unsupported_categories_and_gateway_endpoints(
             _route_row(requested_model="omni-moderation-latest", model_category="moderation_only"),
             _route_row(requested_model="gpt-realtime", model_category="realtime_only"),
             _route_row(requested_model="batch-target", model_category="batch_only"),
+            _route_row(requested_model="gpt-5-search-api", model_category="chat"),
             _route_row(
                 requested_model="legacy-completion",
                 model_category="chat",
@@ -300,6 +301,7 @@ def test_route_proposal_excludes_unsupported_categories_and_gateway_endpoints(
     assert "/v1/responses" not in text
     assert "/v1/completions" not in text
     assert "omitted unsupported model category" in result.stdout
+    assert "omitted search-specific model requiring future hosted_web_search policy" in result.stdout
 
 
 def test_output_refuses_overwrite_without_flag(tmp_path, monkeypatch, respx_mock) -> None:
