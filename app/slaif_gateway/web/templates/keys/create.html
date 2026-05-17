@@ -147,6 +147,32 @@
       </div>
     </section>
 
+    <section class="action-panel" aria-labelledby="create-calibration-heading">
+      <h2 id="create-calibration-heading">Trusted Calibration Key</h2>
+      <p class="warning-text">Trusted calibration keys use broad discovery policy for a small number of calls. Do not issue them to participants. They are for trusted organizers/admins only. Observed usage is used later to derive strict participant policies.</p>
+      <dl class="compact-dl">
+        <dt>Enabled</dt>
+        <dd>{{ "Yes" if trusted_calibration_settings.enabled else "No" }}</dd>
+        <dt>Maximum requests</dt>
+        <dd>{{ trusted_calibration_settings.max_requests }}</dd>
+        <dt>Maximum valid days</dt>
+        <dd>{{ trusted_calibration_settings.max_valid_days }}</dd>
+        <dt>Unknown hosted tools</dt>
+        <dd>{{ "Allowed for trusted calibration" if trusted_calibration_settings.allow_unknown_hosted_tools else "Denied" }}</dd>
+        <dt>External authority</dt>
+        <dd>{{ "Allowed" if trusted_calibration_settings.allow_external_authority else "Denied by default" }}</dd>
+      </dl>
+      <label class="checkbox-row">
+        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %}>
+        Create as trusted calibration key
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %}>
+        I understand this is for trusted calibration discovery only
+      </label>
+      <p class="muted small">The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys.</p>
+    </section>
+
     <section class="action-panel" aria-labelledby="create-submit-heading">
       <h2 id="create-submit-heading">Create Key</h2>
       <p class="warning-text">The selected mode controls the only plaintext destination. Old keys cannot be resent; lost keys must be rotated.</p>

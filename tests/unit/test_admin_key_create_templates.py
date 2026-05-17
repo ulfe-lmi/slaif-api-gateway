@@ -5,6 +5,10 @@ from fastapi.testclient import TestClient
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.keys import CreatedGatewayKey
+from slaif_gateway.services.key_modes import (
+    CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+    KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 from tests.unit.test_admin_key_create_routes import _cohort, _owner, _patch_options
@@ -37,6 +41,11 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert 'name="owner_id"' in html
     assert 'name="allowed_models"' in html
     assert 'name="allowed_endpoints"' in html
+    assert "Trusted Calibration Key" in html
+    assert 'name="trusted_calibration" value="true"' in html
+    assert 'name="confirm_trusted_calibration" value="true"' in html
+    assert str(settings.TRUSTED_CALIBRATION_MAX_REQUESTS) in html
+    assert str(settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS) in html
     assert "key plaintext is shown once" not in html.lower()
     assert "None - show key once in browser" in html
     assert "Email delivery mode" in html
@@ -116,3 +125,58 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "session-token" not in html
     assert "one_time_secret" not in html
     assert "email action" not in html.lower()
+
+
+def test_create_result_template_marks_trusted_calibration_key(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    plaintext_key = "sk-slaif-calibration.once-only-created"
+
+    async def get_owner_by_id(self, requested_owner_id):
+        return owner
+
+    async def create_gateway_key(self, payload):
+        now = datetime.now(UTC)
+        return CreatedGatewayKey(
+            gateway_key_id=uuid.uuid4(),
+            owner_id=owner_id,
+            public_key_id="calpublic",
+            display_prefix="sk-slaif-calpublic",
+            plaintext_key=plaintext_key,
+            one_time_secret_id=uuid.uuid4(),
+            valid_from=now,
+            valid_until=now + timedelta(days=7),
+            rate_limit_policy=None,
+            key_purpose=KEY_PURPOSE_TRUSTED_CALIBRATION,
+            capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
+        )
+
+    monkeypatch.setattr("slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id", get_owner_by_id)
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "7",
+            "request_limit_total": "5",
+            "trusted_calibration": "true",
+            "confirm_trusted_calibration": "true",
+            "reason": "trusted discovery",
+        },
+    )
+
+    html = response.text
+    assert response.status_code == 200
+    assert html.count(plaintext_key) == 1
+    assert "Trusted calibration key" in html
+    assert "broad discovery policy" in html
+    assert "trusted_calibration_discovery" in html
+    assert "Do not issue to participants" in html

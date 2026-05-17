@@ -44,6 +44,9 @@ class AdminKeyListRow:
     allowed_endpoints: tuple[str, ...]
     allow_all_models: bool
     allow_all_endpoints: bool
+    key_purpose: str
+    capability_policy_mode: str
+    calibration_metadata: dict[str, object]
     allowed_models_summary: str
     allowed_endpoints_summary: str
     allowed_providers_summary: str

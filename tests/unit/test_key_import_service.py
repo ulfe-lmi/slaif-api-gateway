@@ -115,6 +115,9 @@ def test_valid_row_resolves_owner_policy_and_rate_limits() -> None:
     ("field", "value", "message"),
     [
         ("unknown", "value", "unknown fields"),
+        ("key_purpose", "trusted_calibration", "unknown fields"),
+        ("capability_policy_mode", "trusted_calibration_discovery", "unknown fields"),
+        ("trusted_calibration", "true", "unknown fields"),
         ("owner_id", str(uuid.uuid4()), "owner_id must reference an existing owner"),
         ("owner_email", "not-an-email", "owner_email must be a valid email address"),
         ("institution_id", str(uuid.uuid4()), "institution_id must match"),
