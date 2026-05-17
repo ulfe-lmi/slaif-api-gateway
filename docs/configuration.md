@@ -228,20 +228,30 @@ The admin-only proposal generator uses a separate discovery key:
 
 - `OPENAI_ADMIN_DISCOVERY_API_KEY` is the default environment variable read by
   `slaif-gateway openai-assisted pricing-proposal` and
-  `slaif-gateway openai-assisted route-proposal`.
+  `slaif-gateway openai-assisted route-proposal`, and by the authenticated
+  admin dashboard pages under `/admin/openai-assisted`.
 - `OPENAI_ASSISTED_CATALOG_MODEL` defaults the proposal model when `--model` is
-  omitted. Operators can override it per command with `--model`.
+  omitted or when the dashboard form keeps the default. Operators can override
+  it per CLI command with `--model` or per dashboard proposal form.
 
-This key is only read when an operator explicitly runs the proposal command with
-`--acknowledge-llm-proposal-risk`. It is not used by gateway user traffic, is
-not read from provider config rows, and must not be named `OPENAI_API_KEY`.
-`OPENAI_API_KEY` remains the OpenAI-compatible client variable for
-gateway-issued user keys.
+This key is only read when an operator explicitly runs the proposal CLI command
+with `--acknowledge-llm-proposal-risk` or submits the dashboard proposal form
+after checking the required acknowledgement. It is not used by gateway user
+traffic, is not read from provider config rows, is never displayed in the
+dashboard, and must not be named `OPENAI_API_KEY`. `OPENAI_API_KEY` remains the
+OpenAI-compatible client variable for gateway-issued user keys.
 
-The proposal commands call OpenAI Responses with web search restricted to
-official OpenAI domains where possible, ask for strict JSON, validate the JSON
-locally, and write TSV proposal files. They do not mutate `pricing_rules` or
-`model_routes`; import remains a separate preview/confirm/audit workflow.
+The proposal commands and dashboard pages call OpenAI Responses with web search
+restricted to official OpenAI domains where possible, ask for strict JSON,
+validate the JSON locally, and render TSV proposal content. They do not mutate
+`pricing_rules` or `model_routes`; import remains a separate
+preview/confirm/audit workflow through the existing pricing and route import
+pages. The dashboard result page is no-cache and must not store raw model
+responses, raw webpage text, prompts, completions, cookies, sessions, CSRF
+tokens, provider keys, encrypted payloads, nonces, or raw request/response
+bodies. Dashboard proposal generation is synchronous in the current
+implementation and uses the service HTTP timeout; use the CLI if an operator
+wants to run proposal generation outside a browser request.
 Generated OpenAI pricing rows are operator-reviewed local accounting
 assumptions, not authoritative provider pricing or invoice-grade guarantees.
 Request, token, output, model, and rate limits remain important controls even

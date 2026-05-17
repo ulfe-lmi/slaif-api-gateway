@@ -53,6 +53,27 @@ Client `Authorization` headers contain gateway-issued keys and are never
 forwarded upstream. Provider adapters construct a new upstream `Authorization`
 header from the server-side provider secret and use an outbound header allowlist.
 
+## Admin OpenAI Assisted Proposal Boundary
+
+OpenAI-assisted catalog proposal generation is an admin-only operator workflow,
+not a gateway user endpoint. It can call OpenAI only when an authenticated admin
+explicitly runs the CLI command with the risk acknowledgement or submits the
+dashboard proposal form with CSRF and the required acknowledgement checkbox.
+
+The workflow uses the separate `OPENAI_ADMIN_DISCOVERY_API_KEY` environment
+variable by default. It does not use `OPENAI_API_KEY`, does not read
+`provider_configs` secret values, and never displays or logs the discovery key
+value. It asks OpenAI for strict JSON from official OpenAI source URLs, validates
+the JSON locally, and renders reviewed TSV proposal content only.
+
+Proposal generation does not mutate `pricing_rules` or `model_routes`; the
+existing import preview/confirm/audit pages remain the only mutation gate. Safe
+audit/log events may include admin ID, proposal kind, source URLs, proposal
+model, row count, warning count, and a diagnostic ID. They must not include raw
+model responses, raw webpage text, prompts, completions, cookies, sessions, CSRF
+tokens, provider keys, encrypted payloads, nonces, raw request/response bodies,
+or generated full TSV content.
+
 ## Quota And Accounting
 
 PostgreSQL is the hard quota source of truth. Redis rate limiting is operational

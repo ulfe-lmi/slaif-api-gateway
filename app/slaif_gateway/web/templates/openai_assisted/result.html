@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}OpenAI Assisted Proposal Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="openai-assisted-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Proposals</p>
+      <h1 id="openai-assisted-result-heading">OpenAI Assisted Proposal Result</h1>
+      <p class="muted">Generated TSV for review. Import remains a separate preview, confirmation, and audit step.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link" href="{{ import_url }}">Open import page</a>
+      <a class="button-link secondary" href="/admin/openai-assisted">Proposal choices</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel danger-zone" aria-labelledby="openai-assisted-result-warning-heading">
+    <h2 id="openai-assisted-result-warning-heading">Review Required</h2>
+    <p class="warning-text">{{ warning }}</p>
+    <p class="muted">{{ proposal_warning }}</p>
+  </section>
+
+  <section class="summary-grid" aria-label="Proposal result summary">
+    <div class="metric-card">
+      <span class="metric-label">Proposal kind</span>
+      <strong>{{ result.proposal_type }}</strong>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">Rows</span>
+      <strong>{{ result.row_count }}</strong>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">Validation warnings</span>
+      <strong>{{ result.warnings|length }}</strong>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="openai-assisted-sources-heading">
+    <h2 id="openai-assisted-sources-heading">Source URLs</h2>
+    <ul>
+      {% for source_url in result.source_urls %}
+      <li><a href="{{ source_url }}" rel="noreferrer">{{ source_url }}</a></li>
+      {% else %}
+      <li>No cited source URLs were returned.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section class="action-panel" aria-labelledby="openai-assisted-warnings-heading">
+    <h2 id="openai-assisted-warnings-heading">Warnings</h2>
+    {% if result.warnings %}
+    <ul>
+      {% for warning in result.warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No proposal validation warnings were returned.</p>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="openai-assisted-tsv-heading">
+    <h2 id="openai-assisted-tsv-heading">Generated TSV</h2>
+    <p class="muted">Review these rows, then paste them into the import preview page. This page does not execute import.</p>
+    <textarea rows="18" spellcheck="false" readonly>{{ result.tsv_text }}</textarea>
+    <div class="header-actions">
+      <a class="button-link" href="{{ import_url }}">Continue to import preview</a>
+    </div>
+  </section>
+</section>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}OpenAI Route Proposal{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="openai-assisted-routes-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Proposals</p>
+      <h1 id="openai-assisted-routes-heading">OpenAI Route Proposal</h1>
+      <p class="muted">Generate a TSV proposal for reviewed local route import. No model route rows are written here.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/openai-assisted">Proposal choices</a>
+      <a class="button-link secondary" href="/admin/routes/import">Route import</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel danger-zone" aria-labelledby="openai-assisted-warning-heading">
+    <h2 id="openai-assisted-warning-heading">Review Required</h2>
+    <p class="warning-text">{{ warning }}</p>
+    <p class="muted">This uses {{ api_key_env_var }} from the server environment. The discovery key value is never shown.</p>
+  </section>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/openai-assisted/routes/propose">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="openai-assisted-routes-source-heading">
+      <h2 id="openai-assisted-routes-source-heading">Sources And Scope</h2>
+      <div class="form-grid">
+        <label>Models source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off"></label>
+        <label>Proposal model<input name="proposal_model" value="{{ form.proposal_model }}" autocomplete="off"></label>
+        <label>
+          Endpoint scope
+          <select name="endpoint_scope">
+            <option value="chat_completions" {% if form.endpoint_scope == "chat_completions" %}selected{% endif %}>Implemented Chat Completions only</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted small">Visible sources: {% for source_url in source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="openai-assisted-routes-filters-heading">
+      <h2 id="openai-assisted-routes-filters-heading">Model Filters</h2>
+      <label>Include model IDs or globs<textarea name="include_models" rows="4" spellcheck="false">{{ form.include_models }}</textarea></label>
+      <label>Exclude model IDs or globs<textarea name="exclude_models" rows="4" spellcheck="false">{{ form.exclude_models }}</textarea></label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="acknowledge_proposal" value="true">
+        I understand this is a proposal, not authoritative pricing or route truth.
+      </label>
+      <p class="muted small">Responses-only, embeddings-only, image-only, audio-only, moderation-only, realtime-only, batch-only, /v1/responses, and /v1/completions rows are excluded.</p>
+      <button type="submit">Generate route proposal</button>
+    </section>
+  </form>
+</section>
+{% endblock %}

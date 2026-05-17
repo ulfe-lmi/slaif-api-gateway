@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -93,6 +93,16 @@ from slaif_gateway.services.key_policy_validation import (
     validate_gateway_key_policy_values,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.openai_assisted_catalog import (
+    DEFAULT_OPENAI_ASSISTED_MODEL,
+    DEFAULT_OPENAI_MODELS_SOURCE_URL,
+    DEFAULT_OPENAI_PRICING_SOURCE_URL,
+    OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+    PROPOSAL_WARNING,
+    OpenAIAssistedProposalTextResult,
+    generate_openai_pricing_proposal_text,
+    generate_openai_route_proposal_text,
+)
 from slaif_gateway.services.cohort_service import CohortService
 from slaif_gateway.services.institution_service import InstitutionService
 from slaif_gateway.services.owner_service import OwnerService
@@ -253,6 +263,11 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
 }
 
 _ADMIN_EMAIL_DELIVERY_MODES = {"none", "pending", "send-now", "enqueue"}
+_OPENAI_ASSISTED_UI_WARNING = (
+    "This calls OpenAI and produces an LLM-assisted proposal only. It does not "
+    "update pricing or routes. Review sources and import separately."
+)
+_OPENAI_ASSISTED_ENDPOINT_SCOPES = {"chat_completions": "chat.completions"}
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -2732,6 +2747,241 @@ async def list_admin_routes(
                 "offset": offset,
             },
         },
+    )
+
+
+@router.get("/openai-assisted", response_class=HTMLResponse)
+async def admin_openai_assisted_index(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_openai_assisted_page(
+        request,
+        "openai_assisted/index.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "warning": _OPENAI_ASSISTED_UI_WARNING,
+            "source_urls": _openai_assisted_source_urls("pricing"),
+            "route_source_urls": _openai_assisted_source_urls("route"),
+            "api_key_env_var": OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+            "proposal_model": _effective_openai_assisted_model(settings),
+        },
+    )
+
+
+@router.get("/openai-assisted/pricing", response_class=HTMLResponse)
+async def admin_openai_assisted_pricing_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_openai_assisted_pricing_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+    )
+
+
+@router.post("/openai-assisted/pricing/propose", response_class=HTMLResponse)
+async def admin_openai_assisted_pricing_propose(
+    request: Request,
+    csrf_token: str = Form(""),
+    source_url: str = Form(DEFAULT_OPENAI_PRICING_SOURCE_URL),
+    models_source_url: str = Form(DEFAULT_OPENAI_MODELS_SOURCE_URL),
+    proposal_model: str = Form(""),
+    currency: str = Form("USD"),
+    endpoint_scope: str = Form("chat_completions"),
+    include_models: str = Form(""),
+    exclude_models: str = Form(""),
+    max_web_calls: int = Form(3),
+    acknowledge_proposal: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _openai_assisted_pricing_form_from_values(
+        source_url=source_url,
+        models_source_url=models_source_url,
+        proposal_model=proposal_model,
+        currency=currency,
+        endpoint_scope=endpoint_scope,
+        include_models=include_models,
+        exclude_models=exclude_models,
+        max_web_calls=str(max_web_calls),
+    )
+    if not _is_checked(acknowledge_proposal):
+        return _render_openai_assisted_pricing_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error="Confirm that this is a proposal before calling OpenAI.",
+            status_code=400,
+        )
+
+    try:
+        endpoint = _openai_assisted_endpoint_for_scope(endpoint_scope)
+        result = await generate_openai_pricing_proposal_text(
+            source_url=source_url,
+            models_source_url=models_source_url,
+            api_key_env_var=OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+            proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+            currency=currency,
+            endpoint=endpoint,
+            include_models=_split_model_filters(include_models),
+            exclude_models=_split_model_filters(exclude_models),
+            max_web_calls=max_web_calls,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _render_openai_assisted_failure(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            proposal_kind="pricing",
+            form=form,
+            exc=exc,
+        )
+
+    await _audit_openai_assisted_proposal(
+        request,
+        admin_id=action_context.admin_user.id,
+        proposal_kind="pricing",
+        source_urls=result.source_urls,
+        proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+        row_count=result.row_count,
+        warning_count=len(result.warnings),
+    )
+    _log_openai_assisted_proposal_success(
+        request,
+        admin_id=action_context.admin_user.id,
+        proposal_kind="pricing",
+        source_urls=result.source_urls,
+        proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+        row_count=result.row_count,
+        warning_count=len(result.warnings),
+    )
+    return _render_openai_assisted_result(
+        request,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        result=result,
+    )
+
+
+@router.get("/openai-assisted/routes", response_class=HTMLResponse)
+async def admin_openai_assisted_routes_form(request: Request) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    return _render_openai_assisted_routes_form(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+    )
+
+
+@router.post("/openai-assisted/routes/propose", response_class=HTMLResponse)
+async def admin_openai_assisted_routes_propose(
+    request: Request,
+    csrf_token: str = Form(""),
+    source_url: str = Form(DEFAULT_OPENAI_MODELS_SOURCE_URL),
+    proposal_model: str = Form(""),
+    endpoint_scope: str = Form("chat_completions"),
+    include_models: str = Form(""),
+    exclude_models: str = Form(""),
+    acknowledge_proposal: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = _openai_assisted_route_form_from_values(
+        source_url=source_url,
+        proposal_model=proposal_model,
+        endpoint_scope=endpoint_scope,
+        include_models=include_models,
+        exclude_models=exclude_models,
+    )
+    if not _is_checked(acknowledge_proposal):
+        return _render_openai_assisted_routes_form(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            error="Confirm that this is a proposal before calling OpenAI.",
+            status_code=400,
+        )
+
+    try:
+        _openai_assisted_endpoint_for_scope(endpoint_scope)
+        result = await generate_openai_route_proposal_text(
+            source_url=source_url,
+            api_key_env_var=OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+            proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+            include_models=_split_model_filters(include_models),
+            exclude_models=_split_model_filters(exclude_models),
+            implemented_endpoints_only=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _render_openai_assisted_failure(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            proposal_kind="route",
+            form=form,
+            exc=exc,
+        )
+
+    await _audit_openai_assisted_proposal(
+        request,
+        admin_id=action_context.admin_user.id,
+        proposal_kind="route",
+        source_urls=result.source_urls,
+        proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+        row_count=result.row_count,
+        warning_count=len(result.warnings),
+    )
+    _log_openai_assisted_proposal_success(
+        request,
+        admin_id=action_context.admin_user.id,
+        proposal_kind="route",
+        source_urls=result.source_urls,
+        proposal_model=_effective_openai_assisted_model(settings, proposal_model),
+        row_count=result.row_count,
+        warning_count=len(result.warnings),
+    )
+    return _render_openai_assisted_result(
+        request,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        result=result,
     )
 
 
@@ -5853,6 +6103,228 @@ def _render_provider_config_form(
     )
 
 
+def _render_openai_assisted_page(
+    request: Request,
+    template_name: str,
+    context: dict[str, object],
+    *,
+    status_code: int = 200,
+) -> Response:
+    response = templates.TemplateResponse(request, template_name, context, status_code=status_code)
+    _set_no_store_headers(response)
+    return response
+
+
+def _render_openai_assisted_pricing_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str] | None = None,
+    error: str | None = None,
+    diagnostic_id: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    settings = _settings(request)
+    return _render_openai_assisted_page(
+        request,
+        "openai_assisted/pricing.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "form": form or _default_openai_assisted_pricing_form(settings),
+            "error": error,
+            "diagnostic_id": diagnostic_id,
+            "warning": _OPENAI_ASSISTED_UI_WARNING,
+            "api_key_env_var": OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+            "source_urls": _openai_assisted_source_urls("pricing"),
+        },
+        status_code=status_code,
+    )
+
+
+def _render_openai_assisted_routes_form(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str] | None = None,
+    error: str | None = None,
+    diagnostic_id: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    settings = _settings(request)
+    return _render_openai_assisted_page(
+        request,
+        "openai_assisted/routes.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "form": form or _default_openai_assisted_route_form(settings),
+            "error": error,
+            "diagnostic_id": diagnostic_id,
+            "warning": _OPENAI_ASSISTED_UI_WARNING,
+            "api_key_env_var": OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR,
+            "source_urls": _openai_assisted_source_urls("route"),
+        },
+        status_code=status_code,
+    )
+
+
+def _render_openai_assisted_result(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    result: OpenAIAssistedProposalTextResult,
+    status_code: int = 200,
+) -> Response:
+    import_url = "/admin/pricing/import" if result.proposal_type == "pricing" else "/admin/routes/import"
+    return _render_openai_assisted_page(
+        request,
+        "openai_assisted/result.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "result": result,
+            "warning": _OPENAI_ASSISTED_UI_WARNING,
+            "proposal_warning": PROPOSAL_WARNING,
+            "import_url": import_url,
+        },
+        status_code=status_code,
+    )
+
+
+def _render_openai_assisted_failure(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    proposal_kind: str,
+    form: dict[str, str],
+    exc: BaseException,
+) -> Response:
+    diagnostic_id = _admin_diagnostic_id(request)
+    _log_openai_assisted_proposal_failure(
+        request,
+        admin_id=getattr(admin, "id", None),
+        proposal_kind=proposal_kind,
+        exc=exc,
+    )
+    error = f"Proposal generation failed safely. Diagnostic ID: {diagnostic_id}."
+    if proposal_kind == "pricing":
+        return _render_openai_assisted_pricing_form(
+            request,
+            admin=admin,
+            csrf_token=csrf_token,
+            form=form,
+            error=error,
+            diagnostic_id=diagnostic_id,
+            status_code=400,
+        )
+    return _render_openai_assisted_routes_form(
+        request,
+        admin=admin,
+        csrf_token=csrf_token,
+        form=form,
+        error=error,
+        diagnostic_id=diagnostic_id,
+        status_code=400,
+    )
+
+
+def _default_openai_assisted_pricing_form(settings: Settings) -> dict[str, str]:
+    return _openai_assisted_pricing_form_from_values(
+        source_url=DEFAULT_OPENAI_PRICING_SOURCE_URL,
+        models_source_url=DEFAULT_OPENAI_MODELS_SOURCE_URL,
+        proposal_model=_effective_openai_assisted_model(settings),
+        currency="USD",
+        endpoint_scope="chat_completions",
+        include_models="",
+        exclude_models="",
+        max_web_calls="3",
+    )
+
+
+def _default_openai_assisted_route_form(settings: Settings) -> dict[str, str]:
+    return _openai_assisted_route_form_from_values(
+        source_url=DEFAULT_OPENAI_MODELS_SOURCE_URL,
+        proposal_model=_effective_openai_assisted_model(settings),
+        endpoint_scope="chat_completions",
+        include_models="",
+        exclude_models="",
+    )
+
+
+def _openai_assisted_pricing_form_from_values(
+    *,
+    source_url: str,
+    models_source_url: str,
+    proposal_model: str,
+    currency: str,
+    endpoint_scope: str,
+    include_models: str,
+    exclude_models: str,
+    max_web_calls: str,
+) -> dict[str, str]:
+    return {
+        "source_url": source_url,
+        "models_source_url": models_source_url,
+        "proposal_model": proposal_model,
+        "currency": currency,
+        "endpoint_scope": endpoint_scope,
+        "include_models": include_models,
+        "exclude_models": exclude_models,
+        "max_web_calls": max_web_calls,
+    }
+
+
+def _openai_assisted_route_form_from_values(
+    *,
+    source_url: str,
+    proposal_model: str,
+    endpoint_scope: str,
+    include_models: str,
+    exclude_models: str,
+) -> dict[str, str]:
+    return {
+        "source_url": source_url,
+        "proposal_model": proposal_model,
+        "endpoint_scope": endpoint_scope,
+        "include_models": include_models,
+        "exclude_models": exclude_models,
+    }
+
+
+def _effective_openai_assisted_model(settings: Settings, proposal_model: str | None = None) -> str:
+    if proposal_model is not None and proposal_model.strip():
+        return proposal_model.strip()
+    configured = settings.OPENAI_ASSISTED_CATALOG_MODEL.strip()
+    return configured or DEFAULT_OPENAI_ASSISTED_MODEL
+
+
+def _openai_assisted_endpoint_for_scope(endpoint_scope: str) -> str:
+    try:
+        return _OPENAI_ASSISTED_ENDPOINT_SCOPES[endpoint_scope]
+    except KeyError as exc:
+        raise ValueError("Only implemented Chat Completions proposals are supported.") from exc
+
+
+def _split_model_filters(value: str) -> tuple[str, ...]:
+    filters: list[str] = []
+    for chunk in value.replace(",", "\n").splitlines():
+        cleaned = chunk.strip()
+        if cleaned:
+            filters.append(cleaned)
+    return tuple(filters)
+
+
+def _openai_assisted_source_urls(proposal_kind: str) -> tuple[str, ...]:
+    if proposal_kind == "pricing":
+        return (DEFAULT_OPENAI_PRICING_SOURCE_URL, DEFAULT_OPENAI_MODELS_SOURCE_URL)
+    return (DEFAULT_OPENAI_MODELS_SOURCE_URL,)
+
+
 def _render_pricing_import_form(
     request: Request,
     *,
@@ -7389,6 +7861,81 @@ def _log_admin_key_policy_failure(
     if isinstance(error_code, str) and error_code:
         event["error_code"] = error_code
     logger.warning("admin.key_policy_update.failed", **event)
+
+
+async def _audit_openai_assisted_proposal(
+    request: Request,
+    *,
+    admin_id: uuid.UUID,
+    proposal_kind: str,
+    source_urls: Sequence[str],
+    proposal_model: str,
+    row_count: int,
+    warning_count: int,
+) -> None:
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            await AuditRepository(session).add_audit_log(
+                admin_user_id=admin_id,
+                action="openai_assisted_catalog.proposal_generated",
+                entity_type="openai_assisted_catalog_proposal",
+                old_values=None,
+                new_values={
+                    "proposal_kind": proposal_kind,
+                    "source_urls": list(source_urls),
+                    "proposal_model": proposal_model,
+                    "row_count": row_count,
+                    "warning_count": warning_count,
+                    "diagnostic_id": _admin_diagnostic_id(request),
+                    "mutated_metadata": False,
+                },
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                request_id=_admin_request_id(request) or _admin_diagnostic_id(request),
+                note="Generated OpenAI-assisted catalog proposal TSV for review; no pricing or route rows mutated.",
+            )
+
+
+def _log_openai_assisted_proposal_success(
+    request: Request,
+    *,
+    admin_id: uuid.UUID,
+    proposal_kind: str,
+    source_urls: Sequence[str],
+    proposal_model: str,
+    row_count: int,
+    warning_count: int,
+) -> None:
+    logger.info(
+        "admin.openai_assisted_catalog.proposal_generated",
+        diagnostic_id=_admin_diagnostic_id(request),
+        request_id=_admin_request_id(request),
+        admin_id=str(admin_id),
+        proposal_kind=proposal_kind,
+        source_urls=list(source_urls),
+        proposal_model=proposal_model,
+        row_count=row_count,
+        warning_count=warning_count,
+        mutated_metadata=False,
+    )
+
+
+def _log_openai_assisted_proposal_failure(
+    request: Request,
+    *,
+    admin_id: uuid.UUID | None,
+    proposal_kind: str,
+    exc: BaseException,
+) -> None:
+    logger.warning(
+        "admin.openai_assisted_catalog.proposal_failed",
+        diagnostic_id=_admin_diagnostic_id(request),
+        request_id=_admin_request_id(request),
+        admin_id=str(admin_id) if admin_id is not None else None,
+        proposal_kind=proposal_kind,
+        exception_type=type(exc).__name__,
+    )
 
 
 def _uuid_for_log(value: str | None) -> uuid.UUID | None:

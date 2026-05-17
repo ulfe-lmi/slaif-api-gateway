@@ -48,8 +48,8 @@ separate reviewed implementation contract.
 
 ## OpenAI Assisted Pricing And Route Proposals
 
-SLAIF includes an admin-only CLI workflow that can call OpenAI to help draft
-pricing and route proposal files:
+SLAIF includes admin-only CLI and dashboard workflows that can call OpenAI to
+help draft pricing and route proposal files:
 
 ```bash
 slaif-gateway openai-assisted pricing-proposal \
@@ -61,21 +61,33 @@ slaif-gateway openai-assisted route-proposal \
   --acknowledge-llm-proposal-risk
 ```
 
-The command calls OpenAI only when an operator explicitly runs it. It is disabled
-unless the server-side admin discovery environment variable is configured; the
-default is `OPENAI_ADMIN_DISCOVERY_API_KEY`. Do not use `OPENAI_API_KEY` for
-this tool: `OPENAI_API_KEY` remains reserved for client-side gateway-issued
-keys. The default proposal model is controlled by
-`OPENAI_ASSISTED_CATALOG_MODEL`, and the CLI accepts `--model` for an explicit
-override.
+The dashboard exposes the same boundary under `/admin/openai-assisted`, with
+separate pricing and route proposal pages. It requires an authenticated admin
+session, CSRF, and an explicit acknowledgement checkbox before calling OpenAI.
+The result page shows cited source URLs, warnings, row counts, and generated TSV
+for review, then links to the existing pricing or route import page. It does
+not execute import. Proposal generation is synchronous in the current dashboard
+implementation and uses the service HTTP timeout; if OpenAI or web search is
+slow, the admin should retry later or use the CLI workflow.
+
+The CLI command and dashboard action call OpenAI only when an operator
+explicitly runs them. They are disabled unless the server-side admin discovery
+environment variable is configured; the default is
+`OPENAI_ADMIN_DISCOVERY_API_KEY`. Do not use `OPENAI_API_KEY` for this tool:
+`OPENAI_API_KEY` remains reserved for client-side gateway-issued keys. The
+default proposal model is controlled by `OPENAI_ASSISTED_CATALOG_MODEL`, and the
+CLI or dashboard form can select a model for the proposal request.
 
 Proposal generation uses official OpenAI documentation URLs by default:
 `https://platform.openai.com/docs/pricing` and
-`https://platform.openai.com/docs/models/compare`. The command asks OpenAI for
-strict JSON, validates the JSON deterministically, and renders local TSV files.
-It does not directly mutate `pricing_rules` or `model_routes`, does not call
-OpenRouter, does not fetch external FX data, and does not import rows from a web
-fetch or LLM response.
+`https://platform.openai.com/docs/models/compare`. The generator asks OpenAI for
+strict JSON, validates the JSON deterministically, and renders local TSV
+proposal content. It does not directly mutate `pricing_rules` or `model_routes`,
+does not call OpenRouter, does not fetch external FX data, and does not import
+rows from a web fetch or LLM response. The dashboard also does not store raw
+model responses, raw webpage text, prompts, completions, cookies, sessions, CSRF
+tokens, provider keys, encrypted payloads, nonces, or raw request/response
+bodies.
 
 LLM-generated proposal files are not authoritative. They are draft operator
 inputs. Imported rows become local SLAIF accounting and routing assumptions only
@@ -120,12 +132,12 @@ over the gateway's accounting model, not a provider billing attestation.
 Request, token, output, model, and rate limits remain the safer primary controls
 for workshops and courses, with money limits acting as an additional guardrail.
 
-The proposal generator deliberately stops at a reviewed file. Operators must
-inspect the TSV, run the existing pricing or route import preview, and execute
-the import only with explicit confirmation and an audit reason. The generator
-must reject secret-looking input and metadata and preserves the rule that
-provider keys come only from server-side environment variables or deployment
-secrets.
+The proposal generator deliberately stops at reviewed TSV content. Operators
+must inspect the TSV, run the existing pricing or route import preview, and
+execute the import only with explicit confirmation and an audit reason. The
+generator must reject secret-looking input and metadata and preserves the rule
+that provider keys come only from server-side environment variables or
+deployment secrets.
 
 ## OpenAI Completions Bootstrap CSV
 
