@@ -26,6 +26,7 @@ _SUPPORTED_IMAGE_DATA_URL_MIME_TYPES = frozenset(
 )
 _FILE_DATA_URL_PREFIX = "data:"
 _FILE_DATA_URL_BASE64_SUFFIX = ";base64"
+_AUDIO_DATA_URL_PREFIX = "data:"
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
@@ -110,6 +111,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
 
     total_images = 0
     total_files = 0
+    total_audio_inputs = 0
     for message_index, message in enumerate(value):
         if not isinstance(message, Mapping):
             _raise(
@@ -131,6 +133,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
             settings=settings,
             total_images_seen=total_images,
             total_files_seen=total_files,
+            total_audio_inputs_seen=total_audio_inputs,
         )
         total_images += _count_image_parts(message.get("content"))
         if total_images > settings.CHAT_MAX_IMAGES_PER_REQUEST:
@@ -146,6 +149,13 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
                 "chat_file_count_exceeded",
                 "The request includes too many Chat Completions file content parts.",
             )
+        total_audio_inputs += _count_audio_input_parts(message.get("content"))
+        if total_audio_inputs > settings.CHAT_MAX_AUDIO_INPUTS_PER_REQUEST:
+            _raise(
+                "messages",
+                "chat_audio_count_exceeded",
+                "The request includes too many Chat Completions audio input content parts.",
+            )
 
 
 def _validate_message_content(
@@ -156,6 +166,7 @@ def _validate_message_content(
     settings: Settings,
     total_images_seen: int,
     total_files_seen: int,
+    total_audio_inputs_seen: int,
 ) -> None:
     if content is None:
         return
@@ -180,6 +191,7 @@ def _validate_message_content(
     text_parts = 0
     image_parts = 0
     file_parts = 0
+    audio_input_parts = 0
     total_text_bytes = 0
     for part_index, part in enumerate(content):
         if isinstance(part, str):
@@ -237,10 +249,38 @@ def _validate_message_content(
                         "The request includes too many Chat Completions file content parts.",
                     )
                 continue
+            if part.get("type") == "input_audio":
+                audio_input_parts += 1
+                _validate_audio_input_part(
+                    part,
+                    message_index=message_index,
+                    part_index=part_index,
+                    message_role=message_role,
+                    settings=settings,
+                )
+                if audio_input_parts > settings.CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE:
+                    _raise(
+                        f"messages[{message_index}].content",
+                        "chat_audio_count_exceeded",
+                        "A Chat Completions message includes too many audio input content parts.",
+                    )
+                if (
+                    total_audio_inputs_seen + audio_input_parts
+                    > settings.CHAT_MAX_AUDIO_INPUTS_PER_REQUEST
+                ):
+                    _raise(
+                        "messages",
+                        "chat_audio_count_exceeded",
+                        "The request includes too many Chat Completions audio input content parts.",
+                    )
+                continue
             _raise(
                 f"messages[{message_index}].content[{part_index}].type",
                 "chat_field_invalid_type",
-                "Chat Completions message content parts must be text, image_url, or file objects.",
+                (
+                    "Chat Completions message content parts must be text, image_url, "
+                    "file, or input_audio objects."
+                ),
             )
         text = part.get("text")
         if not isinstance(text, str):
@@ -548,7 +588,12 @@ def _validate_file_data(
         error_code="chat_file_data_too_large",
         safe_message="A Chat Completions file payload exceeds the gateway size limit.",
     )
-    _validate_base64_payload(value, param=param)
+    _validate_base64_payload(
+        value,
+        param=param,
+        error_code="chat_file_data_invalid",
+        safe_message="Chat Completions file data must be valid base64.",
+    )
 
 
 def _validate_file_data_url(
@@ -594,20 +639,135 @@ def _validate_file_data_url(
         )
     if not encoded:
         _raise(param, "chat_file_data_invalid", "File data URLs must include base64 data.")
-    _validate_base64_payload(encoded, param=param)
+    _validate_base64_payload(
+        encoded,
+        param=param,
+        error_code="chat_file_data_invalid",
+        safe_message="Chat Completions file data must be valid base64.",
+    )
 
 
-def _validate_base64_payload(value: str, *, param: str) -> None:
+def _validate_audio_input_part(
+    part: Mapping[str, Any],
+    *,
+    message_index: int,
+    part_index: int,
+    message_role: str,
+    settings: Settings,
+) -> None:
+    param = f"messages[{message_index}].content[{part_index}]"
+    if message_role != "user":
+        _raise(
+            f"{param}.type",
+            "chat_audio_part_invalid_shape",
+            "Chat Completions audio input content parts are supported only on user messages.",
+        )
+
+    for key in part:
+        if key not in {"type", "input_audio"}:
+            _raise(
+                f"{param}.{key}",
+                "chat_audio_part_invalid_shape",
+                "Audio input content parts may only include documented Chat Completions audio fields.",
+            )
+
+    input_audio = part.get("input_audio")
+    if not isinstance(input_audio, Mapping):
+        _raise(
+            f"{param}.input_audio",
+            "chat_audio_part_invalid_shape",
+            "Chat Completions audio input content parts must include an input_audio object.",
+        )
+
+    for key in input_audio:
+        if key not in {"data", "format"}:
+            _raise(
+                f"{param}.input_audio.{key}",
+                "chat_audio_part_invalid_shape",
+                "Audio input objects may only include documented Chat Completions audio fields.",
+            )
+
+    data = input_audio.get("data")
+    if not isinstance(data, str) or not data:
+        _raise(
+            f"{param}.input_audio.data",
+            "chat_audio_data_invalid",
+            "Chat Completions audio input must include base64 audio data.",
+        )
+
+    audio_format = input_audio.get("format")
+    if not isinstance(audio_format, str) or not audio_format:
+        _raise(
+            f"{param}.input_audio.format",
+            "chat_audio_format_invalid",
+            "Chat Completions audio input must include an audio format.",
+        )
+    if audio_format not in _allowed_audio_input_formats(settings):
+        _raise(
+            f"{param}.input_audio.format",
+            "chat_audio_format_not_supported",
+            "The Chat Completions audio input format is not supported by this gateway.",
+        )
+
+    _validate_audio_input_data(
+        data,
+        param=f"{param}.input_audio.data",
+        settings=settings,
+    )
+
+
+def _validate_audio_input_data(value: str, *, param: str, settings: Settings) -> None:
+    if value.startswith(("http://", "https://")):
+        _raise(
+            param,
+            "chat_audio_url_not_supported",
+            "Chat Completions audio URLs are not enabled by this gateway.",
+        )
+    if value.startswith(_AUDIO_DATA_URL_PREFIX):
+        _validate_audio_data_url(value, param=param, settings=settings)
+        return
+
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_AUDIO_INPUT_DATA_BYTES,
+        error_code="chat_audio_data_too_large",
+        safe_message="A Chat Completions audio input payload exceeds the gateway size limit.",
+    )
+    _validate_base64_payload(
+        value,
+        param=param,
+        error_code="chat_audio_data_invalid",
+        safe_message="Chat Completions audio input data must be valid base64.",
+    )
+
+
+def _validate_audio_data_url(value: str, *, param: str, settings: Settings) -> None:
+    _ = settings
+    _raise(
+        param,
+        "chat_audio_data_url_not_allowed",
+        "Audio input data URLs are not enabled by this gateway.",
+    )
+
+
+def _validate_base64_payload(
+    value: str,
+    *,
+    param: str,
+    error_code: str,
+    safe_message: str,
+) -> None:
     normalized = "".join(value.split())
     if not normalized or len(normalized) % 4 != 0 or not _BASE64_CHARS_RE.fullmatch(normalized):
-        _raise(param, "chat_file_data_invalid", "Chat Completions file data must be valid base64.")
+        _raise(param, error_code, safe_message)
     try:
         base64.b64decode(normalized, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ChatCompletionRequestCapsError(
-            "Chat Completions file data must be valid base64.",
+            safe_message,
             param=param,
-            error_code="chat_file_data_invalid",
+            error_code=error_code,
         ) from exc
 
 
@@ -634,6 +794,14 @@ def _allowed_file_mime_types(settings: Settings) -> frozenset[str]:
     )
 
 
+def _allowed_audio_input_formats(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.CHAT_ALLOWED_AUDIO_INPUT_FORMATS.split(",")
+        if item.strip()
+    )
+
+
 def _count_image_parts(content: Any) -> int:
     if not isinstance(content, list):
         return 0
@@ -648,6 +816,16 @@ def _count_file_parts(content: Any) -> int:
     if not isinstance(content, list):
         return 0
     return sum(1 for part in content if isinstance(part, Mapping) and part.get("type") == "file")
+
+
+def _count_audio_input_parts(content: Any) -> int:
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "input_audio"
+    )
 
 
 def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings) -> None:

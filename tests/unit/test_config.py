@@ -54,6 +54,11 @@ def _clear_env(monkeypatch) -> None:
         "CHAT_ALLOW_FILE_IDS",
         "CHAT_ALLOWED_FILE_MIME_TYPES",
         "CHAT_ALLOWED_FILE_EXTENSIONS",
+        "CHAT_MAX_AUDIO_INPUTS_PER_REQUEST",
+        "CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE",
+        "CHAT_MAX_AUDIO_INPUT_DATA_BYTES",
+        "CHAT_ALLOWED_AUDIO_INPUT_FORMATS",
+        "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS",
         "CHAT_MAX_TOOLS_PER_REQUEST",
         "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
         "CHAT_MAX_FUNCTIONS_PER_REQUEST",
@@ -197,6 +202,11 @@ def test_default_settings_load(monkeypatch) -> None:
         "application/pdf,text/plain,text/markdown,text/csv,application/json"
     )
     assert settings.CHAT_ALLOWED_FILE_EXTENSIONS == ".pdf,.txt,.md,.csv,.json"
+    assert settings.CHAT_MAX_AUDIO_INPUTS_PER_REQUEST == 4
+    assert settings.CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE == 2
+    assert settings.CHAT_MAX_AUDIO_INPUT_DATA_BYTES == 10485760
+    assert settings.CHAT_ALLOWED_AUDIO_INPUT_FORMATS == "wav,mp3"
+    assert settings.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is False
     assert settings.CHAT_MAX_TOOLS_PER_REQUEST == 64
     assert settings.CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST == 16
     assert settings.CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES == 65536
@@ -741,6 +751,9 @@ def test_invalid_zero_or_negative_caps_fail(monkeypatch) -> None:
         ("CHAT_MAX_FILES_PER_MESSAGE", "0"),
         ("CHAT_MAX_FILE_DATA_BYTES", "0"),
         ("CHAT_MAX_FILE_NAME_BYTES", "0"),
+        ("CHAT_MAX_AUDIO_INPUTS_PER_REQUEST", "0"),
+        ("CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE", "0"),
+        ("CHAT_MAX_AUDIO_INPUT_DATA_BYTES", "0"),
         ("CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST", "0"),
         ("CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES", "-1"),
         ("CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES", "-1"),

@@ -4,6 +4,7 @@ import pytest
 
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
+    CHAT_CAPABILITY_AUDIO_INPUTS,
     CHAT_CAPABILITY_CUSTOM_TOOLS,
     CHAT_CAPABILITY_FILE_INPUTS,
     CHAT_CAPABILITY_FUNCTION_TOOLS,
@@ -323,6 +324,25 @@ def _file_payload(**overrides: object) -> dict[str, object]:
     return body
 
 
+def _audio_payload(**overrides: object) -> dict[str, object]:
+    body = _payload(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "wav"},
+                    },
+                ],
+            }
+        ]
+    )
+    body.update(overrides)
+    return body
+
+
 def test_file_input_requires_explicit_file_capability_without_payload_leakage() -> None:
     raw_file_data = "c2VjcmV0IGZpbGUgcGF5bG9hZA=="
 
@@ -373,6 +393,60 @@ def test_text_only_request_does_not_require_file_capability() -> None:
     enforce_chat_completion_route_capabilities(
         _payload(),
         route_capabilities=_caps(**{CHAT_CAPABILITY_FILE_INPUTS: False}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_audio_input_requires_explicit_audio_capability_without_payload_leakage() -> None:
+    raw_audio_data = "c2VjcmV0LWF1ZGlvLXBheWxvYWQ="
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": raw_audio_data, "format": "wav"},
+                            }
+                        ],
+                    }
+                ]
+            ),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert absent_exc.value.error_code == "chat_audio_input_capability_not_supported"
+    assert absent_exc.value.param == "messages"
+    assert raw_audio_data not in absent_exc.value.safe_message
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _audio_payload(),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_INPUTS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert false_exc.value.error_code == "chat_audio_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _audio_payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_INPUTS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_text_only_request_does_not_require_audio_capability() -> None:
+    enforce_chat_completion_route_capabilities(
+        _payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_INPUTS: False}),
         route_supports_streaming=True,
         requested_model="gpt-4.1-mini",
     )
@@ -430,6 +504,71 @@ def test_file_input_with_image_function_custom_and_n_requires_all_capabilities()
                 CHAT_CAPABILITY_FUNCTION_TOOLS: True,
                 CHAT_CAPABILITY_CUSTOM_TOOLS: True,
                 CHAT_CAPABILITY_FILE_INPUTS: True,
+            }
+        ),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_audio_input_with_image_file_function_custom_and_n_requires_all_capabilities() -> None:
+    payload = _audio_payload(
+        n=2,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "analyze"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/image.png"},
+                    },
+                    {
+                        "type": "file",
+                        "file": {"filename": "notes.txt", "file_data": "SGVsbG8="},
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "mp3"},
+                    },
+                ],
+            }
+        ],
+        tools=[
+            {"type": "function", "function": {"name": "lookup"}},
+            {"type": "custom", "custom": {"name": "run_shell"}},
+        ],
+    )
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as audio_exc:
+        enforce_chat_completion_route_capabilities(
+            payload,
+            route_capabilities=_caps(
+                **{
+                    CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                    CHAT_CAPABILITY_FILE_INPUTS: True,
+                    CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                    CHAT_CAPABILITY_FUNCTION_TOOLS: True,
+                    CHAT_CAPABILITY_CUSTOM_TOOLS: True,
+                    CHAT_CAPABILITY_AUDIO_INPUTS: False,
+                }
+            ),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert audio_exc.value.error_code == "chat_audio_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        payload,
+        route_capabilities=_caps(
+            **{
+                CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                CHAT_CAPABILITY_FILE_INPUTS: True,
+                CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                CHAT_CAPABILITY_FUNCTION_TOOLS: True,
+                CHAT_CAPABILITY_CUSTOM_TOOLS: True,
+                CHAT_CAPABILITY_AUDIO_INPUTS: True,
             }
         ),
         route_supports_streaming=True,

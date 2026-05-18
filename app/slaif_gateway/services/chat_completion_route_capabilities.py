@@ -32,6 +32,7 @@ CHAT_CAPABILITY_IMAGE_INPUTS = "chat_image_inputs"
 CHAT_CAPABILITY_MULTIMODAL = "chat_multimodal"
 CHAT_CAPABILITY_AUDIO = "chat_audio"
 CHAT_CAPABILITY_FILE_INPUTS = "chat_file_inputs"
+CHAT_CAPABILITY_AUDIO_INPUTS = "chat_audio_inputs"
 CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT = "chat_service_tier_non_default"
 CHAT_CAPABILITY_MULTIPLE_CHOICES = "chat_multiple_choices"
 
@@ -58,6 +59,7 @@ KNOWN_CHAT_COMPLETION_CAPABILITIES = frozenset(
         CHAT_CAPABILITY_MULTIMODAL,
         CHAT_CAPABILITY_AUDIO,
         CHAT_CAPABILITY_FILE_INPUTS,
+        CHAT_CAPABILITY_AUDIO_INPUTS,
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT,
         CHAT_CAPABILITY_MULTIPLE_CHOICES,
     }
@@ -100,6 +102,7 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
         CHAT_CAPABILITY_MULTIMODAL: False,
         CHAT_CAPABILITY_AUDIO: False,
         CHAT_CAPABILITY_FILE_INPUTS: False,
+        CHAT_CAPABILITY_AUDIO_INPUTS: False,
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT: False,
         CHAT_CAPABILITY_MULTIPLE_CHOICES: False,
     }
@@ -242,6 +245,16 @@ def classify_chat_completion_route_capability_requirements(
                 field="messages",
                 error_code="chat_file_input_capability_not_supported",
                 safe_message="This model route does not support Chat Completions file input.",
+            )
+        )
+
+    if _uses_audio_inputs(payload):
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_AUDIO_INPUTS,
+                field="messages",
+                error_code="chat_audio_input_capability_not_supported",
+                safe_message="This model route does not support Chat Completions audio input.",
             )
         )
 
@@ -418,6 +431,22 @@ def _uses_file_inputs(payload: Mapping[str, Any]) -> bool:
             continue
         for part in content:
             if isinstance(part, Mapping) and part.get("type") == "file":
+                return True
+    return False
+
+
+def _uses_audio_inputs(payload: Mapping[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "input_audio":
                 return True
     return False
 

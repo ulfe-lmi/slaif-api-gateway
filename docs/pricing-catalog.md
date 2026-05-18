@@ -39,14 +39,22 @@ file URLs are rejected in this slice. Successful accounting still finalizes
 from provider usage/cost, and OpenRouter provider-reported cost is not
 multiplied by file count or `n`.
 
+Chat Completions audio input to text output is enabled only behind explicit
+route capability and request caps. The audio content-part wrapper, format, and
+base64 `input_audio.data` string are included in the ordinary message input
+estimate, but SLAIF does not treat audio bytes or duration as invoice-grade
+billable tokens and does not infer exact final audio cost from base64 size.
+Audio URLs and audio data URLs are rejected in this PR. Successful accounting
+still finalizes from provider usage/cost, and OpenRouter provider-reported cost
+is not multiplied by audio count, byte size, duration, or `n`.
+
 The upstream investigation in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md)
-shows that audio request shapes and broader file modes are documented, but
-bytes are not billable tokens. Future audio/file-ID/file-URL support needs
-modality-specific admission
-estimates, pricing/catalog fields where upstream pricing requires them,
-provider usage parsing, and accounting tests before those payloads can be
-enabled for cost-limited gateway keys.
+shows that audio output and broader file modes are documented, but bytes are
+not billable tokens. Future audio-output/file-ID/file-URL support needs
+modality-specific admission estimates, pricing/catalog fields where upstream
+pricing requires them, provider usage parsing, and accounting tests before
+those payloads can be enabled for cost-limited gateway keys.
 
 ## OpenRouter Price Refresh
 

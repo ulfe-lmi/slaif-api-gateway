@@ -69,7 +69,6 @@ _UNSUPPORTED_MESSAGE_CONTENT_PART_TYPES = frozenset(
     {
         "audio",
         "image",
-        "input_audio",
         "input_file",
         "input_image",
         "video",
@@ -293,6 +292,8 @@ def _finding_for_message_content(messages: Any) -> ChatCompletionFieldFinding | 
             if part_type == "image_url":
                 continue
             if part_type == "file":
+                continue
+            if part_type == "input_audio":
                 continue
             if isinstance(part_type, str) and part_type in _UNSUPPORTED_MESSAGE_CONTENT_PART_TYPES:
                 return _unsupported_message_part_finding(message_index, part_index)

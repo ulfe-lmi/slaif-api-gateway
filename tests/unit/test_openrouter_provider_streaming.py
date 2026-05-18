@@ -23,7 +23,18 @@ def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     body = {
         "model": "client-model",
         "stream": True,
-        "messages": [],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "mp3"},
+                    },
+                ],
+            }
+        ],
         "stream_options": {"include_usage": False},
     }
     request = ProviderRequest(
@@ -68,6 +79,7 @@ def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     assert sent_body["stream"] is True
     assert sent_body["stream_options"] == {"include_usage": True}
     assert sent_body["model"] == "anthropic/claude-test"
+    assert sent_body["messages"] == body["messages"]
     assert body["model"] == "client-model"
     assert body["stream_options"]["include_usage"] is False
 
