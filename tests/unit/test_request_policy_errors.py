@@ -47,6 +47,6 @@ def test_choice_count_error_maps_to_openai_invalid_request_error() -> None:
 
     assert mapped.status_code == 400
     assert mapped.error_type == "invalid_request_error"
-    assert mapped.code == "invalid_choice_count"
+    assert mapped.code == "chat_choice_count_invalid"
     assert mapped.param == "n"
     assert mapped.message == "n > 1 is not supported"

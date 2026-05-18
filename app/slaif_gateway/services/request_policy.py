@@ -18,13 +18,13 @@ from slaif_gateway.services.hosted_tool_policy import enforce_chat_completion_ca
 from slaif_gateway.services.input_token_estimation import estimate_chat_completion_input_tokens
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
+    ChoiceCountLimitExceededError,
     InputTokenLimitExceededError,
     InvalidChatMessagesError,
     InvalidChoiceCountError,
     InvalidOutputTokenLimitError,
     InvalidRequestBodyError,
     InvalidStreamOptionsError,
-    MULTI_CHOICE_UNSUPPORTED_MESSAGE,
     OutputTokenLimitExceededError,
 )
 
@@ -47,12 +47,13 @@ class ChatCompletionRequestPolicy:
             capability_policy_mode=capability_policy_mode,
         )
         enforce_chat_completion_request_caps(effective_body, settings=self._settings)
-        self._validate_choice_count(effective_body.get("n"))
+        effective_choice_count = self._validate_choice_count(effective_body.get("n"))
         messages = self._validate_messages(effective_body.get("messages"))
 
-        requested_output_tokens, effective_output_tokens, injected_default = (
+        requested_output_tokens, effective_output_tokens_per_choice, injected_default = (
             self._resolve_output_token_limit(effective_body)
         )
+        effective_output_tokens = effective_output_tokens_per_choice * effective_choice_count
         self._force_streaming_usage_metadata(effective_body)
         enforce_chat_completion_capability_policy(
             effective_body,
@@ -86,6 +87,8 @@ class ChatCompletionRequestPolicy:
             effective_body=effective_body,
             requested_output_tokens=requested_output_tokens,
             effective_output_tokens=effective_output_tokens,
+            effective_output_tokens_per_choice=effective_output_tokens_per_choice,
+            effective_choice_count=effective_choice_count,
             estimated_input_tokens=input_estimate.total_input_tokens_estimate,
             estimated_message_input_tokens=input_estimate.message_input_tokens_estimate,
             estimated_non_message_input_tokens=input_estimate.non_message_input_tokens_estimate,
@@ -121,27 +124,28 @@ class ChatCompletionRequestPolicy:
         body["max_completion_tokens"] = default_limit
         return default_limit, default_limit, True
 
-    def _validate_choice_count(self, value: Any) -> None:
+    def _validate_choice_count(self, value: Any) -> int:
         if value is None:
-            return
+            return 1
 
         if isinstance(value, bool) or not isinstance(value, int):
             raise InvalidChoiceCountError(
-                "The 'n' field must be the integer 1.",
+                "The 'n' field must be a positive integer.",
                 param="n",
             )
 
         if value < 1:
             raise InvalidChoiceCountError(
-                "The 'n' field must be the integer 1.",
+                "The 'n' field must be a positive integer.",
                 param="n",
             )
 
-        if value > 1:
-            raise InvalidChoiceCountError(
-                MULTI_CHOICE_UNSUPPORTED_MESSAGE,
+        if value > self._settings.CHAT_MAX_CHOICES_PER_REQUEST:
+            raise ChoiceCountLimitExceededError(
+                "The 'n' field exceeds the configured maximum number of Chat Completions choices.",
                 param="n",
             )
+        return value
 
     def _force_streaming_usage_metadata(self, body: dict[str, Any]) -> None:
         if body.get("stream") is not True:

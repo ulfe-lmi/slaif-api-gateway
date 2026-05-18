@@ -1247,9 +1247,39 @@ def test_choice_count_one_is_allowed_and_preserved() -> None:
     )
 
     assert result.effective_body["n"] == 1
+    assert result.effective_choice_count == 1
+    assert result.effective_output_tokens_per_choice == 12
+    assert result.effective_output_tokens == 12
 
 
-@pytest.mark.parametrize("value", [2, 10, 0, -1, True, False, "1", 1.0, {}, []])
+def test_multiple_choice_count_is_choice_aware_for_output_reservation() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    single_choice = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 8,
+        }
+    )
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 8,
+            "n": 3,
+        }
+    )
+
+    assert result.effective_body["n"] == 3
+    assert result.effective_choice_count == 3
+    assert result.requested_output_tokens == 8
+    assert result.effective_output_tokens_per_choice == 8
+    assert result.effective_output_tokens == 24
+    assert result.estimated_input_tokens == single_choice.estimated_input_tokens
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, "1", 1.0, {}, []])
 def test_invalid_choice_count_is_rejected_without_mutating_original(value: object) -> None:
     policy = ChatCompletionRequestPolicy(_settings())
     body = {
@@ -1264,6 +1294,25 @@ def test_invalid_choice_count_is_rejected_without_mutating_original(value: objec
         policy.apply(body)
 
     assert exc_info.value.param == "n"
+    assert exc_info.value.error_code == "chat_choice_count_invalid"
+    assert body == original
+
+
+def test_choice_count_above_gateway_cap_is_rejected_without_mutating_original() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(CHAT_MAX_CHOICES_PER_REQUEST=4))
+    body = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "n": 5,
+        "max_completion_tokens": 8,
+    }
+    original = copy.deepcopy(body)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(body)
+
+    assert exc_info.value.param == "n"
+    assert exc_info.value.error_code == "chat_choice_count_limit_exceeded"
     assert body == original
 
 
@@ -1361,7 +1410,7 @@ def test_streaming_function_tool_and_structured_output_fields_remain_allowed() -
         ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
         ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
         ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/img.png"}}]}]}, "unsupported_chat_completion_modality", "messages[0].content[0].type"),
-        ({"n": 2}, "invalid_choice_count", "n"),
+        ({"n": 99}, "chat_choice_count_limit_exceeded", "n"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
     ],
 )
@@ -1383,6 +1432,24 @@ def test_streaming_requests_keep_unsupported_feature_rejections(
 
     assert exc_info.value.error_code == expected_code
     assert exc_info.value.param == expected_param
+
+
+def test_streaming_multiple_choices_are_allowed_by_request_policy() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "max_completion_tokens": 8,
+            "n": 2,
+        }
+    )
+
+    assert result.effective_body["n"] == 2
+    assert result.effective_body["stream_options"] == {"include_usage": True}
+    assert result.effective_output_tokens == 16
 
 
 def test_streaming_policy_rejects_non_object_stream_options() -> None:

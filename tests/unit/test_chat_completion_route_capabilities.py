@@ -8,6 +8,7 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_CAPABILITY_FUNCTION_TOOLS,
     CHAT_CAPABILITY_JSON_MODE,
     CHAT_CAPABILITY_LOGPROBS,
+    CHAT_CAPABILITY_MULTIPLE_CHOICES,
     CHAT_CAPABILITY_STREAMING,
     CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
     CHAT_CAPABILITY_TEXT,
@@ -152,6 +153,85 @@ def test_custom_tools_require_explicit_custom_tool_capability_without_semantic_p
     enforce_chat_completion_route_capabilities(
         _payload(tools=[{"type": "custom", "custom": {"name": "delete_file"}}]),
         route_capabilities=_caps(**{CHAT_CAPABILITY_CUSTOM_TOOLS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_multiple_choices_require_explicit_multiple_choice_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(n=2),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert absent_exc.value.error_code == "chat_multiple_choices_capability_not_supported"
+    assert absent_exc.value.param == "n"
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(n=2),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert false_exc.value.error_code == "chat_multiple_choices_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _payload(n=2),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_choice_count_one_does_not_require_multiple_choice_capability() -> None:
+    enforce_chat_completion_route_capabilities(
+        _payload(n=1),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: False}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_multiple_choices_with_function_tools_require_both_capabilities() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(n=2, tools=[{"type": "function", "function": {"name": "lookup"}}]),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True, CHAT_CAPABILITY_FUNCTION_TOOLS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_capability_not_supported"
+    assert exc_info.value.param == "tools"
+
+    enforce_chat_completion_route_capabilities(
+        _payload(n=2, tools=[{"type": "function", "function": {"name": "lookup"}}]),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True, CHAT_CAPABILITY_FUNCTION_TOOLS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_multiple_choices_with_custom_tools_require_both_capabilities() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(n=2, tools=[{"type": "custom", "custom": {"name": "run_shell"}}]),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True, CHAT_CAPABILITY_CUSTOM_TOOLS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_custom_tool_capability_not_supported"
+    assert exc_info.value.param == "tools"
+
+    enforce_chat_completion_route_capabilities(
+        _payload(n=2, tools=[{"type": "custom", "custom": {"name": "run_shell"}}]),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True, CHAT_CAPABILITY_CUSTOM_TOOLS: True}),
         route_supports_streaming=True,
         requested_model="gpt-4.1-mini",
     )

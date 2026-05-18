@@ -30,11 +30,15 @@ operational guidance, not a production certification.
 - Non-streaming Chat Completions local custom tools when the resolved route
   explicitly enables `chat_custom_tools`; streaming custom tools remain
   unsupported.
+- Bounded Chat Completions `n > 1` when the resolved route explicitly enables
+  `chat_multiple_choices`; streaming multiple choices are supported without
+  full-stream buffering.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.
-- `n` omitted or `n=1` is supported; `n > 1` is rejected before provider
-  forwarding, rate limiting, pricing, quota reservation, or ledger mutation.
+- `n` omitted or `n=1` is supported unchanged. `n > 1` is capped by
+  `CHAT_MAX_CHOICES_PER_REQUEST`, requires route capability, reserves input
+  once and possible output per choice, and finalizes provider usage once.
 - Streaming requests force `stream_options.include_usage=true`; missing final
   usage emits a safe stream error and does not emit a misleading success.
 - Provider authorization is substituted server-side; client `Authorization`
@@ -101,7 +105,8 @@ Nginx syntax validation, documentation hygiene, CodeQL, and Dependabot.
 The Review 5.0 remediation matrix now records every Review 5.0 finding as
 addressed or hardened:
 
-- `n > 1` Chat Completions ambiguity: addressed by fail-closed rejection.
+- `n > 1` Chat Completions ambiguity: addressed by bounded choice-aware
+  reservation and route capability gating.
 - `/v1/models` empty allow-list mismatch: addressed.
 - Admin login brute-force/rate-limit protection: addressed.
 - Production provider-secret validation drift: addressed.

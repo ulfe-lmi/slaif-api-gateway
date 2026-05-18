@@ -48,7 +48,7 @@ def _auth(policy: dict[str, int | None] | None = None) -> AuthenticatedGatewayKe
     )
 
 
-def _route() -> RouteResolutionResult:
+def _route(*, capabilities: dict[str, object] | None = None) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
         resolved_model="gpt-4.1-mini",
@@ -57,6 +57,7 @@ def _route() -> RouteResolutionResult:
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        capabilities=capabilities,
     )
 
 
@@ -70,7 +71,15 @@ def _chat_request(**overrides) -> dict[str, object]:
     return body
 
 
-def _wire_pipeline(monkeypatch, app, *, auth: AuthenticatedGatewayKey, quota_error=None, accounting_error=None):
+def _wire_pipeline(
+    monkeypatch,
+    app,
+    *,
+    auth: AuthenticatedGatewayKey,
+    route_capabilities: dict[str, object] | None = None,
+    quota_error=None,
+    accounting_error=None,
+):
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as gateway_module
 
@@ -96,7 +105,7 @@ def _wire_pipeline(monkeypatch, app, *, auth: AuthenticatedGatewayKey, quota_err
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (self, authenticated_key)
         state["route_calls"].append(requested_model)
-        return _route()
+        return _route(capabilities=route_capabilities)
 
     async def _fake_estimate(self, *, route, policy, endpoint="chat.completions", at=None):
         _ = (self, route, policy, endpoint, at)
@@ -366,6 +375,61 @@ def test_rate_limit_estimated_tokens_combines_input_and_effective_output(monkeyp
 
     assert response.status_code == 200
     assert rate_state["reserve_calls"][0]["estimated_tokens"] >= 20
+
+
+def test_rate_limit_estimated_tokens_are_choice_aware(monkeypatch) -> None:
+    app = create_app(
+        Settings(
+            OPENAI_UPSTREAM_API_KEY="unused",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+        )
+    )
+    route_capabilities = {
+        "chat_completions": {
+            "chat_text": True,
+            "chat_streaming": True,
+            "chat_function_tools": True,
+            "chat_custom_tools": False,
+            "chat_legacy_functions": True,
+            "chat_structured_outputs": True,
+            "chat_json_mode": True,
+            "chat_logprobs": True,
+            "chat_reasoning_usage": True,
+            "chat_cached_input_usage": True,
+            "hosted_web_search": False,
+            "hosted_file_search": False,
+            "hosted_code_interpreter": False,
+            "hosted_computer_use": False,
+            "hosted_image_generation": False,
+            "hosted_tool_search": False,
+            "external_mcp_connectors": False,
+            "chat_multimodal": False,
+            "chat_audio": False,
+            "chat_file_inputs": False,
+            "chat_service_tier_non_default": False,
+            "chat_multiple_choices": True,
+        }
+    }
+    _wire_pipeline(
+        monkeypatch,
+        app,
+        auth=_auth({"tokens_per_minute": 1000}),
+        route_capabilities=route_capabilities,
+    )
+    rate_state = _wire_rate_service(monkeypatch)
+
+    single_response = TestClient(app).post("/v1/chat/completions", json=_chat_request(max_tokens=20))
+    multi_response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=_chat_request(max_tokens=20, n=3),
+    )
+
+    assert single_response.status_code == 200
+    assert multi_response.status_code == 200
+    assert rate_state["reserve_calls"][1]["estimated_tokens"] == (
+        rate_state["reserve_calls"][0]["estimated_tokens"] + 40
+    )
 
 
 def test_rate_limit_estimated_tokens_include_non_message_fields(monkeypatch) -> None:

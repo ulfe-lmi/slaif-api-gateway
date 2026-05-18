@@ -65,8 +65,11 @@ explicit route capability and ordinary token accounting, while hosted/provider-s
 `external_web_access` are denied before provider forwarding. A Chat Completions
 field registry also rejects unknown top-level fields, non-default service
 tiers, streaming custom tools, and non-text audio/image/file content until those
-features have explicit policy, pricing/accounting, forwarding, and tests. This
-hardening does not implement `/v1/responses`.
+features have explicit policy, pricing/accounting, forwarding, and tests. Chat
+Completions multiple choices are a separate bounded request-shape feature that
+requires explicit `chat_multiple_choices` route metadata and does not implement
+or imply any Responses behavior. This hardening does not implement
+`/v1/responses`.
 
 ## Accounting Model
 

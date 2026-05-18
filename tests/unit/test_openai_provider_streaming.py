@@ -191,6 +191,64 @@ def test_openai_streaming_preserves_tool_call_deltas_finish_reason_and_logprobs(
     assert chunks[3].is_done is True
 
 
+def test_openai_streaming_preserves_multiple_choice_chunks_and_usage() -> None:
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    request = _request(
+        {
+            "model": "client-model",
+            "stream": True,
+            "messages": [],
+            "max_completion_tokens": 8,
+            "n": 2,
+        }
+    )
+    combined_delta = {
+        "id": "chatcmpl-multi-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {"index": 0, "delta": {"content": "A"}, "finish_reason": None},
+            {"index": 1, "delta": {"content": "B"}, "finish_reason": None},
+        ],
+    }
+    interleaved_delta = {
+        "id": "chatcmpl-multi-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {"index": 1, "delta": {"content": " done"}, "finish_reason": "stop"},
+            {"index": 0, "delta": {"content": " done"}, "finish_reason": "length"},
+        ],
+    }
+    usage_delta = {
+        "id": "chatcmpl-multi-stream",
+        "object": "chat.completion.chunk",
+        "choices": [],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 16, "total_tokens": 20},
+    }
+    sse = _sse(combined_delta) + _sse(interleaved_delta) + _sse(usage_delta) + "data: [DONE]\n\n"
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=sse.encode())
+            )
+            chunks = [chunk async for chunk in adapter.stream_chat_completion(request)]
+            return upstream, chunks
+
+    upstream, chunks = asyncio.run(_collect())
+
+    sent_body = json.loads(upstream.calls[0].request.content)
+    assert sent_body["n"] == 2
+    assert chunks[0].raw_sse_event == _sse(combined_delta)
+    assert chunks[0].json_body["choices"][0]["index"] == 0
+    assert chunks[0].json_body["choices"][1]["index"] == 1
+    assert chunks[1].json_body["choices"][0]["finish_reason"] == "stop"
+    assert chunks[1].json_body["choices"][1]["finish_reason"] == "length"
+    assert chunks[2].json_body["choices"] == []
+    assert chunks[2].usage is not None
+    assert chunks[2].usage.completion_tokens == 16
+    assert chunks[3].is_done is True
+
+
 def test_openai_streaming_error_event_raises_safe_diagnostic() -> None:
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
     sse = (

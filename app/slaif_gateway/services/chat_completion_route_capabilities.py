@@ -190,6 +190,16 @@ def classify_chat_completion_route_capability_requirements(
             )
         )
 
+    if _effective_choice_count(payload) > 1:
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_MULTIPLE_CHOICES,
+                field="n",
+                error_code="chat_multiple_choices_capability_not_supported",
+                safe_message="This model route does not support multiple Chat Completions choices.",
+            )
+        )
+
     if _uses_function_tools(payload):
         findings.append(
             ChatCompletionRouteCapabilityFinding(
@@ -337,6 +347,13 @@ def _uses_function_tools(payload: Mapping[str, Any]) -> bool:
 
     tool_choice = payload.get("tool_choice")
     return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "function"
+
+
+def _effective_choice_count(payload: Mapping[str, Any]) -> int:
+    value = payload.get("n")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 1
+    return value
 
 
 def _uses_custom_tools(payload: Mapping[str, Any]) -> bool:

@@ -13,6 +13,8 @@ class ChatCompletionPolicyResult(BaseModel):
     effective_body: dict[str, Any]
     requested_output_tokens: int
     effective_output_tokens: int
+    effective_output_tokens_per_choice: int = 0
+    effective_choice_count: int = 1
     estimated_input_tokens: int
     estimated_message_input_tokens: int = 0
     estimated_non_message_input_tokens: int = 0

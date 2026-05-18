@@ -177,6 +177,28 @@ def _policy(input_tokens: int = 30, output_tokens: int = 40) -> ChatCompletionPo
     )
 
 
+def _multi_choice_policy(
+    *,
+    input_tokens: int = 30,
+    output_tokens_per_choice: int = 40,
+    choice_count: int = 3,
+) -> ChatCompletionPolicyResult:
+    return ChatCompletionPolicyResult(
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [],
+            "max_completion_tokens": output_tokens_per_choice,
+            "n": choice_count,
+        },
+        requested_output_tokens=output_tokens_per_choice,
+        effective_output_tokens=output_tokens_per_choice * choice_count,
+        effective_output_tokens_per_choice=output_tokens_per_choice,
+        effective_choice_count=choice_count,
+        estimated_input_tokens=input_tokens,
+        injected_default_output_tokens=False,
+    )
+
+
 def _estimate(cost: Decimal = Decimal("0.123"), input_tokens: int = 30, output_tokens: int = 40) -> ChatCostEstimate:
     return ChatCostEstimate(
         provider="openai",
@@ -219,6 +241,24 @@ async def test_successful_reservation_creates_pending_row_and_updates_reserved_c
     assert key_repo.lock_calls == [key.id]
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_multiple_choice_reservation_counts_input_once_and_output_per_choice() -> None:
+    key = FakeGatewayKeyRow(id=uuid.uuid4())
+    service, _, _ = _service(key)
+
+    result = await service.reserve_for_chat_completion(
+        authenticated_key=_authenticated_key(key.id),
+        route=_route(),
+        policy=_multi_choice_policy(input_tokens=30, output_tokens_per_choice=40, choice_count=3),
+        cost_estimate=_estimate(input_tokens=30, output_tokens=120),
+        request_id="req_multi",
+        now=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert result.reserved_tokens == 150
+    assert key.tokens_reserved_total == 350
 
 
 @pytest.mark.asyncio

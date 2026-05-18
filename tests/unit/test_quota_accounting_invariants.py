@@ -444,6 +444,94 @@ def test_release_finalize_and_failure_paths_are_idempotent_or_fail_safe() -> Non
     asyncio.run(_run())
 
 
+def test_multiple_choice_finalization_uses_provider_usage_once() -> None:
+    async def _run() -> None:
+        key = FakeGatewayKeyRow(id=uuid.uuid4())
+        key_repo = FakeGatewayKeysRepository(key)
+        quota_repo = FakeQuotaReservationsRepository()
+        usage_repo = FakeUsageLedgerRepository()
+        quota_service = QuotaService(
+            gateway_keys_repository=key_repo,  # type: ignore[arg-type]
+            quota_reservations_repository=quota_repo,  # type: ignore[arg-type]
+        )
+        accounting = AccountingService(
+            gateway_keys_repository=key_repo,  # type: ignore[arg-type]
+            quota_reservations_repository=quota_repo,  # type: ignore[arg-type]
+            usage_ledger_repository=usage_repo,  # type: ignore[arg-type]
+        )
+        policy = _policy(input_tokens=20, output_tokens=90)
+        policy.effective_body["n"] = 3
+        policy.effective_output_tokens_per_choice = 30
+        policy.effective_choice_count = 3
+        estimate = _estimate(input_tokens=20, output_tokens=90)
+
+        reservation = await quota_service.reserve_for_chat_completion(
+            authenticated_key=_auth(key.id),
+            route=_route(),
+            policy=policy,
+            cost_estimate=estimate,
+            request_id="req-multi-finalize",
+        )
+        result = await accounting.finalize_successful_response(
+            reservation.reservation_id,
+            _auth(key.id),
+            _route(),
+            policy,
+            estimate,
+            _response(prompt_tokens=10, completion_tokens=15),
+            request_id="req-multi-finalize",
+        )
+
+        ledger = next(iter(usage_repo.rows.values()))
+        assert reservation.reserved_tokens == 110
+        assert result.prompt_tokens == 10
+        assert result.completion_tokens == 15
+        assert result.total_tokens == 25
+        assert key.tokens_used_total == 25
+        assert ledger.prompt_tokens == 10
+        assert ledger.completion_tokens == 15
+        assert ledger.total_tokens == 25
+
+    asyncio.run(_run())
+
+
+def test_openrouter_provider_reported_cost_is_not_multiplied_by_choice_count() -> None:
+    service = AccountingService(
+        gateway_keys_repository=FakeGatewayKeysRepository(FakeGatewayKeyRow(id=uuid.uuid4())),  # type: ignore[arg-type]
+        quota_reservations_repository=FakeQuotaReservationsRepository(),  # type: ignore[arg-type]
+        usage_ledger_repository=FakeUsageLedgerRepository(),  # type: ignore[arg-type]
+    )
+    response = ProviderResponse(
+        provider="openrouter",
+        upstream_model="openai/gpt-4.1-mini",
+        status_code=200,
+        json_body={},
+        usage=ProviderUsage(prompt_tokens=10, completion_tokens=15, total_tokens=25),
+        raw_cost_native=Decimal("0.001200000"),
+        native_currency="EUR",
+    )
+    usage = service.extract_usage(response)
+
+    cost = service.compute_actual_cost(
+        response,
+        RouteResolutionResult(
+            requested_model="classroom-cheap",
+            resolved_model="openai/gpt-4.1-mini",
+            provider="openrouter",
+            route_id=uuid.uuid4(),
+            route_match_type="exact",
+            route_pattern="classroom-cheap",
+            priority=100,
+        ),
+        usage,
+        _estimate(input_tokens=20, output_tokens=90),
+    )
+
+    assert cost.actual_cost_eur == Decimal("0.001200000")
+    assert cost.provider_reported_cost_eur == Decimal("0.001200000")
+    assert cost.cost_source == "provider_reported"
+
+
 def test_overrun_finalization_blocks_next_quota_reservation() -> None:
     async def _run() -> None:
         key = FakeGatewayKeyRow(

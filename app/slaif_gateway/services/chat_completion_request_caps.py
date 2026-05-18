@@ -8,7 +8,7 @@ from typing import Any
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
-from slaif_gateway.services.policy_errors import MULTI_CHOICE_UNSUPPORTED_MESSAGE, RequestPolicyError
+from slaif_gateway.services.policy_errors import RequestPolicyError
 
 _REASONING_EFFORT_VALUES = frozenset({"minimal", "low", "medium", "high"})
 _RESPONSE_FORMAT_TYPES = frozenset({"text", "json_object", "json_schema"})
@@ -38,7 +38,7 @@ def enforce_chat_completion_request_caps(
 
     _validate_model(payload.get("model"))
     _validate_messages(payload.get("messages"), settings=settings)
-    _validate_scalar_controls(payload)
+    _validate_scalar_controls(payload, settings=settings)
     _validate_stop(payload.get("stop"), settings=settings)
     _validate_user(payload.get("user"), settings=settings)
     _validate_logit_bias(payload.get("logit_bias"), settings=settings)
@@ -182,7 +182,7 @@ def _validate_message_content(
         )
 
 
-def _validate_scalar_controls(payload: Mapping[str, Any]) -> None:
+def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings) -> None:
     _validate_number_range(
         payload.get("temperature"),
         param="temperature",
@@ -236,14 +236,17 @@ def _validate_scalar_controls(payload: Mapping[str, Any]) -> None:
         if isinstance(n, bool) or not isinstance(n, int) or n < 1:
             _raise(
                 "n",
-                "invalid_choice_count",
-                "The 'n' field must be the integer 1.",
+                "chat_choice_count_invalid",
+                "The 'n' field must be a positive integer.",
             )
-        if n > 1:
+        if n > settings.CHAT_MAX_CHOICES_PER_REQUEST:
             _raise(
                 "n",
-                "invalid_choice_count",
-                MULTI_CHOICE_UNSUPPORTED_MESSAGE,
+                "chat_choice_count_limit_exceeded",
+                (
+                    "The 'n' field exceeds the configured maximum number of "
+                    "Chat Completions choices."
+                ),
             )
 
     reasoning_effort = payload.get("reasoning_effort")

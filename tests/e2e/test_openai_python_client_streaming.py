@@ -133,6 +133,104 @@ def test_openai_python_client_chat_completions_streaming_e2e(
 
 
 @pytest.mark.e2e
+def test_openai_python_client_chat_completions_streaming_multiple_choices_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, owner_label="OpenAI Multi Stream", multiple_choices=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    first_delta = {
+        "id": "chatcmpl-multi-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [
+            {"index": 0, "delta": {"content": "first"}, "finish_reason": None},
+            {"index": 1, "delta": {"content": "second"}, "finish_reason": None},
+        ],
+    }
+    second_delta = {
+        "id": "chatcmpl-multi-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [
+            {"index": 1, "delta": {"content": " done"}, "finish_reason": "stop"},
+            {"index": 0, "delta": {"content": " done"}, "finish_reason": "length"},
+        ],
+    }
+    usage_delta = {
+        "id": "chatcmpl-multi-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
+    }
+    sse = _sse(first_delta) + _sse(second_delta) + _sse(usage_delta) + "data: [DONE]\n\n"
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-request-id": "upstream-openai-multi-stream-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            chunks = list(
+                client.chat.completions.create(
+                    model=TEST_MODEL,
+                    messages=[{"role": "user", "content": PROMPT_TEXT}],
+                    stream=True,
+                    max_completion_tokens=8,
+                    n=2,
+                )
+            )
+
+    choice_indexes = [choice.index for chunk in chunks for choice in chunk.choices]
+    finish_reasons = [choice.finish_reason for chunk in chunks for choice in chunk.choices]
+    assert choice_indexes == [0, 1, 1, 0]
+    assert "stop" in finish_reasons
+    assert "length" in finish_reasons
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.completion_tokens == 12
+
+    upstream_body = json.loads(upstream_route.calls[0].request.content)
+    assert upstream_body["stream"] is True
+    assert upstream_body["stream_options"] == {"include_usage": True}
+    assert upstream_body["n"] == 2
+    assert upstream_body["max_completion_tokens"] == 8
+    assert upstream_route.calls[0].request.headers["authorization"] == (
+        f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    )
+    assert upstream_route.calls[0].request.headers["authorization"] != (
+        f"Bearer {created.plaintext_gateway_key}"
+    )
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.usage_ledger.streaming is True
+    assert state.usage_ledger.prompt_tokens == 5
+    assert state.usage_ledger.completion_tokens == 12
+    assert state.usage_ledger.total_tokens == 17
+
+
+@pytest.mark.e2e
 def test_openai_python_client_chat_completions_streaming_tool_calls_e2e(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

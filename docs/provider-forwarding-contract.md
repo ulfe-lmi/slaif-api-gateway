@@ -55,7 +55,7 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 Chat Completions routes include explicit `capabilities.chat_completions`
 metadata for the currently supported request surface. Hosted search/tools,
 multimodal/audio/file inputs, custom tools, non-default service tiers, and
-`n > 1` are not enabled by that metadata.
+multiple choices are not enabled by that metadata.
 
 ## OpenAI Upstream Forwarding
 
@@ -165,19 +165,13 @@ models such as `gpt-5-search-api`.
 The Chat Completions field registry is also fail-closed. Standard keys and
 trusted calibration keys reject unknown top-level Chat Completions fields with
 `unknown_chat_completion_field`. Current forwarding supports text-only message
-content, local function tools, legacy function fields, `response_format`,
-`prediction`, metadata within the gateway size cap, omitted/`auto`
-`service_tier`, and text-only `modalities`. It rejects custom tools,
+content, local function tools, route-enabled non-streaming local custom tools,
+route-enabled bounded multiple choices, legacy function fields,
+`response_format`, `prediction`, metadata within the gateway size cap,
+omitted/`auto` `service_tier`, and text-only `modalities`. It rejects
 non-default `service_tier`, audio/image/file/video content, provider-side state
 fields such as `store=true`, `previous_response_id`, and `conversation`, and
 other unclassified feature-bearing fields before any provider request is built.
-Current upstream evidence for Chat Completions custom tools is recorded in
-[`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md):
-the API reference and official Python SDK types include custom-tool shapes, but
-the guide examples are Responses-oriented, so SLAIF keeps rejection in place
-until a later implementation adds explicit caps, route/model capability gates,
-provider adapter tests, input-estimation/accounting checks, and
-no-content/no-secret coverage.
 
 Supported Chat Completions fields are also bounded by explicit scalar and size
 validation before any provider body is constructed. The gateway validates
@@ -225,7 +219,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
 | `stream_options` | Preserved, but `include_usage` forced to `true` for streaming | Required for reliable streaming accounting |
-| `n` | Preserved only when omitted or exactly `1`; rejected for any other value | Multi-choice accounting is not implemented, so `n > 1` is rejected before provider forwarding |
+| `n` | Preserved when omitted, `1`, or route-enabled and within `CHAT_MAX_CHOICES_PER_REQUEST` | Output-token controls remain per choice; reservation and estimated output cost multiply possible output by `n`, while final provider usage/cost is used once |
 | `tools` / `tool_choice` | Preserved when accepted and within configured local-tool caps; serialized object/list payloads are included in input/cost pre-reservation | Local `function` tools are allowed as client-side behavior. Non-streaming local `custom` tools are allowed only when the resolved route explicitly enables `chat_custom_tools`; SLAIF does not execute them or inspect their downstream meaning. Hosted/provider-side tools, MCP/connectors, web search tools, unknown tool types, and tool choices that force denied hosted tools are rejected before forwarding |
 | `functions` / `function_call` | Preserved when accepted and within equivalent caps; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
 | `response_format` | Preserved when accepted; bounded JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
@@ -238,7 +232,11 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
-`n > 1` is a deliberate compatibility limitation, not a forwarding transformation. Supporting it later requires choice-aware reservation, cost estimation, and final usage validation before the gateway can safely forward multi-choice requests.
+`n > 1` is a bounded forwarding feature, not a new billing category. It requires
+`chat_multiple_choices=true` on the resolved route. Input is estimated once,
+possible output is reserved as `effective_max_output_tokens_per_choice * n`,
+and final provider usage or OpenRouter provider-reported cost is not multiplied
+again by `n`.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 
@@ -289,9 +287,11 @@ Streaming has an extra finalization rule because content may already have reache
 
 Streaming does not expand request policy. Hosted/provider-side tools, custom
 tools, web search, MCP/connectors, external web access, multimodal/audio/file
-content, `n > 1`, non-default `service_tier`, background/provider-state
-lifecycle fields, and unknown top-level fields remain rejected before provider
-forwarding.
+content, non-default `service_tier`, background/provider-state lifecycle
+fields, and unknown top-level fields remain rejected before provider
+forwarding. Streaming `n > 1` is supported when route metadata explicitly
+enables multiple choices; SSE chunks, choice indexes, finish reasons, the final
+usage chunk, and `[DONE]` are preserved without buffering the full stream.
 
 ### Reconciliation
 
