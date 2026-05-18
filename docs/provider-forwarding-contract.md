@@ -51,7 +51,11 @@ runtime lookup:
 `/v1/chat/completions` routes and matching pricing rows from a curated in-repo
 catalog plus an operator-controlled pricing CSV. The command does not call
 OpenAI for model discovery, does not fetch pricing, and rejects legacy
-`/v1/completions` route creation while that endpoint is not implemented.
+`/v1/completions` route creation while that endpoint is not implemented. Seeded
+Chat Completions routes include explicit `capabilities.chat_completions`
+metadata for the currently supported request surface. Hosted search/tools,
+multimodal/audio/file inputs, custom tools, non-default service tiers, and
+`n > 1` are not enabled by that metadata.
 
 ## OpenAI Upstream Forwarding
 
@@ -174,6 +178,19 @@ counts, local function-tool counts and schema sizes, response-format schema
 size, metadata key/count/byte limits, stop sequence limits, `prediction` size,
 `stream_options` size, and `n` exactly `1`. Rejection errors do not include raw
 messages, metadata values, schemas, tool payloads, or request bodies.
+
+Route/model capability metadata is checked after route resolution and before
+Redis rate limiting, pricing lookup, quota reservation, or provider forwarding.
+The key model allowlist is not sufficient by itself: the resolved route must
+also allow the request's Chat Completions shape. Current capability flags cover
+text chat, streaming, local function tools, legacy functions, JSON mode,
+structured outputs, logprobs, reasoning-usage signals, cached-input usage
+signals, hosted tool families, multimodal/audio/file inputs, non-default
+service tiers, and multiple choices. New Chat Completions routes created by the
+route service receive explicit conservative metadata. Existing legacy routes
+without a `chat_completions` block use a compatibility fallback for the
+previously supported surface, while malformed or unknown `chat_completions`
+capability flags fail closed.
 
 ## Header Contract
 

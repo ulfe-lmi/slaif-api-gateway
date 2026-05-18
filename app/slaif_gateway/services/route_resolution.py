@@ -160,4 +160,6 @@ class RouteResolutionService:
             provider_timeout_seconds=getattr(best.provider_config, "timeout_seconds", None),
             provider_max_retries=getattr(best.provider_config, "max_retries", None),
             visible_model_id=best.route.requested_model,
+            supports_streaming=bool(getattr(best.route, "supports_streaming", True)),
+            capabilities=dict(getattr(best.route, "capabilities", {}) or {}),
         )

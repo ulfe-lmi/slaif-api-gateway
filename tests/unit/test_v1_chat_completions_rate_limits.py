@@ -215,7 +215,7 @@ def test_request_rate_limit_rejection_happens_before_expensive_work(monkeypatch)
     assert response.status_code == 429
     assert response.json()["error"]["type"] == "rate_limit_error"
     assert response.json()["error"]["code"] == "request_rate_limit_exceeded"
-    assert pipeline_state["route_calls"] == []
+    assert pipeline_state["route_calls"] == ["classroom-cheap"]
     assert pipeline_state["pricing_calls"] == []
     assert pipeline_state["reserve_calls"] == []
     assert pipeline_state["provider_calls"] == []
@@ -259,7 +259,7 @@ def test_redis_fail_closed_unavailable_returns_before_expensive_work(monkeypatch
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "redis_rate_limit_unavailable"
-    assert pipeline_state["route_calls"] == []
+    assert pipeline_state["route_calls"] == ["classroom-cheap"]
 
 
 def test_redis_fail_open_allows_request(monkeypatch) -> None:

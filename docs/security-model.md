@@ -55,9 +55,11 @@ header from the server-side provider secret and use an outbound header allowlist
 
 ## Chat Completions Capability Policy
 
-SLAIF permissions are endpoint, model, provider, and capability permissions. A
-model allowlist or `/v1/chat/completions` endpoint allowlist does not grant
-hosted-tool permission.
+SLAIF permissions are endpoint, model, provider, capability/tool,
+request-shape, and accounting/data-policy permissions. A model allowlist or
+`/v1/chat/completions` endpoint allowlist does not grant local function-tool,
+structured-output, logprobs, reasoning-control, hosted-tool, or service-tier
+permission by itself.
 
 Current Chat Completions policy allows local/client-side `function` tools,
 legacy `functions` / `function_call`, `response_format`, JSON mode, and
@@ -86,6 +88,19 @@ logging or returning raw messages, prompt content, metadata values, schemas,
 tool arguments, provider keys, gateway keys, cookies, sessions, CSRF tokens,
 encrypted payloads, or nonces.
 
+Resolved Chat Completions routes are also checked against explicit
+`model_routes.capabilities["chat_completions"]` metadata. New seeded or
+manually created Chat Completions routes receive conservative capability flags
+for the currently supported surface: text chat, streaming, local function tools,
+legacy functions, JSON mode, structured outputs, logprobs, reasoning/cached
+usage signals, and explicit false flags for hosted tools, multimodal/audio/file
+inputs, non-default service tiers, and multiple choices. Route capability
+checks happen after route resolution and before Redis rate limiting, pricing
+lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
+forwarding. Existing routes without a `chat_completions` block use a documented
+compatibility fallback for the previously supported surface; malformed or
+unknown Chat Completions capability flags fail closed.
+
 Hosted/provider-side tools are denied by default because no persisted per-key
 hosted-tool policy exists. Chat Completions requests with `web_search_options`,
 `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
@@ -106,11 +121,12 @@ still use normal authentication, route
 resolution, provider-secret isolation, PostgreSQL request reservation and
 finalization, usage ledger, usage profiling, and audit behavior. Their
 `trusted_calibration_discovery` mode may pass hosted/provider-side Chat
-Completions capability markers for routed models so a trusted organizer can
-discover workflow requirements, but it still denies unsupported endpoints,
-external MCP/connectors, provider-side authorization, connector IDs, server
-URLs, approval flows, and background/provider-state lifecycle features by
-default. Calibration keys are not participant keys.
+Completions capability markers only when the resolved route metadata
+explicitly allows that hosted capability, so a trusted organizer can discover
+workflow requirements, but it still denies unsupported endpoints, external
+MCP/connectors, provider-side authorization, connector IDs, server URLs,
+approval flows, and background/provider-state lifecycle features by default.
+Calibration keys are not participant keys.
 
 ## Admin OpenAI Assisted Proposal Boundary
 

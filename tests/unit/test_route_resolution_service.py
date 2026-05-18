@@ -98,6 +98,8 @@ def _route(
     upstream_model: str | None = None,
     priority: int = 100,
     enabled: bool = True,
+    supports_streaming: bool = True,
+    capabilities: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
@@ -108,6 +110,8 @@ def _route(
         upstream_model=upstream_model or requested_model,
         priority=priority,
         enabled=enabled,
+        supports_streaming=supports_streaming,
+        capabilities=capabilities or {},
     )
 
 
@@ -143,6 +147,27 @@ async def test_exact_route_resolves() -> None:
     assert result.provider_api_key_env_var == "OPENAI_API_KEY"
     assert result.provider_timeout_seconds == 300
     assert result.provider_max_retries == 2
+
+
+@pytest.mark.asyncio
+async def test_route_resolution_returns_safe_capability_metadata() -> None:
+    service = RouteResolutionService(
+        model_routes_repository=FakeModelRoutesRepository(
+            [
+                _route(
+                    "gpt-4.1-mini",
+                    supports_streaming=False,
+                    capabilities={"chat_completions": {"chat_text": True}},
+                )
+            ]
+        ),
+        provider_configs_repository=FakeProviderConfigsRepository([_provider("openai")]),
+    )
+
+    result = await service.resolve_model("gpt-4.1-mini", _make_key())
+
+    assert result.supports_streaming is False
+    assert result.capabilities == {"chat_completions": {"chat_text": True}}
 
 
 @pytest.mark.asyncio

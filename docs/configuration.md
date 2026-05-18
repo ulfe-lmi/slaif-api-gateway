@@ -367,7 +367,8 @@ Trusted calibration keys are real gateway keys for trusted organizers/admins.
 They are short-lived, request-limited, and use normal authentication, routing,
 provider-secret isolation, PostgreSQL accounting, usage ledger, usage
 profiling, and audit behavior. Their discovery policy may pass routed Chat
-Completions hosted-capability markers so an admin can later derive strict
+Completions hosted-capability markers only when the resolved route metadata
+explicitly allows that capability, so an admin can later derive strict
 participant policies/templates from observed usage. They are not participant
 keys and do not enable `/v1/responses` or `/v1/completions`.
 
@@ -757,9 +758,12 @@ content server-side instead of trusting preview HTML or client-side
 classification. The current dashboard execution workflow is all-or-nothing and
 create-only: if any row is invalid, duplicated, conflicting, or would require an
 update/replace decision, no rows are written. Successful creates go through the
-route service and write safe audit rows. Confirmed imports can affect future
-model resolution through the existing resolver; route resolution runtime
-semantics are otherwise unchanged.
+route service, receive explicit Chat Completions capability metadata when the
+route is for `/v1/chat/completions`, and write safe audit rows. Confirmed
+imports can affect future model resolution through the existing resolver; route
+resolution runtime semantics are otherwise unchanged. Capability metadata is
+separate from endpoint/model/provider allowlists and does not enable hosted
+tools, multimodal/audio/file inputs, `n > 1`, or non-default service tiers.
 
 Dashboard usage and audit CSV exports are capped by:
 

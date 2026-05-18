@@ -215,6 +215,9 @@ def test_mocked_openai_valid_json_produces_route_tsv(tmp_path, monkeypatch, resp
     ]
     capabilities = json.loads(rows[0]["capabilities"])
     assert capabilities["endpoint_compatibility"] == "v1/chat/completions"
+    assert capabilities["chat_completions"]["chat_text"] is True
+    assert capabilities["chat_completions"]["chat_streaming"] is True
+    assert capabilities["chat_completions"]["hosted_web_search"] is False
     preview = validate_route_import_rows(
         parse_route_import_tsv(output.read_text()),
         provider_configs=(RouteImportProviderRef(id=uuid.uuid4(), provider="openai"),),

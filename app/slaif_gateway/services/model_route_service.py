@@ -7,6 +7,9 @@ import uuid
 from slaif_gateway.db.models import MATCH_TYPE_VALUES_MODEL_ROUTES, ModelRoute
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    ensure_default_chat_completion_capabilities,
+)
 from slaif_gateway.services.record_errors import RecordNotFoundError
 
 
@@ -57,7 +60,11 @@ class ModelRouteService:
             enabled=enabled,
             visible_in_models=visible_in_models,
             supports_streaming=supports_streaming,
-            capabilities=capabilities,
+            capabilities=ensure_default_chat_completion_capabilities(
+                capabilities,
+                supports_streaming=supports_streaming,
+                endpoint=normalize_endpoint(endpoint),
+            ),
             notes=_clean_optional(notes),
         )
         await self._audit.add_audit_log(
@@ -157,7 +164,11 @@ class ModelRouteService:
             enabled=enabled,
             visible_in_models=visible_in_models,
             supports_streaming=supports_streaming,
-            capabilities=capabilities or {},
+            capabilities=ensure_default_chat_completion_capabilities(
+                capabilities,
+                supports_streaming=supports_streaming,
+                endpoint=normalize_endpoint(endpoint),
+            ),
             notes=_clean_optional(notes),
         )
         if not updated:

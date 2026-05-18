@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import pytest
+
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    CHAT_COMPLETIONS_CAPABILITIES_KEY,
+    CHAT_CAPABILITY_FUNCTION_TOOLS,
+    CHAT_CAPABILITY_JSON_MODE,
+    CHAT_CAPABILITY_LOGPROBS,
+    CHAT_CAPABILITY_STREAMING,
+    CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
+    CHAT_CAPABILITY_TEXT,
+    ChatCompletionRouteCapabilityError,
+    default_chat_completion_capabilities,
+    enforce_chat_completion_route_capabilities,
+)
+
+
+def _payload(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    body.update(overrides)
+    return body
+
+
+def _caps(**overrides: bool) -> dict[str, object]:
+    capabilities = default_chat_completion_capabilities(supports_streaming=True)
+    capabilities.update(overrides)
+    return {CHAT_COMPLETIONS_CAPABILITIES_KEY: capabilities}
+
+
+def test_text_only_request_passes_when_route_allows_text_chat() -> None:
+    enforce_chat_completion_route_capabilities(
+        _payload(),
+        route_capabilities=_caps(),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_text_only_request_fails_when_route_lacks_text_chat() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_TEXT: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_capability_not_supported"
+    assert exc_info.value.param == "model"
+
+
+def test_streaming_requires_streaming_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(stream=True),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_STREAMING: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_capability_not_supported"
+    assert exc_info.value.param == "stream"
+
+
+def test_legacy_supports_streaming_field_is_used_for_routes_without_chat_metadata() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(stream=True),
+            route_capabilities={},
+            route_supports_streaming=False,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.param == "stream"
+
+
+def test_function_tools_require_function_tool_capability_without_schema_inspection() -> None:
+    raw_schema_marker = "raw function schema marker"
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "delete_file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "authorization": {"description": raw_schema_marker}
+                                },
+                            },
+                        },
+                    }
+                ]
+            ),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_FUNCTION_TOOLS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.param == "tools"
+    assert raw_schema_marker not in exc_info.value.safe_message
+
+
+def test_legacy_functions_require_legacy_capability() -> None:
+    capabilities = default_chat_completion_capabilities(supports_streaming=True)
+    capabilities["chat_legacy_functions"] = False
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(functions=[{"name": "lookup"}]),
+            route_capabilities={CHAT_COMPLETIONS_CAPABILITIES_KEY: capabilities},
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.param == "functions"
+
+
+def test_response_format_requires_matching_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as json_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(response_format={"type": "json_object"}),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_JSON_MODE: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+    with pytest.raises(ChatCompletionRouteCapabilityError) as schema_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(response_format={"type": "json_schema", "json_schema": {"schema": {}}}),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_STRUCTURED_OUTPUTS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert json_exc.value.param == "response_format"
+    assert schema_exc.value.param == "response_format"
+
+
+def test_logprobs_requires_logprobs_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(logprobs=True),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_LOGPROBS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.param == "logprobs"
+
+
+def test_search_specific_model_requires_hosted_web_search_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(model="gpt-5-search-api"),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-5-search-api",
+        )
+
+    assert exc_info.value.error_code == "chat_hosted_tool_not_allowed"
+    assert exc_info.value.param == "model"
+
+
+def test_known_hosted_tools_require_matching_route_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _payload(tools=[{"type": "web_search_preview"}]),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_hosted_tool_not_allowed"
+    assert exc_info.value.param == "tools[0].type"
+
+
+def test_unknown_and_malformed_chat_capability_metadata_fails_closed() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as unknown_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(),
+            route_capabilities={CHAT_COMPLETIONS_CAPABILITIES_KEY: {"chat_text": True, "future": True}},
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+    with pytest.raises(ChatCompletionRouteCapabilityError) as malformed_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(),
+            route_capabilities={CHAT_COMPLETIONS_CAPABILITIES_KEY: {"chat_text": "yes"}},
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert unknown_exc.value.error_code == "chat_route_capability_invalid"
+    assert malformed_exc.value.error_code == "chat_route_capability_invalid"

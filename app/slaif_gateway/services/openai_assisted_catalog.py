@@ -16,6 +16,9 @@ from urllib.parse import urlparse
 
 import httpx
 
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    ensure_default_chat_completion_capabilities,
+)
 from slaif_gateway.services.hosted_tool_policy import is_search_specific_chat_completion_model
 from slaif_gateway.services.model_route_service import normalize_endpoint
 from slaif_gateway.utils.redaction import redact_text
@@ -564,12 +567,21 @@ def _route_rows_from_payload(
         row_source_urls = _required_source_urls(raw_row.get("source_urls"), row_number=index)
         source_urls.update(row_source_urls)
         confidence = _confidence(raw_row.get("confidence"), row_number=index)
-        capabilities = {
-            "source_type": "openai_llm_assisted",
-            "source_urls": row_source_urls,
-            "endpoint_compatibility": "v1/chat/completions",
-            "confidence": confidence,
-        }
+        supports_streaming = _required_bool(
+            raw_row.get("supports_streaming"),
+            field_name="supports_streaming",
+            row_number=index,
+        )
+        capabilities = ensure_default_chat_completion_capabilities(
+            {
+                "source_type": "openai_llm_assisted",
+                "source_urls": row_source_urls,
+                "endpoint_compatibility": "v1/chat/completions",
+                "confidence": confidence,
+            },
+            supports_streaming=supports_streaming,
+            endpoint=_CHAT_COMPLETIONS_ENDPOINT,
+        )
         upstream_model = (
             _optional_safe_text(raw_row.get("upstream_model"), field_name="upstream_model", row_number=index)
             or requested_model
@@ -584,9 +596,7 @@ def _route_rows_from_payload(
                 "priority": "100",
                 "enabled": "true",
                 "visible_in_models": "true",
-                "supports_streaming": "true"
-                if _required_bool(raw_row.get("supports_streaming"), field_name="supports_streaming", row_number=index)
-                else "false",
+                "supports_streaming": "true" if supports_streaming else "false",
                 "capabilities": _metadata_json(capabilities),
                 "notes": (
                     "Endpoint compatibility is proposed from official OpenAI docs "
