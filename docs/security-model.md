@@ -62,9 +62,11 @@ structured-output, logprobs, reasoning-control, hosted-tool, or service-tier
 permission by itself.
 
 Current Chat Completions policy allows local/client-side `function` tools,
-legacy `functions` / `function_call`, `response_format`, JSON mode, and
-ordinary streaming. SLAIF does not execute local tools and does not police what
-a downstream application does when it receives a local function call.
+route-enabled non-streaming local/client-side `custom` tools, legacy
+`functions` / `function_call`, `response_format`, JSON mode, and ordinary
+streaming. SLAIF does not execute local tools and does not police what a
+downstream application does when it receives a local function or custom tool
+call.
 
 The Chat Completions field registry is fail-closed. Endpoint and model
 authorization do not authorize unknown future request features. Standard keys
@@ -72,25 +74,26 @@ and trusted calibration keys reject unknown top-level fields before Redis rate
 limiting, route resolution, pricing lookup, PostgreSQL quota reservation,
 usage-profile insertion, or provider forwarding. The error includes the field
 name as a safe `param`, but not the raw value. Current policy also rejects
-custom tools, non-default `service_tier`, audio/image/file/video content,
+custom tools when route metadata does not explicitly enable them, non-default `service_tier`, audio/image/file/video content,
 provider-side lifecycle/state fields, and other unclassified feature-bearing
 fields until pricing, accounting, forwarding, and tests exist.
 
 OpenAI upstream evidence for Chat Completions custom tools is tracked in
 [`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md).
-The current API reference and official Python SDK types include custom-tool
-shapes, but SLAIF keeps `tools[].type == "custom"` disabled until a focused
-implementation adds explicit size caps, capability gates, provider adapter
-coverage, input-estimation/accounting treatment, and no-content/no-secret
-tests. Custom tools would remain local/client-side intent; they are not
-provider-hosted execution authority.
+SLAIF supports the documented non-streaming request/response shapes only as
+local/client-side intent. Custom tool definitions and generated custom-tool
+input are ordinary token-bearing Chat Completions material. SLAIF adds no
+custom-tool pricing, execution fee, or custom-tool ledger billing columns, and
+a later downstream app call with tool results is a separate ordinary gateway
+request. Custom tools are not provider-hosted execution authority.
 
 Supported Chat Completions fields are validated against explicit type, range,
 count, and byte caps before Redis rate limiting, route resolution, pricing
 lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
 forwarding. The cap layer keeps local function tools allowed but bounds tool
 count, function name and description length, per-tool schema size, and total
-schema size. It also bounds message count/content, text parts,
+schema size. It also bounds custom tool count, name/description, serialized
+format, and grammar definition sizes. It also bounds message count/content, text parts,
 `response_format` schemas, `metadata`, `prediction`, `stream_options`, `stop`,
 `user`, and `logit_bias`. Errors name the field and policy problem without
 logging or returning raw messages, prompt content, metadata values, schemas,
@@ -101,7 +104,7 @@ Resolved Chat Completions routes are also checked against explicit
 `model_routes.capabilities["chat_completions"]` metadata. New seeded or
 manually created Chat Completions routes receive conservative capability flags
 for the currently supported surface: text chat, streaming, local function tools,
-legacy functions, JSON mode, structured outputs, logprobs, reasoning/cached
+local custom tools, legacy functions, JSON mode, structured outputs, logprobs, reasoning/cached
 usage signals, and explicit false flags for hosted tools, multimodal/audio/file
 inputs, non-default service tiers, and multiple choices. Route capability
 checks happen after route resolution and before Redis rate limiting, pricing
@@ -291,7 +294,7 @@ Chat Completions request policy estimates input tokens before Redis rate
 limiting, route resolution, pricing lookup, PostgreSQL quota reservation, or
 provider forwarding. The estimate includes message content plus conservative
 canonical JSON byte-size upper bounds for serialized non-message object/list
-fields that are forwarded to providers, including `tools`, `functions`,
+fields that are forwarded to providers, including local function/custom `tools`, `functions`,
 object-shaped `tool_choice` / `function_call`, `response_format` JSON schemas,
 `prediction`, `metadata`, `logit_bias`, and `stream_options`. Unknown top-level
 fields and over-cap fields are rejected before this estimation step and are not
@@ -300,7 +303,7 @@ forwarded.
 Large tool/function/schema payloads may be rejected before provider calls. The
 estimator stores and exposes only safe count metadata such as token estimate,
 counted field names, and counted bytes. It does not store prompts, completions,
-raw request bodies, raw response bodies, raw tool/schema payloads, provider
+raw request bodies, raw response bodies, raw tool/schema/custom-tool/grammar payloads, provider
 keys, plaintext gateway keys, token hashes, encrypted payloads, nonces,
 password hashes, session tokens, or email bodies. Successful requests still
 finalize accounting from actual provider usage when available. This is Chat

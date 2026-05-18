@@ -59,11 +59,12 @@ security and cost surfaces, not as generic JSON passthrough.
 
 Current Chat Completions policy already applies the same fail-closed boundary
 for implemented `/v1/chat/completions`: local function tools are allowed as
-client-side behavior, while hosted/provider-side tools, MCP/connectors,
+client-side behavior, non-streaming local custom tools are allowed only behind
+explicit route capability and ordinary token accounting, while hosted/provider-side tools, MCP/connectors,
 `web_search_options`, search-specific models, `background=true`, and
 `external_web_access` are denied before provider forwarding. A Chat Completions
-field registry also rejects unknown top-level fields, custom tools,
-non-default service tiers, and non-text audio/image/file content until those
+field registry also rejects unknown top-level fields, non-default service
+tiers, streaming custom tools, and non-text audio/image/file content until those
 features have explicit policy, pricing/accounting, forwarding, and tests. This
 hardening does not implement `/v1/responses`.
 

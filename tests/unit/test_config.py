@@ -40,9 +40,12 @@ def _clear_env(monkeypatch) -> None:
         "CHAT_MAX_MESSAGE_CONTENT_BYTES",
         "CHAT_MAX_TEXT_PARTS_PER_MESSAGE",
         "CHAT_MAX_TOOLS_PER_REQUEST",
+        "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
         "CHAT_MAX_FUNCTIONS_PER_REQUEST",
         "CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES",
         "CHAT_MAX_TOTAL_TOOL_SCHEMA_BYTES",
+        "CHAT_MAX_CUSTOM_TOOL_FORMAT_BYTES",
+        "CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES",
         "CHAT_MAX_RESPONSE_FORMAT_SCHEMA_BYTES",
         "CHAT_MAX_METADATA_BYTES",
         "CHAT_MAX_METADATA_KEYS",
@@ -54,6 +57,8 @@ def _clear_env(monkeypatch) -> None:
         "CHAT_MAX_LOGIT_BIAS_BYTES",
         "CHAT_MAX_TOOL_NAME_BYTES",
         "CHAT_MAX_TOOL_DESCRIPTION_BYTES",
+        "CHAT_MAX_CUSTOM_TOOL_NAME_BYTES",
+        "CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES",
         "CHAT_MAX_METADATA_KEY_BYTES",
         "ENABLE_METRICS",
         "ENABLE_EMAIL_DELIVERY",
@@ -161,7 +166,10 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.CHAT_MAX_MESSAGES_PER_REQUEST == 128
     assert settings.CHAT_MAX_MESSAGE_CONTENT_BYTES == 262144
     assert settings.CHAT_MAX_TOOLS_PER_REQUEST == 64
+    assert settings.CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST == 16
     assert settings.CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES == 65536
+    assert settings.CHAT_MAX_CUSTOM_TOOL_FORMAT_BYTES == 65536
+    assert settings.CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES == 32768
     assert settings.CHAT_MAX_METADATA_BYTES == 16384
     assert settings.ENABLE_METRICS is True
     assert settings.metrics_require_auth() is False
@@ -693,7 +701,9 @@ def test_invalid_zero_or_negative_caps_fail(monkeypatch) -> None:
         ("HARD_MAX_INPUT_TOKENS", "0"),
         ("HARD_MAX_INPUT_TOKENS", "-1"),
         ("CHAT_MAX_MESSAGES_PER_REQUEST", "0"),
+        ("CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST", "0"),
         ("CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES", "-1"),
+        ("CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES", "-1"),
         ("CHAT_MAX_METADATA_BYTES", "0"),
     )
 

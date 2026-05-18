@@ -85,6 +85,7 @@ async def _create_test_data(
     owner_label: str = "OpenAI",
     trusted_calibration: bool = False,
     supports_streaming: bool = True,
+    custom_tools: bool = False,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -187,6 +188,7 @@ async def _create_test_data(
                             "chat_text": True,
                             "chat_streaming": supports_streaming,
                             "chat_function_tools": True,
+                            "chat_custom_tools": custom_tools,
                             "chat_legacy_functions": True,
                             "chat_structured_outputs": True,
                             "chat_json_mode": True,
@@ -515,6 +517,126 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
     )
     assert FAKE_OPENAI_UPSTREAM_KEY not in provider_config_text
     assert state.provider_config.api_key_env_var == "OPENAI_UPSTREAM_API_KEY"
+
+
+@pytest.mark.e2e
+def test_openai_python_client_chat_completions_custom_tool_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, custom_tools=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    custom_input = "echo hello"
+    grammar_definition = "[a-z ]+"
+    upstream_payload = {
+        "id": "chatcmpl-custom-tool-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_custom_1",
+                            "type": "custom",
+                            "custom": {
+                                "name": "run_shell",
+                                "input": custom_input,
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-custom-tool-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.chat.completions.create(
+                model=TEST_MODEL,
+                messages=[{"role": "user", "content": PROMPT_TEXT}],
+                tools=[
+                    {
+                        "type": "custom",
+                        "custom": {
+                            "name": "run_shell",
+                            "description": "local command intent",
+                            "format": {
+                                "type": "grammar",
+                                "grammar": {
+                                    "syntax": "regex",
+                                    "definition": grammar_definition,
+                                },
+                            },
+                        },
+                    }
+                ],
+                tool_choice={"type": "custom", "custom": {"name": "run_shell"}},
+            )
+
+    assert response.choices[0].finish_reason == "tool_calls"
+    tool_call = response.choices[0].message.tool_calls[0]
+    assert tool_call.type == "custom"
+    assert tool_call.custom.name == "run_shell"
+    assert tool_call.custom.input == custom_input
+
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_gateway_key}"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["tools"][0]["type"] == "custom"
+    assert upstream_body["tools"][0]["custom"]["name"] == "run_shell"
+    assert upstream_body["tools"][0]["custom"]["format"]["grammar"]["definition"] == grammar_definition
+    assert upstream_body["tool_choice"] == {"type": "custom", "custom": {"name": "run_shell"}}
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_used_total == 13
+    assert state.usage_ledger.prompt_tokens == 8
+    assert state.usage_ledger.completion_tokens == 5
+    assert state.usage_ledger.total_tokens == 13
+    assert state.usage_ledger.accounting_status == "finalized"
+
+    usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
+    metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+    for forbidden in (
+        PROMPT_TEXT,
+        COMPLETION_TEXT,
+        custom_input,
+        grammar_definition,
+        created.plaintext_gateway_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in usage_payload
+        assert forbidden not in metadata_payload
 
 
 @pytest.mark.e2e

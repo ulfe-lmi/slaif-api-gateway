@@ -14,6 +14,7 @@ CHAT_COMPLETIONS_CAPABILITIES_KEY = "chat_completions"
 CHAT_CAPABILITY_TEXT = "chat_text"
 CHAT_CAPABILITY_STREAMING = "chat_streaming"
 CHAT_CAPABILITY_FUNCTION_TOOLS = "chat_function_tools"
+CHAT_CAPABILITY_CUSTOM_TOOLS = "chat_custom_tools"
 CHAT_CAPABILITY_LEGACY_FUNCTIONS = "chat_legacy_functions"
 CHAT_CAPABILITY_STRUCTURED_OUTPUTS = "chat_structured_outputs"
 CHAT_CAPABILITY_JSON_MODE = "chat_json_mode"
@@ -38,6 +39,7 @@ KNOWN_CHAT_COMPLETION_CAPABILITIES = frozenset(
         CHAT_CAPABILITY_TEXT,
         CHAT_CAPABILITY_STREAMING,
         CHAT_CAPABILITY_FUNCTION_TOOLS,
+        CHAT_CAPABILITY_CUSTOM_TOOLS,
         CHAT_CAPABILITY_LEGACY_FUNCTIONS,
         CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
         CHAT_CAPABILITY_JSON_MODE,
@@ -78,6 +80,7 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
         CHAT_CAPABILITY_TEXT: True,
         CHAT_CAPABILITY_STREAMING: bool(supports_streaming),
         CHAT_CAPABILITY_FUNCTION_TOOLS: True,
+        CHAT_CAPABILITY_CUSTOM_TOOLS: False,
         CHAT_CAPABILITY_LEGACY_FUNCTIONS: True,
         CHAT_CAPABILITY_STRUCTURED_OUTPUTS: True,
         CHAT_CAPABILITY_JSON_MODE: True,
@@ -194,6 +197,18 @@ def classify_chat_completion_route_capability_requirements(
                 field="tools",
                 error_code="chat_capability_not_supported",
                 safe_message="This model route does not support local Chat Completions function tools.",
+            )
+        )
+
+    if _uses_custom_tools(payload):
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_CUSTOM_TOOLS,
+                field="tools",
+                error_code="chat_custom_tool_capability_not_supported",
+                safe_message=(
+                    "This model route does not support local Chat Completions custom tools."
+                ),
             )
         )
 
@@ -322,6 +337,17 @@ def _uses_function_tools(payload: Mapping[str, Any]) -> bool:
 
     tool_choice = payload.get("tool_choice")
     return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "function"
+
+
+def _uses_custom_tools(payload: Mapping[str, Any]) -> bool:
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, Mapping) and tool.get("type") == "custom":
+                return True
+
+    tool_choice = payload.get("tool_choice")
+    return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "custom"
 
 
 def _hosted_tool_findings(payload: Mapping[str, Any]) -> list[ChatCompletionRouteCapabilityFinding]:

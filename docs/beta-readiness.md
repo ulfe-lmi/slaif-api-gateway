@@ -27,6 +27,9 @@ operational guidance, not a production certification.
 - Authenticated `GET /v1/models` using local route/provider metadata.
 - `POST /v1/chat/completions` non-streaming and SSE streaming through OpenAI
   and OpenRouter adapters.
+- Non-streaming Chat Completions local custom tools when the resolved route
+  explicitly enables `chat_custom_tools`; streaming custom tools remain
+  unsupported.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.

@@ -24,6 +24,8 @@ but are not a production certification.
 
 - OpenAI-compatible `GET /v1/models`.
 - OpenAI-compatible non-streaming and streaming `POST /v1/chat/completions`.
+- Non-streaming Chat Completions local custom tools behind explicit route
+  capability; streaming custom tools remain unsupported.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - Explicit Chat Completions route/model capability metadata, enforced
   separately from gateway-key endpoint/model/provider allowlists.

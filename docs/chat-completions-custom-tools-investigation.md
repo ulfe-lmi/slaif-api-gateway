@@ -4,8 +4,7 @@ Checked on 2026-05-18.
 
 This note answers whether OpenAI upstream appears to support
 `/v1/chat/completions` requests with `tools[].type == "custom"`, and records
-the current SLAIF decision. It is an evidence note only; it does not change
-gateway runtime behavior.
+the SLAIF enablement boundary.
 
 ## Evidence Checked
 
@@ -48,15 +47,24 @@ Official `openai-python` SDK:
   tool request, tool-choice, and response types.
 - Source: [openai/openai-python](https://github.com/openai/openai-python).
 
-Current SLAIF implementation:
+SLAIF implementation after the enablement PR:
 
-- `tools[].type == "custom"` is rejected by
-  `app/slaif_gateway/services/chat_completion_field_policy.py` with
-  `custom_tool_not_supported`.
-- Existing unit tests assert this rejection in both request-policy and
-  `/v1/chat/completions` policy paths.
-- This investigation PR does not change request policy, provider forwarding,
-  accounting, routing, capability metadata, or tests.
+- Non-streaming Chat Completions custom tools are accepted only as
+  local/client-side custom tool-call intent when the resolved route explicitly
+  sets `capabilities.chat_completions.chat_custom_tools=true`.
+- The supported request shape is the documented Chat Completions shape:
+  `{"type":"custom","custom":{"name":..., "description"?:..., "format"?:...}}`.
+  `format` may be `{"type":"text"}` or
+  `{"type":"grammar","grammar":{"syntax":"lark"|"regex","definition":...}}`.
+- Named custom tool choice is accepted only as
+  `{"type":"custom","custom":{"name":...}}` and only when the name matches a
+  declared custom tool in the same request.
+- Streaming Chat Completions custom tools remain unsupported because the
+  installed official OpenAI Python SDK stream chunk type only models function
+  tool deltas for Chat Completions.
+- Custom tools use ordinary Chat Completions input/output token accounting.
+  SLAIF adds no custom-tool pricing, billing unit, execution fee, or ledger
+  cost category.
 
 ## Conclusion
 
@@ -65,26 +73,13 @@ the API reference and official Python SDK generated types include
 Chat Completions custom-tool shapes, while the function-calling guide's
 custom-tool examples are Responses API examples.
 
-SLAIF should continue rejecting Chat Completions custom tools until a dedicated
-implementation PR proves compatibility and safety. A future enablement PR would
-need at least:
-
-- explicit request-field and cap validation for custom-tool definitions,
-  grammar definitions, and generated custom-tool input;
-- route/model capability metadata and key/template policy gating;
-- provider adapter tests for OpenAI and OpenRouter request/response shapes;
-- mocked official OpenAI Python client E2E coverage;
-- input-estimation and accounting checks showing custom-tool definitions and
-  generated custom-tool input affect normal token usage without introducing a
-  separate hosted-tool billing unit unless a provider documents one;
-- no-content/no-secret tests proving prompts, completions, request bodies,
-  custom-tool definitions, custom-tool input, grammar definitions, tool
-  payloads, provider keys, gateway plaintext keys, Authorization headers,
-  cookies, CSRF/session tokens, and other secrets are not stored, logged, or
-  displayed.
+The enablement boundary is intentionally narrow:
 
 Custom tools are local/client-side tool intent, not provider-hosted execution
-authority. SLAIF does not police downstream application behavior after local
-tool-call output. Hosted/provider-side tools, MCP/connectors, web search, file
+authority. OpenAI does not execute the local custom tool merely because it is
+declared, and SLAIF does not execute it. SLAIF does not police downstream
+application behavior after local tool-call output and therefore does not reject
+custom tool names such as `run_shell`, `send_email`, `delete_file`, or
+`code_exec`. Hosted/provider-side tools, MCP/connectors, web search, file
 search, code interpreter or shell/container execution, computer use, image
 generation tools, and tool search remain denied by default.

@@ -338,9 +338,12 @@ forwarding. Defaults:
 | `CHAT_MAX_MESSAGE_CONTENT_BYTES` | `262144` | One message's string/text-part content |
 | `CHAT_MAX_TEXT_PARTS_PER_MESSAGE` | `64` | Text parts in one message |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
+| `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
 | `CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES` | `65536` | One function-tool or function-choice schema payload |
 | `CHAT_MAX_TOTAL_TOOL_SCHEMA_BYTES` | `262144` | Total local function-tool schema payloads |
+| `CHAT_MAX_CUSTOM_TOOL_FORMAT_BYTES` | `65536` | One serialized custom-tool `format` object |
+| `CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES` | `32768` | One raw custom-tool grammar definition |
 | `CHAT_MAX_RESPONSE_FORMAT_SCHEMA_BYTES` | `65536` | `response_format.json_schema` |
 | `CHAT_MAX_METADATA_BYTES` | `16384` | Serialized `metadata` object |
 | `CHAT_MAX_METADATA_KEYS` | `32` | `metadata` key count |
@@ -353,6 +356,8 @@ forwarding. Defaults:
 | `CHAT_MAX_LOGIT_BIAS_BYTES` | `16384` | Serialized `logit_bias` object |
 | `CHAT_MAX_TOOL_NAME_BYTES` | `128` | Function tool/choice name |
 | `CHAT_MAX_TOOL_DESCRIPTION_BYTES` | `4096` | Function description |
+| `CHAT_MAX_CUSTOM_TOOL_NAME_BYTES` | `128` | Custom tool/choice name |
+| `CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES` | `4096` | Custom tool description |
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency

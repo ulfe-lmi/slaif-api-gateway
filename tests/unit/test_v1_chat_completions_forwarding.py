@@ -374,6 +374,124 @@ def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) 
     assert state["finalize_calls"]
 
 
+def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    chat_capabilities = default_chat_completion_capabilities()
+    chat_capabilities["chat_custom_tools"] = True
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-4.1-mini",
+        route_capabilities={"chat_completions": chat_capabilities},
+    )
+    upstream_payload = {
+        "id": "chatcmpl_custom",
+        "object": "chat.completion",
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_custom_1",
+                            "type": "custom",
+                            "custom": {"name": "run_shell", "input": "echo hello"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+    }
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_chat_request(),
+        "tools": [
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "run_shell",
+                    "description": "local command intent",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"syntax": "regex", "definition": "[a-z ]+"},
+                    },
+                },
+            }
+        ],
+        "tool_choice": {"type": "custom", "custom": {"name": "run_shell"}},
+    }
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert upstream_request.headers["authorization"] != "Bearer client-gateway-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["tools"] == body["tools"]
+    assert upstream_body["tool_choice"] == body["tool_choice"]
+    assert state["provider_responses"][0].usage.total_tokens == 13
+    assert state["finalize_calls"]
+
+
+def test_openrouter_nonstreaming_custom_tool_request_is_preserved(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
+    app = create_app(settings)
+    chat_capabilities = default_chat_completion_capabilities()
+    chat_capabilities["chat_custom_tools"] = True
+    _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openrouter",
+        resolved_model="openai/gpt-4.1-mini",
+        route_capabilities={"chat_completions": chat_capabilities},
+    )
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "or_chatcmpl_custom",
+                "choices": [],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+                "usage_cost": 0.00001,
+            },
+        )
+    )
+
+    body = {
+        **_chat_request(),
+        "tools": [{"type": "custom", "custom": {"name": "local_router_tool"}}],
+    }
+    response = TestClient(app).post("/v1/chat/completions", json=body)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "or_chatcmpl_custom"
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["tools"] == body["tools"]
+
+
 def test_trusted_calibration_hosted_tool_request_is_forwarded(monkeypatch, respx_mock) -> None:
     settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
     app = create_app(settings)

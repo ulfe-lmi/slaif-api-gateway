@@ -1036,6 +1036,7 @@ current supported flag names are:
 chat_text
 chat_streaming
 chat_function_tools
+chat_custom_tools
 chat_legacy_functions
 chat_structured_outputs
 chat_json_mode
@@ -1066,6 +1067,14 @@ unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
 external MCP/connectors, multimodal/audio/file inputs, non-default service
 tiers, and `n > 1` remain disabled unless future explicit support changes both
 policy and accounting.
+
+`chat_custom_tools=true` enables only non-streaming local/client-side Chat
+Completions custom tool-call intent. It does not enable hosted tools, MCP or
+connectors, web search, file search, code interpreter, computer use, image
+generation, tool search, multimodal/audio/file inputs, audio output, `n > 1`,
+or non-default service tiers. Custom tools are billed through ordinary
+input/output token accounting and provider usage finalization; no custom-tool
+pricing or ledger billing columns are defined.
 
 Allowed `match_type` values:
 

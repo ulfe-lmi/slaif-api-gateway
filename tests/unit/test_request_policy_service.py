@@ -796,7 +796,6 @@ def test_function_tool_schema_with_provider_marker_property_names_is_allowed() -
         ({"tools": [{"type": "tool_search"}]}, "hosted_tool_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "mcp"}]}, "mcp_connectors_not_allowed", "tools[0].type"),
         ({"tools": [{"type": "custom_tool"}]}, "unknown_tool_type_not_allowed", "tools[0].type"),
-        ({"tools": [{"type": "custom"}]}, "custom_tool_not_supported", "tools[0].type"),
         ({"background": True}, "background_not_allowed", "background"),
         ({"store": True}, "background_not_allowed", "store"),
         ({"previous_response_id": "resp_123"}, "background_not_allowed", "previous_response_id"),
@@ -829,6 +828,232 @@ def test_hosted_tool_capability_surfaces_are_rejected(
     assert exc_info.value.param == expected_param
     assert "sk-" not in exc_info.value.safe_message
     assert "Authorization" not in exc_info.value.safe_message
+
+
+def test_custom_tool_request_is_accepted_as_local_intent_and_counted_in_input_estimate() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    base_request = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    custom_tool = {
+        "type": "custom",
+        "custom": {
+            "name": "run_shell",
+            "description": "Local tool description",
+            "format": {
+                "type": "grammar",
+                "grammar": {"syntax": "regex", "definition": "[a-z]+"},
+            },
+        },
+    }
+
+    without_tool = policy.apply(base_request)
+    with_tool = policy.apply(
+        {
+            **base_request,
+            "tools": [custom_tool],
+            "tool_choice": {"type": "custom", "custom": {"name": "run_shell"}},
+        }
+    )
+
+    assert with_tool.effective_body["tools"][0] == custom_tool
+    assert with_tool.effective_body["tool_choice"]["custom"]["name"] == "run_shell"
+    assert "tools" in with_tool.estimated_non_message_input_fields
+    assert with_tool.estimated_input_tokens > without_tool.estimated_input_tokens
+
+
+def test_custom_tool_names_are_not_semantically_policed() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "custom", "custom": {"name": "delete_file"}}],
+        }
+    )
+
+    assert result.effective_body["tools"][0]["custom"]["name"] == "delete_file"
+
+
+@pytest.mark.parametrize(
+    ("settings_overrides", "request_overrides", "expected_code", "expected_param"),
+    [
+        (
+            {"CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST": 1},
+            {
+                "tools": [
+                    {"type": "custom", "custom": {"name": "one"}},
+                    {"type": "custom", "custom": {"name": "two"}},
+                ]
+            },
+            "chat_custom_tool_count_exceeded",
+            "tools",
+        ),
+        (
+            {"CHAT_MAX_CUSTOM_TOOL_NAME_BYTES": 4},
+            {"tools": [{"type": "custom", "custom": {"name": "too_long"}}]},
+            "chat_custom_tool_too_large",
+            "tools[0].custom.name",
+        ),
+        (
+            {"CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES": 4},
+            {"tools": [{"type": "custom", "custom": {"name": "ok", "description": "too long"}}]},
+            "chat_custom_tool_too_large",
+            "tools[0].custom.description",
+        ),
+        (
+            {"CHAT_MAX_CUSTOM_TOOL_FORMAT_BYTES": 16},
+            {
+                "tools": [
+                    {
+                        "type": "custom",
+                        "custom": {
+                            "name": "ok",
+                            "format": {
+                                "type": "grammar",
+                                "grammar": {"syntax": "regex", "definition": "x+"},
+                            },
+                        },
+                    }
+                ]
+            },
+            "chat_custom_tool_too_large",
+            "tools[0].custom.format",
+        ),
+        (
+            {"CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES": 4},
+            {
+                "tools": [
+                    {
+                        "type": "custom",
+                        "custom": {
+                            "name": "ok",
+                            "format": {
+                                "type": "grammar",
+                                "grammar": {"syntax": "regex", "definition": "x" * 5},
+                            },
+                        },
+                    }
+                ]
+            },
+            "chat_custom_tool_grammar_too_large",
+            "tools[0].custom.format.grammar.definition",
+        ),
+    ],
+)
+def test_custom_tool_caps_are_enforced(
+    settings_overrides: dict[str, object],
+    request_overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, **settings_overrides)
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                **request_overrides,
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+
+
+@pytest.mark.parametrize(
+    ("request_overrides", "expected_code", "expected_param"),
+    [
+        (
+            {"tools": [{"type": "custom"}]},
+            "chat_custom_tool_invalid_shape",
+            "tools[0].custom",
+        ),
+        (
+            {"tools": [{"type": "custom", "custom": {"name": ""}}]},
+            "chat_custom_tool_invalid_type",
+            "tools[0].custom.name",
+        ),
+        (
+            {"tools": [{"type": "custom", "custom": {"name": "ok", "extra": True}}]},
+            "chat_custom_tool_invalid_shape",
+            "tools[0].custom.extra",
+        ),
+        (
+            {"tools": [{"type": "custom", "custom": {"name": "ok", "format": {"type": "xml"}}}]},
+            "chat_custom_tool_format_not_supported",
+            "tools[0].custom.format.type",
+        ),
+        (
+            {
+                "tools": [
+                    {
+                        "type": "custom",
+                        "custom": {
+                            "name": "ok",
+                            "format": {
+                                "type": "grammar",
+                                "grammar": {"syntax": "python", "definition": "x"},
+                            },
+                        },
+                    }
+                ]
+            },
+            "chat_custom_tool_format_not_supported",
+            "tools[0].custom.format.grammar.syntax",
+        ),
+        (
+            {
+                "tools": [{"type": "custom", "custom": {"name": "ok"}}],
+                "tool_choice": {"type": "custom", "custom": {"name": "missing"}},
+            },
+            "chat_custom_tool_choice_invalid",
+            "tool_choice.custom.name",
+        ),
+        (
+            {"tool_choice": {"type": "custom", "custom": {"name": "missing"}}},
+            "chat_custom_tool_choice_invalid",
+            "tool_choice.custom.name",
+        ),
+        (
+            {"tool_choice": {"type": "mcp"}},
+            "mcp_connectors_not_allowed",
+            "tool_choice.type",
+        ),
+        (
+            {
+                "stream": True,
+                "tools": [{"type": "custom", "custom": {"name": "ok"}}],
+            },
+            "chat_streaming_custom_tool_not_supported",
+            "stream",
+        ),
+    ],
+)
+def test_invalid_custom_tool_shapes_are_rejected_without_raw_payload(
+    request_overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                **request_overrides,
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+    assert "definition" not in exc_info.value.safe_message
 
 
 @pytest.mark.parametrize("marker", ["server_url", "connector_id", "authorization", "require_approval"])
@@ -1127,7 +1352,11 @@ def test_streaming_function_tool_and_structured_output_fields_remain_allowed() -
 @pytest.mark.parametrize(
     ("overrides", "expected_code", "expected_param"),
     [
-        ({"tools": [{"type": "custom"}]}, "custom_tool_not_supported", "tools[0].type"),
+        (
+            {"tools": [{"type": "custom", "custom": {"name": "ok"}}]},
+            "chat_streaming_custom_tool_not_supported",
+            "stream",
+        ),
         ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
         ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
         ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),

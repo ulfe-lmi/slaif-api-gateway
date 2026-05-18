@@ -334,3 +334,27 @@ def test_chat_completions_pricing_path_safety_constraints() -> None:
         "aiosmtplib",
     ):
         assert disallowed not in source
+
+
+def test_chat_custom_tools_do_not_add_special_billing_runtime_paths() -> None:
+    import slaif_gateway.db.models as model_module
+    import slaif_gateway.services.accounting as accounting_module
+    import slaif_gateway.services.pricing as pricing_module
+    import slaif_gateway.services.quota_service as quota_module
+
+    runtime_source = "\n".join(
+        (
+            inspect.getsource(accounting_module),
+            inspect.getsource(pricing_module),
+            inspect.getsource(quota_module),
+            inspect.getsource(model_module),
+        )
+    ).lower()
+
+    for disallowed in (
+        "custom_tool_cost",
+        "custom_tool_price",
+        "custom_tool_billing_unit",
+        "custom_tool_execution_fee",
+    ):
+        assert disallowed not in runtime_source
