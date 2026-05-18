@@ -5,6 +5,7 @@ import pytest
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
     CHAT_CAPABILITY_AUDIO_INPUTS,
+    CHAT_CAPABILITY_AUDIO_OUTPUTS,
     CHAT_CAPABILITY_CUSTOM_TOOLS,
     CHAT_CAPABILITY_FILE_INPUTS,
     CHAT_CAPABILITY_FUNCTION_TOOLS,
@@ -343,6 +344,15 @@ def _audio_payload(**overrides: object) -> dict[str, object]:
     return body
 
 
+def _audio_output_payload(**overrides: object) -> dict[str, object]:
+    body = _payload(
+        modalities=["text", "audio"],
+        audio={"format": "wav", "voice": "alloy"},
+    )
+    body.update(overrides)
+    return body
+
+
 def test_file_input_requires_explicit_file_capability_without_payload_leakage() -> None:
     raw_file_data = "c2VjcmV0IGZpbGUgcGF5bG9hZA=="
 
@@ -449,6 +459,65 @@ def test_text_only_request_does_not_require_audio_capability() -> None:
         route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_INPUTS: False}),
         route_supports_streaming=True,
         requested_model="gpt-4.1-mini",
+    )
+
+
+def test_audio_output_requires_explicit_audio_output_capability() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _audio_output_payload(),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-audio",
+        )
+
+    assert absent_exc.value.error_code == "chat_audio_output_capability_not_supported"
+    assert absent_exc.value.param == "modalities"
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _audio_output_payload(),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_OUTPUTS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-audio",
+        )
+
+    assert false_exc.value.error_code == "chat_audio_output_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _audio_output_payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_OUTPUTS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-audio",
+    )
+
+
+def test_audio_output_with_audio_input_requires_both_audio_capabilities() -> None:
+    payload = _audio_payload(
+        modalities=["text", "audio"],
+        audio={"format": "mp3", "voice": "marin"},
+    )
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            payload,
+            route_capabilities=_caps(**{CHAT_CAPABILITY_AUDIO_OUTPUTS: True}),
+            route_supports_streaming=True,
+            requested_model="gpt-audio",
+        )
+
+    assert exc_info.value.error_code == "chat_audio_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        payload,
+        route_capabilities=_caps(
+            **{
+                CHAT_CAPABILITY_AUDIO_INPUTS: True,
+                CHAT_CAPABILITY_AUDIO_OUTPUTS: True,
+            }
+        ),
+        route_supports_streaming=True,
+        requested_model="gpt-audio",
     )
 
 

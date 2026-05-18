@@ -90,6 +90,7 @@ async def _create_test_data(
     image_inputs: bool = False,
     file_inputs: bool = False,
     audio_inputs: bool = False,
+    audio_outputs: bool = False,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -211,6 +212,7 @@ async def _create_test_data(
                             "chat_audio": False,
                             "chat_file_inputs": file_inputs,
                             "chat_audio_inputs": audio_inputs,
+                            "chat_audio_outputs": audio_outputs,
                             "chat_service_tier_non_default": False,
                             "chat_multiple_choices": multiple_choices,
                         }
@@ -227,6 +229,11 @@ async def _create_test_data(
                 input_price_per_1m=Decimal("1.000000000"),
                 output_price_per_1m=Decimal("1.000000000"),
                 request_price=Decimal("0.000000000"),
+                pricing_metadata=(
+                    {"audio_output_price_per_1m": "64.000000000"}
+                    if audio_outputs
+                    else {}
+                ),
                 notes=f"{notes_prefix} pricing",
             )
 
@@ -950,6 +957,111 @@ def test_openai_python_client_chat_completions_audio_input_e2e(
     for forbidden in (
         PROMPT_TEXT,
         COMPLETION_TEXT,
+        audio_data,
+        created.plaintext_gateway_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in usage_payload
+        assert forbidden not in metadata_payload
+
+
+@pytest.mark.e2e
+def test_openai_python_client_chat_completions_audio_output_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, model="gpt-audio", audio_outputs=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    audio_data = "UklGRiQAAABXQVZFZm10IBAAAAABAAEA"
+    transcript = "hello from audio"
+    upstream_payload = {
+        "id": "chatcmpl-audio-output-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-audio",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": transcript,
+                    "audio": {
+                        "id": "audio_123",
+                        "data": audio_data,
+                        "expires_at": 1893456000,
+                        "transcript": transcript,
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 37,
+            "completion_tokens": 23,
+            "total_tokens": 60,
+            "completion_tokens_details": {"audio_tokens": 17},
+        },
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-audio-output-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.chat.completions.create(
+                model="gpt-audio",
+                messages=[{"role": "user", "content": PROMPT_TEXT}],
+                modalities=["text", "audio"],
+                audio={"format": "wav", "voice": "alloy"},
+            )
+
+    assert response.choices[0].message.content == transcript
+    assert response.choices[0].message.audio is not None
+    assert response.choices[0].message.audio.data == audio_data
+    assert response.choices[0].message.audio.transcript == transcript
+    assert response.usage is not None
+    assert response.usage.total_tokens == 60
+
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_gateway_key}"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["modalities"] == ["text", "audio"]
+    assert upstream_body["audio"] == {"format": "wav", "voice": "alloy"}
+    assert upstream_body["stream"] is False
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_used_total == 60
+    assert state.usage_ledger.prompt_tokens == 37
+    assert state.usage_ledger.completion_tokens == 23
+    assert state.usage_ledger.total_tokens == 60
+    assert state.usage_ledger.accounting_status == "finalized"
+
+    usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
+    metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+    for forbidden in (
+        PROMPT_TEXT,
+        transcript,
         audio_data,
         created.plaintext_gateway_key,
         FAKE_OPENAI_UPSTREAM_KEY,

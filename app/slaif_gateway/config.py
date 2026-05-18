@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     CHAT_MAX_AUDIO_INPUT_DATA_BYTES: int = 10485760
     CHAT_ALLOWED_AUDIO_INPUT_FORMATS: str = "wav,mp3"
     CHAT_ALLOW_AUDIO_INPUT_DATA_URLS: bool = False
+    CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS: str = "wav,mp3,flac,opus,pcm16"
+    CHAT_ALLOWED_AUDIO_OUTPUT_VOICES: str = "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar"
+    CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES: bool = False
+    CHAT_ALLOW_STREAMING_AUDIO_OUTPUT: bool = False
+    CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES: bool = False
     CHAT_MAX_TOOLS_PER_REQUEST: int = 64
     CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST: int = 16
     CHAT_MAX_FUNCTIONS_PER_REQUEST: int = 64

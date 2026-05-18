@@ -185,8 +185,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   bulk participant-key generation, policy mutation, and Responses support
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
-- Chat Completions file IDs, file URLs, audio output, and audio URLs are not
-  implemented. The upstream evidence and future implementation roadmap are documented in
+- Chat Completions file IDs, file URLs, audio URLs, streaming audio output,
+  custom audio-output voices, previous-audio references, and `n > 1` with audio
+  output are not implemented. Non-streaming Chat Completions audio output is
+  implemented only behind explicit route capability and pricing metadata. The
+  upstream evidence and future implementation roadmap are documented in
   [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

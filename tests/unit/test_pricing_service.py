@@ -13,6 +13,7 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import (
+    AudioOutputPricingNotSupportedError,
     FxRateNotFoundError,
     InvalidFxRateError,
     InvalidPricingDataError,
@@ -82,6 +83,7 @@ def _pricing_rule(
     cached_input_price_per_1m: Decimal | None = Decimal("0.075000000"),
     output_price_per_1m: Decimal | None = Decimal("0.600000000"),
     reasoning_price_per_1m: Decimal | None = None,
+    pricing_metadata: dict[str, object] | None = None,
     valid_from: datetime | None = None,
     valid_until: datetime | None = None,
     enabled: bool = True,
@@ -96,6 +98,7 @@ def _pricing_rule(
         cached_input_price_per_1m=cached_input_price_per_1m,
         output_price_per_1m=output_price_per_1m,
         reasoning_price_per_1m=reasoning_price_per_1m,
+        pricing_metadata=pricing_metadata or {},
         valid_from=valid_from or datetime(2026, 1, 1, tzinfo=UTC),
         valid_until=valid_until,
         enabled=enabled,
@@ -401,6 +404,69 @@ async def test_cost_estimate_uses_choice_aware_output_tokens_without_multiplying
     assert estimate.estimated_output_tokens == 30
     assert estimate.estimated_input_cost_native == Decimal("0.000100000000")
     assert estimate.estimated_output_cost_native == Decimal("0.000060000000")
+
+
+@pytest.mark.asyncio
+async def test_audio_output_estimate_requires_explicit_audio_output_pricing_metadata() -> None:
+    service = _service(pricing_rows=[_pricing_rule(currency="EUR")])
+    policy = ChatCompletionPolicyResult(
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [{"role": "user", "content": "say hi"}],
+            "modalities": ["text", "audio"],
+            "audio": {"format": "wav", "voice": "alloy"},
+        },
+        requested_output_tokens=20,
+        effective_output_tokens=20,
+        estimated_input_tokens=100,
+        injected_default_output_tokens=False,
+    )
+
+    with pytest.raises(AudioOutputPricingNotSupportedError) as exc_info:
+        await service.estimate_chat_completion_cost(
+            route=_route(requested_model="classroom-cheap", resolved_model="gpt-4.1-mini"),
+            policy=policy,
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+    assert exc_info.value.error_code == "chat_audio_output_pricing_not_supported"
+    assert exc_info.value.param == "audio"
+
+
+@pytest.mark.asyncio
+async def test_audio_output_estimate_uses_explicit_audio_output_price_for_reservation() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                currency="EUR",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("2.000000000"),
+                pricing_metadata={"audio_output_price_per_1m": "64.000000000"},
+            )
+        ],
+    )
+    policy = ChatCompletionPolicyResult(
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [{"role": "user", "content": "say hi"}],
+            "modalities": ["text", "audio"],
+            "audio": {"format": "wav", "voice": "alloy"},
+        },
+        requested_output_tokens=20,
+        effective_output_tokens=20,
+        estimated_input_tokens=100,
+        injected_default_output_tokens=False,
+    )
+
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(requested_model="classroom-cheap", resolved_model="gpt-4.1-mini"),
+        policy=policy,
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.audio_output_price_per_1m == Decimal("64.000000000")
+    assert estimate.estimated_input_cost_native == Decimal("0.000100000000")
+    assert estimate.estimated_output_cost_native == Decimal("0.001280000000")
 
 
 @pytest.mark.asyncio

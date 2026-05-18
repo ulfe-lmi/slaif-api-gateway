@@ -59,6 +59,11 @@ def _clear_env(monkeypatch) -> None:
         "CHAT_MAX_AUDIO_INPUT_DATA_BYTES",
         "CHAT_ALLOWED_AUDIO_INPUT_FORMATS",
         "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS",
+        "CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS",
+        "CHAT_ALLOWED_AUDIO_OUTPUT_VOICES",
+        "CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES",
+        "CHAT_ALLOW_STREAMING_AUDIO_OUTPUT",
+        "CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES",
         "CHAT_MAX_TOOLS_PER_REQUEST",
         "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
         "CHAT_MAX_FUNCTIONS_PER_REQUEST",
@@ -207,6 +212,12 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.CHAT_MAX_AUDIO_INPUT_DATA_BYTES == 10485760
     assert settings.CHAT_ALLOWED_AUDIO_INPUT_FORMATS == "wav,mp3"
     assert settings.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is False
+    assert settings.CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS == "wav,mp3,flac,opus,pcm16"
+    assert "alloy" in settings.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES
+    assert "cedar" in settings.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES
+    assert settings.CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES is False
+    assert settings.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT is False
+    assert settings.CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES is False
     assert settings.CHAT_MAX_TOOLS_PER_REQUEST == 64
     assert settings.CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST == 16
     assert settings.CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES == 65536

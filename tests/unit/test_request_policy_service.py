@@ -298,6 +298,17 @@ def _audio_message(
     }
 
 
+def _audio_output_request(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "model": "gpt-audio",
+        "messages": [{"role": "user", "content": "say hello"}],
+        "modalities": ["text", "audio"],
+        "audio": {"format": "wav", "voice": "alloy"},
+    }
+    body.update(overrides)
+    return body
+
+
 def test_input_estimate_includes_image_url_material_without_multiplying_input_by_n() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
     text_only = policy.apply(
@@ -368,6 +379,22 @@ def test_input_estimate_includes_audio_data_without_multiplying_input_by_n() -> 
     assert audio_result.estimated_input_tokens > text_only.estimated_input_tokens
     assert audio_result.effective_choice_count == 3
     assert audio_result.effective_output_tokens == 24
+
+
+def test_input_estimate_includes_audio_output_config_without_multiplying_input_by_n() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    result = policy.apply(
+        {
+            **_audio_output_request(),
+            "max_completion_tokens": 8,
+            "n": 1,
+        }
+    )
+
+    assert result.estimated_non_message_input_tokens > 0
+    assert set(result.estimated_non_message_input_fields) >= {"audio", "modalities"}
+    assert result.effective_choice_count == 1
+    assert result.effective_output_tokens == 8
 
 
 @pytest.mark.parametrize(
@@ -487,6 +514,117 @@ def test_audio_input_content_part_is_validated_and_preserved(audio_format: str) 
             "format": audio_format,
         },
     }
+
+
+@pytest.mark.parametrize("audio_format", ["wav", "mp3", "flac", "opus", "pcm16"])
+@pytest.mark.parametrize(
+    "voice",
+    ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "marin", "cedar"],
+)
+def test_audio_output_config_is_validated_and_preserved(audio_format: str, voice: str) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        _audio_output_request(audio={"format": audio_format, "voice": voice})
+    )
+
+    assert result.effective_body["modalities"] == ["text", "audio"]
+    assert result.effective_body["audio"] == {"format": audio_format, "voice": voice}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param", "raw_marker"),
+    [
+        ({"modalities": "audio"}, "chat_audio_modality_invalid", "modalities", "audio"),
+        ({"modalities": ["audio"]}, "chat_audio_modality_not_supported", "modalities", ""),
+        ({"modalities": ["text", "audio", "audio"]}, "chat_audio_modality_invalid", "modalities[2]", ""),
+        ({"modalities": ["text", "video"]}, "chat_audio_modality_not_supported", "modalities[1]", "video"),
+        ({"audio": None}, "chat_audio_output_config_invalid", "audio", ""),
+        ({"audio": {"format": "wav"}}, "chat_audio_output_voice_not_supported", "audio.voice", ""),
+        ({"audio": {"voice": "alloy"}}, "chat_audio_output_format_not_supported", "audio.format", ""),
+        ({"audio": {"format": "aac", "voice": "alloy"}}, "chat_audio_output_format_not_supported", "audio.format", "aac"),
+        ({"audio": {"format": "wav", "voice": "verse"}}, "chat_audio_output_voice_not_supported", "audio.voice", "verse"),
+        (
+            {"audio": {"format": "wav", "voice": {"id": "voice_secret"}}},
+            "chat_audio_output_custom_voice_not_supported",
+            "audio.voice",
+            "voice_secret",
+        ),
+        (
+            {"audio": {"format": "wav", "voice": "alloy", "transcript": "secret transcript"}},
+            "chat_audio_output_config_invalid",
+            "audio.transcript",
+            "secret transcript",
+        ),
+        ({"stream": True}, "chat_streaming_audio_output_not_supported", "stream", ""),
+        ({"n": 2}, "chat_audio_output_multiple_choices_not_supported", "n", ""),
+    ],
+)
+def test_invalid_audio_output_shapes_are_rejected_without_raw_values(
+    overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+    raw_marker: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(_audio_output_request(**overrides))
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+    if raw_marker:
+        assert raw_marker not in exc_info.value.safe_message
+
+
+def test_audio_config_without_audio_modality_is_rejected() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-audio",
+                "messages": [{"role": "user", "content": "hi"}],
+                "modalities": ["text"],
+                "audio": {"format": "wav", "voice": "alloy"},
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_audio_output_config_invalid"
+    assert exc_info.value.param == "audio"
+
+
+def test_audio_modality_without_audio_config_is_rejected() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-audio",
+                "messages": [{"role": "user", "content": "hi"}],
+                "modalities": ["text", "audio"],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_audio_output_config_invalid"
+    assert exc_info.value.param == "audio"
+
+
+def test_assistant_previous_audio_reference_is_rejected_without_raw_id() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    raw_audio_id = "audio_secret_previous_id"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-audio",
+                "messages": [{"role": "assistant", "audio": {"id": raw_audio_id}, "content": "hi"}],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_previous_audio_not_supported"
+    assert exc_info.value.param == "messages[0].audio"
+    assert raw_audio_id not in exc_info.value.safe_message
 
 
 @pytest.mark.parametrize(
@@ -1890,8 +2028,8 @@ def test_trusted_calibration_still_rejects_unknown_top_level_fields() -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected_code", "expected_param"),
     [
-        ({"modalities": ["text", "audio"]}, "unsupported_chat_completion_modality", "modalities"),
-        ({"audio": {"voice": "alloy"}}, "unsupported_chat_completion_modality", "audio"),
+        ({"modalities": ["text", "video"]}, "chat_audio_modality_not_supported", "modalities[1]"),
+        ({"audio": {"voice": "alloy"}}, "chat_audio_output_config_invalid", "audio"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
         ({"metadata": ["not", "object"]}, "chat_field_invalid_type", "metadata"),
         ({"metadata": {"too_large": "x" * 20000}}, "chat_metadata_too_large", "metadata"),
