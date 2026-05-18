@@ -1084,6 +1084,14 @@ gateway request. Admission-time accounting estimates input once and reserves
 possible output as the per-choice effective max output tokens multiplied by
 `n`; finalization uses provider-reported total usage/cost once.
 
+The current `chat_multimodal`, `chat_audio`, and `chat_file_inputs` flags remain
+false in seeded/default metadata and do not enable any runtime support. Future
+Chat Completions multimodal work should prefer more explicit route capabilities
+per surface, such as image inputs, file inputs, audio inputs, and audio outputs,
+before provider forwarding is enabled. The evidence and roadmap are documented
+in
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
+
 Allowed `match_type` values:
 
 ```text

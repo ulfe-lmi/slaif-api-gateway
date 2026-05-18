@@ -228,7 +228,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `temperature` / `top_p` / penalties / logprob controls / `logit_bias` | Preserved when type and range validation passes | Ordinary OpenAI Chat Completions scalar controls |
 | `prediction` | Preserved when accepted as a bounded object; object payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
 | `service_tier` | Omitted or `auto` is allowed; other values are rejected | Local pricing is not service-tier aware |
-| `modalities` / `audio` / non-text content parts | Text-only modality is allowed; audio/image/file/video fields or message parts are rejected | Multimodal/audio/file pricing and accounting are not implemented |
+| `modalities` / `audio` / non-text content parts | Text-only modality is allowed; audio/image/file/video fields or message parts are rejected | Multimodal/audio/file pricing and accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
@@ -237,6 +237,12 @@ Outbound provider header construction uses a small allowlist. Header names conta
 possible output is reserved as `effective_max_output_tokens_per_choice * n`,
 and final provider usage or OpenRouter provider-reported cost is not multiplied
 again by `n`.
+
+Multimodal/audio/file Chat Completions are not forwarded in the current gateway.
+Future support must be explicit per modality because external URLs, base64
+payloads, uploaded file IDs, audio response bytes, and modality-specific usage
+fields create separate privacy, request-size, estimation, pricing, and
+accounting requirements.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 

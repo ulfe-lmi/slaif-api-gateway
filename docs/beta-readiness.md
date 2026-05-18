@@ -173,6 +173,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   bulk participant-key generation, policy mutation, and Responses support
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
+- Chat Completions image/audio/file inputs and audio output are not implemented.
+  The upstream evidence and future implementation roadmap are documented in
+  [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator
   and `superadmin` is metadata/future-proofing.

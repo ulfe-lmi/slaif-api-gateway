@@ -360,6 +360,11 @@ forwarding. Defaults:
 | `CHAT_MAX_CUSTOM_TOOL_NAME_BYTES` | `128` | Custom tool/choice name |
 | `CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES` | `4096` | Custom tool description |
 
+There are no image/audio/file Chat Completions payload-size settings yet because
+those modalities are not enabled. Future support should add explicit caps per
+modality before any provider forwarding, as described in
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
+
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
 penalties between `-2` and `2`, `top_logprobs` between `0` and `20` and only

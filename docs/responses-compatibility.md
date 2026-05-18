@@ -70,6 +70,10 @@ Completions multiple choices are a separate bounded request-shape feature that
 requires explicit `chat_multiple_choices` route metadata and does not implement
 or imply any Responses behavior. This hardening does not implement
 `/v1/responses`.
+The Chat Completions multimodal/audio/file evidence and roadmap are documented
+separately in
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md);
+that document does not change the planned Responses API boundary.
 
 ## Accounting Model
 

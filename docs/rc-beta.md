@@ -116,6 +116,9 @@ migrations automatically.
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
+- Chat Completions image/audio/file inputs and audio output are not implemented.
+  The upstream evidence and future implementation roadmap are documented in
+  [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is a full operator and
   `superadmin` is metadata/future-proofing.

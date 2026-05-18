@@ -88,6 +88,15 @@ custom-tool pricing, execution fee, or custom-tool ledger billing columns, and
 a later downstream app call with tool results is a separate ordinary gateway
 request. Custom tools are not provider-hosted execution authority.
 
+OpenAI and OpenRouter upstream evidence for Chat Completions image/audio/file
+surfaces is tracked in
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
+Those surfaces remain disabled. Base64 image/audio/file payloads, external URLs,
+uploaded file IDs, audio response bytes, and parsed file contents can contain
+personal data or secrets and must not be stored or logged. Forwarding an
+external image or file URL is provider-side URL fetching, not hosted web search,
+but it still needs explicit privacy and egress policy before support is enabled.
+
 Supported Chat Completions fields are validated against explicit type, range,
 count, and byte caps before Redis rate limiting, route resolution, pricing
 lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
