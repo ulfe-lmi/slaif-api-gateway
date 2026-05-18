@@ -32,6 +32,10 @@ but are not a production certification.
 - Chat Completions image input to text output behind explicit
   `chat_image_inputs` route capability, with bounded remote URL/data URL
   validation and ordinary provider-usage finalization.
+- Chat Completions inline file input to text output behind explicit
+  `chat_file_inputs` route capability, with bounded inline base64 `file_data`,
+  safe filename/type validation, file IDs and file URLs rejected, and ordinary
+  provider-usage finalization.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - Explicit Chat Completions route/model capability metadata, enforced
   separately from gateway-key endpoint/model/provider allowlists.
@@ -119,8 +123,8 @@ migrations automatically.
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
-- Chat Completions file/audio inputs and audio output are not implemented. The
-  upstream evidence and future implementation roadmap are documented in
+- Chat Completions file IDs, file URLs, audio inputs, and audio output are not
+  implemented. The upstream evidence and future implementation roadmap are documented in
   [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is a full operator and

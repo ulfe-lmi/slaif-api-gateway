@@ -216,7 +216,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | Field | Behavior | Reason |
 | --- | --- | --- |
 | `model` | Mutated upstream | Replaced with route `upstream_model` for aliases and provider-specific naming |
-| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored. User-message `image_url` parts are preserved only with explicit `chat_image_inputs=true` route capability |
+| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored. User-message `image_url` parts are preserved only with explicit `chat_image_inputs=true` route capability; user-message inline `file` parts are preserved only with explicit `chat_file_inputs=true` route capability |
 | `max_tokens` | Preserved when valid | OpenAI Chat Completions output control |
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
@@ -231,7 +231,8 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `prediction` | Preserved when accepted as a bounded object; object payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
 | `service_tier` | Omitted or `auto` is allowed; other values are rejected | Local pricing is not service-tier aware |
 | `image_url` content parts | Preserved when accepted and within image count/byte/detail caps | Image input is request input, not a hosted tool or image-generation tool. SLAIF does not fetch remote URLs, decode/rewrite data URLs, store/log image URLs or base64 payloads, or infer final image billing from bytes |
-| `modalities` / `audio` / unsupported non-text content parts | Text-only modality is allowed; audio output, audio input, file/video fields, and alternate image part names are rejected | Audio/file/broader multimodal pricing and accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
+| `file` content parts | Preserved when accepted and within file count/byte/type caps | Inline file input is request input, not hosted file search, retrieval, code interpreter, or `/v1/files`. SLAIF forwards only validated `filename` plus inline `file_data`; file IDs and file URLs are rejected. SLAIF does not fetch, upload, decode/rewrite, store/log file payloads, filenames, file IDs, or file URLs, or infer final file billing from bytes |
+| `modalities` / `audio` / unsupported non-text content parts | Text-only modality is allowed; audio output, audio input, video fields, alternate image/file part names, file IDs, and file URLs are rejected | Audio/broader multimodal pricing and accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
@@ -244,10 +245,20 @@ again by `n`.
 Chat Completions image input to text output is forwarded only when route
 metadata explicitly enables `chat_image_inputs`. Remote URLs and image data
 URLs are bounded and forwarded as client-provided `image_url.url` values; SLAIF
-does not fetch, decode, rewrite, store, or log them. File input, audio input,
-audio output, image generation, and broader multimodal combinations remain
-unsupported and must be explicit future work because uploaded file IDs, audio
-response bytes, and modality-specific usage fields create separate privacy,
+does not fetch, decode, rewrite, store, or log them.
+
+Chat Completions inline file input to text output is forwarded only when route
+metadata explicitly enables `chat_file_inputs`. SLAIF forwards documented
+`file` content parts with `filename` and inline `file_data` after byte,
+filename, extension, MIME/data-URL, and base64 validation. Raw base64 is
+accepted by default; data URLs are opt-in with MIME caps. File IDs and file
+URLs remain unsupported, and SLAIF does not fetch URLs, call `/v1/files`, upload
+files upstream, rewrite payloads, store/log file data, filenames, file IDs, or
+file URLs, or infer exact final file cost from bytes.
+
+Audio input, audio output, image generation, and broader multimodal
+combinations remain unsupported and must be explicit future work because audio
+response bytes and modality-specific usage fields create separate privacy,
 request-size, estimation, pricing, and accounting requirements.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.

@@ -91,11 +91,15 @@ request. Custom tools are not provider-hosted execution authority.
 OpenAI and OpenRouter upstream evidence for Chat Completions image/audio/file
 surfaces is tracked in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
-Those surfaces remain disabled. Base64 image/audio/file payloads, external URLs,
-uploaded file IDs, audio response bytes, and parsed file contents can contain
-personal data or secrets and must not be stored or logged. Forwarding an
-external image or file URL is provider-side URL fetching, not hosted web search,
-but it still needs explicit privacy and egress policy before support is enabled.
+Image input and inline file input to text output are enabled only behind
+explicit route capability flags. Base64 image/audio/file payloads, external
+URLs, uploaded file IDs, filenames, audio response bytes, and parsed file
+contents can contain personal data or secrets and must not be stored or logged.
+SLAIF may forward bounded image URLs when `chat_image_inputs=true`, but it does
+not fetch them. SLAIF does not forward file URLs or file IDs in this release.
+Forwarding any external image or file URL is provider-side URL fetching, not
+hosted web search, but file URL forwarding still needs explicit privacy and
+egress policy before support is enabled.
 
 Supported Chat Completions fields are validated against explicit type, range,
 count, and byte caps before Redis rate limiting, route resolution, pricing
@@ -103,13 +107,15 @@ lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
 forwarding. The cap layer keeps local function tools allowed but bounds tool
 count, function name and description length, per-tool schema size, and total
 schema size. It also bounds custom tool count, name/description, serialized
-format, and grammar definition sizes. It also bounds message count/content, text parts,
-image part count, remote image URL bytes, base64 image data URL bytes,
-`response_format` schemas, `metadata`, `prediction`, `stream_options`, `stop`,
-`user`, `n`, and `logit_bias`. Errors name the field and policy problem without
-logging or returning raw messages, prompt content, image URLs, base64 image
-payloads, metadata values, schemas, tool arguments, provider keys, gateway keys,
-cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
+format, and grammar definition sizes. It also bounds message count/content,
+text parts, image part count, remote image URL bytes, base64 image data URL
+bytes, inline file part count, file data bytes, filename bytes, allowed file
+extensions/MIME types, `response_format` schemas, `metadata`, `prediction`,
+`stream_options`, `stop`, `user`, `n`, and `logit_bias`. Errors name the field
+and policy problem without logging or returning raw messages, prompt content,
+image URLs, base64 image/file payloads, filenames, file IDs, file URLs,
+metadata values, schemas, tool arguments, provider keys, gateway keys, cookies,
+sessions, CSRF tokens, encrypted payloads, or nonces.
 
 Resolved Chat Completions routes are also checked against explicit
 `model_routes.capabilities["chat_completions"]` metadata. New seeded or
@@ -120,6 +126,10 @@ usage signals, and explicit false flags for hosted tools, multimodal/audio/file
 inputs, non-default service tiers, and multiple choices. Image input is allowed
 only with `chat_image_inputs=true`; that flag does not imply hosted tools,
 image generation, file input, audio input, audio output, custom tools, function
+tools, `n > 1`, non-default service tiers, or Responses support. Inline file
+input is allowed only with `chat_file_inputs=true`; that flag does not imply
+`/v1/files`, file IDs, file URLs, hosted file search, retrieval, code
+interpreter, image input, audio input, audio output, custom tools, function
 tools, `n > 1`, non-default service tiers, or Responses support. Multiple
 choices are only allowed with `chat_multiple_choices=true`; that flag does not
 imply hosted tools, custom tools, file/audio support, audio output, non-default

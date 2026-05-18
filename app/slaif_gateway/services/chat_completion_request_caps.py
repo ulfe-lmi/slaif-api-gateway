@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import math
+import re
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
@@ -23,6 +24,9 @@ _IMAGE_DATA_URL_PREFIX = "data:"
 _SUPPORTED_IMAGE_DATA_URL_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/webp", "image/gif"}
 )
+_FILE_DATA_URL_PREFIX = "data:"
+_FILE_DATA_URL_BASE64_SUFFIX = ";base64"
+_BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
 class ChatCompletionRequestCapsError(RequestPolicyError):
@@ -105,6 +109,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
         )
 
     total_images = 0
+    total_files = 0
     for message_index, message in enumerate(value):
         if not isinstance(message, Mapping):
             _raise(
@@ -125,6 +130,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
             message_role=role,
             settings=settings,
             total_images_seen=total_images,
+            total_files_seen=total_files,
         )
         total_images += _count_image_parts(message.get("content"))
         if total_images > settings.CHAT_MAX_IMAGES_PER_REQUEST:
@@ -132,6 +138,13 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
                 "messages",
                 "chat_image_count_exceeded",
                 "The request includes too many Chat Completions image content parts.",
+            )
+        total_files += _count_file_parts(message.get("content"))
+        if total_files > settings.CHAT_MAX_FILES_PER_REQUEST:
+            _raise(
+                "messages",
+                "chat_file_count_exceeded",
+                "The request includes too many Chat Completions file content parts.",
             )
 
 
@@ -142,6 +155,7 @@ def _validate_message_content(
     message_role: str,
     settings: Settings,
     total_images_seen: int,
+    total_files_seen: int,
 ) -> None:
     if content is None:
         return
@@ -165,6 +179,7 @@ def _validate_message_content(
 
     text_parts = 0
     image_parts = 0
+    file_parts = 0
     total_text_bytes = 0
     for part_index, part in enumerate(content):
         if isinstance(part, str):
@@ -200,10 +215,32 @@ def _validate_message_content(
                         "The request includes too many Chat Completions image content parts.",
                     )
                 continue
+            if part.get("type") == "file":
+                file_parts += 1
+                _validate_file_part(
+                    part,
+                    message_index=message_index,
+                    part_index=part_index,
+                    message_role=message_role,
+                    settings=settings,
+                )
+                if file_parts > settings.CHAT_MAX_FILES_PER_MESSAGE:
+                    _raise(
+                        f"messages[{message_index}].content",
+                        "chat_file_count_exceeded",
+                        "A Chat Completions message includes too many file content parts.",
+                    )
+                if total_files_seen + file_parts > settings.CHAT_MAX_FILES_PER_REQUEST:
+                    _raise(
+                        "messages",
+                        "chat_file_count_exceeded",
+                        "The request includes too many Chat Completions file content parts.",
+                    )
+                continue
             _raise(
                 f"messages[{message_index}].content[{part_index}].type",
                 "chat_field_invalid_type",
-                "Chat Completions message content parts must be text or image_url objects.",
+                "Chat Completions message content parts must be text, image_url, or file objects.",
             )
         text = part.get("text")
         if not isinstance(text, str):
@@ -361,6 +398,242 @@ def _validate_remote_image_url(value: str, *, param: str, settings: Settings) ->
         )
 
 
+def _validate_file_part(
+    part: Mapping[str, Any],
+    *,
+    message_index: int,
+    part_index: int,
+    message_role: str,
+    settings: Settings,
+) -> None:
+    param = f"messages[{message_index}].content[{part_index}]"
+    if message_role != "user":
+        _raise(
+            f"{param}.type",
+            "chat_file_part_invalid_shape",
+            "Chat Completions file content parts are supported only on user messages.",
+        )
+
+    for key in part:
+        if key not in {"type", "file"}:
+            _raise(
+                f"{param}.{key}",
+                "chat_file_part_invalid_shape",
+                "File content parts may only include documented Chat Completions file fields.",
+            )
+
+    file_obj = part.get("file")
+    if not isinstance(file_obj, Mapping):
+        _raise(
+            f"{param}.file",
+            "chat_file_part_invalid_shape",
+            "Chat Completions file content parts must include a file object.",
+        )
+
+    for key in file_obj:
+        if key == "url":
+            _raise(
+                f"{param}.file.url",
+                "chat_file_url_not_supported",
+                "Chat Completions file URLs are not enabled by this gateway.",
+            )
+        if key not in {"file_data", "file_id", "filename"}:
+            _raise(
+                f"{param}.file.{key}",
+                "chat_file_part_invalid_shape",
+                "File objects may only include documented Chat Completions file fields.",
+            )
+
+    has_file_data = "file_data" in file_obj
+    has_file_id = "file_id" in file_obj
+    file_data = file_obj.get("file_data")
+    file_id = file_obj.get("file_id")
+    filename = file_obj.get("filename")
+
+    if has_file_data and has_file_id:
+        _raise(
+            f"{param}.file",
+            "chat_file_part_invalid_shape",
+            "Chat Completions file inputs must not include both file_data and file_id.",
+        )
+
+    if has_file_id:
+        if not isinstance(file_id, str) or not file_id:
+            _raise(
+                f"{param}.file.file_id",
+                "chat_file_id_not_supported",
+                "Chat Completions file IDs are not enabled by this gateway.",
+            )
+        if not settings.CHAT_ALLOW_FILE_IDS:
+            _raise(
+                f"{param}.file.file_id",
+                "chat_file_id_not_supported",
+                "Chat Completions file IDs are not enabled by this gateway.",
+            )
+        _raise(
+            f"{param}.file.file_id",
+            "chat_file_id_not_supported",
+            "Chat Completions file IDs require a Files API ownership policy and are not enabled.",
+        )
+
+    if not isinstance(filename, str) or not filename:
+        _raise(
+            f"{param}.file.filename",
+            "chat_file_name_invalid",
+            "Inline Chat Completions file inputs must include a safe filename.",
+        )
+    _validate_filename(filename, param=f"{param}.file.filename", settings=settings)
+
+    if not isinstance(file_data, str) or not file_data:
+        _raise(
+            f"{param}.file.file_data",
+            "chat_file_data_invalid",
+            "Inline Chat Completions file inputs must include base64 file_data.",
+        )
+
+    _validate_file_data(
+        file_data,
+        filename=filename,
+        param=f"{param}.file.file_data",
+        settings=settings,
+    )
+
+
+def _validate_filename(value: str, *, param: str, settings: Settings) -> None:
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_FILE_NAME_BYTES,
+        error_code="chat_file_name_too_large",
+        safe_message="A Chat Completions file name exceeds the gateway size limit.",
+    )
+    stripped = value.strip()
+    if stripped != value or stripped in {"", ".", ".."}:
+        _raise(param, "chat_file_name_invalid", "Chat Completions file names must be safe.")
+    if any(ch in value for ch in {"/", "\\", ":"}):
+        _raise(param, "chat_file_name_invalid", "Chat Completions file names must be safe.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        _raise(param, "chat_file_name_invalid", "Chat Completions file names must be safe.")
+
+    extension = _filename_extension(value)
+    if extension not in _allowed_file_extensions(settings):
+        _raise(
+            param,
+            "chat_file_mime_not_supported",
+            "The Chat Completions file type is not supported by this gateway.",
+        )
+
+
+def _validate_file_data(
+    value: str,
+    *,
+    filename: str,
+    param: str,
+    settings: Settings,
+) -> None:
+    if value.startswith(("http://", "https://")):
+        _raise(
+            param,
+            "chat_file_url_not_supported",
+            "Chat Completions file URLs are not enabled by this gateway.",
+        )
+    if value.startswith(_FILE_DATA_URL_PREFIX):
+        _validate_file_data_url(value, filename=filename, param=param, settings=settings)
+        return
+
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_FILE_DATA_BYTES,
+        error_code="chat_file_data_too_large",
+        safe_message="A Chat Completions file payload exceeds the gateway size limit.",
+    )
+    _validate_base64_payload(value, param=param)
+
+
+def _validate_file_data_url(
+    value: str,
+    *,
+    filename: str,
+    param: str,
+    settings: Settings,
+) -> None:
+    if not settings.CHAT_ALLOW_FILE_DATA_URLS:
+        _raise(
+            param,
+            "chat_file_data_url_not_allowed",
+            "File data URLs are not enabled by this gateway.",
+        )
+
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_FILE_DATA_BYTES,
+        error_code="chat_file_data_too_large",
+        safe_message="A Chat Completions file payload exceeds the gateway size limit.",
+    )
+
+    header, separator, encoded = value.partition(",")
+    if not separator:
+        _raise(param, "chat_file_data_invalid", "File data URLs must include base64 data.")
+    if not header.endswith(_FILE_DATA_URL_BASE64_SUFFIX):
+        _raise(param, "chat_file_data_invalid", "File data URLs must use base64 encoding.")
+
+    mime_type = header[len(_FILE_DATA_URL_PREFIX) : -len(_FILE_DATA_URL_BASE64_SUFFIX)].lower()
+    if mime_type not in _allowed_file_mime_types(settings):
+        _raise(
+            param,
+            "chat_file_mime_not_supported",
+            "The Chat Completions file MIME type is not supported by this gateway.",
+        )
+    if _filename_extension(filename) not in _allowed_file_extensions(settings):
+        _raise(
+            param,
+            "chat_file_mime_not_supported",
+            "The Chat Completions file type is not supported by this gateway.",
+        )
+    if not encoded:
+        _raise(param, "chat_file_data_invalid", "File data URLs must include base64 data.")
+    _validate_base64_payload(encoded, param=param)
+
+
+def _validate_base64_payload(value: str, *, param: str) -> None:
+    normalized = "".join(value.split())
+    if not normalized or len(normalized) % 4 != 0 or not _BASE64_CHARS_RE.fullmatch(normalized):
+        _raise(param, "chat_file_data_invalid", "Chat Completions file data must be valid base64.")
+    try:
+        base64.b64decode(normalized, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ChatCompletionRequestCapsError(
+            "Chat Completions file data must be valid base64.",
+            param=param,
+            error_code="chat_file_data_invalid",
+        ) from exc
+
+
+def _filename_extension(value: str) -> str:
+    dot_index = value.rfind(".")
+    if dot_index <= 0 or dot_index == len(value) - 1:
+        return ""
+    return value[dot_index:].lower()
+
+
+def _allowed_file_extensions(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.CHAT_ALLOWED_FILE_EXTENSIONS.split(",")
+        if item.strip()
+    )
+
+
+def _allowed_file_mime_types(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.CHAT_ALLOWED_FILE_MIME_TYPES.split(",")
+        if item.strip()
+    )
+
+
 def _count_image_parts(content: Any) -> int:
     if not isinstance(content, list):
         return 0
@@ -369,6 +642,12 @@ def _count_image_parts(content: Any) -> int:
         for part in content
         if isinstance(part, Mapping) and part.get("type") == "image_url"
     )
+
+
+def _count_file_parts(content: Any) -> int:
+    if not isinstance(content, list):
+        return 0
+    return sum(1 for part in content if isinstance(part, Mapping) and part.get("type") == "file")
 
 
 def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings) -> None:

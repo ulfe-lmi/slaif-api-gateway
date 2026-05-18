@@ -88,6 +88,7 @@ async def _create_test_data(
     custom_tools: bool = False,
     multiple_choices: bool = False,
     image_inputs: bool = False,
+    file_inputs: bool = False,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -207,7 +208,7 @@ async def _create_test_data(
                             "chat_image_inputs": image_inputs,
                             "chat_multimodal": False,
                             "chat_audio": False,
-                            "chat_file_inputs": False,
+                            "chat_file_inputs": file_inputs,
                             "chat_service_tier_non_default": False,
                             "chat_multiple_choices": multiple_choices,
                         }
@@ -739,6 +740,105 @@ def test_openai_python_client_chat_completions_image_input_e2e(
         COMPLETION_TEXT,
         remote_image_url,
         data_image_url,
+        created.plaintext_gateway_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in usage_payload
+        assert forbidden not in metadata_payload
+
+
+@pytest.mark.e2e
+def test_openai_python_client_chat_completions_inline_file_input_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, file_inputs=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    file_data = "cHJpdmF0ZSBmaWxlIHBheWxvYWQ="
+    filename = "private-notes.txt"
+    upstream_payload = {
+        "id": "chatcmpl-file-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": COMPLETION_TEXT},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 31, "completion_tokens": 7, "total_tokens": 38},
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-file-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.chat.completions.create(
+                model=TEST_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": PROMPT_TEXT},
+                            {
+                                "type": "file",
+                                "file": {"filename": filename, "file_data": file_data},
+                            },
+                        ],
+                    }
+                ],
+            )
+
+    assert response.choices[0].message.content == COMPLETION_TEXT
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 31
+
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_gateway_key}"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["messages"][0]["content"][1] == {
+        "type": "file",
+        "file": {"filename": filename, "file_data": file_data},
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_used_total == 38
+    assert state.usage_ledger.prompt_tokens == 31
+    assert state.usage_ledger.completion_tokens == 7
+    assert state.usage_ledger.total_tokens == 38
+    assert state.usage_ledger.accounting_status == "finalized"
+
+    usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
+    metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+    for forbidden in (
+        PROMPT_TEXT,
+        COMPLETION_TEXT,
+        file_data,
+        filename,
         created.plaintext_gateway_key,
         FAKE_OPENAI_UPSTREAM_KEY,
     ):
