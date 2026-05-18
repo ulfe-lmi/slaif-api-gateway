@@ -239,13 +239,26 @@ Streaming requests force `stream_options.include_usage=true` upstream so final
 usage can be captured. Successful streaming requires final provider usage before
 the gateway emits a successful `[DONE]`.
 
+For accepted Chat Completions requests, the gateway forwards provider SSE data
+chunks without buffering the full stream. This includes plain text deltas,
+local/client-side function `tool_calls` deltas, `finish_reason="tool_calls"`,
+provider `logprobs` data, and structured-output-compatible chunks when the
+request passes the same field registry, capability policy, and cap validation
+as non-streaming requests. Streaming does not enable hosted tools, custom
+tools, web search, multimodal/audio/file inputs, `n > 1`, non-default
+`service_tier`, background/provider-state features, MCP/connectors, or unknown
+top-level fields.
+
 If final usage is missing, the gateway emits a safe stream error, records the
 request as incomplete/failed according to current accounting policy, and does not
 emit a normal successful `[DONE]`. If final usage was received but finalization
 fails after content reached the client, a durable recovery state is left for
 operator reconciliation.
 
-Prompt and completion content are not stored by default.
+Prompt/completion content, local tool argument fragments, function schemas,
+response-format schemas, metadata values, raw request/response bodies, gateway
+keys, provider keys, Authorization headers, cookies, CSRF/session tokens, and
+encrypted payloads are not stored or logged by streaming diagnostics.
 
 ## Chat Completions Non-Message Input Estimation
 

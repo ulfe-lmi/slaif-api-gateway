@@ -14,6 +14,10 @@ from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 from slaif_gateway.schemas.providers import ProviderRequest
 
 
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
 def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
     body = {
@@ -105,6 +109,94 @@ def test_openrouter_streaming_injects_usage_options_when_client_omits_them() -> 
     assert sent_body["tool_choice"] == "auto"
     assert sent_body["response_format"] == {"type": "json_object"}
     assert "stream_options" not in body
+
+
+def test_openrouter_streaming_preserves_tool_call_deltas_finish_reason_and_logprobs() -> None:
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    request = ProviderRequest(
+        provider="openrouter",
+        upstream_model="anthropic/claude-test",
+        endpoint="chat.completions",
+        body={"model": "client-model", "stream": True, "messages": []},
+        request_id="gw-123",
+        extra_headers={"Authorization": "Bearer gateway-key"},
+    )
+    first_tool_delta = {
+        "id": "chatcmpl-openrouter-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_lookup",
+                            "type": "function",
+                            "function": {"name": "lookup"},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+                "logprobs": {"content": []},
+            }
+        ],
+    }
+    second_tool_delta = {
+        "id": "chatcmpl-openrouter-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"slaif"}'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    usage_delta = {
+        "id": "chatcmpl-openrouter-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 3,
+            "total_tokens": 12,
+            "cost_usd": "0.0004",
+        },
+    }
+    sse = _sse(first_tool_delta) + _sse(second_tool_delta) + _sse(usage_delta) + "data: [DONE]\n\n"
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.post("https://openrouter.ai/api/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-openrouter-request-id": "upstream-tool-stream"},
+                )
+            )
+            return [chunk async for chunk in adapter.stream_chat_completion(request)]
+
+    chunks = asyncio.run(_collect())
+
+    assert chunks[0].json_body == first_tool_delta
+    assert chunks[0].raw_sse_event == _sse(first_tool_delta)
+    assert chunks[1].json_body == second_tool_delta
+    assert chunks[1].json_body["choices"][0]["finish_reason"] == "tool_calls"
+    assert chunks[1].json_body["choices"][0]["delta"]["tool_calls"][0]["function"][
+        "arguments"
+    ] == '{"query":"slaif"}'
+    assert chunks[2].usage is not None
+    assert chunks[2].usage.total_tokens == 12
+    assert chunks[2].raw_cost_native == Decimal("0.0004")
+    assert chunks[3].is_done is True
 
 
 def test_openrouter_streaming_error_event_raises_safe_diagnostic() -> None:
