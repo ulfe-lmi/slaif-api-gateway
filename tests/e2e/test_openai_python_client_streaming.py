@@ -231,6 +231,113 @@ def test_openai_python_client_chat_completions_streaming_multiple_choices_e2e(
 
 
 @pytest.mark.e2e
+def test_openai_python_client_chat_completions_streaming_image_input_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, owner_label="OpenAI Image Stream", image_inputs=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    image_url = "https://example.test/stream-image.png?token=stream-secret"
+    first_delta = {
+        "id": "chatcmpl-image-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [{"index": 0, "delta": {"content": "image "}, "finish_reason": None}],
+    }
+    second_delta = {
+        "id": "chatcmpl-image-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [{"index": 0, "delta": {"content": "answer"}, "finish_reason": "stop"}],
+    }
+    usage_delta = {
+        "id": "chatcmpl-image-stream-e2e",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [],
+        "usage": {"prompt_tokens": 21, "completion_tokens": 4, "total_tokens": 25},
+    }
+    sse = _sse(first_delta) + _sse(second_delta) + _sse(usage_delta) + "data: [DONE]\n\n"
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-request-id": "upstream-openai-image-stream-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            chunks = list(
+                client.chat.completions.create(
+                    model=TEST_MODEL,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": PROMPT_TEXT},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_url, "detail": "low"},
+                                },
+                            ],
+                        }
+                    ],
+                    stream=True,
+                )
+            )
+
+    streamed_text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert streamed_text == "image answer"
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.total_tokens == 25
+
+    upstream_body = json.loads(upstream_route.calls[0].request.content)
+    assert upstream_body["stream"] is True
+    assert upstream_body["stream_options"] == {"include_usage": True}
+    assert upstream_body["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": image_url, "detail": "low"},
+    }
+    assert upstream_route.calls[0].request.headers["authorization"] == (
+        f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    )
+    assert upstream_route.calls[0].request.headers["authorization"] != (
+        f"Bearer {created.plaintext_gateway_key}"
+    )
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.usage_ledger.streaming is True
+    assert state.usage_ledger.prompt_tokens == 21
+    assert state.usage_ledger.completion_tokens == 4
+    assert state.usage_ledger.total_tokens == 25
+
+    usage_payload = json.dumps(state.usage_ledger.usage_raw, sort_keys=True)
+    metadata_payload = json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+    for forbidden in (PROMPT_TEXT, image_url, created.plaintext_gateway_key, FAKE_OPENAI_UPSTREAM_KEY):
+        assert forbidden not in usage_payload
+        assert forbidden not in metadata_payload
+
+
+@pytest.mark.e2e
 def test_openai_python_client_chat_completions_streaming_tool_calls_e2e(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

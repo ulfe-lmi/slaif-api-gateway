@@ -1050,6 +1050,7 @@ hosted_computer_use
 hosted_image_generation
 hosted_tool_search
 external_mcp_connectors
+chat_image_inputs
 chat_multimodal
 chat_audio
 chat_file_inputs
@@ -1064,7 +1065,7 @@ reservation, or provider forwarding. Existing legacy rows with no
 `chat_completions` object use the documented compatibility fallback for the
 previously supported Chat Completions surface. If the object is present,
 unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
-external MCP/connectors, multimodal/audio/file inputs, non-default service
+external MCP/connectors, file/audio inputs, audio output, non-default service
 tiers, and multiple choices remain disabled unless a route explicitly enables
 the dedicated capability and the request passes gateway caps.
 
@@ -1084,12 +1085,21 @@ gateway request. Admission-time accounting estimates input once and reserves
 possible output as the per-choice effective max output tokens multiplied by
 `n`; finalization uses provider-reported total usage/cost once.
 
+`chat_image_inputs=true` enables Chat Completions image input to text output
+only. It accepts bounded user-message `image_url` content parts with remote
+`http`/`https` URLs or base64 image data URLs according to runtime settings. It
+does not enable file input, audio input, audio output, image generation, hosted
+web search, file search, code interpreter, computer use, MCP/connectors,
+custom tools, function tools, `n > 1`, or non-default service tiers. Image
+definitions are ordinary request input for admission estimates, and final
+accounting uses provider-reported usage/cost once.
+
 The current `chat_multimodal`, `chat_audio`, and `chat_file_inputs` flags remain
-false in seeded/default metadata and do not enable any runtime support. Future
-Chat Completions multimodal work should prefer more explicit route capabilities
-per surface, such as image inputs, file inputs, audio inputs, and audio outputs,
-before provider forwarding is enabled. The evidence and roadmap are documented
-in
+false in seeded/default metadata and do not enable broader runtime support.
+Future Chat Completions multimodal work should continue to prefer explicit
+route capabilities per surface, such as file inputs, audio inputs, and audio
+outputs, before provider forwarding is enabled. The evidence and roadmap are
+documented in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 Allowed `match_type` values:

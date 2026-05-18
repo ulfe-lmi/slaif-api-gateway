@@ -107,6 +107,22 @@ def _chat_request() -> dict[str, object]:
     }
 
 
+def _image_chat_request(url: str = "https://example.test/image.png") -> dict[str, object]:
+    return {
+        "model": "classroom-cheap",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": url, "detail": "low"}},
+                ],
+            }
+        ],
+        "max_tokens": 20,
+    }
+
+
 def _chat_capabilities(**overrides: bool) -> dict[str, object]:
     capabilities = default_chat_completion_capabilities()
     capabilities.update(overrides)
@@ -495,6 +511,123 @@ def test_openrouter_nonstreaming_multiple_choices_preserves_provider_reported_co
     provider_response = state["provider_responses"][0]
     assert provider_response.usage.completion_tokens == 9
     assert provider_response.raw_cost_native == Decimal("0.0012")
+
+
+def test_openai_nonstreaming_image_request_is_forwarded_and_finalized_once(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-4.1-mini",
+        route_capabilities=_chat_capabilities(
+            chat_image_inputs=True,
+            chat_multiple_choices=True,
+            chat_function_tools=True,
+        ),
+    )
+    upstream_payload = {
+        "id": "chatcmpl_image",
+        "object": "chat.completion",
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "image answer"},
+                "finish_reason": "stop",
+            },
+            {
+                "index": 1,
+                "message": {"role": "assistant", "content": "second image answer"},
+                "finish_reason": "stop",
+            },
+        ],
+        "usage": {"prompt_tokens": 111, "completion_tokens": 17, "total_tokens": 128},
+    }
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_image_chat_request("https://example.test/private.png?token=upstream-only"),
+        "n": 2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+    }
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert upstream_request.headers["authorization"] != "Bearer client-gateway-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["messages"] == body["messages"]
+    assert upstream_body["n"] == 2
+    assert upstream_body["tools"] == body["tools"]
+    assert state["provider_responses"][0].usage.prompt_tokens == 111
+    assert state["provider_responses"][0].usage.completion_tokens == 17
+    assert state["finalize_calls"] and len(state["finalize_calls"]) == 1
+
+
+def test_openrouter_nonstreaming_image_request_preserves_provider_reported_cost(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
+    app = create_app(settings)
+    chat_capabilities = default_chat_completion_capabilities()
+    chat_capabilities["chat_image_inputs"] = True
+    chat_capabilities["chat_custom_tools"] = True
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openrouter",
+        resolved_model="openai/gpt-4.1-mini",
+        route_capabilities={"chat_completions": chat_capabilities},
+    )
+    upstream_payload = {
+        "id": "or_chatcmpl_image",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "image answer"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 44,
+            "completion_tokens": 8,
+            "total_tokens": 52,
+            "cost_usd": "0.0042",
+        },
+    }
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_image_chat_request("data:image/png;base64,aGVsbG8="),
+        "tools": [{"type": "custom", "custom": {"name": "local_image_tool"}}],
+    }
+    response = TestClient(app).post("/v1/chat/completions", json=body)
+
+    assert response.status_code == 200
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["messages"] == body["messages"]
+    assert upstream_body["tools"] == body["tools"]
+    provider_response = state["provider_responses"][0]
+    assert provider_response.usage.prompt_tokens == 44
+    assert provider_response.raw_cost_native == Decimal("0.0042")
 
 
 def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(

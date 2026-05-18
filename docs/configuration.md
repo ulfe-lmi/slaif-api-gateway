@@ -338,6 +338,12 @@ forwarding. Defaults:
 | `CHAT_MAX_MESSAGES_PER_REQUEST` | `128` | Number of `messages` entries |
 | `CHAT_MAX_MESSAGE_CONTENT_BYTES` | `262144` | One message's string/text-part content |
 | `CHAT_MAX_TEXT_PARTS_PER_MESSAGE` | `64` | Text parts in one message |
+| `CHAT_MAX_IMAGES_PER_REQUEST` | `8` | Image content parts in one request |
+| `CHAT_MAX_IMAGES_PER_MESSAGE` | `4` | Image content parts in one message |
+| `CHAT_MAX_IMAGE_URL_BYTES` | `4096` | One remote image URL |
+| `CHAT_MAX_IMAGE_DATA_URL_BYTES` | `10485760` | One base64 image data URL |
+| `CHAT_ALLOW_IMAGE_DATA_URLS` | `true` | Whether `data:image/...;base64,...` image URLs are accepted when route capability allows image input |
+| `CHAT_ALLOW_REMOTE_IMAGE_URLS` | `true` | Whether `http`/`https` image URLs are accepted when route capability allows image input |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
 | `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
@@ -360,10 +366,12 @@ forwarding. Defaults:
 | `CHAT_MAX_CUSTOM_TOOL_NAME_BYTES` | `128` | Custom tool/choice name |
 | `CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES` | `4096` | Custom tool description |
 
-There are no image/audio/file Chat Completions payload-size settings yet because
-those modalities are not enabled. Future support should add explicit caps per
-modality before any provider forwarding, as described in
-[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
+Image input to text output is enabled only when the resolved route explicitly
+sets `chat_image_inputs=true`. The image caps above bound request shape before
+provider forwarding. SLAIF does not fetch remote image URLs, decode image
+pixels, or infer final image billing from URL/base64 byte size; final accounting
+continues to use provider usage/cost. File input, audio input, and audio output
+remain unsupported.
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
