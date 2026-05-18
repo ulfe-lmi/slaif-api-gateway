@@ -6,6 +6,7 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
     CHAT_CAPABILITY_CUSTOM_TOOLS,
     CHAT_CAPABILITY_FUNCTION_TOOLS,
+    CHAT_CAPABILITY_IMAGE_INPUTS,
     CHAT_CAPABILITY_JSON_MODE,
     CHAT_CAPABILITY_LOGPROBS,
     CHAT_CAPABILITY_MULTIPLE_CHOICES,
@@ -232,6 +233,122 @@ def test_multiple_choices_with_custom_tools_require_both_capabilities() -> None:
     enforce_chat_completion_route_capabilities(
         _payload(n=2, tools=[{"type": "custom", "custom": {"name": "run_shell"}}]),
         route_capabilities=_caps(**{CHAT_CAPABILITY_MULTIPLE_CHOICES: True, CHAT_CAPABILITY_CUSTOM_TOOLS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def _image_payload(**overrides: object) -> dict[str, object]:
+    body = _payload(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}},
+                ],
+            }
+        ]
+    )
+    body.update(overrides)
+    return body
+
+
+def test_image_input_requires_explicit_image_capability_without_url_leakage() -> None:
+    raw_url = "https://example.test/private.png?token=secret"
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "image_url", "image_url": {"url": raw_url}}],
+                    }
+                ]
+            ),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert absent_exc.value.error_code == "chat_image_input_capability_not_supported"
+    assert absent_exc.value.param == "messages"
+    assert raw_url not in absent_exc.value.safe_message
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _image_payload(),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert false_exc.value.error_code == "chat_image_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _image_payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_text_only_request_does_not_require_image_capability() -> None:
+    enforce_chat_completion_route_capabilities(
+        _payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: False}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_image_input_with_function_tools_requires_both_capabilities() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as exc_info:
+        enforce_chat_completion_route_capabilities(
+            _image_payload(tools=[{"type": "function", "function": {"name": "lookup"}}]),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: True, CHAT_CAPABILITY_FUNCTION_TOOLS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert exc_info.value.error_code == "chat_capability_not_supported"
+    assert exc_info.value.param == "tools"
+
+    enforce_chat_completion_route_capabilities(
+        _image_payload(tools=[{"type": "function", "function": {"name": "lookup"}}]),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: True, CHAT_CAPABILITY_FUNCTION_TOOLS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_image_input_with_custom_tools_and_n_choices_requires_all_capabilities() -> None:
+    with pytest.raises(ChatCompletionRouteCapabilityError) as custom_exc:
+        enforce_chat_completion_route_capabilities(
+            _image_payload(n=2, tools=[{"type": "custom", "custom": {"name": "run_shell"}}]),
+            route_capabilities=_caps(
+                **{
+                    CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                    CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                    CHAT_CAPABILITY_CUSTOM_TOOLS: False,
+                }
+            ),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert custom_exc.value.error_code == "chat_custom_tool_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _image_payload(n=2, tools=[{"type": "custom", "custom": {"name": "run_shell"}}]),
+        route_capabilities=_caps(
+            **{
+                CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                CHAT_CAPABILITY_CUSTOM_TOOLS: True,
+            }
+        ),
         route_supports_streaming=True,
         requested_model="gpt-4.1-mini",
     )

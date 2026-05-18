@@ -104,11 +104,12 @@ forwarding. The cap layer keeps local function tools allowed but bounds tool
 count, function name and description length, per-tool schema size, and total
 schema size. It also bounds custom tool count, name/description, serialized
 format, and grammar definition sizes. It also bounds message count/content, text parts,
+image part count, remote image URL bytes, base64 image data URL bytes,
 `response_format` schemas, `metadata`, `prediction`, `stream_options`, `stop`,
 `user`, `n`, and `logit_bias`. Errors name the field and policy problem without
-logging or returning raw messages, prompt content, metadata values, schemas,
-tool arguments, provider keys, gateway keys, cookies, sessions, CSRF tokens,
-encrypted payloads, or nonces.
+logging or returning raw messages, prompt content, image URLs, base64 image
+payloads, metadata values, schemas, tool arguments, provider keys, gateway keys,
+cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
 Resolved Chat Completions routes are also checked against explicit
 `model_routes.capabilities["chat_completions"]` metadata. New seeded or
@@ -116,9 +117,12 @@ manually created Chat Completions routes receive conservative capability flags
 for the currently supported surface: text chat, streaming, local function tools,
 local custom tools, legacy functions, JSON mode, structured outputs, logprobs, reasoning/cached
 usage signals, and explicit false flags for hosted tools, multimodal/audio/file
-inputs, non-default service tiers, and multiple choices. Multiple choices are
-only allowed with `chat_multiple_choices=true`; that flag does not imply hosted
-tools, custom tools, multimodal/audio/file support, audio output, non-default
+inputs, non-default service tiers, and multiple choices. Image input is allowed
+only with `chat_image_inputs=true`; that flag does not imply hosted tools,
+image generation, file input, audio input, audio output, custom tools, function
+tools, `n > 1`, non-default service tiers, or Responses support. Multiple
+choices are only allowed with `chat_multiple_choices=true`; that flag does not
+imply hosted tools, custom tools, file/audio support, audio output, non-default
 service tiers, or Responses support. Route capability
 checks happen after route resolution and before Redis rate limiting, pricing
 lookup, PostgreSQL quota reservation, usage-profile insertion, or provider

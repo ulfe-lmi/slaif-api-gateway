@@ -54,8 +54,8 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 `/v1/completions` route creation while that endpoint is not implemented. Seeded
 Chat Completions routes include explicit `capabilities.chat_completions`
 metadata for the currently supported request surface. Hosted search/tools,
-multimodal/audio/file inputs, custom tools, non-default service tiers, and
-multiple choices are not enabled by that metadata.
+image/audio/file inputs, custom tools, non-default service tiers, and multiple
+choices are not enabled by that metadata.
 
 ## OpenAI Upstream Forwarding
 
@@ -164,22 +164,24 @@ models such as `gpt-5-search-api`.
 
 The Chat Completions field registry is also fail-closed. Standard keys and
 trusted calibration keys reject unknown top-level Chat Completions fields with
-`unknown_chat_completion_field`. Current forwarding supports text-only message
-content, local function tools, route-enabled non-streaming local custom tools,
-route-enabled bounded multiple choices, legacy function fields,
+`unknown_chat_completion_field`. Current forwarding supports text message
+content, route-enabled image URL content parts, local function tools,
+route-enabled non-streaming local custom tools, route-enabled bounded multiple choices, legacy function fields,
 `response_format`, `prediction`, metadata within the gateway size cap,
 omitted/`auto` `service_tier`, and text-only `modalities`. It rejects
-non-default `service_tier`, audio/image/file/video content, provider-side state
+non-default `service_tier`, audio/file/video content, alternate image part names, provider-side state
 fields such as `store=true`, `previous_response_id`, and `conversation`, and
 other unclassified feature-bearing fields before any provider request is built.
 
 Supported Chat Completions fields are also bounded by explicit scalar and size
 validation before any provider body is constructed. The gateway validates
-temperature/top-p/penalty/logprob/logit-bias ranges, message and text-part
-counts, local function-tool counts and schema sizes, response-format schema
-size, metadata key/count/byte limits, stop sequence limits, `prediction` size,
-`stream_options` size, and `n` exactly `1`. Rejection errors do not include raw
-messages, metadata values, schemas, tool payloads, or request bodies.
+temperature/top-p/penalty/logprob/logit-bias ranges, message/text/image-part
+counts, remote image URL and image data URL byte caps, image detail values,
+local function-tool counts and schema sizes, response-format schema size,
+metadata key/count/byte limits, stop sequence limits, `prediction` size,
+`stream_options` size, and bounded `n`. Rejection errors do not include raw
+messages, image URLs, base64 image payloads, metadata values, schemas, tool
+payloads, or request bodies.
 
 Route/model capability metadata is checked after route resolution and before
 Redis rate limiting, pricing lookup, quota reservation, or provider forwarding.
@@ -187,8 +189,8 @@ The key model allowlist is not sufficient by itself: the resolved route must
 also allow the request's Chat Completions shape. Current capability flags cover
 text chat, streaming, local function tools, local custom tools, legacy functions, JSON mode,
 structured outputs, logprobs, reasoning-usage signals, cached-input usage
-signals, hosted tool families, multimodal/audio/file inputs, non-default
-service tiers, and multiple choices. New Chat Completions routes created by the
+signals, hosted tool families, image inputs, broader multimodal/audio/file
+inputs, non-default service tiers, and multiple choices. New Chat Completions routes created by the
 route service receive explicit conservative metadata. Existing legacy routes
 without a `chat_completions` block use a compatibility fallback for the
 previously supported surface, while malformed or unknown `chat_completions`
@@ -214,7 +216,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | Field | Behavior | Reason |
 | --- | --- | --- |
 | `model` | Mutated upstream | Replaced with route `upstream_model` for aliases and provider-specific naming |
-| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored |
+| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored. User-message `image_url` parts are preserved only with explicit `chat_image_inputs=true` route capability |
 | `max_tokens` | Preserved when valid | OpenAI Chat Completions output control |
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
@@ -228,7 +230,8 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `temperature` / `top_p` / penalties / logprob controls / `logit_bias` | Preserved when type and range validation passes | Ordinary OpenAI Chat Completions scalar controls |
 | `prediction` | Preserved when accepted as a bounded object; object payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
 | `service_tier` | Omitted or `auto` is allowed; other values are rejected | Local pricing is not service-tier aware |
-| `modalities` / `audio` / non-text content parts | Text-only modality is allowed; audio/image/file/video fields or message parts are rejected | Multimodal/audio/file pricing and accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
+| `image_url` content parts | Preserved when accepted and within image count/byte/detail caps | Image input is request input, not a hosted tool or image-generation tool. SLAIF does not fetch remote URLs, decode/rewrite data URLs, store/log image URLs or base64 payloads, or infer final image billing from bytes |
+| `modalities` / `audio` / unsupported non-text content parts | Text-only modality is allowed; audio output, audio input, file/video fields, and alternate image part names are rejected | Audio/file/broader multimodal pricing and accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
@@ -238,11 +241,14 @@ possible output is reserved as `effective_max_output_tokens_per_choice * n`,
 and final provider usage or OpenRouter provider-reported cost is not multiplied
 again by `n`.
 
-Multimodal/audio/file Chat Completions are not forwarded in the current gateway.
-Future support must be explicit per modality because external URLs, base64
-payloads, uploaded file IDs, audio response bytes, and modality-specific usage
-fields create separate privacy, request-size, estimation, pricing, and
-accounting requirements.
+Chat Completions image input to text output is forwarded only when route
+metadata explicitly enables `chat_image_inputs`. Remote URLs and image data
+URLs are bounded and forwarded as client-provided `image_url.url` values; SLAIF
+does not fetch, decode, rewrite, store, or log them. File input, audio input,
+audio output, image generation, and broader multimodal combinations remain
+unsupported and must be explicit future work because uploaded file IDs, audio
+response bytes, and modality-specific usage fields create separate privacy,
+request-size, estimation, pricing, and accounting requirements.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 
@@ -292,8 +298,8 @@ Streaming has an extra finalization rule because content may already have reache
 - Operator reconciliation can later finalize these provider-completed rows using stored usage/cost metadata without calling providers.
 
 Streaming does not expand request policy. Hosted/provider-side tools, custom
-tools, web search, MCP/connectors, external web access, multimodal/audio/file
-content, non-default `service_tier`, background/provider-state lifecycle
+tools, web search, MCP/connectors, external web access, file/audio content,
+non-default `service_tier`, background/provider-state lifecycle
 fields, and unknown top-level fields remain rejected before provider
 forwarding. Streaming `n > 1` is supported when route metadata explicitly
 enables multiple choices; SSE chunks, choice indexes, finish reasons, the final

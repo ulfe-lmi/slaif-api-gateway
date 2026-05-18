@@ -33,6 +33,10 @@ operational guidance, not a production certification.
 - Bounded Chat Completions `n > 1` when the resolved route explicitly enables
   `chat_multiple_choices`; streaming multiple choices are supported without
   full-stream buffering.
+- Chat Completions image input to text output when the resolved route
+  explicitly enables `chat_image_inputs`; remote URLs and image data URLs are
+  bounded and forwarded without SLAIF fetching, storing, logging, or decoding
+  image content.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.
@@ -173,8 +177,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   bulk participant-key generation, policy mutation, and Responses support
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
-- Chat Completions image/audio/file inputs and audio output are not implemented.
-  The upstream evidence and future implementation roadmap are documented in
+- Chat Completions file/audio inputs and audio output are not implemented. The
+  upstream evidence and future implementation roadmap are documented in
   [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

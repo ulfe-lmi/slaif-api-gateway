@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
@@ -15,6 +18,11 @@ _RESPONSE_FORMAT_TYPES = frozenset({"text", "json_object", "json_schema"})
 _TOOL_CHOICE_MODES = frozenset({"none", "auto", "required"})
 _CUSTOM_FORMAT_TYPES = frozenset({"text", "grammar"})
 _CUSTOM_GRAMMAR_SYNTAXES = frozenset({"lark", "regex"})
+_IMAGE_DETAIL_VALUES = frozenset({"auto", "low", "high"})
+_IMAGE_DATA_URL_PREFIX = "data:"
+_SUPPORTED_IMAGE_DATA_URL_MIME_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/webp", "image/gif"}
+)
 
 
 class ChatCompletionRequestCapsError(RequestPolicyError):
@@ -96,6 +104,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
             "The request includes too many Chat Completions messages.",
         )
 
+    total_images = 0
     for message_index, message in enumerate(value):
         if not isinstance(message, Mapping):
             _raise(
@@ -113,15 +122,26 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
         _validate_message_content(
             message.get("content"),
             message_index=message_index,
+            message_role=role,
             settings=settings,
+            total_images_seen=total_images,
         )
+        total_images += _count_image_parts(message.get("content"))
+        if total_images > settings.CHAT_MAX_IMAGES_PER_REQUEST:
+            _raise(
+                "messages",
+                "chat_image_count_exceeded",
+                "The request includes too many Chat Completions image content parts.",
+            )
 
 
 def _validate_message_content(
     content: Any,
     *,
     message_index: int,
+    message_role: str,
     settings: Settings,
+    total_images_seen: int,
 ) -> None:
     if content is None:
         return
@@ -140,10 +160,11 @@ def _validate_message_content(
         _raise(
             f"messages[{message_index}].content",
             "chat_field_invalid_type",
-            "Chat Completions message content must be a string, null, or a list of text parts.",
+            "Chat Completions message content must be a string, null, or a list of supported content parts.",
         )
 
     text_parts = 0
+    image_parts = 0
     total_text_bytes = 0
     for part_index, part in enumerate(content):
         if isinstance(part, str):
@@ -157,7 +178,33 @@ def _validate_message_content(
                 "Chat Completions message content parts must be text strings or text objects.",
             )
         if part.get("type") != "text":
-            continue
+            if part.get("type") == "image_url":
+                image_parts += 1
+                _validate_image_part(
+                    part,
+                    message_index=message_index,
+                    part_index=part_index,
+                    message_role=message_role,
+                    settings=settings,
+                )
+                if image_parts > settings.CHAT_MAX_IMAGES_PER_MESSAGE:
+                    _raise(
+                        f"messages[{message_index}].content",
+                        "chat_image_count_exceeded",
+                        "A Chat Completions message includes too many image content parts.",
+                    )
+                if total_images_seen + image_parts > settings.CHAT_MAX_IMAGES_PER_REQUEST:
+                    _raise(
+                        "messages",
+                        "chat_image_count_exceeded",
+                        "The request includes too many Chat Completions image content parts.",
+                    )
+                continue
+            _raise(
+                f"messages[{message_index}].content[{part_index}].type",
+                "chat_field_invalid_type",
+                "Chat Completions message content parts must be text or image_url objects.",
+            )
         text = part.get("text")
         if not isinstance(text, str):
             _raise(
@@ -180,6 +227,148 @@ def _validate_message_content(
             "chat_field_too_large",
             "A Chat Completions message content field exceeds the gateway size limit.",
         )
+
+
+def _validate_image_part(
+    part: Mapping[str, Any],
+    *,
+    message_index: int,
+    part_index: int,
+    message_role: str,
+    settings: Settings,
+) -> None:
+    param = f"messages[{message_index}].content[{part_index}]"
+    if message_role != "user":
+        _raise(
+            f"{param}.type",
+            "chat_image_part_invalid_shape",
+            "Chat Completions image content parts are supported only on user messages.",
+        )
+
+    for key in part:
+        if key not in {"type", "image_url"}:
+            _raise(
+                f"{param}.{key}",
+                "chat_image_part_invalid_shape",
+                "Image content parts may only include documented Chat Completions image fields.",
+            )
+
+    image_url = part.get("image_url")
+    if not isinstance(image_url, Mapping):
+        _raise(
+            f"{param}.image_url",
+            "chat_image_part_invalid_shape",
+            "Chat Completions image content parts must include an image_url object.",
+        )
+
+    for key in image_url:
+        if key not in {"url", "detail"}:
+            _raise(
+                f"{param}.image_url.{key}",
+                "chat_image_part_invalid_shape",
+                "Image URL objects may only include documented Chat Completions image fields.",
+            )
+
+    url = image_url.get("url")
+    if not isinstance(url, str) or not url:
+        _raise(
+            f"{param}.image_url.url",
+            "chat_image_url_invalid",
+            "Chat Completions image URLs must be non-empty strings.",
+        )
+
+    detail = image_url.get("detail")
+    if detail is not None and detail not in _IMAGE_DETAIL_VALUES:
+        _raise(
+            f"{param}.image_url.detail",
+            "chat_image_detail_invalid",
+            "Chat Completions image detail must be auto, low, or high.",
+        )
+
+    if url.startswith(_IMAGE_DATA_URL_PREFIX):
+        _validate_image_data_url(url, param=f"{param}.image_url.url", settings=settings)
+        return
+
+    _validate_remote_image_url(url, param=f"{param}.image_url.url", settings=settings)
+
+
+def _validate_image_data_url(value: str, *, param: str, settings: Settings) -> None:
+    if not settings.CHAT_ALLOW_IMAGE_DATA_URLS:
+        _raise(
+            param,
+            "chat_image_data_url_not_allowed",
+            "Base64 image data URLs are not enabled by this gateway.",
+        )
+
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_IMAGE_DATA_URL_BYTES,
+        error_code="chat_image_data_url_too_large",
+        safe_message="An image data URL exceeds the gateway size limit.",
+    )
+
+    header, separator, encoded = value.partition(",")
+    if not separator:
+        _raise(param, "chat_image_url_invalid", "Image data URLs must be base64 data URLs.")
+    if not header.endswith(";base64"):
+        _raise(param, "chat_image_url_invalid", "Image data URLs must use base64 encoding.")
+
+    mime_type = header[len(_IMAGE_DATA_URL_PREFIX) : -len(";base64")].lower()
+    if mime_type not in _SUPPORTED_IMAGE_DATA_URL_MIME_TYPES:
+        _raise(
+            param,
+            "chat_image_mime_not_supported",
+            "The image data URL MIME type is not supported by this gateway.",
+        )
+    if not encoded:
+        _raise(param, "chat_image_url_invalid", "Image data URLs must include base64 data.")
+
+    try:
+        base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ChatCompletionRequestCapsError(
+            "Image data URLs must include valid base64 data.",
+            param=param,
+            error_code="chat_image_url_invalid",
+        ) from exc
+
+
+def _validate_remote_image_url(value: str, *, param: str, settings: Settings) -> None:
+    if not settings.CHAT_ALLOW_REMOTE_IMAGE_URLS:
+        _raise(
+            param,
+            "chat_image_url_invalid",
+            "Remote image URLs are not enabled by this gateway.",
+        )
+
+    _validate_string_bytes(
+        value,
+        param=param,
+        max_bytes=settings.CHAT_MAX_IMAGE_URL_BYTES,
+        error_code="chat_image_url_too_large",
+        safe_message="An image URL exceeds the gateway size limit.",
+    )
+
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        _raise(param, "chat_image_url_invalid", "Image URLs must use http or https.")
+    if parsed.username is not None or parsed.password is not None:
+        _raise(
+            param,
+            "chat_image_url_invalid",
+            "Image URLs must not include embedded credentials.",
+        )
+
+
+def _count_image_parts(content: Any) -> int:
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "image_url"
+    )
 
 
 def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings) -> None:

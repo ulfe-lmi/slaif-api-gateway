@@ -262,10 +262,43 @@ def test_input_estimate_handles_text_content_blocks() -> None:
     assert result.estimated_input_tokens > 0
 
 
+def _image_message(url: str = "https://example.test/image.png") -> dict[str, object]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is in this image?"},
+            {"type": "image_url", "image_url": {"url": url}},
+        ],
+    }
+
+
+def test_input_estimate_includes_image_url_material_without_multiplying_input_by_n() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    text_only = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "what is in this image?"}],
+            "max_completion_tokens": 8,
+        }
+    )
+
+    image_result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_image_message("https://example.test/image.png")],
+            "max_completion_tokens": 8,
+            "n": 3,
+        }
+    )
+
+    assert image_result.estimated_input_tokens > text_only.estimated_input_tokens
+    assert image_result.effective_choice_count == 3
+    assert image_result.effective_output_tokens == 24
+
+
 @pytest.mark.parametrize(
     "part",
     [
-        {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}},
         {"type": "input_image", "image_url": "https://example.test/image.png"},
         {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}},
         {"type": "file", "file": {"file_id": "file_123"}},
@@ -285,6 +318,208 @@ def test_non_text_message_content_parts_are_rejected(part: dict[str, object]) ->
 
     assert exc_info.value.error_code == "unsupported_chat_completion_modality"
     assert exc_info.value.param == "messages[0].content[1].type"
+
+
+@pytest.mark.parametrize("detail", ["auto", "low", "high"])
+def test_image_url_content_part_is_validated_and_preserved(detail: str) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.test/image.png?token=private",
+                                "detail": detail,
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    image_part = result.effective_body["messages"][0]["content"][1]
+    assert image_part["image_url"]["detail"] == detail
+
+
+def test_image_data_url_content_part_is_validated_and_preserved() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    data_url = "data:image/png;base64,aGVsbG8="
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_image_message(data_url)],
+        }
+    )
+
+    assert result.effective_body["messages"][0]["content"][1]["image_url"]["url"] == data_url
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param"),
+    [
+        ({"CHAT_MAX_IMAGES_PER_MESSAGE": 1}, "chat_image_count_exceeded", "messages[0].content"),
+        ({"CHAT_MAX_IMAGES_PER_REQUEST": 1}, "chat_image_count_exceeded", "messages"),
+    ],
+)
+def test_image_count_caps_are_enforced(
+    overrides: dict[str, int],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000, **overrides))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "https://example.test/1.png"}},
+                            {"type": "image_url", "image_url": {"url": "https://example.test/2.png"}},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+
+
+@pytest.mark.parametrize(
+    ("image_url", "expected_code"),
+    [
+        ("ftp://example.test/image.png", "chat_image_url_invalid"),
+        ("https://user:pass@example.test/image.png", "chat_image_url_invalid"),
+        ("data:text/plain;base64,aGVsbG8=", "chat_image_mime_not_supported"),
+        ("data:image/png;base64,not valid base64", "chat_image_url_invalid"),
+        ("data:image/png,not-base64", "chat_image_url_invalid"),
+    ],
+)
+def test_invalid_image_url_shapes_are_rejected_without_raw_value(
+    image_url: str,
+    expected_code: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_image_message(image_url)]})
+
+    assert exc_info.value.error_code == expected_code
+    assert image_url not in exc_info.value.safe_message
+
+
+def test_image_url_byte_caps_are_enforced_without_raw_value() -> None:
+    raw_url = "https://example.test/" + ("x" * 200)
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_MAX_IMAGE_URL_BYTES=32)
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_image_message(raw_url)]})
+
+    assert exc_info.value.error_code == "chat_image_url_too_large"
+    assert raw_url not in exc_info.value.safe_message
+
+
+def test_image_data_url_byte_cap_and_policy_are_enforced_without_raw_value() -> None:
+    raw_data_url = "data:image/png;base64," + ("a" * 64)
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_MAX_IMAGE_DATA_URL_BYTES=32)
+    )
+
+    with pytest.raises(RequestPolicyError) as too_large:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_image_message(raw_data_url)]})
+
+    assert too_large.value.error_code == "chat_image_data_url_too_large"
+    assert raw_data_url not in too_large.value.safe_message
+
+    disabled_policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_ALLOW_IMAGE_DATA_URLS=False)
+    )
+    with pytest.raises(RequestPolicyError) as disabled:
+        disabled_policy.apply({"model": "gpt-4.1-mini", "messages": [_image_message(raw_data_url)]})
+
+    assert disabled.value.error_code == "chat_image_data_url_not_allowed"
+    assert raw_data_url not in disabled.value.safe_message
+
+
+def test_remote_image_urls_can_be_disabled() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_ALLOW_REMOTE_IMAGE_URLS=False)
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_image_message()]})
+
+    assert exc_info.value.error_code == "chat_image_url_invalid"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_code", "expected_param"),
+    [
+        (
+            {"role": "system", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/img.png"}}]},
+            "chat_image_part_invalid_shape",
+            "messages[0].content[0].type",
+        ),
+        (
+            {"role": "user", "content": [{"type": "image_url", "image_url": "https://example.test/img.png"}]},
+            "chat_image_part_invalid_shape",
+            "messages[0].content[0].image_url",
+        ),
+        (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/img.png", "detail": "original"},
+                    }
+                ],
+            },
+            "chat_image_detail_invalid",
+            "messages[0].content[0].image_url.detail",
+        ),
+        (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/img.png"},
+                        "provider_extra": True,
+                    }
+                ],
+            },
+            "chat_image_part_invalid_shape",
+            "messages[0].content[0].provider_extra",
+        ),
+    ],
+)
+def test_invalid_image_part_shapes_are_rejected(
+    message: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [message]})
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
 
 
 def test_service_does_not_mutate_original_request() -> None:
@@ -1409,7 +1644,20 @@ def test_streaming_function_tool_and_structured_output_fields_remain_allowed() -
         ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
         ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
         ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
-        ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/img.png"}}]}]}, "unsupported_chat_completion_modality", "messages[0].content[0].type"),
+        (
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}}
+                        ],
+                    }
+                ]
+            },
+            "unsupported_chat_completion_modality",
+            "messages[0].content[0].type",
+        ),
         ({"n": 99}, "chat_choice_count_limit_exceeded", "n"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
     ],

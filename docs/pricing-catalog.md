@@ -23,14 +23,18 @@ custom tools are route-enabled. This can over-reserve, but prevents large
 tool/schema payloads from passing cost checks with a messages-only estimate.
 Successful accounting still finalizes from actual provider usage when available.
 
-Chat Completions multimodal/audio/file support remains disabled. The upstream
-investigation in
+Chat Completions image input to text output is enabled only behind explicit
+route capability and request caps. Image URL/data URL wrapper text is included
+in the ordinary message input estimate, but SLAIF does not treat image bytes as
+invoice-grade billable tokens and does not infer exact final image cost from
+URL or base64 size. Successful accounting still finalizes from provider
+usage/cost. The upstream investigation in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md)
-shows that image, audio, and file request shapes are documented, but bytes are
-not billable tokens. Future support needs modality-specific admission estimates,
-pricing/catalog fields where upstream pricing requires them, provider usage
-parsing, and accounting tests before those payloads can be enabled for
-cost-limited gateway keys.
+shows that audio and file request shapes are documented, but bytes are not
+billable tokens. Future audio/file support needs modality-specific admission
+estimates, pricing/catalog fields where upstream pricing requires them,
+provider usage parsing, and accounting tests before those payloads can be
+enabled for cost-limited gateway keys.
 
 ## OpenRouter Price Refresh
 

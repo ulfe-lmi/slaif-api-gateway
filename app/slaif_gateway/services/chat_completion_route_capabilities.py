@@ -28,6 +28,7 @@ CHAT_CAPABILITY_HOSTED_COMPUTER_USE = "hosted_computer_use"
 CHAT_CAPABILITY_HOSTED_IMAGE_GENERATION = "hosted_image_generation"
 CHAT_CAPABILITY_HOSTED_TOOL_SEARCH = "hosted_tool_search"
 CHAT_CAPABILITY_EXTERNAL_MCP_CONNECTORS = "external_mcp_connectors"
+CHAT_CAPABILITY_IMAGE_INPUTS = "chat_image_inputs"
 CHAT_CAPABILITY_MULTIMODAL = "chat_multimodal"
 CHAT_CAPABILITY_AUDIO = "chat_audio"
 CHAT_CAPABILITY_FILE_INPUTS = "chat_file_inputs"
@@ -53,6 +54,7 @@ KNOWN_CHAT_COMPLETION_CAPABILITIES = frozenset(
         CHAT_CAPABILITY_HOSTED_IMAGE_GENERATION,
         CHAT_CAPABILITY_HOSTED_TOOL_SEARCH,
         CHAT_CAPABILITY_EXTERNAL_MCP_CONNECTORS,
+        CHAT_CAPABILITY_IMAGE_INPUTS,
         CHAT_CAPABILITY_MULTIMODAL,
         CHAT_CAPABILITY_AUDIO,
         CHAT_CAPABILITY_FILE_INPUTS,
@@ -94,6 +96,7 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
         CHAT_CAPABILITY_HOSTED_IMAGE_GENERATION: False,
         CHAT_CAPABILITY_HOSTED_TOOL_SEARCH: False,
         CHAT_CAPABILITY_EXTERNAL_MCP_CONNECTORS: False,
+        CHAT_CAPABILITY_IMAGE_INPUTS: False,
         CHAT_CAPABILITY_MULTIMODAL: False,
         CHAT_CAPABILITY_AUDIO: False,
         CHAT_CAPABILITY_FILE_INPUTS: False,
@@ -219,6 +222,16 @@ def classify_chat_completion_route_capability_requirements(
                 safe_message=(
                     "This model route does not support local Chat Completions custom tools."
                 ),
+            )
+        )
+
+    if _uses_image_inputs(payload):
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_IMAGE_INPUTS,
+                field="messages",
+                error_code="chat_image_input_capability_not_supported",
+                safe_message="This model route does not support Chat Completions image input.",
             )
         )
 
@@ -365,6 +378,22 @@ def _uses_custom_tools(payload: Mapping[str, Any]) -> bool:
 
     tool_choice = payload.get("tool_choice")
     return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "custom"
+
+
+def _uses_image_inputs(payload: Mapping[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "image_url":
+                return True
+    return False
 
 
 def _hosted_tool_findings(payload: Mapping[str, Any]) -> list[ChatCompletionRouteCapabilityFinding]:

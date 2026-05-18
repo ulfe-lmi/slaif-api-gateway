@@ -46,16 +46,31 @@ Current SLAIF implementation:
 - `app/slaif_gateway/providers/openrouter.py`
 - Unit tests in `tests/unit/test_request_policy_service.py` and
   `tests/unit/test_v1_chat_completions_policy.py` that cover current
-  multimodal/audio/file rejection.
+  multimodal/audio/file rejection and image-input enablement.
 
 ## Current SLAIF Behavior
 
-SLAIF currently supports text-only Chat Completions message content. Text
-content may be a string or text content parts inside the existing message caps.
+SLAIF now supports Chat Completions image input to text output as the first
+narrow multimodal slice. Text content may be a string or text content parts
+inside the existing message caps. User messages may also include documented
+`image_url` content parts only when the resolved route explicitly sets
+`capabilities.chat_completions.chat_image_inputs=true`.
+
+Supported image shape:
+
+```json
+{ "type": "image_url", "image_url": { "url": "...", "detail": "low" } }
+```
+
+The `detail` field is optional and must be one of `auto`, `low`, or `high`.
+Remote `http`/`https` URLs and base64
+`data:image/png|jpeg|webp|gif;base64,...` data URLs are bounded by runtime
+settings. SLAIF does not fetch remote image URLs, decode image pixels, rewrite
+image payloads, store/log image URLs or base64 data, or infer exact image cost
+from bytes.
 
 SLAIF currently rejects:
 
-- `image_url` message content parts;
 - `input_audio` message content parts;
 - `file` message content parts;
 - older or alternate non-text part names such as `input_image`, `input_file`,
@@ -70,24 +85,25 @@ bodies, raw response bodies, images, audio, files, base64 payloads, external
 URLs, file IDs, tool payloads, provider keys, gateway plaintext keys,
 Authorization headers, cookies, CSRF tokens, or session tokens.
 
-This PR does not change that behavior.
+The remaining rejection paths return safe OpenAI-shaped errors and do not log
+or return raw payloads.
 
 ## Upstream Evidence Matrix
 
 | Feature | OpenAI documented shape | SDK shape | Role restrictions | Model restrictions | Streaming clarity | Usage/pricing evidence | Current SLAIF status | Recommended next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Image input, text output | User message `content` array containing `{ "type": "image_url", "image_url": { "url": "...", "detail"?: one of "auto", "low", "high", "original" } }`. URLs and base64 data URLs are documented; file ID image inputs are discussed in the image guide for model requests. | `ChatCompletionContentPartImageParam` exists with `type: "image_url"`, `image_url.url`, and `detail`. The local SDK type only lists `auto`, `low`, and `high`; current docs also mention `original` for newer models. | OpenAI API reference exposes image parts for user messages. Developer/system messages are text-only in SDK types. | Requires a vision-capable model. Detail behavior and tokenization vary by model family. | Text streaming should be ordinary Chat Completions chunks. No separate image-output stream shape is needed for image-input to text-output. | OpenAI states images count as tokens and documents patch/tile tokenization. Provider `usage.prompt_tokens` includes image-derived tokens, but precise pre-call estimation requires dimensions, detail, model family, and possibly provider-specific behavior. | Rejected. | First implementation candidate: image input to text output only. Add explicit capability, image count/byte/URL caps, MIME/detail validation, conservative estimation, usage parsing tests, and no-storage tests. |
+| Image input, text output | User message `content` array containing `{ "type": "image_url", "image_url": { "url": "...", "detail"?: one of "auto", "low", "high" } }`. URLs and base64 data URLs are documented. | `ChatCompletionContentPartImageParam` exists with `type: "image_url"`, `image_url.url`, and `detail` `auto`, `low`, or `high`. | OpenAI API reference exposes image parts for user messages. Developer/system messages are text-only in SDK types. | Requires a vision-capable model and explicit SLAIF `chat_image_inputs=true` route capability. Detail behavior and tokenization vary by model family. | Supported for ordinary text SSE chunks; no separate image-output stream shape is enabled. | OpenAI states images count as tokens and documents patch/tile tokenization. Provider `usage.prompt_tokens` includes image-derived tokens, but precise pre-call estimation requires dimensions, detail, model family, and possibly provider-specific behavior. | Implemented behind explicit route capability. | Keep narrow: image input to text output only. Continue to rely on caps plus provider usage/cost finalization; do not infer exact image cost from bytes. |
 | File input, text output | User message `content` array containing `{ "type": "file", "file": { "file_data"?: "...", "file_id"?: "...", "filename"?: "..." } }`. The file guide shows Chat Completions base64 file data and uploaded file IDs. It explicitly says file URLs are not supported for Chat Completions. | `ChatCompletionContentPartParam.File` exists with `type: "file"`, `file.file_data`, `file.file_id`, and `file.filename`. | File parts are part of user message content. Developer/system messages are text-only in SDK types. | Requires file-capable or vision-capable models depending on file type. PDFs may include extracted text plus page images; non-PDF behavior varies. | Text streaming appears ordinary for text output, but file preprocessing can be provider-specific and may affect latency/errors. | OpenAI warns PDF parsing can add both extracted text and page images to context. File size limits and accepted types are documented, but pre-call billable tokens cannot be inferred reliably from bytes alone. | Rejected. | Do not start here unless file ID ownership/upload policy and file parsing/token estimation are settled. Separate base64 file data from uploaded file ID support. |
 | Audio input, text output | User message `content` array containing `{ "type": "input_audio", "input_audio": { "data": "<base64>", "format": "wav" or "mp3" } }`. | `ChatCompletionContentPartInputAudioParam` exists with base64 `data` and `format` `wav` or `mp3`. | Audio parts are user message content. Developer/system messages are text-only in SDK types. | Requires an audio-capable model such as the documented audio model family. | Text output streaming should be ordinary if only text is requested, but audio input preprocessing and usage fields need provider tests. | OpenAI usage types include `prompt_tokens_details.audio_tokens`. Model pages can price text tokens separately from audio tokens. Bytes/duration are not equivalent to billable tokens. | Rejected. | Implement only after image input or as a separate PR with audio byte/duration caps, format validation, audio-token usage parsing, pricing catalog support, and mocked SDK tests. |
 | Text input, audio output | Top-level `modalities: ["text", "audio"]` plus `audio: { "voice": ..., "format": one of "wav", "aac", "mp3", "flac", "opus", "pcm16" }`. Non-streaming OpenAI examples return `choices[].message.audio` with base64 `data`, `id`, `expires_at`, and `transcript`. | `CompletionCreateParamsBase.modalities` allows `text` and `audio`; `ChatCompletionAudioParam` exists. Non-streaming `ChatCompletionMessage.audio` exists. Stream chunk type in the installed SDK has no `delta.audio` field. | Applies at request top level, not as a user content part. | Requires audio-output-capable model. | Ambiguous across providers. OpenAI SDK non-streaming response shape is clear, but installed Chat Completions stream chunk type does not model audio deltas. OpenRouter documents streaming audio output through `delta.audio`, which is not represented in the installed OpenAI ChatCompletionChunk type. | OpenAI usage types include `completion_tokens_details.audio_tokens`. Model pages can price text tokens separately from audio tokens. OpenRouter says audio output is priced as completion tokens and returns cost/usage details. | Rejected. | Do not start with audio output. It needs response media handling, streaming compatibility decisions, output byte caps, usage parsing, pricing support, and client compatibility tests. |
 | Audio input, audio output | Combines user `input_audio` content with `modalities: ["text", "audio"]` and `audio` output config. | Request types exist for both sides. Non-streaming audio response exists; streaming delta is ambiguous in installed SDK. | Audio input is user content; audio output is top-level request config. | Requires bidirectional audio-capable model. | Ambiguous for streaming in the official SDK; OpenRouter documents streaming `delta.audio`. | Both prompt and completion audio token details may matter. Text token prices are not enough. | Rejected. | Defer until audio input and audio output are independently implemented and tested. |
 | Mixed text plus image/audio/file inputs | OpenAI and OpenRouter both document content arrays that can contain multiple part types. | The user-message content union includes text, image, input audio, and file parts. | User message only for non-text parts; developer/system message SDK types remain text-only. | Requires every requested modality to be supported by the selected model/provider. | Text-output streaming can probably remain pass-through; audio output still needs separate treatment. | Mixed inputs create mixed usage surfaces: text, image-derived, file-derived, audio input, cached input, and reasoning tokens. | Rejected. | Defer until each individual modality has its own caps, capability flags, pricing, and accounting coverage. |
-| Interaction with `n > 1` | OpenAI documents `n` as multiple choices and charges generated tokens across choices. | SDK supports `n`; stream chunks can contain multiple choices. | No modality-specific role change. | Model/provider support may vary. | Text streaming multiple choices is already supported by SLAIF. Audio output with `n > 1` is not clear enough for immediate support. | Do not multiply provider usage by `n`; PR #157 already established final usage is authoritative once. Pre-call output reservation would need to multiply per-choice possible text/audio output. | Text-only `n > 1` supported behind capability. Multimodal with `n > 1` rejected because multimodal is rejected. | Do not combine `n > 1` with the first multimodal implementation unless the modality-specific output estimate and provider usage tests are complete. |
-| Interaction with local function tools | Function tools are local/client-side intent. | SDK supports function tools with Chat Completions. | No modality-specific role change. | Model/provider support may vary. | Text streaming function tools are already supported. | Function schemas are ordinary input material; modality usage is separate. | Text-only function tools supported. Multimodal with function tools rejected because multimodal is rejected. | After a modality is implemented, test it both without tools and with local function tools. |
-| Interaction with non-streaming custom local tools | Custom tools are local/client-side intent. | SDK supports non-streaming custom tools and custom tool calls. | No modality-specific role change. | Model/provider support may vary. | Streaming custom tools remain unsupported. | Custom tool definitions are ordinary input material; modality usage is separate. | Non-streaming text-only custom tools supported behind capability. Multimodal with custom tools rejected because multimodal is rejected. | After a modality is implemented, test non-streaming custom tools only when both capabilities are explicit. |
+| Interaction with `n > 1` | OpenAI documents `n` as multiple choices and charges generated tokens across choices. | SDK supports `n`; stream chunks can contain multiple choices. | No modality-specific role change. | Model/provider support may vary. | Text streaming multiple choices is already supported by SLAIF. Audio output with `n > 1` is not clear enough for immediate support. | Do not multiply provider usage by `n`; PR #157 already established final usage is authoritative once. Pre-call output reservation multiplies possible text output per choice, while image/message input is estimated once. | Image input with `n > 1` is supported only when both `chat_image_inputs=true` and `chat_multiple_choices=true` are set. | Keep final provider usage/cost authoritative once. |
+| Interaction with local function tools | Function tools are local/client-side intent. | SDK supports function tools with Chat Completions. | No modality-specific role change. | Model/provider support may vary. | Text streaming function tools are already supported. | Function schemas are ordinary input material; modality usage is separate. | Image input with function tools is supported only when both `chat_image_inputs=true` and `chat_function_tools=true` are set. | Keep hosted tools separate and denied unless explicitly implemented later. |
+| Interaction with non-streaming custom local tools | Custom tools are local/client-side intent. | SDK supports non-streaming custom tools and custom tool calls. | No modality-specific role change. | Model/provider support may vary. | Streaming custom tools remain unsupported. | Custom tool definitions are ordinary input material; modality usage is separate. | Image input with non-streaming custom local tools is supported only when both `chat_image_inputs=true` and `chat_custom_tools=true` are set. | Keep streaming custom tools rejected. |
 | Interaction with streaming custom local tools | Upstream stream-delta shape remains unclear in the installed SDK. | Installed SDK stream chunk tool deltas model function tools only. | Not applicable. | Not applicable. | Unsupported by SLAIF. | Not applicable. | Rejected. | Keep rejected. Do not use multimodal work to reopen streaming custom tools. |
-| Interaction with `response_format` / structured outputs | OpenAI supports response formatting for Chat Completions, but model and modality combinations can differ. | SDK supports `response_format`. | No modality-specific role change. | Structured output support is model-specific. | Text streaming with structured output is supported today; audio output plus structured output is unclear. | Structured-output schemas are ordinary input material; modality usage is separate. | Text-only structured outputs supported. Multimodal rejected. | Do not combine structured outputs with the first modality slice unless upstream docs and tests confirm the combination. |
-| Interaction with `logprobs` | Chat Completions supports text-token logprobs where model-compatible. | SDK supports `logprobs` and `top_logprobs`. | No modality-specific role change. | Model-specific. | Text streaming logprobs are represented. Audio/file/image-specific logprob meaning is not documented clearly enough for SLAIF. | Logprob data is response metadata, not a billing category. | Text-only logprobs supported. Multimodal rejected. | Keep logprobs separate from first modality enablement unless provider behavior is explicitly tested. |
+| Interaction with `response_format` / structured outputs | OpenAI supports response formatting for Chat Completions, but model and modality combinations can differ. | SDK supports `response_format`. | No modality-specific role change. | Structured output support is model-specific. | Text streaming with structured output is supported today; audio output plus structured output is unclear. | Structured-output schemas are ordinary input material; modality usage is separate. | Image input can compose with JSON mode/structured outputs only when the route enables both capabilities and the request passes caps. | Keep audio/file combinations separate. |
+| Interaction with `logprobs` | Chat Completions supports text-token logprobs where model-compatible. | SDK supports `logprobs` and `top_logprobs`. | No modality-specific role change. | Model-specific. | Text streaming logprobs are represented. Audio/file/image-specific logprob meaning is not documented clearly enough for SLAIF. | Logprob data is response metadata, not a billing category. | Image input can compose with logprobs only when the route enables both capabilities and the request passes caps. | Keep audio/file combinations separate. |
 
 ## Billing And Accounting Analysis
 
@@ -223,7 +239,8 @@ Each implementation PR should include:
 
 ## Proposed Minimal First Slice
 
-The next implementation should start with image input to text output only.
+The first implementation slice is image input to text output only and is now
+implemented behind `chat_image_inputs=true`.
 
 Reasons:
 
@@ -239,13 +256,13 @@ responses, ambiguous streaming deltas in the installed official SDK, audio-token
 pricing, output media caps, and new no-storage risks.
 
 Do not start with file input if uploaded-file ID behavior, ownership, and file
-processing costs are still ambiguous. Do not combine modalities in the first
-implementation PR.
+processing costs are still ambiguous. Do not combine additional modalities in
+the next implementation PR.
 
 ## Decision
 
-Keep Chat Completions multimodal/audio/file support disabled on current `main`.
-The upstream shapes are real enough to plan from, but SLAIF needs explicit
-capability gates, request caps, provider usage parsing, pricing/catalog support,
-accounting tests, provider adapter tests, official-client E2E coverage, and
-redaction/no-storage tests before any modality is enabled.
+Keep Chat Completions file input, audio input, audio output, image generation,
+and broader mixed-modality support disabled on current `main`. Image input to
+text output is enabled only through explicit route capability, conservative
+caps, provider usage/cost finalization, provider adapter tests,
+official-client E2E coverage, and redaction/no-storage tests.
