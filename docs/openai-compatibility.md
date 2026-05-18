@@ -111,7 +111,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
 | `prediction` | Supported as a bounded JSON object and counted as provider-context input |
 | `modalities` | Allowed only when it requests text only |
-| `audio`, image/audio/file/video message content parts | Rejected until multimodal/audio/file pricing and accounting support exists |
+| `audio`, image/audio/file/video message content parts | Rejected until multimodal/audio/file pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
 | `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
 | `background`, `store=true`, `previous_response_id`, `conversation` | Rejected; provider-side lifecycle/state features are not implemented |
 | Unknown top-level fields | Rejected in standard and trusted-calibration modes with `unknown_chat_completion_field` |
@@ -190,6 +190,15 @@ current installed official OpenAI Python SDK exposes non-streaming Chat
 Completions custom tool request/response types, but its Chat Completions stream
 chunk type only models function tool deltas. Requests with `stream=true` and
 custom tools fail before provider forwarding.
+
+Chat Completions multimodal/audio/file inputs and audio output remain
+unsupported. OpenAI and OpenRouter document image, audio, and file request
+surfaces for compatible models, but SLAIF keeps them disabled until it has
+explicit route capability flags, request-size and content-type caps, modality
+estimation, pricing/catalog support, provider usage parsing, accounting tests,
+provider adapter tests, official-client E2E coverage, and redaction/no-storage
+tests. See
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 `n > 1` is supported as bounded multiple-choice Chat Completions only when the
 resolved route explicitly sets `chat_multiple_choices=true`. The configured

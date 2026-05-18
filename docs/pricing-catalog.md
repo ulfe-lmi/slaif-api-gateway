@@ -23,6 +23,15 @@ custom tools are route-enabled. This can over-reserve, but prevents large
 tool/schema payloads from passing cost checks with a messages-only estimate.
 Successful accounting still finalizes from actual provider usage when available.
 
+Chat Completions multimodal/audio/file support remains disabled. The upstream
+investigation in
+[`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md)
+shows that image, audio, and file request shapes are documented, but bytes are
+not billable tokens. Future support needs modality-specific admission estimates,
+pricing/catalog fields where upstream pricing requires them, provider usage
+parsing, and accounting tests before those payloads can be enabled for
+cost-limited gateway keys.
+
 ## OpenRouter Price Refresh
 
 OpenRouter publishes model metadata that includes a `pricing` object with
