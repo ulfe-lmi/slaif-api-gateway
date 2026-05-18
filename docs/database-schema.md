@@ -1094,12 +1094,23 @@ custom tools, function tools, `n > 1`, or non-default service tiers. Image
 definitions are ordinary request input for admission estimates, and final
 accounting uses provider-reported usage/cost once.
 
-The current `chat_multimodal`, `chat_audio`, and `chat_file_inputs` flags remain
-false in seeded/default metadata and do not enable broader runtime support.
-Future Chat Completions multimodal work should continue to prefer explicit
-route capabilities per surface, such as file inputs, audio inputs, and audio
-outputs, before provider forwarding is enabled. The evidence and roadmap are
-documented in
+`chat_file_inputs=true` enables Chat Completions inline file input to text
+output only. It accepts bounded user-message `file` content parts with
+`filename` and inline `file_data`. Raw base64 is accepted by default; data URLs
+are accepted only when runtime settings enable them and the MIME type is
+allowlisted. File IDs and file URLs remain unsupported and do not flow upstream.
+This flag does not enable `/v1/files`, hosted file search, retrieval, code
+interpreter, audio input, audio output, image generation, hosted tools,
+MCP/connectors, custom tools, function tools, image input, `n > 1`, or
+non-default service tiers. File definitions are ordinary request input for
+admission estimates, and final accounting uses provider-reported usage/cost
+once.
+
+The current `chat_multimodal` and `chat_audio` flags remain false in
+seeded/default metadata and do not enable broader runtime support. Future Chat
+Completions multimodal work should continue to prefer explicit route
+capabilities per surface, such as audio inputs and audio outputs, before
+provider forwarding is enabled. The evidence and roadmap are documented in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 Allowed `match_type` values:

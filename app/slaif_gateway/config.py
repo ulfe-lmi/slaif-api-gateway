@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     CHAT_MAX_IMAGE_DATA_URL_BYTES: int = 10485760
     CHAT_ALLOW_IMAGE_DATA_URLS: bool = True
     CHAT_ALLOW_REMOTE_IMAGE_URLS: bool = True
+    CHAT_MAX_FILES_PER_REQUEST: int = 4
+    CHAT_MAX_FILES_PER_MESSAGE: int = 2
+    CHAT_MAX_FILE_DATA_BYTES: int = 10485760
+    CHAT_MAX_FILE_NAME_BYTES: int = 255
+    CHAT_ALLOW_FILE_DATA_URLS: bool = False
+    CHAT_ALLOW_FILE_IDS: bool = False
+    CHAT_ALLOWED_FILE_MIME_TYPES: str = "application/pdf,text/plain,text/markdown,text/csv,application/json"
+    CHAT_ALLOWED_FILE_EXTENSIONS: str = ".pdf,.txt,.md,.csv,.json"
     CHAT_MAX_TOOLS_PER_REQUEST: int = 64
     CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST: int = 16
     CHAT_MAX_FUNCTIONS_PER_REQUEST: int = 64
@@ -358,6 +366,10 @@ class Settings(BaseSettings):
             "CHAT_MAX_IMAGES_PER_MESSAGE",
             "CHAT_MAX_IMAGE_URL_BYTES",
             "CHAT_MAX_IMAGE_DATA_URL_BYTES",
+            "CHAT_MAX_FILES_PER_REQUEST",
+            "CHAT_MAX_FILES_PER_MESSAGE",
+            "CHAT_MAX_FILE_DATA_BYTES",
+            "CHAT_MAX_FILE_NAME_BYTES",
             "CHAT_MAX_TOOLS_PER_REQUEST",
             "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
             "CHAT_MAX_FUNCTIONS_PER_REQUEST",

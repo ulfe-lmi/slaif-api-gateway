@@ -272,6 +272,19 @@ def _image_message(url: str = "https://example.test/image.png") -> dict[str, obj
     }
 
 
+def _file_message(
+    file_data: str = "SGVsbG8sIGZpbGU=",
+    filename: str = "notes.txt",
+) -> dict[str, object]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "summarize this file"},
+            {"type": "file", "file": {"filename": filename, "file_data": file_data}},
+        ],
+    }
+
+
 def test_input_estimate_includes_image_url_material_without_multiplying_input_by_n() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
     text_only = policy.apply(
@@ -296,12 +309,35 @@ def test_input_estimate_includes_image_url_material_without_multiplying_input_by
     assert image_result.effective_output_tokens == 24
 
 
+def test_input_estimate_includes_file_data_without_multiplying_input_by_n() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    text_only = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "summarize this file"}],
+            "max_completion_tokens": 8,
+        }
+    )
+
+    file_result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_file_message()],
+            "max_completion_tokens": 8,
+            "n": 3,
+        }
+    )
+
+    assert file_result.estimated_input_tokens > text_only.estimated_input_tokens
+    assert file_result.effective_choice_count == 3
+    assert file_result.effective_output_tokens == 24
+
+
 @pytest.mark.parametrize(
     "part",
     [
         {"type": "input_image", "image_url": "https://example.test/image.png"},
         {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}},
-        {"type": "file", "file": {"file_id": "file_123"}},
         {"type": "video", "video": {"url": "https://example.test/video.mp4"}},
     ],
 )
@@ -363,6 +399,39 @@ def test_image_data_url_content_part_is_validated_and_preserved() -> None:
     assert result.effective_body["messages"][0]["content"][1]["image_url"]["url"] == data_url
 
 
+def test_file_content_part_with_raw_base64_is_validated_and_preserved() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_file_message()],
+        }
+    )
+
+    file_part = result.effective_body["messages"][0]["content"][1]
+    assert file_part == {
+        "type": "file",
+        "file": {"filename": "notes.txt", "file_data": "SGVsbG8sIGZpbGU="},
+    }
+
+
+def test_file_data_url_can_be_enabled_and_preserved() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_ALLOW_FILE_DATA_URLS=True)
+    )
+    data_url = "data:application/pdf;base64,SGVsbG8="
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_file_message(data_url, "notes.pdf")],
+        }
+    )
+
+    assert result.effective_body["messages"][0]["content"][1]["file"]["file_data"] == data_url
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_code", "expected_param"),
     [
@@ -387,6 +456,40 @@ def test_image_count_caps_are_enforced(
                         "content": [
                             {"type": "image_url", "image_url": {"url": "https://example.test/1.png"}},
                             {"type": "image_url", "image_url": {"url": "https://example.test/2.png"}},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param"),
+    [
+        ({"CHAT_MAX_FILES_PER_MESSAGE": 1}, "chat_file_count_exceeded", "messages[0].content"),
+        ({"CHAT_MAX_FILES_PER_REQUEST": 1}, "chat_file_count_exceeded", "messages"),
+    ],
+)
+def test_file_count_caps_are_enforced(
+    overrides: dict[str, int],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000, **overrides))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "file", "file": {"filename": "one.txt", "file_data": "T25l"}},
+                            {"type": "file", "file": {"filename": "two.txt", "file_data": "VHdv"}},
                         ],
                     }
                 ],
@@ -467,6 +570,68 @@ def test_remote_image_urls_can_be_disabled() -> None:
 
 
 @pytest.mark.parametrize(
+    ("file_data", "filename", "expected_code"),
+    [
+        ("not valid base64", "notes.txt", "chat_file_data_invalid"),
+        ("https://example.test/private.pdf?token=secret", "notes.pdf", "chat_file_url_not_supported"),
+        ("data:application/x-msdownload;base64,SGVsbG8=", "notes.pdf", "chat_file_mime_not_supported"),
+        ("SGVsbG8=", "archive.zip", "chat_file_mime_not_supported"),
+    ],
+)
+def test_invalid_file_data_shapes_are_rejected_without_raw_values(
+    file_data: str,
+    filename: str,
+    expected_code: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_ALLOW_FILE_DATA_URLS=True)
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_file_message(file_data, filename)]})
+
+    assert exc_info.value.error_code == expected_code
+    assert file_data not in exc_info.value.safe_message
+    assert filename not in exc_info.value.safe_message
+
+
+def test_file_data_url_is_disabled_by_default_without_raw_value() -> None:
+    file_data = "data:application/pdf;base64,SGVsbG8="
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_file_message(file_data, "notes.pdf")]})
+
+    assert exc_info.value.error_code == "chat_file_data_url_not_allowed"
+    assert file_data not in exc_info.value.safe_message
+
+
+def test_file_byte_caps_are_enforced_without_raw_values() -> None:
+    raw_file_data = "a" * 64
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_MAX_FILE_DATA_BYTES=32)
+    )
+
+    with pytest.raises(RequestPolicyError) as too_large:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_file_message(raw_file_data)]})
+
+    assert too_large.value.error_code == "chat_file_data_too_large"
+    assert raw_file_data not in too_large.value.safe_message
+
+    raw_filename = ("x" * 260) + ".txt"
+    with pytest.raises(RequestPolicyError) as name_too_large:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [_file_message("SGVsbG8=", raw_filename)],
+            }
+        )
+
+    assert name_too_large.value.error_code == "chat_file_name_too_large"
+    assert raw_filename not in name_too_large.value.safe_message
+
+
+@pytest.mark.parametrize(
     ("message", "expected_code", "expected_param"),
     [
         (
@@ -520,6 +685,87 @@ def test_invalid_image_part_shapes_are_rejected(
 
     assert exc_info.value.error_code == expected_code
     assert exc_info.value.param == expected_param
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_code", "expected_param", "raw_marker"),
+    [
+        (
+            {"role": "system", "content": [{"type": "file", "file": {"filename": "notes.txt", "file_data": "SGVsbG8="}}]},
+            "chat_file_part_invalid_shape",
+            "messages[0].content[0].type",
+            "notes.txt",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": "SGVsbG8="}]},
+            "chat_file_part_invalid_shape",
+            "messages[0].content[0].file",
+            "SGVsbG8=",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": {"file_id": "file-secret"}}]},
+            "chat_file_id_not_supported",
+            "messages[0].content[0].file.file_id",
+            "file-secret",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": {"file_id": None}}]},
+            "chat_file_id_not_supported",
+            "messages[0].content[0].file.file_id",
+            "file_id",
+        ),
+        (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "notes.txt",
+                            "file_data": "SGVsbG8=",
+                            "file_id": "file-secret",
+                        },
+                    }
+                ],
+            },
+            "chat_file_part_invalid_shape",
+            "messages[0].content[0].file",
+            "file-secret",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "../secret.txt", "file_data": "SGVsbG8="}}]},
+            "chat_file_name_invalid",
+            "messages[0].content[0].file.filename",
+            "../secret.txt",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "notes.txt", "file_data": "SGVsbG8=", "url": "https://example.test/private.pdf"}}]},
+            "chat_file_url_not_supported",
+            "messages[0].content[0].file.url",
+            "https://example.test/private.pdf",
+        ),
+        (
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "notes.txt", "file_data": "SGVsbG8="}, "provider_extra": True}]},
+            "chat_file_part_invalid_shape",
+            "messages[0].content[0].provider_extra",
+            "notes.txt",
+        ),
+    ],
+)
+def test_invalid_file_part_shapes_are_rejected_without_raw_values(
+    message: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+    raw_marker: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [message]})
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+    assert raw_marker not in exc_info.value.safe_message
 
 
 def test_service_does_not_mutate_original_request() -> None:

@@ -235,6 +235,16 @@ def classify_chat_completion_route_capability_requirements(
             )
         )
 
+    if _uses_file_inputs(payload):
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_FILE_INPUTS,
+                field="messages",
+                error_code="chat_file_input_capability_not_supported",
+                safe_message="This model route does not support Chat Completions file input.",
+            )
+        )
+
     if "functions" in payload or "function_call" in payload:
         findings.append(
             ChatCompletionRouteCapabilityFinding(
@@ -392,6 +402,22 @@ def _uses_image_inputs(payload: Mapping[str, Any]) -> bool:
             continue
         for part in content:
             if isinstance(part, Mapping) and part.get("type") == "image_url":
+                return True
+    return False
+
+
+def _uses_file_inputs(payload: Mapping[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "file":
                 return True
     return False
 

@@ -5,6 +5,7 @@ import pytest
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
     CHAT_CAPABILITY_CUSTOM_TOOLS,
+    CHAT_CAPABILITY_FILE_INPUTS,
     CHAT_CAPABILITY_FUNCTION_TOOLS,
     CHAT_CAPABILITY_IMAGE_INPUTS,
     CHAT_CAPABILITY_JSON_MODE,
@@ -298,6 +299,139 @@ def test_text_only_request_does_not_require_image_capability() -> None:
     enforce_chat_completion_route_capabilities(
         _payload(),
         route_capabilities=_caps(**{CHAT_CAPABILITY_IMAGE_INPUTS: False}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def _file_payload(**overrides: object) -> dict[str, object]:
+    body = _payload(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {
+                        "type": "file",
+                        "file": {"filename": "notes.txt", "file_data": "SGVsbG8="},
+                    },
+                ],
+            }
+        ]
+    )
+    body.update(overrides)
+    return body
+
+
+def test_file_input_requires_explicit_file_capability_without_payload_leakage() -> None:
+    raw_file_data = "c2VjcmV0IGZpbGUgcGF5bG9hZA=="
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "file",
+                                "file": {"filename": "secret.txt", "file_data": raw_file_data},
+                            }
+                        ],
+                    }
+                ]
+            ),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert absent_exc.value.error_code == "chat_file_input_capability_not_supported"
+    assert absent_exc.value.param == "messages"
+    assert raw_file_data not in absent_exc.value.safe_message
+    assert "secret.txt" not in absent_exc.value.safe_message
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _file_payload(),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_FILE_INPUTS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert false_exc.value.error_code == "chat_file_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _file_payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_FILE_INPUTS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_text_only_request_does_not_require_file_capability() -> None:
+    enforce_chat_completion_route_capabilities(
+        _payload(),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_FILE_INPUTS: False}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
+
+
+def test_file_input_with_image_function_custom_and_n_requires_all_capabilities() -> None:
+    payload = _file_payload(
+        n=2,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/image.png"},
+                    },
+                    {
+                        "type": "file",
+                        "file": {"filename": "notes.txt", "file_data": "SGVsbG8="},
+                    },
+                ],
+            }
+        ],
+        tools=[
+            {"type": "function", "function": {"name": "lookup"}},
+            {"type": "custom", "custom": {"name": "run_shell"}},
+        ],
+    )
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as file_exc:
+        enforce_chat_completion_route_capabilities(
+            payload,
+            route_capabilities=_caps(
+                **{
+                    CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                    CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                    CHAT_CAPABILITY_FUNCTION_TOOLS: True,
+                    CHAT_CAPABILITY_CUSTOM_TOOLS: True,
+                    CHAT_CAPABILITY_FILE_INPUTS: False,
+                }
+            ),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert file_exc.value.error_code == "chat_file_input_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        payload,
+        route_capabilities=_caps(
+            **{
+                CHAT_CAPABILITY_IMAGE_INPUTS: True,
+                CHAT_CAPABILITY_MULTIPLE_CHOICES: True,
+                CHAT_CAPABILITY_FUNCTION_TOOLS: True,
+                CHAT_CAPABILITY_CUSTOM_TOOLS: True,
+                CHAT_CAPABILITY_FILE_INPUTS: True,
+            }
+        ),
         route_supports_streaming=True,
         requested_model="gpt-4.1-mini",
     )

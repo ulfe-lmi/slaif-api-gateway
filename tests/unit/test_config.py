@@ -46,6 +46,14 @@ def _clear_env(monkeypatch) -> None:
         "CHAT_MAX_IMAGE_DATA_URL_BYTES",
         "CHAT_ALLOW_IMAGE_DATA_URLS",
         "CHAT_ALLOW_REMOTE_IMAGE_URLS",
+        "CHAT_MAX_FILES_PER_REQUEST",
+        "CHAT_MAX_FILES_PER_MESSAGE",
+        "CHAT_MAX_FILE_DATA_BYTES",
+        "CHAT_MAX_FILE_NAME_BYTES",
+        "CHAT_ALLOW_FILE_DATA_URLS",
+        "CHAT_ALLOW_FILE_IDS",
+        "CHAT_ALLOWED_FILE_MIME_TYPES",
+        "CHAT_ALLOWED_FILE_EXTENSIONS",
         "CHAT_MAX_TOOLS_PER_REQUEST",
         "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
         "CHAT_MAX_FUNCTIONS_PER_REQUEST",
@@ -179,6 +187,16 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.CHAT_MAX_IMAGE_DATA_URL_BYTES == 10485760
     assert settings.CHAT_ALLOW_IMAGE_DATA_URLS is True
     assert settings.CHAT_ALLOW_REMOTE_IMAGE_URLS is True
+    assert settings.CHAT_MAX_FILES_PER_REQUEST == 4
+    assert settings.CHAT_MAX_FILES_PER_MESSAGE == 2
+    assert settings.CHAT_MAX_FILE_DATA_BYTES == 10485760
+    assert settings.CHAT_MAX_FILE_NAME_BYTES == 255
+    assert settings.CHAT_ALLOW_FILE_DATA_URLS is False
+    assert settings.CHAT_ALLOW_FILE_IDS is False
+    assert settings.CHAT_ALLOWED_FILE_MIME_TYPES == (
+        "application/pdf,text/plain,text/markdown,text/csv,application/json"
+    )
+    assert settings.CHAT_ALLOWED_FILE_EXTENSIONS == ".pdf,.txt,.md,.csv,.json"
     assert settings.CHAT_MAX_TOOLS_PER_REQUEST == 64
     assert settings.CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST == 16
     assert settings.CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES == 65536
@@ -719,6 +737,10 @@ def test_invalid_zero_or_negative_caps_fail(monkeypatch) -> None:
         ("CHAT_MAX_IMAGES_PER_MESSAGE", "0"),
         ("CHAT_MAX_IMAGE_URL_BYTES", "0"),
         ("CHAT_MAX_IMAGE_DATA_URL_BYTES", "0"),
+        ("CHAT_MAX_FILES_PER_REQUEST", "0"),
+        ("CHAT_MAX_FILES_PER_MESSAGE", "0"),
+        ("CHAT_MAX_FILE_DATA_BYTES", "0"),
+        ("CHAT_MAX_FILE_NAME_BYTES", "0"),
         ("CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST", "0"),
         ("CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES", "-1"),
         ("CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES", "-1"),

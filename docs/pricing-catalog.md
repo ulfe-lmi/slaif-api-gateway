@@ -28,10 +28,22 @@ route capability and request caps. Image URL/data URL wrapper text is included
 in the ordinary message input estimate, but SLAIF does not treat image bytes as
 invoice-grade billable tokens and does not infer exact final image cost from
 URL or base64 size. Successful accounting still finalizes from provider
-usage/cost. The upstream investigation in
+usage/cost.
+
+Chat Completions inline file input to text output is enabled only behind
+explicit route capability and request caps. The file content-part wrapper,
+filename, and inline `file_data` string are included in the ordinary message
+input estimate, but SLAIF does not treat file bytes as invoice-grade billable
+tokens and does not infer exact final file cost from base64 size. File IDs and
+file URLs are rejected in this slice. Successful accounting still finalizes
+from provider usage/cost, and OpenRouter provider-reported cost is not
+multiplied by file count or `n`.
+
+The upstream investigation in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md)
-shows that audio and file request shapes are documented, but bytes are not
-billable tokens. Future audio/file support needs modality-specific admission
+shows that audio request shapes and broader file modes are documented, but
+bytes are not billable tokens. Future audio/file-ID/file-URL support needs
+modality-specific admission
 estimates, pricing/catalog fields where upstream pricing requires them,
 provider usage parsing, and accounting tests before those payloads can be
 enabled for cost-limited gateway keys.

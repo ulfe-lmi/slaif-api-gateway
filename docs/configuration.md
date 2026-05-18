@@ -344,6 +344,14 @@ forwarding. Defaults:
 | `CHAT_MAX_IMAGE_DATA_URL_BYTES` | `10485760` | One base64 image data URL |
 | `CHAT_ALLOW_IMAGE_DATA_URLS` | `true` | Whether `data:image/...;base64,...` image URLs are accepted when route capability allows image input |
 | `CHAT_ALLOW_REMOTE_IMAGE_URLS` | `true` | Whether `http`/`https` image URLs are accepted when route capability allows image input |
+| `CHAT_MAX_FILES_PER_REQUEST` | `4` | Inline file content parts in one request |
+| `CHAT_MAX_FILES_PER_MESSAGE` | `2` | Inline file content parts in one message |
+| `CHAT_MAX_FILE_DATA_BYTES` | `10485760` | One `file.file_data` string, including any data-URL wrapper |
+| `CHAT_MAX_FILE_NAME_BYTES` | `255` | One inline file `filename` |
+| `CHAT_ALLOW_FILE_DATA_URLS` | `false` | Whether `data:<mime>;base64,...` file data URLs are accepted; raw base64 is accepted by default |
+| `CHAT_ALLOW_FILE_IDS` | `false` | Reserved for a future Files API ownership policy; file IDs are rejected in this release |
+| `CHAT_ALLOWED_FILE_MIME_TYPES` | `application/pdf,text/plain,text/markdown,text/csv,application/json` | Data-URL MIME allowlist for inline file inputs |
+| `CHAT_ALLOWED_FILE_EXTENSIONS` | `.pdf,.txt,.md,.csv,.json` | Filename extension allowlist for inline file inputs |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
 | `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
@@ -367,11 +375,13 @@ forwarding. Defaults:
 | `CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES` | `4096` | Custom tool description |
 
 Image input to text output is enabled only when the resolved route explicitly
-sets `chat_image_inputs=true`. The image caps above bound request shape before
-provider forwarding. SLAIF does not fetch remote image URLs, decode image
-pixels, or infer final image billing from URL/base64 byte size; final accounting
-continues to use provider usage/cost. File input, audio input, and audio output
-remain unsupported.
+sets `chat_image_inputs=true`. Inline file input to text output is enabled only
+when the route sets `chat_file_inputs=true`. The image/file caps above bound
+request shape before provider forwarding. SLAIF does not fetch remote image
+URLs, fetch file URLs, upload files upstream, decode media payloads, store/log
+image or file payloads, or infer final image/file billing from URL/base64 byte
+size; final accounting continues to use provider usage/cost. File IDs, file
+URLs, audio input, and audio output remain unsupported.
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
