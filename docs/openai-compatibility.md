@@ -92,27 +92,31 @@ every top-level Chat Completions field through a fail-closed registry.
 | Field or feature | Current behavior |
 | --- | --- |
 | `model` | Supported; route resolution later replaces it upstream with the resolved model |
-| `messages` | Supported for string content and text content parts; prompts/messages are not stored |
+| `messages` | Supported for string content and text content parts within configured count/byte caps; prompts/messages are not stored |
 | `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
 | `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
-| `tools` with `type=function` | Supported local/client-side tool intent; schemas are forwarded and counted for input estimation |
+| `tools` with `type=function` | Supported local/client-side tool intent within configured count/name/description/schema caps; schemas are forwarded and counted for input estimation |
 | `tools` with `type=custom` | Rejected as unsupported until custom-tool forwarding, sizing, and accounting are explicitly implemented |
-| `functions` / `function_call` | Supported legacy local function fields and counted for input estimation |
-| `tool_choice` | Supported for local function choices; hosted/provider-side forced choices are rejected |
-| `response_format` | Supported response-shaping field; JSON schemas are counted for input estimation |
-| `metadata` | Supported only as a JSON object within the gateway size cap; forwarded but not stored wholesale |
+| `functions` / `function_call` | Supported legacy local function fields within equivalent caps and counted for input estimation |
+| `tool_choice` | Supported for local function choices within configured name/shape caps; hosted/provider-side forced choices are rejected |
+| `response_format` | Supported response-shaping field; `text`, `json_object`, and bounded `json_schema` shapes are accepted and counted |
+| `metadata` | Supported only as a JSON object within configured key/count/byte caps; forwarded but not stored wholesale |
 | `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
-| `prediction` | Supported and counted as a provider-context object when object-shaped |
+| `prediction` | Supported as a bounded JSON object and counted as provider-context input |
 | `modalities` | Allowed only when it requests text only |
 | `audio`, image/audio/file/video message content parts | Rejected until multimodal/audio/file pricing and accounting support exists |
 | `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
 | `background`, `store=true`, `previous_response_id`, `conversation` | Rejected; provider-side lifecycle/state features are not implemented |
 | Unknown top-level fields | Rejected in standard and trusted-calibration modes with `unknown_chat_completion_field` |
 
-Current request policy also rejects malformed `messages`, invalid output-token
-controls, input estimates over the configured hard input cap, non-object
-`stream_options` when `stream=true`, and Chat Completions `n` values other than
-integer `1`.
+Current request policy also rejects malformed or empty `messages`, too many or
+oversized messages/text parts, invalid scalar controls, invalid output-token
+controls, input estimates over the configured hard input cap, non-object or
+oversized `stream_options`, overlarge `stop`, `user`, `logit_bias`,
+`metadata`, `prediction`, function-tool schema, and `response_format` schema
+payloads, and Chat Completions `n` values other than integer `1`. Rejection
+messages name the field and problem without echoing raw messages, metadata
+values, schemas, tool payloads, or request bodies.
 
 Current Chat Completions capability policy allows local/client-side function
 tools, legacy `functions` / `function_call`, `response_format`, JSON mode, and
@@ -141,14 +145,13 @@ Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
 object/list fields such as `tools`, legacy `functions`, object-shaped
 `tool_choice` / `function_call`, `response_format` JSON schemas,
-`prediction`, `metadata`, and `stream_options`. Rejected unknown fields do not
-reach estimation or provider forwarding. Very large
-tool/function/schema payloads may be rejected before Redis rate limiting, route
-resolution, pricing lookup, PostgreSQL quota reservation, or provider calls when
-the hard input cap is exceeded. The estimate is intentionally conservative and
-may over-reserve; successful accounting still finalizes from actual provider
-usage when available. This is Chat Completions remediation and does not
-implement the Responses API.
+`prediction`, `metadata`, `logit_bias`, and `stream_options`. Rejected unknown
+or over-cap fields do not reach estimation or provider forwarding. Very large
+tool/function/schema payloads may be rejected by explicit per-field caps before
+the broader hard input-token cap is evaluated. The estimate is intentionally
+conservative and may over-reserve; successful accounting still finalizes from
+actual provider usage when available. This is Chat Completions remediation and
+does not implement the Responses API.
 
 `n > 1` is intentionally rejected for now. Multi-choice Chat Completions can produce multiple choices and require choice-aware quota reservation, cost estimation, and final usage validation. The gateway does not silently clamp or drop `n`; future support requires multiplying reservation and cost policy by the requested choice count and validating provider final-usage semantics.
 

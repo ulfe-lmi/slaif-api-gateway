@@ -17,8 +17,6 @@ from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidOutputTokenLimitError,
-    InvalidChoiceCountError,
-    InvalidStreamOptionsError,
     OutputTokenLimitExceededError,
     RequestPolicyError,
 )
@@ -277,7 +275,7 @@ def test_input_estimate_handles_text_content_blocks() -> None:
 def test_non_text_message_content_parts_are_rejected(part: dict[str, object]) -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=1000))
 
-    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
                 "model": "gpt-4.1-mini",
@@ -310,7 +308,7 @@ def test_unknown_extra_field_is_rejected_without_mutating_original() -> None:
     }
     body = copy.deepcopy(original)
 
-    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(body)
 
     assert exc_info.value.error_code == "unknown_chat_completion_field"
@@ -384,6 +382,319 @@ def test_known_supported_fields_are_preserved_and_classified() -> None:
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "expected_code"),
+    [
+        ("temperature", -0.1, "chat_field_value_out_of_range"),
+        ("temperature", True, "chat_field_invalid_type"),
+        ("top_p", 1.1, "chat_field_value_out_of_range"),
+        ("presence_penalty", -2.1, "chat_field_value_out_of_range"),
+        ("frequency_penalty", 2.1, "chat_field_value_out_of_range"),
+        ("stream", "true", "chat_field_invalid_type"),
+        ("logprobs", "true", "chat_field_invalid_type"),
+        ("parallel_tool_calls", 1, "chat_field_invalid_type"),
+        ("seed", 1.5, "chat_field_invalid_type"),
+        ("reasoning_effort", "extreme", "chat_field_value_out_of_range"),
+    ],
+)
+def test_scalar_field_validation_rejects_invalid_values(
+    field: str,
+    value: object,
+    expected_code: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                field: value,
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == field
+
+
+@pytest.mark.parametrize("value", [-101, 101, True, "1"])
+def test_logit_bias_values_are_validated_without_echoing_values(value: object) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "logit_bias": {"123": value},
+            }
+        )
+
+    assert exc_info.value.param == "logit_bias"
+    assert "123" not in exc_info.value.safe_message
+
+
+def test_top_logprobs_requires_logprobs_true() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "top_logprobs": 2,
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_field_value_out_of_range"
+    assert exc_info.value.param == "top_logprobs"
+
+
+def test_message_count_and_content_caps_are_enforced_without_echoing_content() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_MESSAGES_PER_REQUEST=1,
+            CHAT_MAX_MESSAGE_CONTENT_BYTES=8,
+        )
+    )
+    raw_content = "raw prompt marker"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": raw_content}],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_field_too_large"
+    assert raw_content not in exc_info.value.safe_message
+
+    with pytest.raises(RequestPolicyError) as count_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "ok"},
+                ],
+            }
+        )
+
+    assert count_exc.value.error_code == "chat_message_limit_exceeded"
+
+
+def test_text_content_part_count_is_capped() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_TEXT_PARTS_PER_MESSAGE=1,
+        )
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "one"},
+                            {"type": "text", "text": "two"},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_field_too_many_items"
+
+
+def test_tool_count_and_schema_caps_are_enforced_without_echoing_schema() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_TOOLS_PER_REQUEST=1,
+            CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES=40,
+        )
+    )
+    raw_schema_marker = "raw schema marker"
+
+    with pytest.raises(RequestPolicyError) as schema_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"description": raw_schema_marker * 4}
+                                },
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+    assert schema_exc.value.error_code == "chat_tool_schema_too_large"
+    assert raw_schema_marker not in schema_exc.value.safe_message
+
+    with pytest.raises(RequestPolicyError) as count_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {"type": "function", "function": {"name": "one"}},
+                    {"type": "function", "function": {"name": "two"}},
+                ],
+            }
+        )
+
+    assert count_exc.value.error_code == "chat_tool_count_exceeded"
+
+
+def test_function_tool_name_and_description_caps_are_enforced() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_TOOL_NAME_BYTES=4,
+            CHAT_MAX_TOOL_DESCRIPTION_BYTES=8,
+        )
+    )
+
+    with pytest.raises(RequestPolicyError) as name_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "tool_name"}}],
+            }
+        )
+
+    assert name_exc.value.param == "tools[0].function.name"
+    assert name_exc.value.error_code == "chat_field_too_large"
+
+
+def test_legacy_functions_receive_equivalent_caps() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_FUNCTIONS_PER_REQUEST=1,
+        )
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "functions": [{"name": "one"}, {"name": "two"}],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_tool_count_exceeded"
+
+
+def test_response_format_metadata_prediction_stop_user_and_stream_options_caps() -> None:
+    raw_marker = "raw metadata marker"
+    cases = [
+        (
+            {"response_format": {"type": "json_schema", "json_schema": {"schema": {"x": raw_marker * 20}}}},
+            "chat_response_format_schema_too_large",
+            "response_format.json_schema",
+            {"CHAT_MAX_RESPONSE_FORMAT_SCHEMA_BYTES": 40},
+        ),
+        (
+            {"metadata": {"safe": raw_marker * 20}},
+            "chat_metadata_too_large",
+            "metadata",
+            {"CHAT_MAX_METADATA_BYTES": 40},
+        ),
+        (
+            {"prediction": {"type": "content", "content": raw_marker * 20}},
+            "chat_field_too_large",
+            "prediction",
+            {"CHAT_MAX_PREDICTION_BYTES": 40},
+        ),
+        (
+            {"stop": ["a", "b"]},
+            "chat_stop_sequence_limit_exceeded",
+            "stop",
+            {"CHAT_MAX_STOP_SEQUENCES": 1},
+        ),
+        (
+            {"user": raw_marker},
+            "chat_field_too_large",
+            "user",
+            {"CHAT_MAX_USER_FIELD_BYTES": 4},
+        ),
+        (
+            {"stream_options": {"raw": raw_marker * 20}},
+            "chat_field_too_large",
+            "stream_options",
+            {"CHAT_MAX_STREAM_OPTIONS_BYTES": 40},
+        ),
+    ]
+
+    for overrides, expected_code, expected_param, settings_overrides in cases:
+        policy = ChatCompletionRequestPolicy(
+            _settings(HARD_MAX_INPUT_TOKENS=5000, **settings_overrides)
+        )
+        with pytest.raises(RequestPolicyError) as exc_info:
+            policy.apply(
+                {
+                    "model": "gpt-4.1-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    **overrides,
+                }
+            )
+
+        assert exc_info.value.error_code == expected_code
+        assert exc_info.value.param == expected_param
+        assert raw_marker not in exc_info.value.safe_message
+
+
+def test_metadata_key_caps_and_string_key_policy() -> None:
+    policy = ChatCompletionRequestPolicy(
+        _settings(
+            HARD_MAX_INPUT_TOKENS=5000,
+            CHAT_MAX_METADATA_KEYS=1,
+            CHAT_MAX_METADATA_KEY_BYTES=4,
+        )
+    )
+
+    with pytest.raises(RequestPolicyError) as count_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"one": "1", "two": "2"},
+            }
+        )
+
+    assert count_exc.value.error_code == "chat_field_too_many_items"
+
+    with pytest.raises(RequestPolicyError) as key_exc:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"long_key": "1"},
+            }
+        )
+
+    assert key_exc.value.error_code == "chat_field_too_large"
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("x_future_object", {"feature": "raw future value"}),
@@ -394,7 +705,7 @@ def test_known_supported_fields_are_preserved_and_classified() -> None:
 def test_unknown_top_level_fields_are_rejected(field: str, value: object) -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
 
-    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
                 "model": "gpt-4.1-mini",
@@ -662,8 +973,8 @@ def test_trusted_calibration_still_rejects_unknown_top_level_fields() -> None:
         ({"modalities": ["text", "audio"]}, "unsupported_chat_completion_modality", "modalities"),
         ({"audio": {"voice": "alloy"}}, "unsupported_chat_completion_modality", "audio"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
-        ({"metadata": ["not", "object"]}, "invalid_chat_completion_metadata", "metadata"),
-        ({"metadata": {"too_large": "x" * 9000}}, "chat_completion_metadata_too_large", "metadata"),
+        ({"metadata": ["not", "object"]}, "chat_field_invalid_type", "metadata"),
+        ({"metadata": {"too_large": "x" * 20000}}, "chat_metadata_too_large", "metadata"),
     ],
 )
 def test_field_registry_rejects_explicit_unsupported_fields(
@@ -673,7 +984,7 @@ def test_field_registry_rejects_explicit_unsupported_fields(
 ) -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=20000))
 
-    with pytest.raises(ChatCompletionFieldPolicyError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
                 "model": "gpt-4.1-mini",
@@ -724,7 +1035,7 @@ def test_invalid_choice_count_is_rejected_without_mutating_original(value: objec
     }
     original = copy.deepcopy(body)
 
-    with pytest.raises(InvalidChoiceCountError) as exc_info:
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(body)
 
     assert exc_info.value.param == "n"
@@ -780,7 +1091,7 @@ def test_streaming_policy_injects_include_usage_when_missing() -> None:
 def test_streaming_policy_rejects_non_object_stream_options() -> None:
     policy = ChatCompletionRequestPolicy(_settings())
 
-    with pytest.raises(InvalidStreamOptionsError):
+    with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
                 "model": "gpt-4.1-mini",
@@ -789,6 +1100,7 @@ def test_streaming_policy_rejects_non_object_stream_options() -> None:
                 "stream_options": "include_usage",
             }
         )
+    assert exc_info.value.error_code == "invalid_stream_options"
 
 
 def test_policy_service_safety_constraints() -> None:

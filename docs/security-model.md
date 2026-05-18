@@ -74,6 +74,18 @@ custom tools, non-default `service_tier`, audio/image/file/video content,
 provider-side lifecycle/state fields, and other unclassified feature-bearing
 fields until pricing, accounting, forwarding, and tests exist.
 
+Supported Chat Completions fields are validated against explicit type, range,
+count, and byte caps before Redis rate limiting, route resolution, pricing
+lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
+forwarding. The cap layer keeps local function tools allowed but bounds tool
+count, function name and description length, per-tool schema size, and total
+schema size. It also bounds message count/content, text parts,
+`response_format` schemas, `metadata`, `prediction`, `stream_options`, `stop`,
+`user`, and `logit_bias`. Errors name the field and policy problem without
+logging or returning raw messages, prompt content, metadata values, schemas,
+tool arguments, provider keys, gateway keys, cookies, sessions, CSRF tokens,
+encrypted payloads, or nonces.
+
 Hosted/provider-side tools are denied by default because no persisted per-key
 hosted-tool policy exists. Chat Completions requests with `web_search_options`,
 `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
@@ -243,8 +255,9 @@ provider forwarding. The estimate includes message content plus conservative
 canonical JSON byte-size upper bounds for serialized non-message object/list
 fields that are forwarded to providers, including `tools`, `functions`,
 object-shaped `tool_choice` / `function_call`, `response_format` JSON schemas,
-`prediction`, `metadata`, and `stream_options`. Unknown top-level fields are
-rejected before this estimation step and are not forwarded.
+`prediction`, `metadata`, `logit_bias`, and `stream_options`. Unknown top-level
+fields and over-cap fields are rejected before this estimation step and are not
+forwarded.
 
 Large tool/function/schema payloads may be rejected before provider calls. The
 estimator stores and exposes only safe count metadata such as token estimate,

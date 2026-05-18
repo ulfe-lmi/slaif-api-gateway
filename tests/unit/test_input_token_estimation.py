@@ -97,6 +97,25 @@ def test_functions_contribute_non_message_estimate() -> None:
     assert estimate.counted_fields == ("functions",)
 
 
+def test_logit_bias_and_response_shaping_objects_contribute_non_message_estimate() -> None:
+    body = {
+        "model": "gpt-4.1-mini",
+        "messages": _messages(),
+        "logit_bias": {"123": -1},
+        "response_format": {"type": "json_object"},
+        "stream_options": {"include_usage": True},
+    }
+
+    estimate = estimate_non_message_input_tokens(body)
+
+    assert estimate.counted_fields == ("logit_bias", "response_format", "stream_options")
+    assert estimate.input_tokens_estimate == (
+        len(canonical_json_bytes({"logit_bias": body["logit_bias"]}))
+        + len(canonical_json_bytes({"response_format": body["response_format"]}))
+        + len(canonical_json_bytes({"stream_options": body["stream_options"]}))
+    )
+
+
 def test_unknown_extra_object_and_list_passthrough_fields_are_counted() -> None:
     body = {
         "model": "gpt-4.1-mini",

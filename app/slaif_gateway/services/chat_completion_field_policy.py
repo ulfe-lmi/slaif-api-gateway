@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -12,9 +11,6 @@ from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
 )
 from slaif_gateway.services.policy_errors import RequestPolicyError
-
-METADATA_MAX_BYTES = 8192
-
 
 class ChatCompletionFieldClassification(StrEnum):
     """Registry buckets for top-level Chat Completions request fields."""
@@ -37,6 +33,7 @@ CHAT_COMPLETION_FIELD_REGISTRY: dict[str, ChatCompletionFieldClassification] = {
     "stop": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "seed": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "user": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
+    "logit_bias": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "logprobs": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "top_logprobs": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "presence_penalty": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
@@ -231,9 +228,6 @@ def _finding_for_known_field(
     if field_name == "service_tier":
         return _service_tier_finding(value, classification=classification)
 
-    if field_name == "metadata":
-        return _metadata_finding(value, classification=classification)
-
     if field_name == "tools":
         return _tools_finding(value, classification=classification)
 
@@ -281,45 +275,6 @@ def _service_tier_finding(
             "gateway pricing is not service-tier aware."
         ),
     )
-
-
-def _metadata_finding(
-    value: Any,
-    *,
-    classification: ChatCompletionFieldClassification,
-) -> ChatCompletionFieldFinding | None:
-    if not isinstance(value, Mapping):
-        return ChatCompletionFieldFinding(
-            rejected_field="metadata",
-            classification=classification,
-            error_code="invalid_chat_completion_metadata",
-            safe_message="The 'metadata' field must be a JSON object.",
-        )
-    try:
-        serialized = json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    except (TypeError, ValueError):
-        return ChatCompletionFieldFinding(
-            rejected_field="metadata",
-            classification=classification,
-            error_code="invalid_chat_completion_metadata",
-            safe_message="The 'metadata' field must be JSON-serializable.",
-        )
-    if len(serialized.encode("utf-8")) > METADATA_MAX_BYTES:
-        return ChatCompletionFieldFinding(
-            rejected_field="metadata",
-            classification=classification,
-            error_code="chat_completion_metadata_too_large",
-            safe_message=(
-                "The 'metadata' field exceeds the gateway size limit for "
-                "Chat Completions metadata."
-            ),
-        )
-    return None
 
 
 def _tools_finding(

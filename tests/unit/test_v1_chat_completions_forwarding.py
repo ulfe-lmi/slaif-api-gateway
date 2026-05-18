@@ -306,6 +306,7 @@ def test_nonstreaming_request_preserves_openai_sdk_fields_to_upstream(
         "response_format": {"type": "json_object"},
         "seed": 123,
         "user": "student-1",
+        "logit_bias": {"123": -1},
         "logprobs": True,
         "top_logprobs": 2,
         "presence_penalty": 0.1,

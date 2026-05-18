@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     DEFAULT_MAX_OUTPUT_TOKENS: int = 1024
     HARD_MAX_OUTPUT_TOKENS: int = 4096
     HARD_MAX_INPUT_TOKENS: int = 128000
+    CHAT_MAX_MESSAGES_PER_REQUEST: int = 128
+    CHAT_MAX_MESSAGE_CONTENT_BYTES: int = 262144
+    CHAT_MAX_TEXT_PARTS_PER_MESSAGE: int = 64
+    CHAT_MAX_TOOLS_PER_REQUEST: int = 64
+    CHAT_MAX_FUNCTIONS_PER_REQUEST: int = 64
+    CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES: int = 65536
+    CHAT_MAX_TOTAL_TOOL_SCHEMA_BYTES: int = 262144
+    CHAT_MAX_RESPONSE_FORMAT_SCHEMA_BYTES: int = 65536
+    CHAT_MAX_METADATA_BYTES: int = 16384
+    CHAT_MAX_METADATA_KEYS: int = 32
+    CHAT_MAX_STOP_SEQUENCES: int = 4
+    CHAT_MAX_STOP_SEQUENCE_BYTES: int = 1024
+    CHAT_MAX_USER_FIELD_BYTES: int = 1024
+    CHAT_MAX_PREDICTION_BYTES: int = 65536
+    CHAT_MAX_STREAM_OPTIONS_BYTES: int = 8192
+    CHAT_MAX_LOGIT_BIAS_BYTES: int = 16384
+    CHAT_MAX_TOOL_NAME_BYTES: int = 128
+    CHAT_MAX_TOOL_DESCRIPTION_BYTES: int = 4096
+    CHAT_MAX_METADATA_KEY_BYTES: int = 128
     CALIBRATION_KEYS_ENABLED: bool = True
     TRUSTED_CALIBRATION_MAX_REQUESTS: int = 10
     TRUSTED_CALIBRATION_MAX_VALID_DAYS: int = 7
@@ -315,12 +334,32 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_SESSION_COOKIE_SECURE must be true in production when SameSite=None")
 
     def _validate_request_caps(self) -> None:
-        if self.DEFAULT_MAX_OUTPUT_TOKENS <= 0:
-            raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be a positive integer")
-        if self.HARD_MAX_OUTPUT_TOKENS <= 0:
-            raise ValueError("HARD_MAX_OUTPUT_TOKENS must be a positive integer")
-        if self.HARD_MAX_INPUT_TOKENS <= 0:
-            raise ValueError("HARD_MAX_INPUT_TOKENS must be a positive integer")
+        for name in (
+            "DEFAULT_MAX_OUTPUT_TOKENS",
+            "HARD_MAX_OUTPUT_TOKENS",
+            "HARD_MAX_INPUT_TOKENS",
+            "CHAT_MAX_MESSAGES_PER_REQUEST",
+            "CHAT_MAX_MESSAGE_CONTENT_BYTES",
+            "CHAT_MAX_TEXT_PARTS_PER_MESSAGE",
+            "CHAT_MAX_TOOLS_PER_REQUEST",
+            "CHAT_MAX_FUNCTIONS_PER_REQUEST",
+            "CHAT_MAX_SINGLE_TOOL_SCHEMA_BYTES",
+            "CHAT_MAX_TOTAL_TOOL_SCHEMA_BYTES",
+            "CHAT_MAX_RESPONSE_FORMAT_SCHEMA_BYTES",
+            "CHAT_MAX_METADATA_BYTES",
+            "CHAT_MAX_METADATA_KEYS",
+            "CHAT_MAX_STOP_SEQUENCES",
+            "CHAT_MAX_STOP_SEQUENCE_BYTES",
+            "CHAT_MAX_USER_FIELD_BYTES",
+            "CHAT_MAX_PREDICTION_BYTES",
+            "CHAT_MAX_STREAM_OPTIONS_BYTES",
+            "CHAT_MAX_LOGIT_BIAS_BYTES",
+            "CHAT_MAX_TOOL_NAME_BYTES",
+            "CHAT_MAX_TOOL_DESCRIPTION_BYTES",
+            "CHAT_MAX_METADATA_KEY_BYTES",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
 

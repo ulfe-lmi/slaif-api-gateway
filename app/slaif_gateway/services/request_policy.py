@@ -11,6 +11,9 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.services.chat_completion_field_policy import (
     enforce_chat_completion_field_policy,
 )
+from slaif_gateway.services.chat_completion_request_caps import (
+    enforce_chat_completion_request_caps,
+)
 from slaif_gateway.services.hosted_tool_policy import enforce_chat_completion_capability_policy
 from slaif_gateway.services.input_token_estimation import estimate_chat_completion_input_tokens
 from slaif_gateway.services.policy_errors import (
@@ -43,6 +46,7 @@ class ChatCompletionRequestPolicy:
             effective_body,
             capability_policy_mode=capability_policy_mode,
         )
+        enforce_chat_completion_request_caps(effective_body, settings=self._settings)
         self._validate_choice_count(effective_body.get("n"))
         messages = self._validate_messages(effective_body.get("messages"))
 
