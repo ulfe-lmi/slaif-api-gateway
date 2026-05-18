@@ -64,12 +64,13 @@ explicit route capability and ordinary token accounting, while hosted/provider-s
 `web_search_options`, search-specific models, `background=true`, and
 `external_web_access` are denied before provider forwarding. A Chat Completions
 field registry also rejects unknown top-level fields, non-default service
-tiers, streaming custom tools, and unsupported audio/broader multimodal content
-until those features have explicit policy, pricing/accounting, forwarding, and
-tests. Chat Completions image input and inline file input to text output are
-separate route-enabled request-input features and do not implement image
-generation, `/v1/files`, hosted file search, retrieval, or any Responses
-behavior. Chat Completions multiple choices are a separate bounded
+tiers, streaming custom tools, audio output, and unsupported broader multimodal
+media-response content until those features have explicit policy,
+pricing/accounting, forwarding, and tests. Chat Completions image input, inline
+file input, and audio input to text output are separate route-enabled
+request-input features and do not implement image generation, `/v1/files`,
+hosted file search, retrieval, `/v1/audio/*`, Realtime, audio output, or any
+Responses behavior. Chat Completions multiple choices are a separate bounded
 request-shape feature that requires explicit `chat_multiple_choices` route
 metadata and does not implement or imply any Responses behavior. This hardening
 does not implement `/v1/responses`.

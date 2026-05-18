@@ -352,6 +352,11 @@ forwarding. Defaults:
 | `CHAT_ALLOW_FILE_IDS` | `false` | Reserved for a future Files API ownership policy; file IDs are rejected in this release |
 | `CHAT_ALLOWED_FILE_MIME_TYPES` | `application/pdf,text/plain,text/markdown,text/csv,application/json` | Data-URL MIME allowlist for inline file inputs |
 | `CHAT_ALLOWED_FILE_EXTENSIONS` | `.pdf,.txt,.md,.csv,.json` | Filename extension allowlist for inline file inputs |
+| `CHAT_MAX_AUDIO_INPUTS_PER_REQUEST` | `4` | Audio input content parts in one request |
+| `CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE` | `2` | Audio input content parts in one message |
+| `CHAT_MAX_AUDIO_INPUT_DATA_BYTES` | `10485760` | One `input_audio.data` base64 string |
+| `CHAT_ALLOWED_AUDIO_INPUT_FORMATS` | `wav,mp3` | Allowed `input_audio.format` values |
+| `CHAT_ALLOW_AUDIO_INPUT_DATA_URLS` | `false` | Reserved for future policy; audio input data URLs are not accepted by default |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
 | `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
@@ -376,12 +381,15 @@ forwarding. Defaults:
 
 Image input to text output is enabled only when the resolved route explicitly
 sets `chat_image_inputs=true`. Inline file input to text output is enabled only
-when the route sets `chat_file_inputs=true`. The image/file caps above bound
-request shape before provider forwarding. SLAIF does not fetch remote image
-URLs, fetch file URLs, upload files upstream, decode media payloads, store/log
-image or file payloads, or infer final image/file billing from URL/base64 byte
-size; final accounting continues to use provider usage/cost. File IDs, file
-URLs, audio input, and audio output remain unsupported.
+when the route sets `chat_file_inputs=true`. Audio input to text output is
+enabled only when the route sets `chat_audio_inputs=true`. The image/file/audio
+caps above bound request shape before provider forwarding. SLAIF does not fetch
+remote image URLs, fetch file or audio URLs, upload files upstream, transcribe
+audio locally, decode media payloads, store/log image, file, or audio payloads,
+or infer final image/file/audio billing from URL/base64 byte size or audio
+duration; final accounting continues to use provider usage/cost. File IDs, file
+URLs, audio URLs, audio data URLs, and audio output remain
+unsupported.
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency

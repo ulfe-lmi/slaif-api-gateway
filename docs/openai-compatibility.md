@@ -83,9 +83,11 @@ Responses API work is separate and out of scope for this command.
 Seeded Chat Completions route rows include explicit `model_routes.capabilities`
 metadata under the `chat_completions` key for text chat, streaming, local
 function tools, local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and
-safe provider usage signals. Hosted tools, multimodal/audio/file inputs,
+safe provider usage signals. Hosted tools, audio output and broader media features,
 non-default service tiers, and multiple choices are marked unsupported by
 default. Image input to text output requires explicit `chat_image_inputs=true`
+metadata; inline file input requires explicit `chat_file_inputs=true` metadata;
+audio input to text output requires explicit `chat_audio_inputs=true`
 metadata; `n > 1` requires explicit `chat_multiple_choices=true` metadata.
 
 ## Chat Completions Request Fields
@@ -99,7 +101,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | Field or feature | Current behavior |
 | --- | --- |
 | `model` | Supported; route resolution later replaces it upstream with the resolved model |
-| `messages` | Supported for string content and text content parts within configured count/byte caps; prompts/messages are not stored. User-message `image_url` parts are supported only when route metadata sets `chat_image_inputs=true`; user-message inline `file` parts are supported only when route metadata sets `chat_file_inputs=true` |
+| `messages` | Supported for string content and text content parts within configured count/byte caps; prompts/messages are not stored. User-message `image_url` parts are supported only when route metadata sets `chat_image_inputs=true`; user-message inline `file` parts are supported only when route metadata sets `chat_file_inputs=true`; user-message `input_audio` parts are supported only when route metadata sets `chat_audio_inputs=true` |
 | `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
 | `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
 | `tools` with `type=function` | Supported local/client-side tool intent within configured count/name/description/schema caps; schemas are forwarded and counted for input estimation |
@@ -114,21 +116,23 @@ every top-level Chat Completions field through a fail-closed registry.
 | `modalities` | Allowed only when it requests text only |
 | `image_url` message content parts | Supported for image input to text output only on user messages and only with `chat_image_inputs=true`; exact shape is `{ "type": "image_url", "image_url": { "url": "...", "detail"?: "auto" | "low" | "high" } }` |
 | `file` message content parts | Supported for inline file input to text output only on user messages and only with `chat_file_inputs=true`; exact accepted first-slice shape is `{ "type": "file", "file": { "filename": "...", "file_data": "<base64>" } }`. Raw base64 is accepted by default; `data:<mime>;base64,...` is accepted only when `CHAT_ALLOW_FILE_DATA_URLS=true`. File IDs and file URLs are rejected |
-| `audio`, video/alternate image/file content parts | Rejected until separate audio/broader multimodal pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
+| `input_audio` message content parts | Supported for audio input to text output only on user messages and only with `chat_audio_inputs=true`; exact accepted shape is `{ "type": "input_audio", "input_audio": { "data": "<base64>", "format": "wav" | "mp3" } }`. Audio data URLs and remote audio URLs are rejected in this PR |
+| `audio`, video/alternate image/file/audio content parts | Rejected until separate audio-output/broader multimodal pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
 | `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
 | `background`, `store=true`, `previous_response_id`, `conversation` | Rejected; provider-side lifecycle/state features are not implemented |
 | Unknown top-level fields | Rejected in standard and trusted-calibration modes with `unknown_chat_completion_field` |
 
 Current request policy also rejects malformed or empty `messages`, too many or
-oversized messages/text/image/file parts, invalid image URLs or data URLs,
+oversized messages/text/image/file/audio parts, invalid image URLs or data URLs,
 invalid image detail values, invalid file data, filenames, file IDs, file URLs,
+invalid audio data or formats, audio URLs,
 invalid scalar controls, invalid output-token
 controls, input estimates over the configured hard input cap, non-object or
 oversized `stream_options`, overlarge `stop`, `user`, `logit_bias`,
 `metadata`, `prediction`, function-tool schema, and `response_format` schema
 payloads, and invalid or over-cap Chat Completions `n` values. Rejection
 messages name the field and problem without echoing raw messages, metadata
-values, image URLs, image/file base64 data, filenames, file IDs, schemas, tool
+values, image URLs, image/file/audio base64 data, filenames, file IDs, schemas, tool
 payloads, or request bodies.
 
 Current Chat Completions capability policy allows local/client-side function
@@ -165,7 +169,7 @@ pricing lookup, PostgreSQL quota reservation, or provider forwarding, the
 gateway checks the resolved route's `chat_completions` capability metadata
 against the accepted request shape. Text chat, streaming, local function tools,
 local custom tools, image input, legacy functions, JSON mode, structured
-outputs, logprobs, reasoning controls, image input, file input, and multiple choices must be allowed by
+outputs, logprobs, reasoning controls, file input, audio input, and multiple choices must be allowed by
 the route metadata when used.
 A model allowlist
 entry alone therefore does not imply permission to use those capabilities.
@@ -224,12 +228,23 @@ non-streaming custom tools, `response_format`, and logprobs only when those
 features' own capabilities and policies pass. Final accounting still uses
 provider usage/cost once.
 
-Chat Completions audio input and audio output remain unsupported. OpenAI and
-OpenRouter document those request/response surfaces for compatible models, but
-SLAIF keeps them disabled until separate route capabilities, request-size and
-format caps, modality estimation, pricing/catalog support, provider usage
-parsing, accounting tests, provider adapter tests, official-client E2E
-coverage, and redaction/no-storage tests are implemented. See
+Chat Completions audio input to text output is implemented as the third narrow
+multimodal slice. SLAIF supports user-message `input_audio` content parts with
+raw base64 `data` and `format` `wav` or `mp3` behind explicit
+`chat_audio_inputs=true` route capability and configured count/byte/format
+caps. Audio data URLs and remote audio URLs are rejected, and SLAIF does not
+fetch audio URLs, transcribe audio locally, store/log audio payloads or decoded
+bytes, infer exact audio cost from bytes or duration, or enable audio output.
+Audio input composes with streaming text output, `n > 1`, image input, inline
+file input, local function tools, non-streaming custom tools,
+`response_format`, and logprobs only when those features' own capabilities and
+policies pass. Final accounting still uses provider usage/cost once. Chat
+Completions audio output remains unsupported. OpenAI and OpenRouter document
+audio-output request/response surfaces for compatible models, but SLAIF keeps
+them disabled until separate route capabilities, response byte caps, pricing
+support, provider usage parsing, accounting tests, provider adapter tests,
+official-client E2E coverage, and redaction/no-storage tests are implemented.
+See
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 `n > 1` is supported as bounded multiple-choice Chat Completions only when the
@@ -341,7 +356,7 @@ Implemented streaming behavior:
 
 Unsupported streaming request features are the same as non-streaming Chat
 Completions: hosted/provider-side tools, web search, custom tools,
-multimodal/audio/file inputs, non-default `service_tier`, background
+audio output, non-default `service_tier`, background
 or provider-state lifecycle fields, MCP/connectors, external web access, and
 unknown top-level fields are rejected before provider forwarding.
 Streaming `n > 1` is supported for routes with `chat_multiple_choices=true`;

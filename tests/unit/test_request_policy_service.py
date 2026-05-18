@@ -285,6 +285,19 @@ def _file_message(
     }
 
 
+def _audio_message(
+    audio_data: str = "UklGRiQAAABXQVZFZm10IBAAAAABAAEA",
+    audio_format: str = "wav",
+) -> dict[str, object]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "transcribe this audio"},
+            {"type": "input_audio", "input_audio": {"data": audio_data, "format": audio_format}},
+        ],
+    }
+
+
 def test_input_estimate_includes_image_url_material_without_multiplying_input_by_n() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
     text_only = policy.apply(
@@ -333,11 +346,34 @@ def test_input_estimate_includes_file_data_without_multiplying_input_by_n() -> N
     assert file_result.effective_output_tokens == 24
 
 
+def test_input_estimate_includes_audio_data_without_multiplying_input_by_n() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    text_only = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "transcribe this audio"}],
+            "max_completion_tokens": 8,
+        }
+    )
+
+    audio_result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_audio_message()],
+            "max_completion_tokens": 8,
+            "n": 3,
+        }
+    )
+
+    assert audio_result.estimated_input_tokens > text_only.estimated_input_tokens
+    assert audio_result.effective_choice_count == 3
+    assert audio_result.effective_output_tokens == 24
+
+
 @pytest.mark.parametrize(
     "part",
     [
         {"type": "input_image", "image_url": "https://example.test/image.png"},
-        {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}},
         {"type": "video", "video": {"url": "https://example.test/video.mp4"}},
     ],
 )
@@ -432,6 +468,27 @@ def test_file_data_url_can_be_enabled_and_preserved() -> None:
     assert result.effective_body["messages"][0]["content"][1]["file"]["file_data"] == data_url
 
 
+@pytest.mark.parametrize("audio_format", ["wav", "mp3"])
+def test_audio_input_content_part_is_validated_and_preserved(audio_format: str) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [_audio_message(audio_format=audio_format)],
+        }
+    )
+
+    audio_part = result.effective_body["messages"][0]["content"][1]
+    assert audio_part == {
+        "type": "input_audio",
+        "input_audio": {
+            "data": "UklGRiQAAABXQVZFZm10IBAAAAABAAEA",
+            "format": audio_format,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_code", "expected_param"),
     [
@@ -490,6 +547,40 @@ def test_file_count_caps_are_enforced(
                         "content": [
                             {"type": "file", "file": {"filename": "one.txt", "file_data": "T25l"}},
                             {"type": "file", "file": {"filename": "two.txt", "file_data": "VHdv"}},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param"),
+    [
+        ({"CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE": 1}, "chat_audio_count_exceeded", "messages[0].content"),
+        ({"CHAT_MAX_AUDIO_INPUTS_PER_REQUEST": 1}, "chat_audio_count_exceeded", "messages"),
+    ],
+)
+def test_audio_input_count_caps_are_enforced(
+    overrides: dict[str, int],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000, **overrides))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_audio", "input_audio": {"data": "T25l", "format": "wav"}},
+                            {"type": "input_audio", "input_audio": {"data": "VHdv", "format": "mp3"}},
                         ],
                     }
                 ],
@@ -632,6 +723,47 @@ def test_file_byte_caps_are_enforced_without_raw_values() -> None:
 
 
 @pytest.mark.parametrize(
+    ("audio_data", "audio_format", "expected_code"),
+    [
+        ("not valid base64", "wav", "chat_audio_data_invalid"),
+        ("https://example.test/private.wav?token=secret", "wav", "chat_audio_url_not_supported"),
+        ("data:audio/wav;base64,UklG", "wav", "chat_audio_data_url_not_allowed"),
+        ("UklGRiQAAABXQVZFZm10IBAAAAABAAEA", "flac", "chat_audio_format_not_supported"),
+    ],
+)
+def test_invalid_audio_input_shapes_are_rejected_without_raw_values(
+    audio_data: str,
+    audio_format: str,
+    expected_code: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [_audio_message(audio_data, audio_format)],
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert audio_data not in exc_info.value.safe_message
+
+
+def test_audio_input_byte_cap_is_enforced_without_raw_value() -> None:
+    raw_audio_data = "a" * 64
+    policy = ChatCompletionRequestPolicy(
+        _settings(HARD_MAX_INPUT_TOKENS=5000, CHAT_MAX_AUDIO_INPUT_DATA_BYTES=32)
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [_audio_message(raw_audio_data)]})
+
+    assert exc_info.value.error_code == "chat_audio_data_too_large"
+    assert raw_audio_data not in exc_info.value.safe_message
+
+
+@pytest.mark.parametrize(
     ("message", "expected_code", "expected_param"),
     [
         (
@@ -753,6 +885,88 @@ def test_invalid_image_part_shapes_are_rejected(
     ],
 )
 def test_invalid_file_part_shapes_are_rejected_without_raw_values(
+    message: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+    raw_marker: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply({"model": "gpt-4.1-mini", "messages": [message]})
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+    assert raw_marker not in exc_info.value.safe_message
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_code", "expected_param", "raw_marker"),
+    [
+        (
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "wav"},
+                    }
+                ],
+            },
+            "chat_audio_part_invalid_shape",
+            "messages[0].content[0].type",
+            "UklGRiQ=",
+        ),
+        (
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": "UklGRiQ="}]},
+            "chat_audio_part_invalid_shape",
+            "messages[0].content[0].input_audio",
+            "UklGRiQ=",
+        ),
+        (
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": {"format": "wav"}}]},
+            "chat_audio_data_invalid",
+            "messages[0].content[0].input_audio.data",
+            "secret-audio-marker",
+        ),
+        (
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "UklGRiQ="}}]},
+            "chat_audio_format_invalid",
+            "messages[0].content[0].input_audio.format",
+            "UklGRiQ=",
+        ),
+        (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "wav", "url": "https://example.test/audio.wav"},
+                    }
+                ],
+            },
+            "chat_audio_part_invalid_shape",
+            "messages[0].content[0].input_audio.url",
+            "https://example.test/audio.wav",
+        ),
+        (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "wav"},
+                        "provider_extra": True,
+                    }
+                ],
+            },
+            "chat_audio_part_invalid_shape",
+            "messages[0].content[0].provider_extra",
+            "UklGRiQ=",
+        ),
+    ],
+)
+def test_invalid_audio_input_part_shapes_are_rejected_without_raw_values(
     message: dict[str, object],
     expected_code: str,
     expected_param: str,
@@ -1890,20 +2104,6 @@ def test_streaming_function_tool_and_structured_output_fields_remain_allowed() -
         ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
         ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
         ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
-        (
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_audio", "input_audio": {"data": "abc", "format": "wav"}}
-                        ],
-                    }
-                ]
-            },
-            "unsupported_chat_completion_modality",
-            "messages[0].content[0].type",
-        ),
         ({"n": 99}, "chat_choice_count_limit_exceeded", "n"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
     ],

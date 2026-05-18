@@ -142,6 +142,28 @@ def _file_chat_request(
     }
 
 
+def _audio_chat_request(
+    audio_data: str = "UklGRiQAAABXQVZFZm10IBAAAAABAAEA",
+    audio_format: str = "wav",
+) -> dict[str, object]:
+    return {
+        "model": "classroom-cheap",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": audio_data, "format": audio_format},
+                    },
+                ],
+            }
+        ],
+        "max_tokens": 20,
+    }
+
+
 def _chat_capabilities(**overrides: bool) -> dict[str, object]:
     capabilities = default_chat_completion_capabilities()
     capabilities.update(overrides)
@@ -782,6 +804,154 @@ def test_openrouter_nonstreaming_file_request_preserves_provider_reported_cost(
     provider_response = state["provider_responses"][0]
     assert provider_response.usage.prompt_tokens == 54
     assert provider_response.raw_cost_native == Decimal("0.0052")
+
+
+def test_openai_nonstreaming_audio_input_request_is_forwarded_and_finalized_once(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-4.1-mini",
+        route_capabilities=_chat_capabilities(
+            chat_audio_inputs=True,
+            chat_multiple_choices=True,
+            chat_function_tools=True,
+        ),
+    )
+    upstream_payload = {
+        "id": "chatcmpl_audio",
+        "object": "chat.completion",
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "audio answer"},
+                "finish_reason": "stop",
+            },
+            {
+                "index": 1,
+                "message": {"role": "assistant", "content": "second audio answer"},
+                "finish_reason": "stop",
+            },
+        ],
+        "usage": {
+            "prompt_tokens": 131,
+            "completion_tokens": 19,
+            "total_tokens": 150,
+            "prompt_tokens_details": {"audio_tokens": 42},
+        },
+    }
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_audio_chat_request("cHJpdmF0ZSBhdWRpbyBwYXlsb2Fk", "wav"),
+        "n": 2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+    }
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert upstream_request.headers["authorization"] != "Bearer client-gateway-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["messages"] == body["messages"]
+    assert upstream_body["n"] == 2
+    assert upstream_body["tools"] == body["tools"]
+    provider_response = state["provider_responses"][0]
+    assert provider_response.usage.prompt_tokens == 131
+    assert provider_response.usage.completion_tokens == 19
+    assert provider_response.usage.other_usage["prompt_tokens_details"] == {"audio_tokens": 42}
+    assert state["finalize_calls"] and len(state["finalize_calls"]) == 1
+
+
+def test_openrouter_nonstreaming_audio_input_request_preserves_provider_reported_cost(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
+    app = create_app(settings)
+    chat_capabilities = default_chat_completion_capabilities()
+    chat_capabilities["chat_audio_inputs"] = True
+    chat_capabilities["chat_image_inputs"] = True
+    chat_capabilities["chat_file_inputs"] = True
+    chat_capabilities["chat_custom_tools"] = True
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openrouter",
+        resolved_model="openai/gpt-4.1-mini",
+        route_capabilities={"chat_completions": chat_capabilities},
+    )
+    upstream_payload = {
+        "id": "or_chatcmpl_audio",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "audio answer"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 64,
+            "completion_tokens": 9,
+            "total_tokens": 73,
+            "cost_usd": "0.0062",
+            "prompt_tokens_details": {"audio_tokens": 22},
+        },
+    }
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_audio_chat_request("cHJpdmF0ZSBvcGVucm91dGVyIGF1ZGlv", "mp3"),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "analyze"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/chart.png"},
+                    },
+                    {"type": "file", "file": {"filename": "notes.txt", "file_data": "SGVsbG8="}},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": "cHJpdmF0ZSBvcGVucm91dGVyIGF1ZGlv",
+                            "format": "mp3",
+                        },
+                    },
+                ],
+            }
+        ],
+        "tools": [{"type": "custom", "custom": {"name": "local_audio_tool"}}],
+    }
+    response = TestClient(app).post("/v1/chat/completions", json=body)
+
+    assert response.status_code == 200
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["messages"] == body["messages"]
+    assert upstream_body["tools"] == body["tools"]
+    provider_response = state["provider_responses"][0]
+    assert provider_response.usage.prompt_tokens == 64
+    assert provider_response.usage.other_usage["prompt_tokens_details"] == {"audio_tokens": 22}
+    assert provider_response.raw_cost_native == Decimal("0.0062")
 
 
 def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(

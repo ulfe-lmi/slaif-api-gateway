@@ -32,7 +32,18 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     original_body = {
         "model": "client-model",
         "stream": True,
-        "messages": [],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRiQ=", "format": "wav"},
+                    },
+                ],
+            }
+        ],
         "stream_options": {"include_usage": False, "other": "preserved"},
     }
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
@@ -70,6 +81,7 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     assert sent_body["stream"] is True
     assert sent_body["stream_options"] == {"include_usage": True, "other": "preserved"}
     assert sent_body["model"] == "gpt-test-mini"
+    assert sent_body["messages"] == original_body["messages"]
     assert original_body["model"] == "client-model"
     assert original_body["stream_options"]["include_usage"] is False
 

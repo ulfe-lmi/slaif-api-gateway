@@ -41,6 +41,10 @@ operational guidance, not a production certification.
   explicitly enables `chat_file_inputs`; inline `file_data` and `filename` are
   bounded and forwarded without SLAIF fetching file URLs, calling `/v1/files`,
   uploading files, storing, logging, or inferring exact file cost from bytes.
+- Chat Completions audio input to text output when the resolved route
+  explicitly enables `chat_audio_inputs`; raw base64 `wav`/`mp3` audio is
+  bounded and forwarded without SLAIF fetching audio URLs, transcribing locally,
+  storing, logging, or inferring exact audio cost from bytes or duration.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.
@@ -181,7 +185,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   bulk participant-key generation, policy mutation, and Responses support
   remain future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
-- Chat Completions file IDs, file URLs, audio inputs, and audio output are not
+- Chat Completions file IDs, file URLs, audio output, and audio URLs are not
   implemented. The upstream evidence and future implementation roadmap are documented in
   [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
