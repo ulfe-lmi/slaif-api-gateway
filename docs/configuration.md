@@ -357,6 +357,11 @@ forwarding. Defaults:
 | `CHAT_MAX_AUDIO_INPUT_DATA_BYTES` | `10485760` | One `input_audio.data` base64 string |
 | `CHAT_ALLOWED_AUDIO_INPUT_FORMATS` | `wav,mp3` | Allowed `input_audio.format` values |
 | `CHAT_ALLOW_AUDIO_INPUT_DATA_URLS` | `false` | Reserved for future policy; audio input data URLs are not accepted by default |
+| `CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS` | `wav,mp3,flac,opus,pcm16` | Allowed non-streaming Chat Completions audio-output formats |
+| `CHAT_ALLOWED_AUDIO_OUTPUT_VOICES` | `alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar` | Allowed built-in Chat Completions audio-output voices |
+| `CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES` | `false` | Reserved for future policy; custom audio-output voices are rejected by default |
+| `CHAT_ALLOW_STREAMING_AUDIO_OUTPUT` | `false` | Streaming Chat Completions audio output remains unsupported by default |
+| `CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES` | `false` | `n > 1` with Chat Completions audio output remains unsupported by default |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
 | `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
@@ -382,14 +387,18 @@ forwarding. Defaults:
 Image input to text output is enabled only when the resolved route explicitly
 sets `chat_image_inputs=true`. Inline file input to text output is enabled only
 when the route sets `chat_file_inputs=true`. Audio input to text output is
-enabled only when the route sets `chat_audio_inputs=true`. The image/file/audio
-caps above bound request shape before provider forwarding. SLAIF does not fetch
-remote image URLs, fetch file or audio URLs, upload files upstream, transcribe
-audio locally, decode media payloads, store/log image, file, or audio payloads,
-or infer final image/file/audio billing from URL/base64 byte size or audio
-duration; final accounting continues to use provider usage/cost. File IDs, file
-URLs, audio URLs, audio data URLs, and audio output remain
-unsupported.
+enabled only when the route sets `chat_audio_inputs=true`. Non-streaming audio
+output is enabled only when the route sets `chat_audio_outputs=true` and the
+active pricing row provides `pricing_metadata.audio_output_price_per_1m`. The
+image/file/audio caps above bound request shape before provider forwarding.
+SLAIF does not fetch remote image URLs, fetch file or audio URLs, upload files
+upstream, transcribe audio locally, transcode audio, decode media payloads,
+store/log image, file, audio, transcript, request, or response payloads, or
+infer final image/file/audio billing from URL/base64 byte size, transcript
+length, audio format, voice, or duration; final accounting continues to use
+provider usage/cost. File IDs, file URLs, audio URLs, audio data URLs, streaming
+audio output, custom audio-output voices, previous-audio references, and `n > 1`
+with audio output remain unsupported.
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency

@@ -46,6 +46,11 @@ class InvalidPricingDataError(PricingError):
     message = "Configured pricing data is invalid"
 
 
+class AudioOutputPricingNotSupportedError(PricingError):
+    error_code = "chat_audio_output_pricing_not_supported"
+    message = "Chat Completions audio-output pricing is not configured for the resolved model"
+
+
 class InvalidFxRateError(PricingError):
     status_code = 500
     error_type = "server_error"

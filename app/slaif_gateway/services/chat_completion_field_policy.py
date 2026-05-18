@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -51,8 +51,8 @@ CHAT_COMPLETION_FIELD_REGISTRY: dict[str, ChatCompletionFieldClassification] = {
     "metadata": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "reasoning_effort": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "parallel_tool_calls": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
-    "modalities": ChatCompletionFieldClassification.UNSUPPORTED_MODALITY,
-    "audio": ChatCompletionFieldClassification.UNSUPPORTED_MODALITY,
+    "modalities": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
+    "audio": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "prediction": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "service_tier": ChatCompletionFieldClassification.FORWARDED_SUPPORTED,
     "web_search_options": ChatCompletionFieldClassification.HOSTED_CAPABILITY,
@@ -64,7 +64,6 @@ CHAT_COMPLETION_FIELD_REGISTRY: dict[str, ChatCompletionFieldClassification] = {
     "defer_loading": ChatCompletionFieldClassification.EXPLICITLY_REJECTED,
 }
 
-_TEXT_ONLY_MODALITIES = frozenset({"text"})
 _UNSUPPORTED_MESSAGE_CONTENT_PART_TYPES = frozenset(
     {
         "audio",
@@ -208,49 +207,10 @@ def _finding_for_known_field(
             safe_message="Deferred hosted-tool loading is not enabled by this gateway.",
         )
 
-    if field_name == "modalities":
-        return _modalities_finding(value, classification=classification)
-
-    if field_name == "audio":
-        return ChatCompletionFieldFinding(
-            rejected_field=field_name,
-            classification=classification,
-            error_code="unsupported_chat_completion_modality",
-            safe_message=(
-                "Chat Completions audio output is not enabled because this gateway "
-                "does not yet account for audio pricing."
-            ),
-        )
-
     if field_name == "service_tier":
         return _service_tier_finding(value, classification=classification)
 
     return None
-
-
-def _modalities_finding(
-    value: Any,
-    *,
-    classification: ChatCompletionFieldClassification,
-) -> ChatCompletionFieldFinding | None:
-    if isinstance(value, str):
-        requested = {value}
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        requested = {str(item) for item in value}
-    else:
-        requested = {"unsupported"}
-
-    if requested and requested <= _TEXT_ONLY_MODALITIES:
-        return None
-
-    return ChatCompletionFieldFinding(
-        rejected_field="modalities",
-        classification=classification,
-        error_code="unsupported_chat_completion_modality",
-        safe_message=(
-            "Only text Chat Completions modalities are enabled by this gateway."
-        ),
-    )
 
 
 def _service_tier_finding(

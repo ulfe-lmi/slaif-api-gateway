@@ -137,19 +137,6 @@ class AccountingService:
         _ = at
         native_currency = _normalize_currency(pricing_estimate.native_currency)
         warnings: list[str] = []
-        component_costs, component_tokens, component_warnings = _component_slaif_costs(
-            usage=usage,
-            pricing_estimate=pricing_estimate,
-        )
-        warnings.extend(component_warnings)
-
-        slaif_native = sum(component_costs.values(), Decimal("0"))
-        slaif_eur = _convert_estimate_native_to_eur(
-            actual_native=slaif_native,
-            native_currency=native_currency,
-            estimated_total_native=pricing_estimate.estimated_total_cost_native,
-            estimated_total_eur=pricing_estimate.estimated_total_cost_eur,
-        )
         provider_reported_cost, provider_reported_currency, provider_warning = _provider_reported_cost(
             provider_response
         )
@@ -170,6 +157,21 @@ class AccountingService:
             )
             if provider_response.provider == "openrouter" and provider_reported_eur is None:
                 warnings.append("provider_reported_cost_currency_unsupported")
+
+        component_costs, component_tokens, component_warnings = _component_slaif_costs(
+            usage=usage,
+            pricing_estimate=pricing_estimate,
+            allow_unpriced_audio_output=provider_cost_trusted,
+        )
+        warnings.extend(component_warnings)
+
+        slaif_native = sum(component_costs.values(), Decimal("0"))
+        slaif_eur = _convert_estimate_native_to_eur(
+            actual_native=slaif_native,
+            native_currency=native_currency,
+            estimated_total_native=pricing_estimate.estimated_total_cost_native,
+            estimated_total_eur=pricing_estimate.estimated_total_cost_eur,
+        )
 
         if provider_cost_trusted and provider_reported_eur is not None:
             actual_eur = provider_reported_eur
@@ -750,6 +752,7 @@ def _component_slaif_costs(
     *,
     usage: ActualUsage,
     pricing_estimate: ChatCostEstimate,
+    allow_unpriced_audio_output: bool = False,
 ) -> tuple[dict[str, Decimal], dict[str, int], list[str]]:
     input_price = _price_per_1m(
         pricing_estimate.input_price_per_1m,
@@ -793,8 +796,9 @@ def _component_slaif_costs(
         cached_input_price = input_price
     _validate_price(cached_input_price, param="cached_input_price_per_1m")
 
-    reasoning_tokens = min(usage.reasoning_tokens or 0, usage.completion_tokens)
-    non_reasoning_output_tokens = usage.completion_tokens - reasoning_tokens
+    audio_output_tokens = min(_audio_output_tokens(usage.other_usage) or 0, usage.completion_tokens)
+    reasoning_tokens = min(usage.reasoning_tokens or 0, usage.completion_tokens - audio_output_tokens)
+    non_reasoning_output_tokens = usage.completion_tokens - reasoning_tokens - audio_output_tokens
     reasoning_price = pricing_estimate.reasoning_price_per_1m
     if reasoning_tokens and reasoning_price is None:
         reasoning_price = output_price
@@ -807,14 +811,30 @@ def _component_slaif_costs(
         warnings.append("cached_tokens_exceed_prompt_tokens_capped")
     if usage.reasoning_tokens is not None and usage.reasoning_tokens > usage.completion_tokens:
         warnings.append("reasoning_tokens_exceed_completion_tokens_capped")
+    if (_audio_output_tokens(usage.other_usage) or 0) > usage.completion_tokens:
+        warnings.append("audio_output_tokens_exceed_completion_tokens_capped")
     if usage.prompt_tokens + usage.completion_tokens < usage.total_tokens:
         warnings.append("total_tokens_include_unpriced_provider_components")
+
+    audio_output_price = pricing_estimate.audio_output_price_per_1m
+    if audio_output_tokens and audio_output_price is None:
+        if not allow_unpriced_audio_output:
+            raise UnsupportedProviderCostError(
+                "Actual audio output cost cannot be computed without configured audio pricing",
+                param="audio",
+            )
+        audio_output_price = output_price
+        warnings.append("audio_output_price_fallback_to_output_for_provider_cost_comparison")
+    elif audio_output_price is None:
+        audio_output_price = output_price
+    _validate_price(audio_output_price, param="audio_output_price_per_1m")
 
     component_tokens = {
         "input_uncached_tokens": uncached_input_tokens,
         "input_cached_tokens": cached_tokens,
         "output_non_reasoning_tokens": non_reasoning_output_tokens,
         "output_reasoning_tokens": reasoning_tokens,
+        "output_audio_tokens": audio_output_tokens,
         "total_tokens": usage.total_tokens,
     }
     component_costs = {
@@ -822,6 +842,7 @@ def _component_slaif_costs(
         "input_cached": _tokens_to_cost(cached_tokens, cached_input_price),
         "output_non_reasoning": _tokens_to_cost(non_reasoning_output_tokens, output_price),
         "output_reasoning": _tokens_to_cost(reasoning_tokens, reasoning_price),
+        "output_audio": _tokens_to_cost(audio_output_tokens, audio_output_price),
     }
     return component_costs, component_tokens, warnings
 
@@ -847,6 +868,25 @@ def _price_per_1m(
             return Decimal("0")
         raise UnsupportedProviderCostError("Estimated token count must be positive", param=param)
     return fallback_cost * _ONE_MILLION / Decimal(fallback_tokens)
+
+
+def _audio_output_tokens(other_usage: Mapping[str, Any]) -> int | None:
+    for key in (
+        ("completion_tokens_details", "audio_tokens"),
+        ("output_tokens_details", "audio_tokens"),
+        ("audio_tokens",),
+    ):
+        value: Any = other_usage
+        for part in key:
+            if not isinstance(value, Mapping):
+                value = None
+                break
+            value = value.get(part)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value >= 0:
+            return value
+    return None
 
 
 def _validate_price(value: Decimal, *, param: str) -> None:

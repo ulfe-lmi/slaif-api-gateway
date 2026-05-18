@@ -66,6 +66,7 @@ def _estimate(
     cached_input_price_per_1m: Decimal | None = None,
     output_price_per_1m: Decimal | None = None,
     reasoning_price_per_1m: Decimal | None = None,
+    audio_output_price_per_1m: Decimal | None = None,
 ) -> ChatCostEstimate:
     return ChatCostEstimate(
         provider="openai",
@@ -84,6 +85,7 @@ def _estimate(
         cached_input_price_per_1m=cached_input_price_per_1m,
         output_price_per_1m=output_price_per_1m,
         reasoning_price_per_1m=reasoning_price_per_1m,
+        audio_output_price_per_1m=audio_output_price_per_1m,
     )
 
 
@@ -274,6 +276,97 @@ def test_compute_actual_cost_uses_reasoning_price_without_double_charging_output
     assert actual.actual_cost_native == Decimal("0.000450000000")
     assert actual.component_token_counts["output_non_reasoning_tokens"] == 75
     assert actual.component_token_counts["output_reasoning_tokens"] == 25
+
+
+def test_compute_actual_cost_uses_audio_output_price_without_double_charging_output() -> None:
+    usage = ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=100,
+        total_tokens=100,
+        other_usage={"completion_tokens_details": {"audio_tokens": 40}},
+    )
+
+    actual = _service().compute_actual_cost(
+        _response(ProviderUsage(prompt_tokens=0, completion_tokens=100, total_tokens=100)),
+        _route(),
+        usage,
+        _estimate(
+            input_price_per_1m=Decimal("1.000000000"),
+            output_price_per_1m=Decimal("4.000000000"),
+            audio_output_price_per_1m=Decimal("64.000000000"),
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.002800000000")
+    assert actual.component_token_counts["output_non_reasoning_tokens"] == 60
+    assert actual.component_token_counts["output_audio_tokens"] == 40
+    assert actual.component_costs_native["output_non_reasoning"] == Decimal("0.000240000000")
+    assert actual.component_costs_native["output_audio"] == Decimal("0.002560000000")
+
+
+def test_compute_actual_cost_requires_audio_output_price_without_trusted_provider_cost() -> None:
+    usage = ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=100,
+        total_tokens=100,
+        other_usage={"completion_tokens_details": {"audio_tokens": 40}},
+    )
+
+    with pytest.raises(UnsupportedProviderCostError):
+        _service().compute_actual_cost(
+            _response(ProviderUsage(prompt_tokens=0, completion_tokens=100, total_tokens=100)),
+            _route(),
+            usage,
+            _estimate(
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("4.000000000"),
+            ),
+        )
+
+
+def test_compute_actual_cost_uses_openrouter_provider_cost_once_for_audio_output() -> None:
+    route = RouteResolutionResult(
+        requested_model="openrouter/model",
+        resolved_model="openrouter/model",
+        provider="openrouter",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern="openrouter/model",
+        priority=100,
+    )
+    usage = ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=100,
+        total_tokens=100,
+        other_usage={"completion_tokens_details": {"audio_tokens": 40}},
+    )
+
+    actual = _service().compute_actual_cost(
+        ProviderResponse(
+            provider="openrouter",
+            upstream_model="openrouter/model",
+            status_code=200,
+            json_body={},
+            usage=ProviderUsage(prompt_tokens=0, completion_tokens=100, total_tokens=100),
+            raw_cost_native=Decimal("0.012000000"),
+            native_currency="USD",
+        ),
+        route,
+        usage,
+        _estimate(
+            native_currency="USD",
+            total_native=Decimal("0.300000000"),
+            total_eur=Decimal("0.276000000"),
+            input_price_per_1m=Decimal("1.000000000"),
+            output_price_per_1m=Decimal("4.000000000"),
+        ),
+    )
+
+    assert actual.actual_cost_native == Decimal("0.012000000")
+    assert actual.actual_cost_eur == Decimal("0.011040000000000000")
+    assert actual.cost_source == "provider_reported"
+    assert actual.component_token_counts["output_audio_tokens"] == 40
+    assert "audio_output_price_fallback_to_output_for_provider_cost_comparison" in actual.cost_warnings
 
 
 def test_compute_actual_cost_falls_back_for_reasoning_without_price() -> None:

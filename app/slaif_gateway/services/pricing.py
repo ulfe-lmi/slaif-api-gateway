@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Final
+from typing import Any, Final
 
 from slaif_gateway.db.models import FxRate, PricingRule
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
@@ -17,6 +18,7 @@ from slaif_gateway.schemas.pricing import (
 )
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import (
+    AudioOutputPricingNotSupportedError,
     FxRateNotFoundError,
     InvalidFxRateError,
     InvalidPricingDataError,
@@ -106,11 +108,18 @@ class PricingService:
 
         input_tokens = policy.estimated_input_tokens
         output_tokens = policy.effective_output_tokens
+        audio_output_requested = _uses_audio_output(policy.effective_body)
+        if audio_output_requested and pricing.audio_output_price_per_1m is None:
+            raise AudioOutputPricingNotSupportedError(param="audio")
+
         input_cost_native = (
             Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
         )
+        output_price = pricing.output_price_per_1m
+        if audio_output_requested and pricing.audio_output_price_per_1m is not None:
+            output_price = max(output_price, pricing.audio_output_price_per_1m)
         output_cost_native = (
-            Decimal(output_tokens) / _ONE_MILLION * pricing.output_price_per_1m
+            Decimal(output_tokens) / _ONE_MILLION * output_price
         )
         total_native = input_cost_native + output_cost_native
         total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
@@ -132,6 +141,7 @@ class PricingService:
             cached_input_price_per_1m=pricing.cached_input_price_per_1m,
             output_price_per_1m=pricing.output_price_per_1m,
             reasoning_price_per_1m=pricing.reasoning_price_per_1m,
+            audio_output_price_per_1m=pricing.audio_output_price_per_1m,
             fx_rate=fx.rate,
         )
 
@@ -176,6 +186,10 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
         row.reasoning_price_per_1m,
         field_name="reasoning_price_per_1m",
     )
+    audio_output_price = _optional_metadata_price_per_1m(
+        row.pricing_metadata,
+        field_name="audio_output_price_per_1m",
+    )
 
     return PricingLookupResult(
         provider=row.provider,
@@ -186,6 +200,7 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
         cached_input_price_per_1m=cached_input_price,
         output_price_per_1m=output_price,
         reasoning_price_per_1m=reasoning_price,
+        audio_output_price_per_1m=audio_output_price,
         pricing_rule_id=row.id,
         valid_from=row.valid_from,
         valid_until=row.valid_until,
@@ -220,6 +235,36 @@ def _optional_non_negative_decimal(value: Decimal | None, *, field_name: str) ->
             f"Configured pricing field '{field_name}' must be non-negative."
         )
     return value
+
+
+def _optional_metadata_price_per_1m(
+    metadata: Mapping[str, Any] | None,
+    *,
+    field_name: str,
+) -> Decimal | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    value = metadata.get(field_name)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise InvalidPricingDataError(f"Configured pricing metadata field '{field_name}' must be numeric.")
+    if isinstance(value, Decimal):
+        return _optional_non_negative_decimal(value, field_name=field_name)
+    if isinstance(value, int | float | str):
+        try:
+            parsed = Decimal(str(value))
+        except Exception as exc:
+            raise InvalidPricingDataError(
+                f"Configured pricing metadata field '{field_name}' must be numeric."
+            ) from exc
+        return _optional_non_negative_decimal(parsed, field_name=field_name)
+    raise InvalidPricingDataError(f"Configured pricing metadata field '{field_name}' must be numeric.")
+
+
+def _uses_audio_output(payload: Mapping[str, Any]) -> bool:
+    modalities = payload.get("modalities")
+    return isinstance(modalities, list) and any(item == "audio" for item in modalities)
 
 
 def _required_positive_decimal(value: Decimal, *, field_name: str) -> Decimal:

@@ -1055,6 +1055,7 @@ chat_multimodal
 chat_audio
 chat_file_inputs
 chat_audio_inputs
+chat_audio_outputs
 chat_service_tier_non_default
 chat_multiple_choices
 ```
@@ -1066,9 +1067,9 @@ reservation, or provider forwarding. Existing legacy rows with no
 `chat_completions` object use the documented compatibility fallback for the
 previously supported Chat Completions surface. If the object is present,
 unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
-external MCP/connectors, audio output, non-default service
-tiers, and multiple choices remain disabled unless a route explicitly enables
-the dedicated capability and the request passes gateway caps.
+external MCP/connectors, non-default service tiers, multiple choices, and
+non-streaming audio output remain disabled unless a route explicitly enables the
+dedicated capability and the request passes gateway caps.
 
 `chat_custom_tools=true` enables only non-streaming local/client-side Chat
 Completions custom tool-call intent. It does not enable hosted tools, MCP or
@@ -1111,17 +1112,30 @@ once.
 only. It accepts bounded user-message `input_audio` content parts with raw
 base64 `data` and `format` `wav` or `mp3`. Audio data URLs and remote audio
 URLs remain unsupported and do not flow upstream. This flag does not enable
-audio output, top-level `modalities` requesting audio, `/v1/audio/*`, Realtime
-API, file input, image input, image generation, hosted tools, MCP/connectors,
-custom tools, function tools, `n > 1`, or non-default service tiers. Audio
+audio output, `/v1/audio/*`, Realtime API, file input, image input, image
+generation, hosted tools, MCP/connectors, custom tools, function tools,
+`n > 1`, or non-default service tiers. Audio
 definitions are ordinary request input for admission estimates, and final
 accounting uses provider-reported usage/cost once.
+
+`chat_audio_outputs=true` enables non-streaming Chat Completions audio output
+only. It accepts bounded top-level `modalities: ["text", "audio"]` plus
+top-level `audio` config with configured built-in voices and formats, and it
+requires the active pricing row to include
+`pricing_metadata.audio_output_price_per_1m`. It preserves non-streaming
+provider `choices[].message.audio` objects for the client without storing or
+logging generated audio data or transcripts. This flag does not enable audio
+input, `/v1/audio/*`, Realtime API, streaming audio output, custom voices,
+assistant previous-audio references, image/file input, hosted tools,
+MCP/connectors, custom tools, function tools, `n > 1`, or non-default service
+tiers. Final accounting uses provider-reported usage/cost once; raw audio bytes,
+transcript length, format, voice, and duration are not exact billing units.
 
 The current `chat_multimodal` and `chat_audio` flags remain false in
 seeded/default metadata and do not enable broader runtime support. Future Chat
 Completions multimodal work should continue to prefer explicit route
-capabilities per surface, such as audio outputs, before provider forwarding is
-enabled. The evidence and roadmap are documented in
+capabilities per surface before provider forwarding is enabled. The evidence
+and roadmap are documented in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 Allowed `match_type` values:
@@ -1216,7 +1230,12 @@ Rules:
 - Unknown pricing must fail closed.
 - Do not forward requests for models without an enabled pricing rule unless an admin explicitly marks the route as free or exempt.
 - If upstream returns cost directly, still store the native currency and converted EUR value in `usage_ledger`.
-- Use `pricing_metadata` for provider-specific dimensions that are not yet first-class fields.
+- Use `pricing_metadata` for provider-specific dimensions that are not yet
+  first-class fields. Non-streaming Chat Completions audio output currently
+  requires `pricing_metadata.audio_output_price_per_1m` on the active pricing
+  row before the request can reserve quota. This metadata value is a decimal
+  price per one million provider-reported audio output tokens; it is not derived
+  from audio bytes, transcript length, duration, format, or voice.
 
 ---
 

@@ -164,6 +164,20 @@ def _audio_chat_request(
     }
 
 
+def _audio_output_chat_request(
+    *,
+    audio_format: str = "wav",
+    voice: str = "alloy",
+) -> dict[str, object]:
+    return {
+        "model": "classroom-cheap",
+        "messages": [{"role": "user", "content": "say hello"}],
+        "modalities": ["text", "audio"],
+        "audio": {"format": audio_format, "voice": voice},
+        "max_tokens": 20,
+    }
+
+
 def _chat_capabilities(**overrides: bool) -> dict[str, object]:
     capabilities = default_chat_completion_capabilities()
     capabilities.update(overrides)
@@ -952,6 +966,153 @@ def test_openrouter_nonstreaming_audio_input_request_preserves_provider_reported
     assert provider_response.usage.prompt_tokens == 64
     assert provider_response.usage.other_usage["prompt_tokens_details"] == {"audio_tokens": 22}
     assert provider_response.raw_cost_native == Decimal("0.0062")
+
+
+def test_openai_nonstreaming_audio_output_request_and_response_are_preserved(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-audio",
+        route_capabilities=_chat_capabilities(chat_audio_outputs=True),
+    )
+    upstream_payload = {
+        "id": "chatcmpl_audio_output",
+        "object": "chat.completion",
+        "model": "gpt-audio",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "audio": {
+                        "id": "audio_123",
+                        "data": "UklGRiQ=",
+                        "expires_at": 1893456000,
+                        "transcript": "hello",
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 31,
+            "completion_tokens": 20,
+            "total_tokens": 51,
+            "completion_tokens_details": {"audio_tokens": 16},
+        },
+    }
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = _audio_output_chat_request(audio_format="wav", voice="alloy")
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_request = route.calls[0].request
+    assert upstream_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert upstream_request.headers["authorization"] != "Bearer client-gateway-key"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["model"] == "gpt-audio"
+    assert upstream_body["modalities"] == ["text", "audio"]
+    assert upstream_body["audio"] == {"format": "wav", "voice": "alloy"}
+    provider_response = state["provider_responses"][0]
+    assert provider_response.usage.other_usage["completion_tokens_details"] == {
+        "audio_tokens": 16
+    }
+    assert state["finalize_calls"] and len(state["finalize_calls"]) == 1
+
+
+def test_openrouter_nonstreaming_audio_output_preserves_provider_reported_cost(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openrouter",
+        resolved_model="openai/gpt-audio",
+        route_capabilities=_chat_capabilities(
+            chat_audio_outputs=True,
+            chat_audio_inputs=True,
+            chat_image_inputs=True,
+            chat_file_inputs=True,
+            chat_custom_tools=True,
+        ),
+    )
+    upstream_payload = {
+        "id": "or_chatcmpl_audio_output",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "audio": {
+                        "id": "audio_or_123",
+                        "data": "UklGRiQ=",
+                        "expires_at": 1893456000,
+                        "transcript": "hello",
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 64,
+            "completion_tokens": 24,
+            "total_tokens": 88,
+            "cost_usd": "0.0123",
+            "completion_tokens_details": {"audio_tokens": 18},
+        },
+    }
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_audio_output_chat_request(audio_format="mp3", voice="marin"),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "answer with audio"},
+                    {"type": "image_url", "image_url": {"url": "https://example.test/chart.png"}},
+                    {"type": "file", "file": {"filename": "notes.txt", "file_data": "SGVsbG8="}},
+                    {"type": "input_audio", "input_audio": {"data": "UklGRiQ=", "format": "wav"}},
+                ],
+            }
+        ],
+        "tools": [{"type": "custom", "custom": {"name": "local_audio_output_tool"}}],
+    }
+    response = TestClient(app).post("/v1/chat/completions", json=body)
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_body = json.loads(route.calls[0].request.content)
+    assert upstream_body["modalities"] == ["text", "audio"]
+    assert upstream_body["audio"] == {"format": "mp3", "voice": "marin"}
+    assert upstream_body["messages"] == body["messages"]
+    assert upstream_body["tools"] == body["tools"]
+    provider_response = state["provider_responses"][0]
+    assert provider_response.raw_cost_native == Decimal("0.0123")
+    assert provider_response.usage.other_usage["completion_tokens_details"] == {
+        "audio_tokens": 18
+    }
 
 
 def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
