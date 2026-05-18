@@ -1088,6 +1088,74 @@ def test_streaming_policy_injects_include_usage_when_missing() -> None:
     assert result.effective_body["stream_options"] == {"include_usage": True}
 
 
+def test_streaming_function_tool_and_structured_output_fields_remain_allowed() -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+
+    result = policy.apply(
+        {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+            "response_format": {"type": "json_object"},
+            "logprobs": True,
+            "top_logprobs": 2,
+        }
+    )
+
+    assert result.effective_body["stream"] is True
+    assert result.effective_body["stream_options"] == {"include_usage": True}
+    assert result.effective_body["tools"][0]["type"] == "function"
+    assert result.effective_body["tool_choice"]["function"]["name"] == "lookup"
+    assert result.effective_body["response_format"] == {"type": "json_object"}
+    assert result.effective_body["logprobs"] is True
+    assert result.effective_body["top_logprobs"] == 2
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code", "expected_param"),
+    [
+        ({"tools": [{"type": "custom"}]}, "custom_tool_not_supported", "tools[0].type"),
+        ({"tools": [{"type": "web_search"}]}, "web_search_not_allowed", "tools[0].type"),
+        ({"web_search_options": {"search_context_size": "low"}}, "web_search_not_allowed", "web_search_options"),
+        ({"model": "gpt-5-search-api"}, "search_model_requires_hosted_web_search", "model"),
+        ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/img.png"}}]}]}, "unsupported_chat_completion_modality", "messages[0].content[0].type"),
+        ({"n": 2}, "invalid_choice_count", "n"),
+        ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
+    ],
+)
+def test_streaming_requests_keep_unsupported_feature_rejections(
+    overrides: dict[str, object],
+    expected_code: str,
+    expected_param: str,
+) -> None:
+    policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+    request = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        **overrides,
+    }
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(request)
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == expected_param
+
+
 def test_streaming_policy_rejects_non_object_stream_options() -> None:
     policy = ChatCompletionRequestPolicy(_settings())
 

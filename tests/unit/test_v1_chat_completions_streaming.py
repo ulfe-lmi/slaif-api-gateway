@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -60,6 +61,10 @@ def _chat_request() -> dict[str, object]:
         "stream_options": {"include_usage": False, "other": "preserved"},
         "max_tokens": 20,
     }
+
+
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
 def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=None):
@@ -227,6 +232,106 @@ def test_streaming_chat_completion_forwards_chunks_and_finalizes_after_usage(mon
     )
     assert state["recovery_failure_calls"] == []
     assert state["failure_calls"] == []
+
+
+def test_streaming_tool_call_deltas_finish_reason_and_logprobs_are_preserved(monkeypatch) -> None:
+    first_tool_delta = {
+        "id": "chatcmpl-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_lookup",
+                            "type": "function",
+                            "function": {"name": "lookup"},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+                "logprobs": {"content": []},
+            }
+        ],
+    }
+    second_tool_delta = {
+        "id": "chatcmpl-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"slaif"}'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    usage_delta = {
+        "id": "chatcmpl-tool-stream",
+        "object": "chat.completion.chunk",
+        "choices": [],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+    }
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data=json.dumps(first_tool_delta, separators=(",", ":")),
+            raw_sse_event=_sse(first_tool_delta),
+            json_body=first_tool_delta,
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data=json.dumps(second_tool_delta, separators=(",", ":")),
+            raw_sse_event=_sse(second_tool_delta),
+            json_body=second_tool_delta,
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data=json.dumps(usage_delta, separators=(",", ":")),
+            raw_sse_event=_sse(usage_delta),
+            json_body=usage_delta,
+            usage=ProviderUsage(prompt_tokens=9, completion_tokens=3, total_tokens=12),
+            upstream_request_id="upstream-stream",
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data="[DONE]",
+            raw_sse_event="data: [DONE]\n\n",
+            is_done=True,
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(monkeypatch, app, chunks=chunks)
+
+    request = _chat_request()
+    request["tools"] = [{"type": "function", "function": {"name": "lookup"}}]
+    request["tool_choice"] = "auto"
+    request["logprobs"] = True
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=request) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert _sse(first_tool_delta) in body
+    assert _sse(second_tool_delta) in body
+    assert '"finish_reason":"tool_calls"' in body
+    assert '"logprobs":{"content":[]}' in body
+    assert '"tool_calls"' in body
+    assert "data: [DONE]" in body
+    assert state["finalize_calls"]
+    assert state["provider_completed_calls"]
+    assert '"total_tokens":12' in body
 
 
 def test_streaming_provider_failure_records_failure_and_returns_error_event(monkeypatch) -> None:

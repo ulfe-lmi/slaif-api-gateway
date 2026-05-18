@@ -67,9 +67,9 @@ OpenAI for model discovery, does not fetch pricing, and rejects legacy
 | Body preservation | Registry-classified OpenAI Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
-| Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
+| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
 | Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost with cached/reasoning token handling where provider usage exposes it. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
-| Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored |
+| Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored. Streaming provider error events are converted to safe OpenAI-shaped SSE error events after reservation release |
 
 `OPENAI_API_KEY` is reserved for client OpenAI-compatible configuration and is
 never used as the gateway's upstream OpenAI provider secret. In production,
@@ -91,9 +91,9 @@ provider, and route/provider config overrides must reference env var names only.
 | Body preservation | Registry-classified OpenAI-compatible Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
-| Successful streaming response | Provider SSE events are forwarded; `[DONE]` is sent only after final accounting succeeds |
+| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
 | Usage/accounting | Token usage is parsed; valid non-negative OpenRouter `usage.cost` or `usage.cost_usd` with supported currency is preferred for actual finalization while SLAIF-calculated cost remains comparison metadata. Invalid provider-reported cost falls back to SLAIF calculation. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
-| Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored |
+| Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored. Streaming provider error events are converted to safe OpenAI-shaped SSE error events after reservation release |
 
 In production, `OPENROUTER_API_KEY` must be configured for the enabled built-in
 OpenRouter provider. DB-backed `provider_configs.api_key_env_var` values are env
@@ -251,12 +251,22 @@ normal quota admission until limits are raised or usage is reset.
 Streaming has an extra finalization rule because content may already have reached the client:
 
 - Provider chunks are forwarded as they arrive.
+- The forwarded chunk surface includes plain text deltas, local/client-side
+  function `tool_calls` deltas, `finish_reason="tool_calls"`, provider
+  `logprobs` data, and response-format-compatible JSON/text deltas when those
+  request fields pass policy.
 - Final provider usage is required for success.
 - If usage is missing, the reservation is released, a failed/incomplete event is recorded with zero actual cost, a safe SSE error event is emitted, and normal successful `[DONE]` is not emitted.
 - If usage is present, the gateway writes a durable provider-completed record before final counter mutation.
 - If finalization succeeds, that record is marked finalized and `[DONE]` is emitted.
 - If finalization fails, the record is marked with `needs_reconciliation=true` and `recovery_state=provider_completed_finalization_failed`; `[DONE]` is not emitted.
 - Operator reconciliation can later finalize these provider-completed rows using stored usage/cost metadata without calling providers.
+
+Streaming does not expand request policy. Hosted/provider-side tools, custom
+tools, web search, MCP/connectors, external web access, multimodal/audio/file
+content, `n > 1`, non-default `service_tier`, background/provider-state
+lifecycle fields, and unknown top-level fields remain rejected before provider
+forwarding.
 
 ### Reconciliation
 
