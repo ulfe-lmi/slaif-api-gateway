@@ -60,6 +60,9 @@ from slaif_gateway.schemas.rate_limits import RateLimitPolicy
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import AccountingError
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    enforce_chat_completion_route_capabilities,
+)
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
@@ -138,6 +141,12 @@ async def handle_chat_completion(
         raise openai_error_from_request_policy_error(exc) from exc
 
     request_id = _request_id_from_request(request)
+    route = await _resolve_chat_completion_route(
+        authenticated_key=authenticated_key,
+        effective_model=policy_result.effective_body["model"],
+        policy_result=policy_result,
+        request=request,
+    )
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
@@ -146,9 +155,9 @@ async def handle_chat_completion(
         request=request,
     )
     try:
-        route, cost_estimate, reservation = await _reserve_chat_completion_quota(
+        cost_estimate, reservation = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
-            effective_model=policy_result.effective_body["model"],
+            route=route,
             policy_result=policy_result,
             request_id=request_id,
             request=request,
@@ -556,11 +565,11 @@ async def _release_rate_limit_concurrency(
 async def _reserve_chat_completion_quota(
     *,
     authenticated_key: AuthenticatedGatewayKey,
-    effective_model: str,
+    route: RouteResolutionResult,
     policy_result: ChatCompletionPolicyResult,
     request_id: str,
     request: Request | None,
-) -> tuple[RouteResolutionResult, ChatCostEstimate, QuotaReservationResult]:
+) -> tuple[ChatCostEstimate, QuotaReservationResult]:
     session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
@@ -568,18 +577,6 @@ async def _reserve_chat_completion_quota(
         raise _database_session_unavailable_error() from exc
 
     try:
-        service = RouteResolutionService(
-            model_routes_repository=ModelRoutesRepository(session),
-            provider_configs_repository=ProviderConfigsRepository(session),
-        )
-        try:
-            route = await service.resolve_model(
-                effective_model,
-                authenticated_key,
-            )
-        except RouteResolutionError as exc:
-            raise openai_error_from_route_resolution_error(exc) from exc
-
         pricing_service = PricingService(
             pricing_rules_repository=PricingRulesRepository(session),
             fx_rates_repository=FxRatesRepository(session),
@@ -611,7 +608,45 @@ async def _reserve_chat_completion_quota(
 
         if hasattr(session, "commit"):
             await session.commit()
-        return route, cost_estimate, reservation
+        return cost_estimate, reservation
+    finally:
+        await session_iterator.aclose()
+
+
+async def _resolve_chat_completion_route(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    effective_model: str,
+    policy_result: ChatCompletionPolicyResult,
+    request: Request | None,
+) -> RouteResolutionResult:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        service = RouteResolutionService(
+            model_routes_repository=ModelRoutesRepository(session),
+            provider_configs_repository=ProviderConfigsRepository(session),
+        )
+        try:
+            route = await service.resolve_model(
+                effective_model,
+                authenticated_key,
+            )
+            enforce_chat_completion_route_capabilities(
+                policy_result.effective_body,
+                route_capabilities=route.capabilities,
+                route_supports_streaming=route.supports_streaming,
+                requested_model=route.requested_model,
+            )
+        except RouteResolutionError as exc:
+            raise openai_error_from_route_resolution_error(exc) from exc
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
+        return route
     finally:
         await session_iterator.aclose()
 

@@ -94,7 +94,12 @@ def _wire_auth_and_db(monkeypatch, app) -> None:
     monkeypatch.setattr(main_module.QuotaService, "release_reservation", _fake_release)
 
 
-def _route_result(requested_model: str = "gpt-4.1-mini") -> RouteResolutionResult:
+def _route_result(
+    requested_model: str = "gpt-4.1-mini",
+    *,
+    supports_streaming: bool = True,
+    capabilities: dict[str, object] | None = None,
+) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model=requested_model,
@@ -103,6 +108,8 @@ def _route_result(requested_model: str = "gpt-4.1-mini") -> RouteResolutionResul
         route_match_type="exact",
         route_pattern=requested_model,
         priority=100,
+        supports_streaming=supports_streaming,
+        capabilities=capabilities,
     )
 
 
@@ -632,7 +639,71 @@ def test_request_caps_reject_before_redis_route_pricing_quota_or_provider(monkey
     assert response.json()["error"]["code"] == "chat_field_too_large"
     assert response.json()["error"]["param"] == "messages[0].content"
     assert calls == []
-    assert "raw request body marker" not in response.text
+
+
+def test_route_capability_mismatch_rejects_before_redis_pricing_quota_or_provider(monkeypatch) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    calls: list[str] = []
+
+    async def _fake_redis_reserve(**kwargs):
+        _ = kwargs
+        calls.append("redis")
+        return None
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, authenticated_key)
+        calls.append("route")
+        return _route_result(
+            requested_model,
+            capabilities={"chat_completions": {"chat_text": False}},
+        )
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, endpoint, at)
+        calls.append("pricing")
+        return object()
+
+    async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
+        _ = (self, authenticated_key, route, policy, cost_estimate, request_id, now)
+        calls.append("quota")
+        raise AssertionError("quota reservation should not be called")
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_redis_reserve)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "raw prompt marker"}],
+        },
+        headers={"Authorization": "Bearer sk-slaif-raw-gateway-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "This model route does not support text Chat Completions.",
+        "type": "invalid_request_error",
+        "param": "model",
+        "code": "chat_capability_not_supported",
+    }
+    assert calls == ["route"]
+    assert "raw prompt marker" not in response.text
     assert "sk-slaif-raw-gateway-key" not in response.text
 
 

@@ -189,15 +189,17 @@ async def test_reservation_commits_and_closes_before_provider_call(monkeypatch) 
     assert state["events"] == [
         "tx1:open",
         "tx1:resolve",
-        "tx1:price",
-        "tx1:reserve",
-        "tx1:commit",
         "tx1:close",
-        "provider:called",
         "tx2:open",
-        "tx2:finalize",
+        "tx2:price",
+        "tx2:reserve",
         "tx2:commit",
         "tx2:close",
+        "provider:called",
+        "tx3:open",
+        "tx3:finalize",
+        "tx3:commit",
+        "tx3:close",
     ]
 
 
@@ -213,8 +215,8 @@ async def test_finalization_uses_separate_transaction_after_provider_response(mo
         settings=Settings(OPENAI_UPSTREAM_API_KEY="unused"),
     )
 
-    assert state["events"].index("provider:called") < state["events"].index("tx2:open")
-    assert "tx2:finalize" in state["events"]
+    assert state["events"].index("provider:called") < state["events"].index("tx3:open")
+    assert "tx3:finalize" in state["events"]
 
 
 @pytest.mark.asyncio
@@ -253,15 +255,17 @@ async def test_provider_failure_releases_reservation_in_separate_transaction(mon
     assert state["events"] == [
         "tx1:open",
         "tx1:resolve",
-        "tx1:price",
-        "tx1:reserve",
-        "tx1:commit",
         "tx1:close",
-        "provider:called",
         "tx2:open",
-        "tx2:release",
+        "tx2:price",
+        "tx2:reserve",
         "tx2:commit",
         "tx2:close",
+        "provider:called",
+        "tx3:open",
+        "tx3:release",
+        "tx3:commit",
+        "tx3:close",
     ]
 
 
@@ -273,7 +277,7 @@ async def test_provider_is_not_called_when_quota_reservation_fails(monkeypatch) 
 
     async def _raise_quota(self, *args, **kwargs):
         _ = (self, args, kwargs)
-        state["events"].append("tx1:reserve")
+        state["events"].append("tx2:reserve")
         raise QuotaLimitExceededError("Token quota limit exceeded", param="token_limit_total")
 
     def _get_provider_adapter(provider, settings):
@@ -292,7 +296,7 @@ async def test_provider_is_not_called_when_quota_reservation_fails(monkeypatch) 
 
     assert exc_info.value.code == "quota_limit_exceeded"
     assert "provider:called" not in state["events"]
-    assert "tx1:commit" not in state["events"]
+    assert "tx2:commit" not in state["events"]
 
 
 @pytest.mark.asyncio
@@ -321,4 +325,4 @@ async def test_accounting_failure_after_provider_success_does_not_return_success
 
     assert exc_info.value.code == "reservation_finalization_error"
     assert "provider:called" in state["events"]
-    assert "tx2:commit" not in state["events"]
+    assert "tx3:commit" not in state["events"]

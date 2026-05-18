@@ -1027,6 +1027,46 @@ created_at timestamptz not null
 updated_at timestamptz not null
 ```
 
+For `/v1/chat/completions` routes, `capabilities` may include a
+`chat_completions` object with boolean flags. New route-service and curated
+OpenAI bootstrap writes add this object automatically when it is absent. The
+current supported flag names are:
+
+```text
+chat_text
+chat_streaming
+chat_function_tools
+chat_legacy_functions
+chat_structured_outputs
+chat_json_mode
+chat_logprobs
+chat_reasoning_usage
+chat_cached_input_usage
+hosted_web_search
+hosted_file_search
+hosted_code_interpreter
+hosted_computer_use
+hosted_image_generation
+hosted_tool_search
+external_mcp_connectors
+chat_multimodal
+chat_audio
+chat_file_inputs
+chat_service_tier_non_default
+chat_multiple_choices
+```
+
+Route/model capability metadata is separate from gateway-key endpoint/model
+allowlists. The Chat Completions request path rejects request shapes that exceed
+the resolved route metadata before Redis rate limiting, pricing, quota
+reservation, or provider forwarding. Existing legacy rows with no
+`chat_completions` object use the documented compatibility fallback for the
+previously supported Chat Completions surface. If the object is present,
+unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
+external MCP/connectors, multimodal/audio/file inputs, non-default service
+tiers, and `n > 1` remain disabled unless future explicit support changes both
+policy and accounting.
+
 Allowed `match_type` values:
 
 ```text

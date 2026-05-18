@@ -22,3 +22,5 @@ class RouteResolutionResult:
     provider_timeout_seconds: int | None = None
     provider_max_retries: int | None = None
     visible_model_id: str | None = None
+    supports_streaming: bool = True
+    capabilities: dict[str, object] | None = None

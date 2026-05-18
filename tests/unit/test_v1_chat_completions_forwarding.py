@@ -21,6 +21,7 @@ from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
 )
+from slaif_gateway.services.chat_completion_route_capabilities import default_chat_completion_capabilities
 
 
 class FakeSession:
@@ -65,6 +66,7 @@ def _route(
     *,
     provider_base_url: str | None = None,
     provider_api_key_env_var: str | None = None,
+    capabilities: dict[str, object] | None = None,
 ) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
@@ -76,6 +78,7 @@ def _route(
         priority=100,
         provider_base_url=provider_base_url,
         provider_api_key_env_var=provider_api_key_env_var,
+        capabilities=capabilities,
     )
 
 
@@ -114,6 +117,7 @@ def _wire_pipeline(
     provider_api_key_env_var: str | None = None,
     authenticated_key: AuthenticatedGatewayKey | None = None,
     expected_requested_model: str = "classroom-cheap",
+    route_capabilities: dict[str, object] | None = None,
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as main_module
@@ -130,6 +134,7 @@ def _wire_pipeline(
         resolved_model=resolved_model,
         provider_base_url=provider_base_url,
         provider_api_key_env_var=provider_api_key_env_var,
+        capabilities=route_capabilities,
     )
     estimate = _estimate(provider=provider, resolved_model=resolved_model)
 
@@ -372,6 +377,8 @@ def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) 
 def test_trusted_calibration_hosted_tool_request_is_forwarded(monkeypatch, respx_mock) -> None:
     settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
     app = create_app(settings)
+    chat_capabilities = default_chat_completion_capabilities()
+    chat_capabilities["hosted_web_search"] = True
     _wire_pipeline(
         monkeypatch,
         app,
@@ -382,6 +389,7 @@ def test_trusted_calibration_hosted_tool_request_is_forwarded(monkeypatch, respx
             capability_policy_mode=CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
         ),
         expected_requested_model="gpt-5-search-api",
+        route_capabilities={"chat_completions": chat_capabilities},
     )
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(

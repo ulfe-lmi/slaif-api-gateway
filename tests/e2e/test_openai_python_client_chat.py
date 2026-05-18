@@ -84,6 +84,7 @@ async def _create_test_data(
     api_key_env_var: str = "OPENAI_UPSTREAM_API_KEY",
     owner_label: str = "OpenAI",
     trusted_calibration: bool = False,
+    supports_streaming: bool = True,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -179,7 +180,34 @@ async def _create_test_data(
                 endpoint=CHAT_COMPLETIONS_ENDPOINT,
                 priority=1,
                 visible_in_models=True,
-                supports_streaming=False,
+                supports_streaming=supports_streaming,
+                capabilities=(
+                    {
+                        "chat_completions": {
+                            "chat_text": True,
+                            "chat_streaming": supports_streaming,
+                            "chat_function_tools": True,
+                            "chat_legacy_functions": True,
+                            "chat_structured_outputs": True,
+                            "chat_json_mode": True,
+                            "chat_logprobs": True,
+                            "chat_reasoning_usage": True,
+                            "chat_cached_input_usage": True,
+                            "hosted_web_search": trusted_calibration,
+                            "hosted_file_search": False,
+                            "hosted_code_interpreter": False,
+                            "hosted_computer_use": False,
+                            "hosted_image_generation": False,
+                            "hosted_tool_search": False,
+                            "external_mcp_connectors": False,
+                            "chat_multimodal": False,
+                            "chat_audio": False,
+                            "chat_file_inputs": False,
+                            "chat_service_tier_non_default": False,
+                            "chat_multiple_choices": False,
+                        }
+                    }
+                ),
                 notes=f"{notes_prefix} route",
             )
             await pricing.create_pricing_rule(

@@ -25,6 +25,8 @@ but are not a production certification.
 - OpenAI-compatible `GET /v1/models`.
 - OpenAI-compatible non-streaming and streaming `POST /v1/chat/completions`.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
+- Explicit Chat Completions route/model capability metadata, enforced
+  separately from gateway-key endpoint/model/provider allowlists.
 - PostgreSQL-backed gateway key, quota, reservation, accounting, usage ledger,
   audit, catalog, routing, pricing, FX, admin, and email delivery metadata.
 - Chat Completions accounting uses admission-time budget checks plus post-call

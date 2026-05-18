@@ -16,6 +16,9 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    ensure_default_chat_completion_capabilities,
+)
 from slaif_gateway.services.model_route_service import normalize_endpoint
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
@@ -327,11 +330,15 @@ class _RouteCreationService:
             notes=entry.notes,
             endpoint=entry.normalized_endpoint,
             supports_streaming=entry.supports_streaming,
-            capabilities={
-                "catalog": "openai-completions",
-                "endpoint": entry.endpoint,
-                "source_note": entry.source_note,
-            },
+            capabilities=ensure_default_chat_completion_capabilities(
+                {
+                    "catalog": "openai-completions",
+                    "endpoint": entry.endpoint,
+                    "source_note": entry.source_note,
+                },
+                supports_streaming=entry.supports_streaming,
+                endpoint=entry.normalized_endpoint,
+            ),
             reason="OpenAI Completions catalog bootstrap",
         )
 

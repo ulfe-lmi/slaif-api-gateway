@@ -290,7 +290,7 @@ def test_streaming_rate_limit_rejection_happens_before_provider(monkeypatch) -> 
     response = TestClient(app).post("/v1/chat/completions", json=_chat_request())
 
     assert response.status_code == 429
-    assert state["route_calls"] == []
+    assert state["route_calls"] == ["classroom-cheap"]
     assert state["stream_calls"] == []
 
 

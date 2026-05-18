@@ -194,6 +194,9 @@ async def test_apply_creates_provider_exact_chat_routes_and_pricing_for_catalog_
     assert len(store.routes) == len(catalog)
     assert all(row.match_type == "exact" for row in store.routes)
     assert all(row.endpoint == "/v1/chat/completions" for row in store.routes)
+    assert all(row.capabilities["chat_completions"]["chat_text"] is True for row in store.routes)
+    assert all(row.capabilities["chat_completions"]["chat_streaming"] is True for row in store.routes)
+    assert all(row.capabilities["chat_completions"]["hosted_web_search"] is False for row in store.routes)
     assert {row.requested_model for row in store.routes} == {entry.model_id for entry in catalog}
     assert len(store.pricing) == len(catalog)
     assert all(row.currency == "EUR" for row in store.pricing)

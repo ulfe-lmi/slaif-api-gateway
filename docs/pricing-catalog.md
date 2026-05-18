@@ -122,6 +122,12 @@ Route proposal TSV files use the current route import fields:
 requested_model	match_type	endpoint	provider	upstream_model	priority	enabled	visible_in_models	supports_streaming	capabilities	notes
 ```
 
+For Chat Completions routes, `capabilities` should include explicit
+`chat_completions` boolean flags as documented in
+[`database-schema.md`](database-schema.md). Endpoint/model/provider policy does
+not imply local function-tool, structured-output, logprobs, hosted-tool,
+service-tier, or multimodal permission.
+
 OpenAI-assisted route proposals must not turn search-specific models such as
 `gpt-5-search-api`, `gpt-4o-search-preview`, or
 `gpt-4o-mini-search-preview` into ordinary Chat Completions routes. Those models

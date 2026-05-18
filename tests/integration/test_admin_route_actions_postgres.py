@@ -235,7 +235,8 @@ def test_admin_route_actions_postgres(migrated_postgres_url: str) -> None:
         route = asyncio.run(_route_by_requested_model(migrated_postgres_url, requested_model))
         assert created.headers["location"] == f"/admin/routes/{route.id}?message=model_route_created"
         assert route.provider == data["provider"]
-        assert route.capabilities == {"vision": False}
+        assert route.capabilities["vision"] is False
+        assert route.capabilities["chat_completions"]["chat_text"] is True
         audit_rows = asyncio.run(_audit_rows(migrated_postgres_url, route.id))
         assert "model_route_created" in {row.action for row in audit_rows}
 
@@ -273,7 +274,8 @@ def test_admin_route_actions_postgres(migrated_postgres_url: str) -> None:
         assert route.priority == 20
         assert route.visible_in_models is False
         assert route.supports_streaming is False
-        assert route.capabilities == {"json": True}
+        assert route.capabilities["json"] is True
+        assert route.capabilities["chat_completions"]["chat_streaming"] is False
 
         edit = client.get(f"/admin/routes/{route.id}/edit")
         bad_secret_edit = client.post(
@@ -289,7 +291,8 @@ def test_admin_route_actions_postgres(migrated_postgres_url: str) -> None:
         )
         assert bad_secret_edit.status_code == 400
         unchanged = asyncio.run(_route_by_requested_model(migrated_postgres_url, edited_model))
-        assert unchanged.capabilities == {"json": True}
+        assert unchanged.capabilities["json"] is True
+        assert unchanged.capabilities["chat_completions"]["chat_streaming"] is False
 
         detail = client.get(f"/admin/routes/{route.id}")
         disable_without_confirmation = client.post(

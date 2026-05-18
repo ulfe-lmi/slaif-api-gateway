@@ -80,6 +80,11 @@ only. It does not call OpenAI for discovery, does not fetch pricing, and does
 not store provider key values. Legacy `/v1/completions` remains unsupported in
 this repository state, so the command rejects `--include-legacy-completions`.
 Responses API work is separate and out of scope for this command.
+Seeded Chat Completions route rows include explicit `model_routes.capabilities`
+metadata under the `chat_completions` key for text chat, streaming, local
+function tools, legacy functions, JSON mode, structured outputs, logprobs, and
+safe provider usage signals. Hosted tools, multimodal/audio/file inputs,
+non-default service tiers, and multiple choices are marked unsupported.
 
 ## Chat Completions Request Fields
 
@@ -133,13 +138,28 @@ reservation, or provider forwarding.
 
 Trusted calibration keys are the discovery exception. A trusted organizer/admin
 key in `trusted_calibration_discovery` mode may pass routed Chat Completions
-hosted-capability markers, including search-specific model IDs when a local
-route exists, so SLAIF can observe safe usage metadata. Normal keys keep the
-hosted-tool-deny behavior. Calibration mode does not implement `/v1/responses`
-or `/v1/completions`, does not create routes automatically, and still denies
+hosted-capability markers only when the local route metadata explicitly allows
+the matching hosted capability, so SLAIF can observe safe usage metadata.
+Normal keys keep the hosted-tool-deny behavior even if a route advertises
+provider support. Calibration mode does not implement `/v1/responses` or
+`/v1/completions`, does not create routes automatically, and still denies
 external MCP/connectors, provider-side authorization, connector IDs, server
 URLs, approval flows, and background/provider-state lifecycle features by
 default.
+
+Route/model capability metadata is a separate gate from key endpoint/model and
+provider allowlists. After route resolution and before Redis rate limiting,
+pricing lookup, PostgreSQL quota reservation, or provider forwarding, the
+gateway checks the resolved route's `chat_completions` capability metadata
+against the accepted request shape. Text chat, streaming, local function tools,
+legacy functions, JSON mode, structured outputs, logprobs, and reasoning
+controls must be allowed by the route metadata when used. A model allowlist
+entry alone therefore does not imply permission to use those capabilities.
+Existing routes that predate the capability block use a documented
+compatibility fallback matching the previously supported Chat Completions
+surface, but newly seeded and newly created Chat Completions routes receive
+explicit metadata. Malformed or unknown `chat_completions` capability flags fail
+closed.
 
 Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
@@ -174,10 +194,12 @@ For `POST /v1/chat/completions`, the implemented order is:
 1. Authenticate the gateway key from `Authorization: Bearer ...`.
 2. Check endpoint allow-list policy.
 3. Validate request shape with the permissive Chat Completions schema.
-4. Apply request policy, capability policy, and token caps, including serialized non-message
-   provider-forwarded Chat Completions fields in the input estimate.
-5. Apply Redis operational rate limits when enabled.
-6. Resolve the model route and provider.
+4. Apply request field policy, hosted-tool policy, request caps, and token caps,
+   including serialized non-message provider-forwarded Chat Completions fields
+   in the input estimate.
+5. Resolve the model route/provider and enforce explicit route/model
+   Chat Completions capability metadata.
+6. Apply Redis operational rate limits when enabled.
 7. Look up pricing and FX data.
 8. Reserve PostgreSQL hard quota.
 9. Forward to OpenAI or OpenRouter.

@@ -98,6 +98,9 @@ async def test_model_route_create_writes_safe_actor_audit() -> None:
     )
 
     assert row.upstream_model == "gpt-upstream-mini"
+    assert row.capabilities["vision"] is False
+    assert row.capabilities["chat_completions"]["chat_text"] is True
+    assert row.capabilities["chat_completions"]["chat_streaming"] is True
     assert audit.rows[0]["admin_user_id"] == actor_admin_id
     assert audit.rows[0]["action"] == "model_route_created"
     assert audit.rows[0]["new_values"]["provider"] == "openai"
@@ -128,6 +131,8 @@ async def test_model_route_update_writes_safe_actor_audit() -> None:
 
     assert updated.enabled is False
     assert updated.priority == 20
+    assert updated.capabilities["json"] is True
+    assert updated.capabilities["chat_completions"]["chat_streaming"] is False
     assert audit.rows[0]["admin_user_id"] == actor_admin_id
     assert audit.rows[0]["action"] == "model_route_updated"
     assert audit.rows[0]["old_values"]["enabled"] is True
