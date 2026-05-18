@@ -167,6 +167,13 @@ content, local function tools, legacy function fields, `response_format`,
 non-default `service_tier`, audio/image/file/video content, provider-side state
 fields such as `store=true`, `previous_response_id`, and `conversation`, and
 other unclassified feature-bearing fields before any provider request is built.
+Supported Chat Completions fields are also bounded by explicit scalar and size
+validation before any provider body is constructed. The gateway validates
+temperature/top-p/penalty/logprob/logit-bias ranges, message and text-part
+counts, local function-tool counts and schema sizes, response-format schema
+size, metadata key/count/byte limits, stop sequence limits, `prediction` size,
+`stream_options` size, and `n` exactly `1`. Rejection errors do not include raw
+messages, metadata values, schemas, tool payloads, or request bodies.
 
 ## Header Contract
 
@@ -188,19 +195,19 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | Field | Behavior | Reason |
 | --- | --- | --- |
 | `model` | Mutated upstream | Replaced with route `upstream_model` for aliases and provider-specific naming |
-| `messages` | Preserved | Required Chat Completions input; used only for validation and token estimation, not stored |
+| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored |
 | `max_tokens` | Preserved when valid | OpenAI Chat Completions output control |
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
 | `stream_options` | Preserved, but `include_usage` forced to `true` for streaming | Required for reliable streaming accounting |
 | `n` | Preserved only when omitted or exactly `1`; rejected for any other value | Multi-choice accounting is not implemented, so `n > 1` is rejected before provider forwarding |
-| `tools` / `tool_choice` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Local `function` tools are allowed as client-side behavior. Hosted/provider-side tools, MCP/connectors, web search tools, unknown tool types, and tool choices that force denied hosted tools are rejected before forwarding |
-| `functions` / `function_call` | Preserved when accepted; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
-| `response_format` | Preserved when accepted; serialized JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
-| `metadata` | Preserved to provider only when it is a JSON object within the gateway size cap; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field with explicit size/shape policy |
-| `user` | Preserved | Ordinary OpenAI Chat Completions field |
-| `temperature` / `top_p` | Preserved | Ordinary OpenAI Chat Completions fields |
-| `prediction` | Preserved when accepted; object/list payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
+| `tools` / `tool_choice` | Preserved when accepted and within configured local-tool caps; serialized object/list payloads are included in input/cost pre-reservation | Local `function` tools are allowed as client-side behavior. Hosted/provider-side tools, MCP/connectors, web search tools, unknown tool types, and tool choices that force denied hosted tools are rejected before forwarding |
+| `functions` / `function_call` | Preserved when accepted and within equivalent caps; serialized object/list payloads are included in input/cost pre-reservation | Legacy OpenAI-compatible function fields may affect provider context size |
+| `response_format` | Preserved when accepted; bounded JSON schemas are included in input/cost pre-reservation | Ordinary OpenAI Chat Completions field that can affect provider context size |
+| `metadata` | Preserved to provider only when it is a JSON object within configured key/count/byte caps; not stored wholesale in ledger | Ordinary OpenAI Chat Completions field with explicit size/shape policy |
+| `user` | Preserved within configured byte cap | Ordinary OpenAI Chat Completions field |
+| `temperature` / `top_p` / penalties / logprob controls / `logit_bias` | Preserved when type and range validation passes | Ordinary OpenAI Chat Completions scalar controls |
+| `prediction` | Preserved when accepted as a bounded object; object payload is included in input/cost pre-reservation | Static-output hints can affect provider context size |
 | `service_tier` | Omitted or `auto` is allowed; other values are rejected | Local pricing is not service-tier aware |
 | `modalities` / `audio` / non-text content parts | Text-only modality is allowed; audio/image/file/video fields or message parts are rejected | Multimodal/audio/file pricing and accounting are not implemented |
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |

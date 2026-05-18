@@ -276,7 +276,7 @@ def test_excessive_estimated_input_returns_openai_shaped_invalid_request_error(m
 
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
-    assert response.json()["error"]["code"] == "input_token_limit_exceeded"
+    assert response.json()["error"]["code"] == "chat_field_too_large"
 
 
 def test_large_tools_schema_rejects_before_redis_route_pricing_quota_or_provider(monkeypatch) -> None:
@@ -493,6 +493,7 @@ def test_multi_choice_count_is_rejected_before_side_effects(monkeypatch) -> None
         ({"previous_response_id": "resp_123"}, "background_not_allowed", "previous_response_id"),
         ({"conversation": "conv_123"}, "background_not_allowed", "conversation"),
         ({"service_tier": "flex"}, "service_tier_not_supported", "service_tier"),
+        ({"metadata": {"oversized": "raw request body marker" * 2000}}, "chat_metadata_too_large", "metadata"),
         ({"x_future": {"secret": "raw request body marker"}}, "unknown_chat_completion_field", "x_future"),
         ({"audio": {"voice": "alloy"}}, "unsupported_chat_completion_modality", "audio"),
     ],
@@ -574,6 +575,65 @@ def test_hosted_tool_policy_rejects_before_redis_route_pricing_quota_or_provider
         "https://mcp.test",
     ):
         assert forbidden not in response_text
+
+
+def test_request_caps_reject_before_redis_route_pricing_quota_or_provider(monkeypatch) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    app = create_app(Settings(CHAT_MAX_MESSAGE_CONTENT_BYTES=8))
+    _wire_auth_and_db(monkeypatch, app)
+    calls: list[str] = []
+
+    async def _fake_redis_reserve(**kwargs):
+        _ = kwargs
+        calls.append("redis")
+        return None
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key):
+        _ = (self, requested_model, authenticated_key)
+        calls.append("route")
+        return _route_result()
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, endpoint, at)
+        calls.append("pricing")
+        return object()
+
+    async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
+        _ = (self, authenticated_key, route, policy, cost_estimate, request_id, now)
+        calls.append("quota")
+        raise AssertionError("quota reservation should not be called")
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_redis_reserve)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "raw request body marker"}],
+        },
+        headers={"Authorization": "Bearer sk-slaif-raw-gateway-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "chat_field_too_large"
+    assert response.json()["error"]["param"] == "messages[0].content"
+    assert calls == []
+    assert "raw request body marker" not in response.text
+    assert "sk-slaif-raw-gateway-key" not in response.text
 
 
 def test_unsupported_model_returns_openai_shaped_route_error(monkeypatch) -> None:
