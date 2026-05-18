@@ -4,6 +4,7 @@ import pytest
 
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
+    CHAT_CAPABILITY_CUSTOM_TOOLS,
     CHAT_CAPABILITY_FUNCTION_TOOLS,
     CHAT_CAPABILITY_JSON_MODE,
     CHAT_CAPABILITY_LOGPROBS,
@@ -105,6 +106,55 @@ def test_function_tools_require_function_tool_capability_without_schema_inspecti
 
     assert exc_info.value.param == "tools"
     assert raw_schema_marker not in exc_info.value.safe_message
+
+
+def test_custom_tools_require_explicit_custom_tool_capability_without_semantic_policing() -> None:
+    raw_grammar_marker = "raw custom grammar marker"
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as absent_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(
+                tools=[
+                    {
+                        "type": "custom",
+                        "custom": {
+                            "name": "run_shell",
+                            "format": {
+                                "type": "grammar",
+                                "grammar": {
+                                    "syntax": "regex",
+                                    "definition": raw_grammar_marker,
+                                },
+                            },
+                        },
+                    }
+                ]
+            ),
+            route_capabilities=_caps(),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert absent_exc.value.error_code == "chat_custom_tool_capability_not_supported"
+    assert absent_exc.value.param == "tools"
+    assert raw_grammar_marker not in absent_exc.value.safe_message
+
+    with pytest.raises(ChatCompletionRouteCapabilityError) as false_exc:
+        enforce_chat_completion_route_capabilities(
+            _payload(tools=[{"type": "custom", "custom": {"name": "delete_file"}}]),
+            route_capabilities=_caps(**{CHAT_CAPABILITY_CUSTOM_TOOLS: False}),
+            route_supports_streaming=True,
+            requested_model="gpt-4.1-mini",
+        )
+
+    assert false_exc.value.error_code == "chat_custom_tool_capability_not_supported"
+
+    enforce_chat_completion_route_capabilities(
+        _payload(tools=[{"type": "custom", "custom": {"name": "delete_file"}}]),
+        route_capabilities=_caps(**{CHAT_CAPABILITY_CUSTOM_TOOLS: True}),
+        route_supports_streaming=True,
+        requested_model="gpt-4.1-mini",
+    )
 
 
 def test_legacy_functions_require_legacy_capability() -> None:

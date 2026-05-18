@@ -12,6 +12,9 @@ from slaif_gateway.services.policy_errors import MULTI_CHOICE_UNSUPPORTED_MESSAG
 
 _REASONING_EFFORT_VALUES = frozenset({"minimal", "low", "medium", "high"})
 _RESPONSE_FORMAT_TYPES = frozenset({"text", "json_object", "json_schema"})
+_TOOL_CHOICE_MODES = frozenset({"none", "auto", "required"})
+_CUSTOM_FORMAT_TYPES = frozenset({"text", "grammar"})
+_CUSTOM_GRAMMAR_SYNTAXES = frozenset({"lark", "regex"})
 
 
 class ChatCompletionRequestCapsError(RequestPolicyError):
@@ -41,7 +44,18 @@ def enforce_chat_completion_request_caps(
     _validate_logit_bias(payload.get("logit_bias"), settings=settings)
     _validate_tools(payload.get("tools"), settings=settings)
     _validate_legacy_functions(payload.get("functions"), settings=settings)
-    _validate_function_choice(payload.get("tool_choice"), param="tool_choice", settings=settings)
+    _validate_tool_choice(
+        payload.get("tool_choice"),
+        tools=payload.get("tools"),
+        param="tool_choice",
+        settings=settings,
+    )
+    if payload.get("stream") is True and _uses_custom_tools(payload):
+        _raise(
+            "stream",
+            "chat_streaming_custom_tool_not_supported",
+            "Streaming Chat Completions custom tools are not enabled by this gateway.",
+        )
     _validate_function_choice(
         payload.get("function_call"),
         param="function_call",
@@ -359,16 +373,28 @@ def _validate_tools(value: Any, *, settings: Settings) -> None:
             "The request includes too many Chat Completions tools.",
         )
     total_schema_bytes = 0
+    custom_tools = 0
     for index, tool in enumerate(value):
         if not isinstance(tool, Mapping):
             _raise(f"tools[{index}]", "chat_field_invalid_type", "Each tool must be an object.")
-        if tool.get("type") != "function":
+        tool_type = tool.get("type")
+        if tool_type == "custom":
+            custom_tools += 1
+            _validate_custom_tool(tool, param_prefix=f"tools[{index}]", settings=settings)
+            continue
+        if tool_type != "function":
             continue
         function = tool.get("function")
         total_schema_bytes += _validate_function_definition(
             function,
             param_prefix=f"tools[{index}].function",
             settings=settings,
+        )
+    if custom_tools > settings.CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST:
+        _raise(
+            "tools",
+            "chat_custom_tool_count_exceeded",
+            "The request includes too many Chat Completions custom tools.",
         )
     if total_schema_bytes > settings.CHAT_MAX_TOTAL_TOOL_SCHEMA_BYTES:
         _raise(
@@ -466,6 +492,273 @@ def _validate_function_definition(
             "A function tool schema exceeds the gateway size limit.",
         )
     return size
+
+
+def _validate_custom_tool(
+    value: Mapping[str, Any],
+    *,
+    param_prefix: str,
+    settings: Settings,
+) -> None:
+    allowed_tool_keys = {"type", "custom"}
+    for key in value:
+        if key not in allowed_tool_keys:
+            _raise(
+                f"{param_prefix}.{key}",
+                "chat_custom_tool_invalid_shape",
+                "Custom tools may only include documented Chat Completions custom-tool fields.",
+            )
+
+    custom = value.get("custom")
+    if not isinstance(custom, Mapping):
+        _raise(
+            f"{param_prefix}.custom",
+            "chat_custom_tool_invalid_shape",
+            "Custom tools must include a custom object.",
+        )
+
+    allowed_custom_keys = {"name", "description", "format"}
+    for key in custom:
+        if key not in allowed_custom_keys:
+            _raise(
+                f"{param_prefix}.custom.{key}",
+                "chat_custom_tool_invalid_shape",
+                "Custom tools may only include documented Chat Completions custom-tool fields.",
+            )
+
+    name = custom.get("name")
+    if not isinstance(name, str) or not name.strip():
+        _raise(
+            f"{param_prefix}.custom.name",
+            "chat_custom_tool_invalid_type",
+            "Custom tool names must be non-empty strings.",
+        )
+    _validate_string_bytes(
+        name,
+        param=f"{param_prefix}.custom.name",
+        max_bytes=settings.CHAT_MAX_CUSTOM_TOOL_NAME_BYTES,
+        error_code="chat_custom_tool_too_large",
+        safe_message="A custom tool name exceeds the gateway size limit.",
+    )
+
+    description = custom.get("description")
+    if description is not None:
+        if not isinstance(description, str):
+            _raise(
+                f"{param_prefix}.custom.description",
+                "chat_custom_tool_invalid_type",
+                "Custom tool descriptions must be strings.",
+            )
+        _validate_string_bytes(
+            description,
+            param=f"{param_prefix}.custom.description",
+            max_bytes=settings.CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES,
+            error_code="chat_custom_tool_too_large",
+            safe_message="A custom tool description exceeds the gateway size limit.",
+        )
+
+    custom_format = custom.get("format")
+    if custom_format is not None:
+        _validate_custom_tool_format(
+            custom_format,
+            param_prefix=f"{param_prefix}.custom.format",
+            settings=settings,
+        )
+
+
+def _validate_custom_tool_format(
+    value: Any,
+    *,
+    param_prefix: str,
+    settings: Settings,
+) -> None:
+    if not isinstance(value, Mapping):
+        _raise(
+            param_prefix,
+            "chat_custom_tool_invalid_shape",
+            "Custom tool format must be an object.",
+        )
+    if _json_size(value, param=param_prefix) > settings.CHAT_MAX_CUSTOM_TOOL_FORMAT_BYTES:
+        _raise(
+            param_prefix,
+            "chat_custom_tool_too_large",
+            "A custom tool format exceeds the gateway size limit.",
+        )
+
+    format_type = value.get("type")
+    if format_type not in _CUSTOM_FORMAT_TYPES:
+        _raise(
+            f"{param_prefix}.type",
+            "chat_custom_tool_format_not_supported",
+            "Custom tool format type is not supported by this gateway.",
+        )
+
+    if format_type == "text":
+        if set(value) != {"type"}:
+            _raise(
+                param_prefix,
+                "chat_custom_tool_invalid_shape",
+                "Text custom tool format may only include documented fields.",
+            )
+        return
+
+    allowed_format_keys = {"type", "grammar"}
+    for key in value:
+        if key not in allowed_format_keys:
+            _raise(
+                f"{param_prefix}.{key}",
+                "chat_custom_tool_invalid_shape",
+                "Grammar custom tool format may only include documented fields.",
+            )
+
+    grammar = value.get("grammar")
+    if not isinstance(grammar, Mapping):
+        _raise(
+            f"{param_prefix}.grammar",
+            "chat_custom_tool_invalid_shape",
+            "Grammar custom tool format must include a grammar object.",
+        )
+    for key in grammar:
+        if key not in {"definition", "syntax"}:
+            _raise(
+                f"{param_prefix}.grammar.{key}",
+                "chat_custom_tool_invalid_shape",
+                "Custom tool grammar may only include documented fields.",
+            )
+    syntax = grammar.get("syntax")
+    if syntax not in _CUSTOM_GRAMMAR_SYNTAXES:
+        _raise(
+            f"{param_prefix}.grammar.syntax",
+            "chat_custom_tool_format_not_supported",
+            "Custom tool grammar syntax is not supported by this gateway.",
+        )
+    definition = grammar.get("definition")
+    if not isinstance(definition, str):
+        _raise(
+            f"{param_prefix}.grammar.definition",
+            "chat_custom_tool_invalid_type",
+            "Custom tool grammar definition must be a string.",
+        )
+    _validate_string_bytes(
+        definition,
+        param=f"{param_prefix}.grammar.definition",
+        max_bytes=settings.CHAT_MAX_CUSTOM_TOOL_GRAMMAR_BYTES,
+        error_code="chat_custom_tool_grammar_too_large",
+        safe_message="A custom tool grammar definition exceeds the gateway size limit.",
+    )
+
+
+def _validate_tool_choice(
+    value: Any,
+    *,
+    tools: Any,
+    param: str,
+    settings: Settings,
+) -> None:
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value not in _TOOL_CHOICE_MODES:
+            _raise(
+                param,
+                "chat_custom_tool_choice_invalid",
+                "The 'tool_choice' field must be none, auto, required, or a supported tool choice object.",
+            )
+        return
+    if not isinstance(value, Mapping):
+        _raise(param, "chat_field_invalid_type", f"The '{param}' field must be a string or object.")
+
+    choice_type = value.get("type")
+    if choice_type == "function":
+        _validate_function_choice(value, param=param, settings=settings)
+        return
+    if choice_type == "custom":
+        _validate_custom_tool_choice(value, tools=tools, param=param, settings=settings)
+        return
+    if choice_type is not None:
+        return
+
+    _raise(
+        param,
+        "chat_custom_tool_choice_invalid",
+        "The 'tool_choice' field must use a supported Chat Completions tool-choice shape.",
+    )
+
+
+def _validate_custom_tool_choice(
+    value: Mapping[str, Any],
+    *,
+    tools: Any,
+    param: str,
+    settings: Settings,
+) -> None:
+    for key in value:
+        if key not in {"type", "custom"}:
+            _raise(
+                f"{param}.{key}",
+                "chat_custom_tool_choice_invalid",
+                "Custom tool choice may only include documented fields.",
+            )
+    custom = value.get("custom")
+    if not isinstance(custom, Mapping):
+        _raise(
+            f"{param}.custom",
+            "chat_custom_tool_choice_invalid",
+            "Custom tool choice must include a custom object.",
+        )
+    for key in custom:
+        if key != "name":
+            _raise(
+                f"{param}.custom.{key}",
+                "chat_custom_tool_choice_invalid",
+                "Custom tool choice may only include documented fields.",
+            )
+    name = custom.get("name")
+    if not isinstance(name, str) or not name.strip():
+        _raise(
+            f"{param}.custom.name",
+            "chat_custom_tool_choice_invalid",
+            "Custom tool choice names must be non-empty strings.",
+        )
+    _validate_string_bytes(
+        name,
+        param=f"{param}.custom.name",
+        max_bytes=settings.CHAT_MAX_CUSTOM_TOOL_NAME_BYTES,
+        error_code="chat_custom_tool_choice_invalid",
+        safe_message="A custom tool choice name exceeds the gateway size limit.",
+    )
+    if name not in _declared_custom_tool_names(tools):
+        _raise(
+            f"{param}.custom.name",
+            "chat_custom_tool_choice_invalid",
+            "Custom tool choice must reference a declared custom tool.",
+        )
+
+
+def _declared_custom_tool_names(tools: Any) -> set[str]:
+    names: set[str] = set()
+    if not isinstance(tools, list):
+        return names
+    for tool in tools:
+        if not isinstance(tool, Mapping) or tool.get("type") != "custom":
+            continue
+        custom = tool.get("custom")
+        if not isinstance(custom, Mapping):
+            continue
+        name = custom.get("name")
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+def _uses_custom_tools(payload: Mapping[str, Any]) -> bool:
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, Mapping) and tool.get("type") == "custom":
+                return True
+    tool_choice = payload.get("tool_choice")
+    return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "custom"
 
 
 def _validate_function_choice(

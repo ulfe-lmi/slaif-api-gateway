@@ -182,7 +182,7 @@ def classify_chat_completion_capabilities(
                     )
                     continue
             tool_type = tool.get("type")
-            if tool_type == "function":
+            if tool_type in {"function", "custom"}:
                 continue
             if tool_type in _DENIED_WEB_SEARCH_TOOL_TYPES:
                 if trusted_discovery:
@@ -242,7 +242,7 @@ def classify_chat_completion_capabilities(
                     )
                 )
         choice_type = tool_choice.get("type")
-        if choice_type is not None and choice_type != "function":
+        if choice_type is not None and choice_type not in {"function", "custom"}:
             if choice_type in _MCP_TOOL_TYPES:
                 findings.append(_tool_choice_finding(choice_type))
             elif not trusted_discovery or (
@@ -299,7 +299,7 @@ def summarize_chat_completion_hosted_capabilities(
             if marker is not None:
                 external_authority.add(marker)
             tool_type = tool.get("type")
-            if tool_type == "function":
+            if tool_type in {"function", "custom"}:
                 continue
             if isinstance(tool_type, str) and tool_type.strip():
                 normalized = tool_type.strip().lower().replace("-", "_")[:64]

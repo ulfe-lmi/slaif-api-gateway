@@ -17,7 +17,9 @@ For implemented Chat Completions, the local cost estimate uses the request
 policy's total estimated input tokens. That total includes message input plus
 conservative serialized estimates for provider-forwarded non-message object/list
 fields such as `tools`, legacy `functions`, `response_format` JSON schemas, and
-unknown passthrough objects/lists. This can over-reserve, but prevents large
+other forwarded objects/lists. Local custom tool definitions, format metadata,
+and grammar definitions are included in that ordinary input estimate when
+custom tools are route-enabled. This can over-reserve, but prevents large
 tool/schema payloads from passing cost checks with a messages-only estimate.
 Successful accounting still finalizes from actual provider usage when available.
 
@@ -219,6 +221,13 @@ pricing catalog should be able to represent, where applicable:
 Tool pricing must be explicit before a tool is enabled for quota-limited keys.
 Current Chat Completions web search and other hosted/provider-side tools are
 denied by default; model and endpoint allowlists do not enable them.
+
+Chat Completions local custom tools are not hosted/provider-side tools for
+SLAIF billing. They have no custom-tool price, billing unit, execution fee, or
+ledger cost category. Custom-tool definitions can increase ordinary input
+tokens, generated custom-tool input can increase ordinary output tokens, and a
+later application request with tool results is accounted as a separate ordinary
+gateway request.
 
 ## Chat Completions Cost Finalization
 

@@ -228,9 +228,6 @@ def _finding_for_known_field(
     if field_name == "service_tier":
         return _service_tier_finding(value, classification=classification)
 
-    if field_name == "tools":
-        return _tools_finding(value, classification=classification)
-
     return None
 
 
@@ -275,28 +272,6 @@ def _service_tier_finding(
             "gateway pricing is not service-tier aware."
         ),
     )
-
-
-def _tools_finding(
-    value: Any,
-    *,
-    classification: ChatCompletionFieldClassification,
-) -> ChatCompletionFieldFinding | None:
-    if not isinstance(value, list):
-        return None
-    for index, tool in enumerate(value):
-        if not isinstance(tool, Mapping):
-            continue
-        if tool.get("type") == "custom":
-            return ChatCompletionFieldFinding(
-                rejected_field=f"tools[{index}].type",
-                classification=classification,
-                error_code="custom_tool_not_supported",
-                safe_message=(
-                    "Chat Completions custom tools are not enabled by this gateway."
-                ),
-            )
-    return None
 
 
 def _finding_for_message_content(messages: Any) -> ChatCompletionFieldFinding | None:

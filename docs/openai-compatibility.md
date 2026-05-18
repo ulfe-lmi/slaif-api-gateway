@@ -82,7 +82,7 @@ this repository state, so the command rejects `--include-legacy-completions`.
 Responses API work is separate and out of scope for this command.
 Seeded Chat Completions route rows include explicit `model_routes.capabilities`
 metadata under the `chat_completions` key for text chat, streaming, local
-function tools, legacy functions, JSON mode, structured outputs, logprobs, and
+function tools, local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and
 safe provider usage signals. Hosted tools, multimodal/audio/file inputs,
 non-default service tiers, and multiple choices are marked unsupported.
 
@@ -101,9 +101,9 @@ every top-level Chat Completions field through a fail-closed registry.
 | `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
 | `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
 | `tools` with `type=function` | Supported local/client-side tool intent within configured count/name/description/schema caps; schemas are forwarded and counted for input estimation |
-| `tools` with `type=custom` | Rejected as unsupported until custom-tool forwarding, sizing, and accounting are explicitly implemented. Upstream evidence is recorded in [`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md) |
+| `tools` with `type=custom` | Supported only as local/client-side custom tool-call intent when the resolved route explicitly sets `chat_custom_tools=true`; SLAIF does not execute custom tools or police downstream application behavior. Custom tool definitions, format, and grammar are bounded, forwarded, and counted as ordinary input material |
 | `functions` / `function_call` | Supported legacy local function fields within equivalent caps and counted for input estimation |
-| `tool_choice` | Supported for local function choices within configured name/shape caps; hosted/provider-side forced choices are rejected |
+| `tool_choice` | Supported for local function choices and route-enabled named custom choices within configured name/shape caps; hosted/provider-side forced choices are rejected |
 | `response_format` | Supported response-shaping field; `text`, `json_object`, and bounded `json_schema` shapes are accepted and counted |
 | `metadata` | Supported only as a JSON object within configured key/count/byte caps; forwarded but not stored wholesale |
 | `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
@@ -158,7 +158,7 @@ provider allowlists. After route resolution and before Redis rate limiting,
 pricing lookup, PostgreSQL quota reservation, or provider forwarding, the
 gateway checks the resolved route's `chat_completions` capability metadata
 against the accepted request shape. Text chat, streaming, local function tools,
-legacy functions, JSON mode, structured outputs, logprobs, and reasoning
+local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and reasoning
 controls must be allowed by the route metadata when used. A model allowlist
 entry alone therefore does not imply permission to use those capabilities.
 Existing routes that predate the capability block use a documented
@@ -169,7 +169,7 @@ closed.
 
 Chat Completions input-token and cost pre-reservation uses a conservative local
 estimate over message content plus serialized non-message provider-forwarded
-object/list fields such as `tools`, legacy `functions`, object-shaped
+object/list fields such as local function/custom `tools`, legacy `functions`, object-shaped
 `tool_choice` / `function_call`, `response_format` JSON schemas,
 `prediction`, `metadata`, `logit_bias`, and `stream_options`. Rejected unknown
 or over-cap fields do not reach estimation or provider forwarding. Very large
@@ -178,6 +178,19 @@ the broader hard input-token cap is evaluated. The estimate is intentionally
 conservative and may over-reserve; successful accounting still finalizes from
 actual provider usage when available. This is Chat Completions remediation and
 does not implement the Responses API.
+
+Chat Completions custom tools use ordinary Chat Completions accounting only.
+SLAIF adds no custom-tool billing category, pricing rule, execution fee, or
+ledger cost column. Custom tool definitions and grammar can increase ordinary
+input-token estimates; generated custom-tool input can increase ordinary output
+tokens. If the downstream app later sends tool results back to the gateway,
+that is a separate ordinary request.
+
+Streaming custom tools are intentionally unsupported in this release. The
+current installed official OpenAI Python SDK exposes non-streaming Chat
+Completions custom tool request/response types, but its Chat Completions stream
+chunk type only models function tool deltas. Requests with `stream=true` and
+custom tools fail before provider forwarding.
 
 `n > 1` is intentionally rejected for now. Multi-choice Chat Completions can produce multiple choices and require choice-aware quota reservation, cost estimation, and final usage validation. The gateway does not silently clamp or drop `n`; future support requires multiplying reservation and cost policy by the requested choice count and validating provider final-usage semantics.
 
