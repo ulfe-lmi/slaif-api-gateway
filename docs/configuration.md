@@ -334,6 +334,7 @@ forwarding. Defaults:
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
+| `CHAT_MAX_CHOICES_PER_REQUEST` | `4` | Maximum `n` choices for one Chat Completions request when the route enables multiple choices |
 | `CHAT_MAX_MESSAGES_PER_REQUEST` | `128` | Number of `messages` entries |
 | `CHAT_MAX_MESSAGE_CONTENT_BYTES` | `262144` | One message's string/text-part content |
 | `CHAT_MAX_TEXT_PARTS_PER_MESSAGE` | `64` | Text parts in one message |
@@ -364,7 +365,11 @@ must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
 penalties between `-2` and `2`, `top_logprobs` between `0` and `20` and only
 with `logprobs=true`, `logit_bias` values between `-100` and `100`,
 `reasoning_effort` one of `minimal`, `low`, `medium`, or `high`, `service_tier`
-omitted or `auto`, and `n` omitted or exactly `1`.
+omitted or `auto`, and `n` a positive integer up to
+`CHAT_MAX_CHOICES_PER_REQUEST`. `n > 1` also requires the resolved route to set
+`chat_multiple_choices=true`. Output-token caps remain per choice; quota and
+cost reservation multiply possible output by `n`, while input estimation is not
+multiplied.
 
 ## Trusted Calibration Keys
 
@@ -768,7 +773,8 @@ route is for `/v1/chat/completions`, and write safe audit rows. Confirmed
 imports can affect future model resolution through the existing resolver; route
 resolution runtime semantics are otherwise unchanged. Capability metadata is
 separate from endpoint/model/provider allowlists and does not enable hosted
-tools, multimodal/audio/file inputs, `n > 1`, or non-default service tiers.
+tools, multimodal/audio/file inputs, non-default service tiers, or multiple
+choices unless the route explicitly enables the dedicated capability.
 
 Dashboard usage and audit CSV exports are capped by:
 

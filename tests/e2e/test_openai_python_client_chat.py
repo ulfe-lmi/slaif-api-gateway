@@ -86,6 +86,7 @@ async def _create_test_data(
     trusted_calibration: bool = False,
     supports_streaming: bool = True,
     custom_tools: bool = False,
+    multiple_choices: bool = False,
 ) -> CreatedE2EData:
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -206,7 +207,7 @@ async def _create_test_data(
                             "chat_audio": False,
                             "chat_file_inputs": False,
                             "chat_service_tier_non_default": False,
-                            "chat_multiple_choices": False,
+                            "chat_multiple_choices": multiple_choices,
                         }
                     }
                 ),
@@ -640,6 +641,90 @@ def test_openai_python_client_chat_completions_custom_tool_e2e(
 
 
 @pytest.mark.e2e
+def test_openai_python_client_chat_completions_multiple_choices_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_test_data(database_url, multiple_choices=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "chatcmpl-multiple-choice-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": TEST_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "first choice"},
+                "finish_reason": "stop",
+            },
+            {
+                "index": 1,
+                "message": {"role": "assistant", "content": "second choice"},
+                "finish_reason": "length",
+            },
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 14, "total_tokens": 19},
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-multiple-choice-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.chat.completions.create(
+                model=TEST_MODEL,
+                messages=[{"role": "user", "content": PROMPT_TEXT}],
+                max_completion_tokens=8,
+                n=2,
+            )
+
+    assert len(response.choices) == 2
+    assert response.choices[0].index == 0
+    assert response.choices[1].index == 1
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[1].finish_reason == "length"
+    assert response.usage is not None
+    assert response.usage.completion_tokens == 14
+
+    upstream_body = json.loads(upstream_route.calls[0].request.content)
+    assert upstream_body["n"] == 2
+    assert upstream_body["max_completion_tokens"] == 8
+    assert upstream_route.calls[0].request.headers["authorization"] == (
+        f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    )
+    assert upstream_route.calls[0].request.headers["authorization"] != (
+        f"Bearer {created.plaintext_gateway_key}"
+    )
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_used_total == 19
+    assert state.usage_ledger.prompt_tokens == 5
+    assert state.usage_ledger.completion_tokens == 14
+    assert state.usage_ledger.total_tokens == 19
+    assert state.usage_ledger.accounting_status == "finalized"
+
+
+@pytest.mark.e2e
 def test_openai_python_client_models_list_empty_for_no_allowed_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -672,7 +757,7 @@ def test_openai_python_client_models_list_empty_for_no_allowed_models(
 
 
 @pytest.mark.e2e
-def test_openai_python_client_rejects_multi_choice_chat_before_upstream(
+def test_openai_python_client_rejects_multi_choice_chat_without_route_capability_before_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = _test_database_url()
@@ -711,9 +796,9 @@ def test_openai_python_client_rejects_multi_choice_chat_before_upstream(
     error = exc_info.value
     assert error.status_code == 400
     assert error.body is not None
-    assert error.body["code"] == "invalid_choice_count"
+    assert error.body["code"] == "chat_multiple_choices_capability_not_supported"
     assert error.body["param"] == "n"
-    assert "multi-choice quota accounting" in error.body["message"]
+    assert "multiple Chat Completions choices" in error.body["message"]
     assert len(upstream_route.calls) == 0
 
     reservation_count, usage_ledger_count = asyncio.run(

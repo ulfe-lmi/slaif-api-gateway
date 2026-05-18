@@ -74,7 +74,8 @@ and trusted calibration keys reject unknown top-level fields before Redis rate
 limiting, route resolution, pricing lookup, PostgreSQL quota reservation,
 usage-profile insertion, or provider forwarding. The error includes the field
 name as a safe `param`, but not the raw value. Current policy also rejects
-custom tools when route metadata does not explicitly enable them, non-default `service_tier`, audio/image/file/video content,
+custom tools and multiple choices when route metadata does not explicitly
+enable them, non-default `service_tier`, audio/image/file/video content,
 provider-side lifecycle/state fields, and other unclassified feature-bearing
 fields until pricing, accounting, forwarding, and tests exist.
 
@@ -95,7 +96,7 @@ count, function name and description length, per-tool schema size, and total
 schema size. It also bounds custom tool count, name/description, serialized
 format, and grammar definition sizes. It also bounds message count/content, text parts,
 `response_format` schemas, `metadata`, `prediction`, `stream_options`, `stop`,
-`user`, and `logit_bias`. Errors name the field and policy problem without
+`user`, `n`, and `logit_bias`. Errors name the field and policy problem without
 logging or returning raw messages, prompt content, metadata values, schemas,
 tool arguments, provider keys, gateway keys, cookies, sessions, CSRF tokens,
 encrypted payloads, or nonces.
@@ -106,7 +107,10 @@ manually created Chat Completions routes receive conservative capability flags
 for the currently supported surface: text chat, streaming, local function tools,
 local custom tools, legacy functions, JSON mode, structured outputs, logprobs, reasoning/cached
 usage signals, and explicit false flags for hosted tools, multimodal/audio/file
-inputs, non-default service tiers, and multiple choices. Route capability
+inputs, non-default service tiers, and multiple choices. Multiple choices are
+only allowed with `chat_multiple_choices=true`; that flag does not imply hosted
+tools, custom tools, multimodal/audio/file support, audio output, non-default
+service tiers, or Responses support. Route capability
 checks happen after route resolution and before Redis rate limiting, pricing
 lookup, PostgreSQL quota reservation, usage-profile insertion, or provider
 forwarding. Existing routes without a `chat_completions` block use a documented
@@ -272,8 +276,9 @@ chunks without buffering the full stream. This includes plain text deltas,
 local/client-side function `tool_calls` deltas, `finish_reason="tool_calls"`,
 provider `logprobs` data, and structured-output-compatible chunks when the
 request passes the same field registry, capability policy, and cap validation
-as non-streaming requests. Streaming does not enable hosted tools, custom
-tools, web search, multimodal/audio/file inputs, `n > 1`, non-default
+as non-streaming requests. Streaming `n > 1` preserves provider choice indexes
+and final usage chunks without buffering. Streaming does not enable hosted
+tools, custom tools, web search, multimodal/audio/file inputs, non-default
 `service_tier`, background/provider-state features, MCP/connectors, or unknown
 top-level fields.
 

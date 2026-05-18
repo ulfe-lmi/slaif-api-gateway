@@ -84,7 +84,8 @@ Seeded Chat Completions route rows include explicit `model_routes.capabilities`
 metadata under the `chat_completions` key for text chat, streaming, local
 function tools, local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and
 safe provider usage signals. Hosted tools, multimodal/audio/file inputs,
-non-default service tiers, and multiple choices are marked unsupported.
+non-default service tiers, and multiple choices are marked unsupported by
+default. `n > 1` requires explicit `chat_multiple_choices=true` metadata.
 
 ## Chat Completions Request Fields
 
@@ -106,6 +107,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | `tool_choice` | Supported for local function choices and route-enabled named custom choices within configured name/shape caps; hosted/provider-side forced choices are rejected |
 | `response_format` | Supported response-shaping field; `text`, `json_object`, and bounded `json_schema` shapes are accepted and counted |
 | `metadata` | Supported only as a JSON object within configured key/count/byte caps; forwarded but not stored wholesale |
+| `n` | Omitted or `1` works unchanged. `n > 1` is accepted only within `CHAT_MAX_CHOICES_PER_REQUEST` and only when the resolved route explicitly sets `chat_multiple_choices=true`; input is estimated once and possible output reservation is multiplied by `n` |
 | `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
 | `prediction` | Supported as a bounded JSON object and counted as provider-context input |
 | `modalities` | Allowed only when it requests text only |
@@ -119,21 +121,17 @@ oversized messages/text parts, invalid scalar controls, invalid output-token
 controls, input estimates over the configured hard input cap, non-object or
 oversized `stream_options`, overlarge `stop`, `user`, `logit_bias`,
 `metadata`, `prediction`, function-tool schema, and `response_format` schema
-payloads, and Chat Completions `n` values other than integer `1`. Rejection
+payloads, and invalid or over-cap Chat Completions `n` values. Rejection
 messages name the field and problem without echoing raw messages, metadata
 values, schemas, tool payloads, or request bodies.
 
 Current Chat Completions capability policy allows local/client-side function
-tools, legacy `functions` / `function_call`, `response_format`, JSON mode, and
+tools, route-enabled non-streaming local custom tools, legacy `functions` /
+`function_call`, `response_format`, JSON mode, bounded multiple choices, and
 ordinary streaming. SLAIF does not police what a downstream application does
-when it receives a local function-tool call from the model. OpenAI's current
-API reference and official Python SDK include Chat Completions custom-tool
-shapes, while the function-calling guide's concrete custom-tool examples are
-Responses-oriented; SLAIF still rejects Chat Completions `tools[].type ==
-"custom"` until a separate implementation adds caps, route/model capability
-gating, provider adapter tests, input-estimation/accounting checks, and
-no-content/no-secret coverage. Hosted/provider-side tools are denied by default
-because there is no persisted hosted-tool allowlist:
+when it receives a local function-tool or custom-tool call from the model.
+Hosted/provider-side tools are denied by default because there is no persisted
+hosted-tool allowlist:
 `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
 `code_interpreter`, `computer` / `computer_use`, `image_generation`,
 `tool_search`, MCP/connectors, provider-side connector/authorization markers,
@@ -159,7 +157,8 @@ pricing lookup, PostgreSQL quota reservation, or provider forwarding, the
 gateway checks the resolved route's `chat_completions` capability metadata
 against the accepted request shape. Text chat, streaming, local function tools,
 local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and reasoning
-controls must be allowed by the route metadata when used. A model allowlist
+controls, and multiple choices must be allowed by the route metadata when used.
+A model allowlist
 entry alone therefore does not imply permission to use those capabilities.
 Existing routes that predate the capability block use a documented
 compatibility fallback matching the previously supported Chat Completions
@@ -192,7 +191,15 @@ Completions custom tool request/response types, but its Chat Completions stream
 chunk type only models function tool deltas. Requests with `stream=true` and
 custom tools fail before provider forwarding.
 
-`n > 1` is intentionally rejected for now. Multi-choice Chat Completions can produce multiple choices and require choice-aware quota reservation, cost estimation, and final usage validation. The gateway does not silently clamp or drop `n`; future support requires multiplying reservation and cost policy by the requested choice count and validating provider final-usage semantics.
+`n > 1` is supported as bounded multiple-choice Chat Completions only when the
+resolved route explicitly sets `chat_multiple_choices=true`. The configured
+gateway maximum is `CHAT_MAX_CHOICES_PER_REQUEST` (default `4`). The effective
+max output-token control remains a per-choice request cap; admission-time
+reservation and estimated output cost use `effective_max_output_tokens_per_choice
+* n`. Input tokens and input cost are estimated once for the single request.
+Final accounting uses provider-reported total usage or provider-reported cost
+once and does not multiply `completion_tokens` or OpenRouter cost again by `n`.
+One request remains one reservation and one usage-ledger event.
 
 ## Gateway-Mutated Fields
 
@@ -293,9 +300,13 @@ Implemented streaming behavior:
 
 Unsupported streaming request features are the same as non-streaming Chat
 Completions: hosted/provider-side tools, web search, custom tools,
-multimodal/audio/file inputs, `n > 1`, non-default `service_tier`, background
+multimodal/audio/file inputs, non-default `service_tier`, background
 or provider-state lifecycle fields, MCP/connectors, external web access, and
 unknown top-level fields are rejected before provider forwarding.
+Streaming `n > 1` is supported for routes with `chat_multiple_choices=true`;
+provider SSE chunks are passed through without buffering, including chunks with
+multiple `choices`, interleaved choice indexes, and the final empty-choices
+usage chunk.
 
 Client disconnect handling is best-effort through generator cancellation cleanup. The code records a provider failure for detected cancellation, releases the quota reservation, and releases rate-limit concurrency when Redis rate limits are enabled. A real ASGI server test closes a stream early and verifies this cleanup path.
 

@@ -1065,8 +1065,8 @@ reservation, or provider forwarding. Existing legacy rows with no
 previously supported Chat Completions surface. If the object is present,
 unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
 external MCP/connectors, multimodal/audio/file inputs, non-default service
-tiers, and `n > 1` remain disabled unless future explicit support changes both
-policy and accounting.
+tiers, and multiple choices remain disabled unless a route explicitly enables
+the dedicated capability and the request passes gateway caps.
 
 `chat_custom_tools=true` enables only non-streaming local/client-side Chat
 Completions custom tool-call intent. It does not enable hosted tools, MCP or
@@ -1075,6 +1075,14 @@ generation, tool search, multimodal/audio/file inputs, audio output, `n > 1`,
 or non-default service tiers. Custom tools are billed through ordinary
 input/output token accounting and provider usage finalization; no custom-tool
 pricing or ledger billing columns are defined.
+
+`chat_multiple_choices=true` enables bounded Chat Completions `n > 1` only. It
+does not enable hosted tools, custom tools, multimodal/audio/file inputs, audio
+output, non-default service tiers, or any Responses API behavior. Multiple
+choices use the existing single reservation and usage-ledger event for the
+gateway request. Admission-time accounting estimates input once and reserves
+possible output as the per-choice effective max output tokens multiplied by
+`n`; finalization uses provider-reported total usage/cost once.
 
 Allowed `match_type` values:
 

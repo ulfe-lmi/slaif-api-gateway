@@ -232,10 +232,12 @@ gateway request.
 ## Chat Completions Cost Finalization
 
 Current Chat Completions uses local pricing rows for admission-time reservation.
-The pre-call estimate uses the estimated input tokens and effective output cap;
-it does not guess cached input or reasoning-token splits before the provider
-returns usage. The provider call is admitted only when that estimate fits the
-key's remaining local budget.
+The pre-call estimate uses estimated input tokens once and the effective output
+reservation. For `n > 1`, the output reservation is choice-aware:
+`effective_max_output_tokens_per_choice * n`. The gateway does not multiply
+input tokens by `n` and does not guess cached input or reasoning-token splits
+before the provider returns usage. The provider call is admitted only when that
+estimate fits the key's remaining local budget.
 
 After a successful provider response, SLAIF finalizes actual usage even when the
 actual token or cost usage exceeds the reservation. This is post-call spend
@@ -257,11 +259,13 @@ is available:
 
 For OpenRouter, a valid non-negative provider-reported cost with supported
 currency is preferred for actual finalization, while the SLAIF-calculated cost
-is retained as comparison metadata. For OpenAI, SLAIF-calculated cost remains
-the actual finalization source unless a provider-reported cost path is
-explicitly supported later. Invalid or unsupported provider-reported costs are
-ignored in favor of SLAIF calculation and recorded as safe metadata. No provider
-pricing fetch, scrape, or extra upstream call happens during finalization.
+is retained as comparison metadata. Provider-reported OpenRouter cost is not
+multiplied again by `n`; it is treated as the cost for the one upstream request.
+For OpenAI, SLAIF-calculated cost remains the actual finalization source unless
+a provider-reported cost path is explicitly supported later. Invalid or
+unsupported provider-reported costs are ignored in favor of SLAIF calculation
+and recorded as safe metadata. No provider pricing fetch, scrape, or extra
+upstream call happens during finalization.
 
 All costs are SLAIF local accounting assumptions for quota and reporting. They
 are not provider invoice certification.

@@ -365,6 +365,45 @@ async def test_cost_estimate_uses_total_policy_input_tokens_with_non_message_fie
 
 
 @pytest.mark.asyncio
+async def test_cost_estimate_uses_choice_aware_output_tokens_without_multiplying_input() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-4.1-mini",
+                currency="EUR",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("2.000000000"),
+            )
+        ],
+    )
+    policy = ChatCompletionPolicyResult(
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 10,
+            "n": 3,
+        },
+        requested_output_tokens=10,
+        effective_output_tokens=30,
+        effective_output_tokens_per_choice=10,
+        effective_choice_count=3,
+        estimated_input_tokens=100,
+        injected_default_output_tokens=False,
+    )
+
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(requested_model="classroom-cheap", resolved_model="gpt-4.1-mini"),
+        policy=policy,
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.estimated_input_tokens == 100
+    assert estimate.estimated_output_tokens == 30
+    assert estimate.estimated_input_cost_native == Decimal("0.000100000000")
+    assert estimate.estimated_output_cost_native == Decimal("0.000060000000")
+
+
+@pytest.mark.asyncio
 async def test_cost_estimate_default_endpoint_uses_chat_completions_pricing_row() -> None:
     service = _service(pricing_rows=[_pricing_rule(currency="EUR")])
 

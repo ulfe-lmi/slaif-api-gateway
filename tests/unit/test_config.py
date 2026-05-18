@@ -36,6 +36,7 @@ def _clear_env(monkeypatch) -> None:
         "DEFAULT_MAX_OUTPUT_TOKENS",
         "HARD_MAX_OUTPUT_TOKENS",
         "HARD_MAX_INPUT_TOKENS",
+        "CHAT_MAX_CHOICES_PER_REQUEST",
         "CHAT_MAX_MESSAGES_PER_REQUEST",
         "CHAT_MAX_MESSAGE_CONTENT_BYTES",
         "CHAT_MAX_TEXT_PARTS_PER_MESSAGE",
@@ -163,6 +164,7 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.DEFAULT_MAX_OUTPUT_TOKENS == 1024
     assert settings.HARD_MAX_OUTPUT_TOKENS == 4096
     assert settings.HARD_MAX_INPUT_TOKENS == 128000
+    assert settings.CHAT_MAX_CHOICES_PER_REQUEST == 4
     assert settings.CHAT_MAX_MESSAGES_PER_REQUEST == 128
     assert settings.CHAT_MAX_MESSAGE_CONTENT_BYTES == 262144
     assert settings.CHAT_MAX_TOOLS_PER_REQUEST == 64

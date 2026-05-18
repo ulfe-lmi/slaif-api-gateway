@@ -107,6 +107,12 @@ def _chat_request() -> dict[str, object]:
     }
 
 
+def _chat_capabilities(**overrides: bool) -> dict[str, object]:
+    capabilities = default_chat_completion_capabilities()
+    capabilities.update(overrides)
+    return {"chat_completions": capabilities}
+
+
 def _wire_pipeline(
     monkeypatch,
     app,
@@ -374,6 +380,123 @@ def test_openrouter_route_uses_openrouter_adapter_path(monkeypatch, respx_mock) 
     assert state["finalize_calls"]
 
 
+def test_openai_nonstreaming_multiple_choices_are_forwarded_and_preserved(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-4.1-mini",
+        route_capabilities=_chat_capabilities(chat_multiple_choices=True),
+    )
+    upstream_payload = {
+        "id": "chatcmpl_multi",
+        "object": "chat.completion",
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "first"},
+                "finish_reason": "stop",
+                "logprobs": {"content": [{"token": "first", "logprob": -0.1, "bytes": [102]}]},
+            },
+            {
+                "index": 1,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+                "logprobs": None,
+            },
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 17, "total_tokens": 22},
+    }
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    body = {
+        **_chat_request(),
+        "n": 2,
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+    }
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_payload
+    upstream_request = route.calls[0].request
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body["n"] == 2
+    assert upstream_body["tools"] == body["tools"]
+    assert response.json()["choices"][0]["index"] == 0
+    assert response.json()["choices"][1]["index"] == 1
+    assert response.json()["choices"][0]["finish_reason"] == "stop"
+    assert response.json()["choices"][1]["finish_reason"] == "tool_calls"
+    assert state["provider_responses"][0].usage.completion_tokens == 17
+    assert state["provider_responses"][0].usage.total_tokens == 22
+    assert state["finalize_calls"]
+
+
+def test_openrouter_nonstreaming_multiple_choices_preserves_provider_reported_cost(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    settings = Settings(OPENROUTER_API_KEY="openrouter-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openrouter",
+        resolved_model="openai/gpt-4.1-mini",
+        route_capabilities=_chat_capabilities(chat_multiple_choices=True),
+    )
+    upstream_payload = {
+        "id": "or_chatcmpl_multi",
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": "first"}, "finish_reason": "stop"},
+            {"index": 1, "message": {"role": "assistant", "content": "second"}, "finish_reason": "length"},
+        ],
+        "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 9,
+            "total_tokens": 12,
+            "cost_usd": "0.0012",
+        },
+    }
+    route = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=upstream_payload)
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={**_chat_request(), "n": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][1]["finish_reason"] == "length"
+    upstream_body = json.loads(route.calls[0].request.content)
+    assert upstream_body["n"] == 2
+    provider_response = state["provider_responses"][0]
+    assert provider_response.usage.completion_tokens == 9
+    assert provider_response.raw_cost_native == Decimal("0.0012")
+
+
 def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
     monkeypatch,
     respx_mock,
@@ -382,6 +505,7 @@ def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
     app = create_app(settings)
     chat_capabilities = default_chat_completion_capabilities()
     chat_capabilities["chat_custom_tools"] = True
+    chat_capabilities["chat_multiple_choices"] = True
     state = _wire_pipeline(
         monkeypatch,
         app,
@@ -408,6 +532,21 @@ def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
                     ],
                 },
                 "finish_reason": "tool_calls",
+            },
+            {
+                "index": 1,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_custom_2",
+                            "type": "custom",
+                            "custom": {"name": "run_shell", "input": "echo bye"},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
             }
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
@@ -418,6 +557,7 @@ def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
 
     body = {
         **_chat_request(),
+        "n": 2,
         "tools": [
             {
                 "type": "custom",
@@ -447,6 +587,8 @@ def test_openai_nonstreaming_custom_tool_request_and_response_are_preserved(
     upstream_body = json.loads(upstream_request.content)
     assert upstream_body["tools"] == body["tools"]
     assert upstream_body["tool_choice"] == body["tool_choice"]
+    assert upstream_body["n"] == 2
+    assert response.json()["choices"][1]["message"]["tool_calls"][0]["type"] == "custom"
     assert state["provider_responses"][0].usage.total_tokens == 13
     assert state["finalize_calls"]
 
