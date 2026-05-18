@@ -76,6 +76,15 @@ custom tools, non-default `service_tier`, audio/image/file/video content,
 provider-side lifecycle/state fields, and other unclassified feature-bearing
 fields until pricing, accounting, forwarding, and tests exist.
 
+OpenAI upstream evidence for Chat Completions custom tools is tracked in
+[`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md).
+The current API reference and official Python SDK types include custom-tool
+shapes, but SLAIF keeps `tools[].type == "custom"` disabled until a focused
+implementation adds explicit size caps, capability gates, provider adapter
+coverage, input-estimation/accounting treatment, and no-content/no-secret
+tests. Custom tools would remain local/client-side intent; they are not
+provider-hosted execution authority.
+
 Supported Chat Completions fields are validated against explicit type, range,
 count, and byte caps before Redis rate limiting, route resolution, pricing
 lookup, PostgreSQL quota reservation, usage-profile insertion, or provider

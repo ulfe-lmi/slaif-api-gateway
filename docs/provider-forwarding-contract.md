@@ -171,6 +171,14 @@ content, local function tools, legacy function fields, `response_format`,
 non-default `service_tier`, audio/image/file/video content, provider-side state
 fields such as `store=true`, `previous_response_id`, and `conversation`, and
 other unclassified feature-bearing fields before any provider request is built.
+Current upstream evidence for Chat Completions custom tools is recorded in
+[`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md):
+the API reference and official Python SDK types include custom-tool shapes, but
+the guide examples are Responses-oriented, so SLAIF keeps rejection in place
+until a later implementation adds explicit caps, route/model capability gates,
+provider adapter tests, input-estimation/accounting checks, and
+no-content/no-secret coverage.
+
 Supported Chat Completions fields are also bounded by explicit scalar and size
 validation before any provider body is constructed. The gateway validates
 temperature/top-p/penalty/logprob/logit-bias ranges, message and text-part

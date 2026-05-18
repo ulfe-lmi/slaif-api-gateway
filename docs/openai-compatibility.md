@@ -101,7 +101,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
 | `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
 | `tools` with `type=function` | Supported local/client-side tool intent within configured count/name/description/schema caps; schemas are forwarded and counted for input estimation |
-| `tools` with `type=custom` | Rejected as unsupported until custom-tool forwarding, sizing, and accounting are explicitly implemented |
+| `tools` with `type=custom` | Rejected as unsupported until custom-tool forwarding, sizing, and accounting are explicitly implemented. Upstream evidence is recorded in [`chat-completions-custom-tools-investigation.md`](chat-completions-custom-tools-investigation.md) |
 | `functions` / `function_call` | Supported legacy local function fields within equivalent caps and counted for input estimation |
 | `tool_choice` | Supported for local function choices within configured name/shape caps; hosted/provider-side forced choices are rejected |
 | `response_format` | Supported response-shaping field; `text`, `json_object`, and bounded `json_schema` shapes are accepted and counted |
@@ -126,8 +126,14 @@ values, schemas, tool payloads, or request bodies.
 Current Chat Completions capability policy allows local/client-side function
 tools, legacy `functions` / `function_call`, `response_format`, JSON mode, and
 ordinary streaming. SLAIF does not police what a downstream application does
-when it receives a local function-tool call from the model. Hosted/provider-side
-tools are denied by default because there is no persisted hosted-tool allowlist:
+when it receives a local function-tool call from the model. OpenAI's current
+API reference and official Python SDK include Chat Completions custom-tool
+shapes, while the function-calling guide's concrete custom-tool examples are
+Responses-oriented; SLAIF still rejects Chat Completions `tools[].type ==
+"custom"` until a separate implementation adds caps, route/model capability
+gating, provider adapter tests, input-estimation/accounting checks, and
+no-content/no-secret coverage. Hosted/provider-side tools are denied by default
+because there is no persisted hosted-tool allowlist:
 `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
 `code_interpreter`, `computer` / `computer_use`, `image_generation`,
 `tool_search`, MCP/connectors, provider-side connector/authorization markers,
