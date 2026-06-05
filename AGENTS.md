@@ -316,11 +316,15 @@ nginx      optional container or host-level reverse proxy for production HTTPS
 
 Expose OpenAI-compatible endpoints under `/v1`.
 
-Minimum initial endpoints:
+Current implemented `/v1` endpoints:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- `POST /v1/embeddings` if enabled in routing/pricing
+
+Future endpoints:
+
+- `POST /v1/embeddings` only if a later implementation adds endpoint
+  forwarding, pricing/accounting, and tests
 - `POST /v1/responses` is the planned RC2-beta feature family, not current RC1
   behavior unless a later implementation PR adds and tests it
 
@@ -332,7 +336,12 @@ Rules:
 - Do not require custom headers from clients.
 - Do not require custom environment variables from clients.
 - The client-provided `Authorization: Bearer ...` token is a gateway-issued token, not the upstream provider token.
-- Unsupported large file/image/audio endpoints are out of scope unless explicitly implemented, priced, routed, and tested.
+- `/v1/files`, `/v1/audio/*`, image-generation endpoints, and Realtime are
+  out of scope unless explicitly implemented, priced, routed, and tested.
+  Current Chat Completions request-body support for image input, inline file
+  input, audio input, and non-streaming audio output is narrower than those
+  standalone endpoint families and is gated by explicit route/model
+  capabilities.
 
 ### 4.1.1 Responses API / RC2-beta direction
 
@@ -370,13 +379,19 @@ Tool policy:
   may call `/v1/chat/completions` with a model is not thereby allowed to use
   hosted/provider-side tools.
 - Current Chat Completions policy allows client-side/local `function` tools,
-  legacy `functions` / `function_call`, `response_format`, JSON mode, and
-  ordinary streaming. SLAIF does not police what the downstream application does
-  when it receives a local function/tool call from the model.
+  non-streaming client-side/local `custom` tools, legacy `functions` /
+  `function_call`, `response_format`, JSON mode, ordinary text streaming, and
+  bounded `n > 1` multiple choices when the resolved route/model explicitly
+  enables the matching capability. SLAIF does not police what the downstream
+  application does when it receives a local function/custom tool call from the
+  model.
 - Current Chat Completions request fields are fail-closed by registry. Unknown
-  top-level fields, custom tools, non-default service tiers, and non-text
-  multimodal/audio/file content must not be silently forwarded until policy,
-  pricing/accounting, forwarding, and tests explicitly support them.
+  top-level fields, non-default service tiers, and unsupported request shapes
+  must not be silently forwarded until policy, pricing/accounting, forwarding,
+  and tests explicitly support them. Current implemented non-text
+  Chat Completions slices are image input to text output, inline file input to
+  text output, audio input to text output, and non-streaming audio output, each
+  behind explicit route/model capability gates and request caps.
 - Current Chat Completions policy denies hosted/provider-side tools by default:
   `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
   `code_interpreter`, `computer` / `computer_use`, `image_generation`,
@@ -384,6 +399,12 @@ Tool policy:
   MCP/connectors, provider-side authorization/connectors markers, and
   search-specific Chat Completions models such as `gpt-5-search-api` unless a
   future explicit hosted web-search policy is implemented.
+- Streaming custom tools, file IDs, file URLs, audio URLs, audio data URLs by
+  default, streaming audio output, custom audio-output voices, previous-audio
+  references, `n > 1` with audio output, video/alternate media part shapes,
+  `/v1/files`, `/v1/audio/*`, Realtime, and `/v1/responses` remain unsupported
+  unless a future scoped PR implements capability policy, caps,
+  pricing/accounting, forwarding, and tests.
 - Do not blindly pass through Responses tools.
 - Supported tool types must be explicitly allowlisted per key or key template.
 - MCP is out of scope for RC2.
@@ -424,18 +445,19 @@ route resolution, PostgreSQL reservation/finalization, usage ledger, safe usage
 profiling, and audit behavior. They are only for trusted organizers/admins, not
 participants, and they do not bypass content-storage prohibitions.
 
-Admins can now summarize observed trusted-calibration usage and preview strict
+Admins can summarize observed trusted-calibration usage and preview strict
 participant-policy proposals from the CLI and admin dashboard with an explicit
-multiplier. This preview is advisory and non-mutating: it does not create key
-templates, create participant keys, update existing gateway key policies, or
-update routes/pricing. The remaining operator workflow is to turn reviewed
-proposals into versioned templates or participant keys through an explicit
-future confirmation path.
+multiplier. This preview is advisory and non-mutating by itself: it does not
+create participant keys, update existing gateway key policies, or update
+routes/pricing. A separate confirmed workflow can persist a reviewed proposal
+as a versioned key-template snapshot, and another confirmed workflow can create
+exactly one normal standard gateway key from a selected template revision.
+Bulk participant-key generation from templates remains future work.
 
 Rules:
 
-- Usage-derived recommendations are advisory until an admin confirms a future
-  template or key creation workflow.
+- Usage-derived recommendations are advisory until an admin confirms a template
+  or single-key creation workflow.
 - Trusted calibration keys may discover hosted/provider-side capability needs
   for routed Chat Completions models, but external MCP/connectors,
   provider-side authorization, connector IDs, server URLs, approval flows,
@@ -466,8 +488,9 @@ Rules:
 - Recommendation workflows should support multipliers such as 1.5x, 2x, 3x, and
   custom values.
 - Recommended templates should include request limits, input/output/reasoning
-  token limits, tool-call limits, per-request caps, allowed
-  endpoints/models/providers, and Responses policy.
+  token limits, tool-call limits, per-request caps, and allowed
+  endpoints/models/providers. Responses policy remains future work until
+  `/v1/responses` is implemented.
 - Admins must see assumptions and may edit recommended values before creating a
   template or keys.
 - Calibration-derived templates should record source key, source time window,
