@@ -33,6 +33,7 @@ CHAT_CAPABILITY_MULTIMODAL = "chat_multimodal"
 CHAT_CAPABILITY_AUDIO = "chat_audio"
 CHAT_CAPABILITY_FILE_INPUTS = "chat_file_inputs"
 CHAT_CAPABILITY_AUDIO_INPUTS = "chat_audio_inputs"
+CHAT_CAPABILITY_AUDIO_OUTPUTS = "chat_audio_outputs"
 CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT = "chat_service_tier_non_default"
 CHAT_CAPABILITY_MULTIPLE_CHOICES = "chat_multiple_choices"
 
@@ -60,6 +61,7 @@ KNOWN_CHAT_COMPLETION_CAPABILITIES = frozenset(
         CHAT_CAPABILITY_AUDIO,
         CHAT_CAPABILITY_FILE_INPUTS,
         CHAT_CAPABILITY_AUDIO_INPUTS,
+        CHAT_CAPABILITY_AUDIO_OUTPUTS,
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT,
         CHAT_CAPABILITY_MULTIPLE_CHOICES,
     }
@@ -103,6 +105,7 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
         CHAT_CAPABILITY_AUDIO: False,
         CHAT_CAPABILITY_FILE_INPUTS: False,
         CHAT_CAPABILITY_AUDIO_INPUTS: False,
+        CHAT_CAPABILITY_AUDIO_OUTPUTS: False,
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT: False,
         CHAT_CAPABILITY_MULTIPLE_CHOICES: False,
     }
@@ -255,6 +258,16 @@ def classify_chat_completion_route_capability_requirements(
                 field="messages",
                 error_code="chat_audio_input_capability_not_supported",
                 safe_message="This model route does not support Chat Completions audio input.",
+            )
+        )
+
+    if _uses_audio_outputs(payload):
+        findings.append(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_AUDIO_OUTPUTS,
+                field="modalities",
+                error_code="chat_audio_output_capability_not_supported",
+                safe_message="This model route does not support Chat Completions audio output.",
             )
         )
 
@@ -449,6 +462,13 @@ def _uses_audio_inputs(payload: Mapping[str, Any]) -> bool:
             if isinstance(part, Mapping) and part.get("type") == "input_audio":
                 return True
     return False
+
+
+def _uses_audio_outputs(payload: Mapping[str, Any]) -> bool:
+    modalities = payload.get("modalities")
+    if isinstance(modalities, list) and any(item == "audio" for item in modalities):
+        return True
+    return "audio" in payload
 
 
 def _hosted_tool_findings(payload: Mapping[str, Any]) -> list[ChatCompletionRouteCapabilityFinding]:

@@ -27,6 +27,8 @@ _SUPPORTED_IMAGE_DATA_URL_MIME_TYPES = frozenset(
 _FILE_DATA_URL_PREFIX = "data:"
 _FILE_DATA_URL_BASE64_SUFFIX = ";base64"
 _AUDIO_DATA_URL_PREFIX = "data:"
+_AUDIO_OUTPUT_MODALITY_VALUES = frozenset({"text", "audio"})
+_SUPPORTED_AUDIO_OUTPUT_MODALITIES = frozenset({"text", "audio"})
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
@@ -52,6 +54,7 @@ def enforce_chat_completion_request_caps(
     _validate_model(payload.get("model"))
     _validate_messages(payload.get("messages"), settings=settings)
     _validate_scalar_controls(payload, settings=settings)
+    _validate_audio_output(payload, settings=settings)
     _validate_stop(payload.get("stop"), settings=settings)
     _validate_user(payload.get("user"), settings=settings)
     _validate_logit_bias(payload.get("logit_bias"), settings=settings)
@@ -125,6 +128,12 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
                 "messages",
                 "invalid_messages",
                 "Each Chat Completions message must include a non-empty string role.",
+            )
+        if role == "assistant" and "audio" in message:
+            _raise(
+                f"messages[{message_index}].audio",
+                "chat_previous_audio_not_supported",
+                "Assistant previous-audio references are not enabled by this gateway.",
             )
         _validate_message_content(
             message.get("content"),
@@ -800,6 +809,150 @@ def _allowed_audio_input_formats(settings: Settings) -> frozenset[str]:
         for item in settings.CHAT_ALLOWED_AUDIO_INPUT_FORMATS.split(",")
         if item.strip()
     )
+
+
+def _allowed_audio_output_formats(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS.split(",")
+        if item.strip()
+    )
+
+
+def _allowed_audio_output_voices(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES.split(",")
+        if item.strip()
+    )
+
+
+def _validate_audio_output(payload: Mapping[str, Any], *, settings: Settings) -> None:
+    modalities = payload.get("modalities")
+    audio = payload.get("audio")
+
+    audio_requested = False
+    if modalities is not None:
+        if not isinstance(modalities, list) or not modalities:
+            _raise(
+                "modalities",
+                "chat_audio_modality_invalid",
+                "Chat Completions modalities must be a non-empty list of strings.",
+            )
+        seen: set[str] = set()
+        for index, item in enumerate(modalities):
+            if not isinstance(item, str) or not item:
+                _raise(
+                    f"modalities[{index}]",
+                    "chat_audio_modality_invalid",
+                    "Chat Completions modalities must be strings.",
+                )
+            if item in seen:
+                _raise(
+                    f"modalities[{index}]",
+                    "chat_audio_modality_invalid",
+                    "Chat Completions modalities must not contain duplicates.",
+                )
+            seen.add(item)
+            if item not in _AUDIO_OUTPUT_MODALITY_VALUES:
+                _raise(
+                    f"modalities[{index}]",
+                    "chat_audio_modality_not_supported",
+                    "Only text and audio Chat Completions modalities are recognized by this gateway.",
+                )
+        if "audio" in seen:
+            audio_requested = True
+            if seen != _SUPPORTED_AUDIO_OUTPUT_MODALITIES:
+                _raise(
+                    "modalities",
+                    "chat_audio_modality_not_supported",
+                    "Audio output requires Chat Completions modalities to be text and audio.",
+                )
+
+    if audio is not None and not audio_requested:
+        _raise(
+            "audio",
+            "chat_audio_output_config_invalid",
+            "Chat Completions audio output config requires modalities to request audio output.",
+        )
+
+    if not audio_requested:
+        return
+
+    if payload.get("stream") is True and not settings.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT:
+        _raise(
+            "stream",
+            "chat_streaming_audio_output_not_supported",
+            "Streaming Chat Completions audio output is not enabled by this gateway.",
+        )
+
+    n = payload.get("n")
+    if (
+        isinstance(n, int)
+        and not isinstance(n, bool)
+        and n > 1
+        and not settings.CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES
+    ):
+        _raise(
+            "n",
+            "chat_audio_output_multiple_choices_not_supported",
+            "Multiple Chat Completions choices with audio output are not enabled by this gateway.",
+        )
+
+    if not isinstance(audio, Mapping):
+        _raise(
+            "audio",
+            "chat_audio_output_config_invalid",
+            "Chat Completions audio output requires an audio config object.",
+        )
+
+    for key in audio:
+        if key not in {"format", "voice"}:
+            _raise(
+                f"audio.{key}",
+                "chat_audio_output_config_invalid",
+                "Audio output config may only include documented Chat Completions audio fields.",
+            )
+
+    audio_format = audio.get("format")
+    if not isinstance(audio_format, str) or not audio_format:
+        _raise(
+            "audio.format",
+            "chat_audio_output_format_not_supported",
+            "Chat Completions audio output must include a supported audio format.",
+        )
+    if audio_format not in _allowed_audio_output_formats(settings):
+        _raise(
+            "audio.format",
+            "chat_audio_output_format_not_supported",
+            "The Chat Completions audio output format is not supported by this gateway.",
+        )
+
+    voice = audio.get("voice")
+    if isinstance(voice, Mapping):
+        if not settings.CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES:
+            _raise(
+                "audio.voice",
+                "chat_audio_output_custom_voice_not_supported",
+                "Custom Chat Completions audio output voices are not enabled by this gateway.",
+            )
+        _raise(
+            "audio.voice",
+            "chat_audio_output_custom_voice_not_supported",
+            "Custom Chat Completions audio output voices require a separate policy.",
+        )
+    if not isinstance(voice, str) or not voice:
+        _raise(
+            "audio.voice",
+            "chat_audio_output_voice_not_supported",
+            "Chat Completions audio output must include a supported voice.",
+        )
+    if voice not in _allowed_audio_output_voices(settings):
+        _raise(
+            "audio.voice",
+            "chat_audio_output_voice_not_supported",
+            "The Chat Completions audio output voice is not supported by this gateway.",
+        )
 
 
 def _count_image_parts(content: Any) -> int:

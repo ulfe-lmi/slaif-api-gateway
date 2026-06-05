@@ -166,10 +166,11 @@ The Chat Completions field registry is also fail-closed. Standard keys and
 trusted calibration keys reject unknown top-level Chat Completions fields with
 `unknown_chat_completion_field`. Current forwarding supports text message
 content, route-enabled image URL content parts, local function tools,
-route-enabled non-streaming local custom tools, route-enabled bounded multiple choices, legacy function fields,
+route-enabled non-streaming local custom tools, route-enabled bounded multiple choices, route-enabled non-streaming audio output, legacy function fields,
 `response_format`, `prediction`, metadata within the gateway size cap,
-omitted/`auto` `service_tier`, and text-only `modalities`. It rejects
-non-default `service_tier`, audio/file/video content, alternate image part names, provider-side state
+omitted/`auto` `service_tier`, text-only `modalities`, and route-enabled
+`modalities=["text","audio"]` with top-level `audio`. It rejects
+non-default `service_tier`, unsupported audio/file/video content, alternate image part names, provider-side state
 fields such as `store=true`, `previous_response_id`, and `conversation`, and
 other unclassified feature-bearing fields before any provider request is built.
 
@@ -180,7 +181,7 @@ counts, remote image URL and image data URL byte caps, image detail values,
 local function-tool counts and schema sizes, response-format schema size,
 metadata key/count/byte limits, stop sequence limits, `prediction` size,
 `stream_options` size, and bounded `n`. Rejection errors do not include raw
-messages, image URLs, base64 image payloads, metadata values, schemas, tool
+messages, image URLs, base64 image/audio payloads, audio transcripts, metadata values, schemas, tool
 payloads, or request bodies.
 
 Route/model capability metadata is checked after route resolution and before
@@ -216,7 +217,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | Field | Behavior | Reason |
 | --- | --- | --- |
 | `model` | Mutated upstream | Replaced with route `upstream_model` for aliases and provider-specific naming |
-| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored. User-message `image_url` parts are preserved only with explicit `chat_image_inputs=true` route capability; user-message inline `file` parts are preserved only with explicit `chat_file_inputs=true` route capability |
+| `messages` | Preserved when valid and within configured caps | Required Chat Completions input; used only for validation and token estimation, not stored. User-message `image_url` parts are preserved only with explicit `chat_image_inputs=true` route capability; user-message inline `file` parts are preserved only with explicit `chat_file_inputs=true` route capability; user-message `input_audio` parts are preserved only with explicit `chat_audio_inputs=true` route capability |
 | `max_tokens` | Preserved when valid | OpenAI Chat Completions output control |
 | `max_completion_tokens` | Preserved when valid or injected if no output-token field exists | Bounded output is required for quota reservation |
 | `stream` | Preserved; streaming path selected only when `true` | Controls JSON vs SSE response |
@@ -233,7 +234,7 @@ Outbound provider header construction uses a small allowlist. Header names conta
 | `image_url` content parts | Preserved when accepted and within image count/byte/detail caps | Image input is request input, not a hosted tool or image-generation tool. SLAIF does not fetch remote URLs, decode/rewrite data URLs, store/log image URLs or base64 payloads, or infer final image billing from bytes |
 | `file` content parts | Preserved when accepted and within file count/byte/type caps | Inline file input is request input, not hosted file search, retrieval, code interpreter, or `/v1/files`. SLAIF forwards only validated `filename` plus inline `file_data`; file IDs and file URLs are rejected. SLAIF does not fetch, upload, decode/rewrite, store/log file payloads, filenames, file IDs, or file URLs, or infer final file billing from bytes |
 | `input_audio` content parts | Preserved when accepted and within audio count/byte/format caps | Audio input is request input, not audio output, `/v1/audio/*`, Realtime, or a hosted tool. SLAIF forwards only validated raw base64 `data` with `format` `wav` or `mp3`; audio URLs and audio data URLs are rejected in this PR. SLAIF does not fetch, transcribe, decode/rewrite, store/log audio payloads or decoded bytes, or infer final audio billing from bytes or duration |
-| `modalities` / `audio` / unsupported non-text content parts | Text-only modality is allowed; audio output, video fields, alternate image/file/audio part names, file IDs, file URLs, and audio URLs are rejected | Audio output and broader multimodal media-response pricing/accounting are not implemented. The investigation record in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) explains why these fields must not be blindly passed through |
+| `modalities` / `audio` / unsupported non-text content parts | Text-only modality is allowed. Non-streaming audio output is forwarded only with explicit `chat_audio_outputs=true`, valid `audio` config, and configured audio-output pricing metadata. Streaming audio output, `n > 1` with audio output, custom voices, previous-audio references, video fields, alternate image/file/audio part names, file IDs, file URLs, and audio URLs are rejected | SLAIF forwards validated audio-output request fields and preserves non-streaming provider `message.audio` responses without storing/logging generated audio data or transcripts. Audio-output cost is finalized from provider usage/cost; bytes, transcript length, format, voice, and duration are not exact billing units |
 | Unknown top-level fields | Rejected before forwarding with `unknown_chat_completion_field` | The gateway must not silently pass future feature-bearing fields through endpoint/model authorization alone |
 | Gateway-internal data | Rejected/not present in provider body | Routing, quota, rate-limit, and accounting state must not be sent upstream |
 
@@ -265,10 +266,19 @@ URLs remain unsupported, and SLAIF does not fetch audio URLs, transcribe
 locally, rewrite payloads, store/log audio data or decoded bytes, or infer exact
 final audio cost from bytes or duration.
 
-Audio output, image generation, and broader multimodal media-response
-combinations remain unsupported and must be explicit future work because audio
-response bytes and modality-specific usage fields create separate privacy,
-request-size, estimation, pricing, and accounting requirements.
+Chat Completions non-streaming audio output is forwarded only when route
+metadata explicitly enables `chat_audio_outputs` and the active pricing rule
+sets `pricing_metadata.audio_output_price_per_1m`. SLAIF forwards documented
+`modalities: ["text", "audio"]` and top-level `audio` config with built-in
+voices and allowlisted formats, preserves provider `choices[].message.audio`
+responses, and does not transcode, decode, rewrite, store, or log generated
+audio data or transcripts. Streaming audio output, `n > 1` with audio output,
+custom voices, and assistant previous-audio references remain unsupported.
+
+Image generation and broader multimodal media-response combinations remain
+unsupported and must be explicit future work because response media bytes and
+modality-specific usage fields create separate privacy, request-size,
+estimation, pricing, and accounting requirements.
 
 The gateway does not intentionally store prompt, completion, full request body, full response body, tool payload, or streamed chunk content in `usage_ledger`.
 

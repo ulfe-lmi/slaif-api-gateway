@@ -112,12 +112,14 @@ format, and grammar definition sizes. It also bounds message count/content,
 text parts, image part count, remote image URL bytes, base64 image data URL
 bytes, inline file part count, file data bytes, filename bytes, allowed file
 extensions/MIME types, audio input count, audio data bytes, allowed audio
-formats, `response_format` schemas, `metadata`, `prediction`, `stream_options`,
-`stop`, `user`, `n`, and `logit_bias`. Errors name the field
+formats, audio-output format/voice values, `response_format` schemas,
+`metadata`, `prediction`, `stream_options`, `stop`, `user`, `n`, and
+`logit_bias`. Errors name the field
 and policy problem without logging or returning raw messages, prompt content,
 image URLs, base64 image/file/audio payloads, filenames, file IDs, file URLs,
-metadata values, schemas, tool arguments, provider keys, gateway keys, cookies,
-sessions, CSRF tokens, encrypted payloads, or nonces.
+generated audio data, transcripts, metadata values, schemas, tool arguments,
+provider keys, gateway keys, cookies, sessions, CSRF tokens, encrypted payloads,
+or nonces.
 
 Resolved Chat Completions routes are also checked against explicit
 `model_routes.capabilities["chat_completions"]` metadata. New seeded or
@@ -136,7 +138,12 @@ tools, `n > 1`, non-default service tiers, or Responses support. Audio input is
 allowed only with `chat_audio_inputs=true`; that flag does not imply audio
 output, top-level audio modalities, `/v1/audio/*`, Realtime, image/file input,
 custom tools, function tools, `n > 1`, non-default service tiers, or Responses
-support. Multiple choices are only allowed with `chat_multiple_choices=true`;
+support. Non-streaming audio output is allowed only with
+`chat_audio_outputs=true` and configured audio-output pricing metadata; that
+flag does not imply audio input, `/v1/audio/*`, Realtime, streaming audio
+output, custom voices, previous-audio references, hosted tools, custom tools,
+function tools, `n > 1`, non-default service tiers, or Responses support.
+Multiple choices are only allowed with `chat_multiple_choices=true`;
 that flag does not imply hosted tools, custom tools, multimodal support, audio
 output, non-default service tiers, or Responses support. Route capability checks
 happen after route resolution and before Redis rate limiting, pricing lookup,

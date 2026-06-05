@@ -83,12 +83,14 @@ Responses API work is separate and out of scope for this command.
 Seeded Chat Completions route rows include explicit `model_routes.capabilities`
 metadata under the `chat_completions` key for text chat, streaming, local
 function tools, local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and
-safe provider usage signals. Hosted tools, audio output and broader media features,
+safe provider usage signals. Hosted tools, streaming audio output and broader media features,
 non-default service tiers, and multiple choices are marked unsupported by
 default. Image input to text output requires explicit `chat_image_inputs=true`
 metadata; inline file input requires explicit `chat_file_inputs=true` metadata;
 audio input to text output requires explicit `chat_audio_inputs=true`
-metadata; `n > 1` requires explicit `chat_multiple_choices=true` metadata.
+metadata; non-streaming audio output requires explicit
+`chat_audio_outputs=true` metadata plus configured audio-output pricing;
+`n > 1` requires explicit `chat_multiple_choices=true` metadata.
 
 ## Chat Completions Request Fields
 
@@ -113,11 +115,12 @@ every top-level Chat Completions field through a fail-closed registry.
 | `n` | Omitted or `1` works unchanged. `n > 1` is accepted only within `CHAT_MAX_CHOICES_PER_REQUEST` and only when the resolved route explicitly sets `chat_multiple_choices=true`; input is estimated once and possible output reservation is multiplied by `n` |
 | `service_tier` | Omitted or `auto` is allowed; non-default values are rejected because pricing is not service-tier aware |
 | `prediction` | Supported as a bounded JSON object and counted as provider-context input |
-| `modalities` | Allowed only when it requests text only |
+| `modalities` | `["text"]` is allowed for text output. `["text", "audio"]` is allowed only for non-streaming audio output when the route sets `chat_audio_outputs=true`, `audio` is valid, `n` is omitted/`1`, and audio-output pricing is configured |
 | `image_url` message content parts | Supported for image input to text output only on user messages and only with `chat_image_inputs=true`; exact shape is `{ "type": "image_url", "image_url": { "url": "...", "detail"?: "auto" | "low" | "high" } }` |
 | `file` message content parts | Supported for inline file input to text output only on user messages and only with `chat_file_inputs=true`; exact accepted first-slice shape is `{ "type": "file", "file": { "filename": "...", "file_data": "<base64>" } }`. Raw base64 is accepted by default; `data:<mime>;base64,...` is accepted only when `CHAT_ALLOW_FILE_DATA_URLS=true`. File IDs and file URLs are rejected |
 | `input_audio` message content parts | Supported for audio input to text output only on user messages and only with `chat_audio_inputs=true`; exact accepted shape is `{ "type": "input_audio", "input_audio": { "data": "<base64>", "format": "wav" | "mp3" } }`. Audio data URLs and remote audio URLs are rejected in this PR |
-| `audio`, video/alternate image/file/audio content parts | Rejected until separate audio-output/broader multimodal pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
+| `audio` | Supported only as top-level non-streaming audio-output config with `modalities: ["text", "audio"]` and `{ "format": "wav" | "mp3" | "flac" | "opus" | "pcm16", "voice": "alloy" | "ash" | "ballad" | "coral" | "echo" | "fable" | "nova" | "onyx" | "sage" | "shimmer" | "marin" | "cedar" }`. Custom voices, streaming audio output, and `n > 1` with audio output are rejected |
+| Video/alternate image/file/audio content parts | Rejected until separate broader multimodal pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
 | `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
 | `background`, `store=true`, `previous_response_id`, `conversation` | Rejected; provider-side lifecycle/state features are not implemented |
 | Unknown top-level fields | Rejected in standard and trusted-calibration modes with `unknown_chat_completion_field` |
@@ -125,21 +128,23 @@ every top-level Chat Completions field through a fail-closed registry.
 Current request policy also rejects malformed or empty `messages`, too many or
 oversized messages/text/image/file/audio parts, invalid image URLs or data URLs,
 invalid image detail values, invalid file data, filenames, file IDs, file URLs,
-invalid audio data or formats, audio URLs,
+invalid audio input data or formats, audio URLs, invalid audio-output
+modalities/config/format/voice,
 invalid scalar controls, invalid output-token
 controls, input estimates over the configured hard input cap, non-object or
 oversized `stream_options`, overlarge `stop`, `user`, `logit_bias`,
 `metadata`, `prediction`, function-tool schema, and `response_format` schema
 payloads, and invalid or over-cap Chat Completions `n` values. Rejection
 messages name the field and problem without echoing raw messages, metadata
-values, image URLs, image/file/audio base64 data, filenames, file IDs, schemas, tool
-payloads, or request bodies.
+values, image URLs, image/file/input-audio/output-audio base64 data, audio
+transcripts, filenames, file IDs, schemas, tool payloads, or request bodies.
 
 Current Chat Completions capability policy allows local/client-side function
 tools, route-enabled non-streaming local custom tools, route-enabled image
 input to text output, route-enabled inline file input to text output, legacy
-`functions` / `function_call`, `response_format`, JSON mode, bounded multiple
-choices, and ordinary streaming. SLAIF does not
+`functions` / `function_call`, non-streaming audio output behind route and
+pricing gates, `response_format`, JSON mode, bounded multiple choices, and
+ordinary streaming. SLAIF does not
 police what a downstream application does
 when it receives a local function-tool or custom-tool call from the model.
 Hosted/provider-side tools are denied by default because there is no persisted
@@ -234,17 +239,30 @@ raw base64 `data` and `format` `wav` or `mp3` behind explicit
 `chat_audio_inputs=true` route capability and configured count/byte/format
 caps. Audio data URLs and remote audio URLs are rejected, and SLAIF does not
 fetch audio URLs, transcribe audio locally, store/log audio payloads or decoded
-bytes, infer exact audio cost from bytes or duration, or enable audio output.
+bytes, or infer exact audio cost from bytes or duration.
 Audio input composes with streaming text output, `n > 1`, image input, inline
 file input, local function tools, non-streaming custom tools,
 `response_format`, and logprobs only when those features' own capabilities and
-policies pass. Final accounting still uses provider usage/cost once. Chat
-Completions audio output remains unsupported. OpenAI and OpenRouter document
-audio-output request/response surfaces for compatible models, but SLAIF keeps
-them disabled until separate route capabilities, response byte caps, pricing
-support, provider usage parsing, accounting tests, provider adapter tests,
-official-client E2E coverage, and redaction/no-storage tests are implemented.
-See
+policies pass. Final accounting still uses provider usage/cost once.
+
+Chat Completions audio output is implemented as a non-streaming first slice.
+SLAIF accepts `modalities: ["text", "audio"]` plus top-level
+`audio: {"format": ..., "voice": ...}` only when the route sets
+`chat_audio_outputs=true` and the active pricing rule includes
+`pricing_metadata.audio_output_price_per_1m`. Supported formats are `wav`,
+`mp3`, `flac`, `opus`, and `pcm16`; supported built-in voices are `alloy`,
+`ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`,
+`shimmer`, `marin`, and `cedar`. Custom voices, previous-audio assistant
+references, streaming audio output, and `n > 1` with audio output are rejected
+in this PR. SLAIF forwards the provider response `choices[].message.audio`
+object to the client, but does not store or log generated audio data,
+transcripts, decoded audio bytes, prompts, completions, raw request bodies, or
+raw response bodies. Final accounting uses provider usage/cost once; OpenAI
+local pricing uses explicit audio-output token pricing metadata when provider
+usage reports `completion_tokens_details.audio_tokens`, and OpenRouter
+provider-reported cost remains authoritative when present. SLAIF does not infer
+exact audio-output cost from bytes, transcript length, format, voice, or
+duration. See
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 
 `n > 1` is supported as bounded multiple-choice Chat Completions only when the

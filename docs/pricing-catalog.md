@@ -48,13 +48,29 @@ Audio URLs and audio data URLs are rejected in this PR. Successful accounting
 still finalizes from provider usage/cost, and OpenRouter provider-reported cost
 is not multiplied by audio count, byte size, duration, or `n`.
 
+Chat Completions non-streaming audio output is enabled only behind explicit
+route capability, request caps, and configured audio-output pricing metadata.
+The request-side `modalities` and `audio` config are included in the ordinary
+input estimate. For admission, the gateway reserves possible output using the
+larger of the text output token price and
+`pricing_metadata.audio_output_price_per_1m`; this is conservative and is not
+an invoice-grade prediction of generated media cost. For OpenAI-local pricing,
+provider-reported audio output tokens such as
+`completion_tokens_details.audio_tokens` are charged with that metadata price
+and remaining completion tokens use the ordinary output price. For OpenRouter,
+provider-reported cost remains authoritative where present. SLAIF does not
+infer exact audio-output cost from generated audio bytes, transcript length,
+format, voice, or duration, and it does not multiply final provider usage/cost
+by audio output count or `n`.
+
 The upstream investigation in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md)
-shows that audio output and broader file modes are documented, but bytes are
-not billable tokens. Future audio-output/file-ID/file-URL support needs
-modality-specific admission estimates, pricing/catalog fields where upstream
-pricing requires them, provider usage parsing, and accounting tests before
-those payloads can be enabled for cost-limited gateway keys.
+shows that broader file modes and streaming audio output are documented or
+emerging, but bytes are not billable tokens. Future streaming
+audio-output/file-ID/file-URL support needs modality-specific admission
+estimates, pricing/catalog fields where upstream pricing requires them,
+provider usage parsing, and accounting tests before those payloads can be
+enabled for cost-limited gateway keys.
 
 ## OpenRouter Price Refresh
 
@@ -150,6 +166,9 @@ cached_input_price_per_1m	reasoning_price_per_1m	request_price	valid_from	valid_
 
 `source_retrieved_at` is explicit proposal metadata and is preserved inside
 `pricing_metadata` during import validation.
+Non-streaming Chat Completions audio-output routes also require
+`pricing_metadata.audio_output_price_per_1m` before audio-output requests are
+accepted.
 
 Route proposal TSV files use the current route import fields:
 
