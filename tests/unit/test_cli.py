@@ -21,6 +21,14 @@ def _plain_stderr(stderr: str) -> str:
 
 def setup_function() -> None:
     get_settings.cache_clear()
+    structlog.reset_defaults()
+
+
+def teardown_function() -> None:
+    # Typer's CliRunner provides an isolated stderr stream. CLI logging tests
+    # intentionally bind structlog to that stream, so reset it before later
+    # tests in the same xdist worker can inherit a closed capture object.
+    structlog.reset_defaults()
 
 
 def test_cli_version() -> None:
