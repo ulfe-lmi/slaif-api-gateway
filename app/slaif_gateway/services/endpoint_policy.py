@@ -10,6 +10,7 @@ from slaif_gateway.services.key_modes import is_trusted_calibration_key
 
 MODELS_LIST: Final[str] = "models.list"
 CHAT_COMPLETIONS: Final[str] = "chat.completions"
+RESPONSES: Final[str] = "responses"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -24,6 +25,13 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "chat.completions",
             "post /v1/chat/completions",
             "/v1/chat/completions",
+        }
+    ),
+    RESPONSES: frozenset(
+        {
+            "responses",
+            "post /v1/responses",
+            "/v1/responses",
         }
     ),
 }

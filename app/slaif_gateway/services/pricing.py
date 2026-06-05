@@ -10,7 +10,7 @@ from typing import Any, Final
 from slaif_gateway.db.models import FxRate, PricingRule
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
-from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import (
     ChatCostEstimate,
     FxConversionResult,
@@ -95,7 +95,7 @@ class PricingService:
         self,
         *,
         route: RouteResolutionResult,
-        policy: ChatCompletionPolicyResult,
+        policy: ChatCompletionPolicyResult | ResponsesPolicyResult,
         endpoint: str = "chat.completions",
         at: datetime | None = None,
     ) -> ChatCostEstimate:
@@ -165,6 +165,8 @@ def _normalize_endpoint(value: str) -> str:
     endpoint = value.strip()
     if endpoint == "chat.completions":
         return "/v1/chat/completions"
+    if endpoint == "responses":
+        return "/v1/responses"
     return endpoint
 
 

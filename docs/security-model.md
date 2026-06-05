@@ -349,21 +349,25 @@ password hashes, session tokens, or email bodies. Successful requests still
 finalize accounting from actual provider usage when available. This is Chat
 Completions hardening only; it does not implement Responses API behavior.
 
-## Planned Responses API Security Model
+## Responses API Security Model
 
-Responses API is not implemented in RC1. The planned RC2 security model is
-default-off and policy-first:
+Responses API support is limited to stateless, non-streaming, text-only
+`POST /v1/responses`. It is default-off and policy-first:
 
-- Responses must be explicitly enabled per key or key template.
+- Responses must be explicitly enabled per key through the `/v1/responses`
+  endpoint allowlist.
 - Endpoint, model, provider, and tool allowlists all apply.
-- Supported tool types must be explicitly allowed; tool JSON is not blind
-  passthrough.
-- MCP/connectors are excluded from RC2.
+- Route/model metadata must explicitly advertise Responses text/stateless
+  capability; Chat Completions capabilities do not imply Responses capability.
+- Tools are not supported in the foundation. Future supported tool types must
+  be explicitly allowed; tool JSON is not blind passthrough.
+- MCP/connectors are excluded.
 - `background`, `store`, `previous_response_id`, conversation/provider-side
   state, retrieval, delete, cancel, and input-item listing are excluded until
   ownership mapping, quota, accounting, and audit behavior are implemented.
-- Tool-enabled policies require bounded-overrun cost calculations that admins
-  can inspect before enabling the policy.
+- `store=false` is injected before forwarding when omitted.
+- Tool-enabled policies, when implemented later, require bounded-overrun cost
+  calculations that admins can inspect before enabling the policy.
 - Pricing catalog refreshes must be previewed, confirmed, and audited; refreshes
   must never silently replace production pricing rows.
 - Provider secrets remain server-side and are never accepted from Responses
@@ -673,8 +677,10 @@ never recover or send old plaintext keys.
   migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
   or allowlisted.
 - Native Anthropic API support is not implemented.
-- Responses API and embeddings API are not implemented. Responses API is the
-  planned RC2 feature family under `docs/responses-compatibility.md`.
+- Responses API support is limited to stateless, non-streaming, text-only
+  `POST /v1/responses`; Responses tools, streaming, stateful lifecycle routes,
+  and multimodal Responses remain future work under
+  `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.

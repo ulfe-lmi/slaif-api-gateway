@@ -28,6 +28,21 @@ def _request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openrouter",
+        upstream_model="openai/gpt-5.2",
+        endpoint="/v1/responses",
+        body=body,
+        request_id="gw-resp-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "X-CSRF-Token": "csrf",
+            "Accept": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openrouter_api_key_raises() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY=None))
@@ -86,6 +101,59 @@ async def test_openrouter_chat_completion_posts_non_streaming_request(respx_mock
     assert response.provider == "openrouter"
     assert response.status_code == 200
     assert response.upstream_request_id == "req-openrouter"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 11
+    assert response.usage.completion_tokens == 4
+    assert response.usage.total_tokens == 15
+    assert response.raw_cost_native == Decimal("0.00042")
+    assert response.native_currency == "USD"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_response_posts_non_streaming_request(respx_mock) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_or_123",
+                "object": "response",
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 4,
+                    "total_tokens": 15,
+                    "cost_usd": "0.00042",
+                },
+            },
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-response"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_body == {
+        "model": "openai/gpt-5.2",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+    }
+    assert caller_body["model"] == "client-model"
+    assert response.provider == "openrouter"
+    assert response.status_code == 200
+    assert response.upstream_request_id == "req-openrouter-response"
     assert response.usage is not None
     assert response.usage.prompt_tokens == 11
     assert response.usage.completion_tokens == 4

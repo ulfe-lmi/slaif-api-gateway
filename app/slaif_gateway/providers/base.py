@@ -27,6 +27,11 @@ class ProviderAdapter(ABC):
     async def forward_chat_completion(self, request: ProviderRequest) -> ProviderResponse:
         """Forward a non-streaming Chat Completions request."""
 
+    async def forward_response(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a non-streaming Responses request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def stream_chat_completion(
         self,
         request: ProviderRequest,

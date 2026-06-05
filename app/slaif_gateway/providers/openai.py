@@ -27,6 +27,7 @@ from slaif_gateway.providers.streaming import parse_sse_lines, with_streaming_us
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
+_RESPONSES_PATH = "/responses"
 _UPSTREAM_REQUEST_ID_HEADERS = ("x-request-id", "openai-request-id")
 
 
@@ -97,6 +98,26 @@ class OpenAIProviderAdapter(ProviderAdapter):
 
         async for chunk in self._stream_sse(_CHAT_COMPLETIONS_PATH, json=body, headers=headers):
             yield self._provider_stream_chunk(request, chunk)
+
+    async def forward_response(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/responses", "responses"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        body = dict(request.body)
+        body["model"] = request.upstream_model
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._post_json(_RESPONSES_PATH, json=body, headers=headers)
+        return self._provider_response(request, response)
 
     async def _post_json(
         self,

@@ -1,23 +1,51 @@
 # Responses Compatibility Contract
 
-Status: not implemented on current `main`.
+Status: limited foundation implemented on current `main`.
 
-This document defines the intended RC2-beta support boundary for Responses API
-work. It is a planning and implementation contract, not a statement that
-`POST /v1/responses` currently works.
+This document defines the RC2-beta support boundary for Responses API work.
+Current support is deliberately narrow: stateless, non-streaming, text-only
+`POST /v1/responses` with no tools, no provider-side storage, no background
+mode, no previous response or conversation state, and no multimodal input or
+output.
 
-## Supported-First Endpoint
+## Supported Endpoint
 
-The planned first endpoint is:
+The first implemented endpoint is:
 
 - `POST /v1/responses`
 
 Unsupported Responses routes remain unsupported until separate implementation
 and tests add them.
 
-## Planned First Supported Mode
+Implemented request fields for the first slice:
 
-RC2 should start with a stateless mode:
+- `model`
+- `input` as a text string
+- `instructions` as optional text
+- `max_output_tokens`
+- `temperature`
+- `top_p`
+- bounded `metadata`
+- `stream` omitted or `false`
+- `store` omitted or `false`
+- `text.format` only as plain text
+- `service_tier` omitted or `auto`
+
+If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
+the gateway remains stateless even when an upstream default would store
+responses. If `max_output_tokens` is omitted, SLAIF injects the existing default
+output cap. The route is non-streaming only.
+
+The first slice supports OpenAI Responses forwarding to `/v1/responses` when
+the selected route explicitly advertises Responses text/stateless capability
+and a `/v1/responses` pricing row exists. OpenRouter Responses forwarding is
+implemented only for explicitly configured `/v1/responses` OpenRouter routes;
+OpenRouter support remains beta/stateless and is not enabled by model allowlist
+alone.
+
+## First Supported Mode
+
+SLAIF starts with a stateless mode:
 
 - no `background=true`
 - no provider-side response storage or retrieval
@@ -73,7 +101,7 @@ generation, `/v1/files`, hosted file search, retrieval, `/v1/audio/*`, Realtime,
 or any Responses behavior. Chat Completions multiple choices are a separate bounded
 request-shape feature that requires explicit `chat_multiple_choices` route
 metadata and does not implement or imply any Responses behavior. This hardening
-does not implement `/v1/responses`.
+is separate from the stateless Responses text foundation.
 The Chat Completions multimodal/audio/file evidence and roadmap are documented
 separately in
 [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md);
@@ -150,11 +178,12 @@ template-to-key workflow.
 
 ## Usage Tracking And Calibration Keys
 
-Calibration keys are planned for RC2 so operators can turn real organizer usage
-into safer participant limits. A semi-trusted organizer, teacher, workshop lead,
-or foreman can receive a relatively lenient calibration key, run the planned
+Calibration keys let operators turn real organizer Chat Completions usage into
+safer participant limits. A semi-trusted organizer, teacher, workshop lead, or
+foreman can receive a relatively lenient calibration key, run the planned
 seminar or workflow, and let an admin derive a stricter key template from the
-observed usage window.
+observed usage window. Responses-specific calibration/template policy remains
+future work.
 
 The workflow is advisory until an admin confirms a template or key creation:
 
@@ -259,12 +288,19 @@ the support matrix:
 - computer use
 - shell or hosted patch/application tools
 
-## Required Tests Before Marking Implemented
+## Required Tests
 
-Responses support is not implemented until these are present and green:
+The stateless text-only foundation is implemented with:
 
 - request policy unit tests;
-- provider adapter tests for OpenAI and OpenRouter;
+- route capability unit tests;
+- provider adapter tests for OpenAI and OpenRouter Responses forwarding;
+- endpoint allowlist and pipeline-ordering tests;
+- PostgreSQL-backed mocked official OpenAI Python client E2E coverage.
+
+Tool-enabled or stateful Responses support remains future work until these are
+present and green:
+
 - PostgreSQL quota/accounting integration tests;
 - bounded-overrun tests;
 - tool allowlist tests;

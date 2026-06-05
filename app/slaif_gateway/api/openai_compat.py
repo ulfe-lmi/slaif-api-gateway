@@ -10,11 +10,17 @@ from slaif_gateway.api.endpoint_policy_errors import openai_error_from_endpoint_
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList
+from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList, ResponsesCreateRequest
 from slaif_gateway.services.chat_completion_gateway import handle_chat_completion
-from slaif_gateway.services.endpoint_policy import CHAT_COMPLETIONS, MODELS_LIST, EndpointPolicyService
+from slaif_gateway.services.endpoint_policy import (
+    CHAT_COMPLETIONS,
+    MODELS_LIST,
+    RESPONSES,
+    EndpointPolicyService,
+)
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
+from slaif_gateway.services.responses_gateway import handle_response_create
 
 router = APIRouter()
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
@@ -55,6 +61,23 @@ async def validate_chat_completions(
     return await handle_chat_completion(
         **kwargs,
     )
+
+
+@router.post("/v1/responses")
+async def create_response(
+    request: Request,
+    payload: ResponsesCreateRequest,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES)
+    kwargs = {
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_create).parameters:
+        kwargs["request"] = request
+    return await handle_response_create(**kwargs)
 
 
 def _ensure_endpoint_allowed(authenticated_key: AuthenticatedGatewayKey, endpoint: str) -> None:

@@ -128,7 +128,9 @@ Gateway-key request policy separates models from endpoints:
 - allowed models are route-backed model IDs such as `gpt-4o-mini`;
 - allowed endpoints are implemented `/v1` paths such as `/v1/models` and
   `/v1/chat/completions`;
-- `/v1/responses` and legacy `/v1/completions` are rejected until implemented.
+- `/v1/responses` is implemented only for the stateless text-only foundation and
+  still requires explicit route capability and pricing metadata;
+- legacy `/v1/completions` is rejected until implemented.
 
 Admins can edit this policy from a key detail page with **Update Request
 Policy**. The same validation is used by service and CLI workflows: endpoint
@@ -455,11 +457,28 @@ then create exactly one normal key from a selected immutable revision with
 `slaif-gateway keys create-from-template` or the template detail page. Bulk
 template-based participant key creation remains future work.
 
-## Planned Responses API Configuration
+## Responses API Configuration
 
-Responses API settings are planned for RC2 and are not implemented unless a
-future PR adds matching code, tests, and `.env.example` entries. Do not set these
-as production controls yet.
+The current Responses API foundation is stateless, non-streaming, and text-only.
+It reuses `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
+`max_output_tokens`, and adds bounded request-shape caps:
+
+- `RESPONSES_MAX_INPUT_TEXT_BYTES=262144`
+- `RESPONSES_MAX_INSTRUCTIONS_BYTES=65536`
+- `RESPONSES_MAX_METADATA_BYTES=16384`
+- `RESPONSES_MAX_METADATA_KEYS=32`
+- `RESPONSES_MAX_STREAM_OPTIONS_BYTES=8192`
+
+These are validation caps, not feature toggles. Responses still requires a key
+with `/v1/responses` in its endpoint policy, a resolved route with explicit
+Responses text/stateless capability metadata, and an active `/v1/responses`
+pricing row.
+
+## Planned Responses Tool Configuration
+
+Tool-enabled Responses settings remain future work unless a future PR adds
+matching code, tests, and `.env.example` entries. Do not set these as production
+controls yet.
 
 Possible future setting names:
 

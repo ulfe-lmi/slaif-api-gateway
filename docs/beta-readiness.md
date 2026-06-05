@@ -179,15 +179,17 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Bulk key synchronous `send-now` execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
-- Responses API is not implemented in RC1. RC2 is planned to focus on limited
-  stateless `POST /v1/responses` support with explicit key/template policy,
-  allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. Safe Chat Completions usage profiling, trusted calibration keys,
-  calibration proposal previews, and durable key-template snapshots now provide
-  the first persisted foundation for usage-derived participant policies.
-  Single-key creation from a selected template revision is implemented, but
-  bulk participant-key generation, policy mutation, and Responses support
-  remain future work. See `responses-compatibility.md`.
+- Responses API support is limited to stateless, non-streaming, text-only
+  `POST /v1/responses` with explicit key endpoint permission, route capability,
+  provider route, and pricing metadata. Responses tools, streaming,
+  storage/state, background mode, retrieval/delete/cancel/list routes,
+  multimodal input/output, and MCP/connectors remain future work. Safe Chat
+  Completions usage profiling, trusted calibration keys, calibration proposal
+  previews, and durable key-template snapshots now provide the first persisted
+  foundation for usage-derived participant policies. Single-key creation from a
+  selected template revision is implemented, but bulk participant-key
+  generation, policy mutation, and Responses-specific template policy remain
+  future work. See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - Chat Completions file IDs, file URLs, audio URLs, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with audio
@@ -214,7 +216,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses, embeddings, files, image, or audio API support in RC1.
+- No Responses tools/stateful routes, embeddings, files endpoints, image
+  endpoints, or audio endpoints in RC1.
 - No MFA or full RBAC.
 - No production certification or compliance claim.
 - No real provider calls or external email during verification.
@@ -223,9 +226,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - Add MFA and role-gated permissions if required for the deployment context.
 - Add formal security review or penetration testing before production claims.
-- Implement Responses API as a separate scoped RC2 project under
-  `responses-compatibility.md`; decide separately whether to implement bulk key
-  send-now, embeddings, and native provider adapters.
+- Continue Responses API as scoped RC2 work under
+  `responses-compatibility.md`; decide separately whether to implement
+  Responses tools/stateful routes, bulk key send-now, embeddings, and native
+  provider adapters.
 - Exercise the production/operator runbooks in at least one production-like
   staging deployment.
 - Continue tuning monitoring and alert routing for the target deployment.

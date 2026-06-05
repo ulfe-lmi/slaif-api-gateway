@@ -150,8 +150,8 @@ Rules:
 - archived templates are rejected;
 - hosted capabilities requiring review are rejected rather than silently enabled
   for participant keys;
-- `/v1/responses` and `/v1/completions` remain unsupported and are not allowed
-  through this workflow.
+- Responses-specific template policy remains future work; `/v1/responses` and
+  `/v1/completions` are not allowed through this template-to-key workflow yet.
 
 ## Existing Keys
 

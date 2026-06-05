@@ -112,12 +112,12 @@ Known limitations:
   field registry explicitly classifies them as supported; provider-specific
   headers are not generally forwarded.
 
-## Planned Responses Forwarding
+## Responses Forwarding
 
-Current Chat Completions forwarding remains unchanged. `POST /v1/responses` is
-not implemented on current `main`.
+Current Chat Completions forwarding remains unchanged. `POST /v1/responses` has
+a limited stateless text-only forwarding path.
 
-Future Responses forwarding must follow the same provider-secret boundary:
+Responses forwarding follows the same provider-secret boundary:
 
 - client `Authorization` is never forwarded upstream;
 - provider authorization is substituted server-side from configured provider
@@ -126,10 +126,14 @@ Future Responses forwarding must follow the same provider-secret boundary:
   client headers, or import files;
 - diagnostics are bounded and sanitized.
 
-Responses-specific rules for RC2:
+Responses-specific rules for the current foundation:
 
-- tool fields are not blind passthrough;
-- supported tool types must be explicitly allowlisted by key or key template;
+- only non-streaming text input/text output is supported;
+- `store=false` is injected when omitted;
+- `max_output_tokens` is defaulted or capped before forwarding;
+- tool fields are rejected and are not blind passthrough;
+- future supported tool types must be explicitly allowlisted by key or key
+  template;
 - MCP/connectors are excluded;
 - `background`, `store`, `previous_response_id`, and `conversation` are rejected
   before provider forwarding;
@@ -139,9 +143,10 @@ Responses-specific rules for RC2:
   sanitized before storage or display.
 
 OpenRouter's Responses API is beta and stateless. OpenAI's Responses API exposes
-stateful/background/storage and hosted-tool surfaces. SLAIF must fail closed on
+stateful/background/storage and hosted-tool surfaces. SLAIF fails closed on
 those differences until the policy, pricing, ownership, and accounting contracts
-are implemented and tested.
+are implemented and tested. OpenRouter Responses is available only through
+explicit `/v1/responses` route metadata; model allowlists alone do not enable it.
 
 ## Capability Policy Boundary
 

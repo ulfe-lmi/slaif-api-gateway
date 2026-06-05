@@ -118,17 +118,19 @@ migrations automatically.
 - Bulk synchronous `send-now` key import execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
-- Responses API is not implemented in RC1. RC2 is planned to focus on limited
-  stateless `POST /v1/responses` support with explicit key/template policy,
-  allowed tool controls, pricing catalog support, and bounded-overrun cost
-  estimates. Current Chat Completions usage profiling and trusted calibration
-  keys, available from CLI and admin web creation, provide safe
-  calibration-foundation metadata. Admins can now preview calibration usage
-  summaries and strict participant-policy proposals from CLI and admin web, then
-  create durable key-template revisions from reviewed proposals. Single-key
-  creation from a selected template revision is implemented for normal standard
-  keys; bulk participant-key generation, policy mutation, and Responses support
-  remain future work. See `responses-compatibility.md`.
+- Responses API support is limited to stateless, non-streaming, text-only
+  `POST /v1/responses` with explicit key endpoint permission, route capability,
+  provider route, and pricing metadata. Responses tools, streaming,
+  storage/state, background mode, retrieval/delete/cancel/list routes,
+  multimodal input/output, and MCP/connectors remain future work. Current Chat
+  Completions usage profiling and trusted calibration keys, available from CLI
+  and admin web creation, provide safe calibration-foundation metadata. Admins
+  can now preview calibration usage summaries and strict participant-policy
+  proposals from CLI and admin web, then create durable key-template revisions
+  from reviewed proposals. Single-key creation from a selected template revision
+  is implemented for normal standard keys; bulk participant-key generation,
+  policy mutation, and Responses-specific template policy remain future work.
+  See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.
 - Chat Completions file IDs, file URLs, audio URLs, streaming audio output,

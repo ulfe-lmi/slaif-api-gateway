@@ -27,6 +27,21 @@ def _request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        endpoint="/v1/responses",
+        body=body,
+        request_id="gw-resp-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "Cookie": "cookie",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openai_api_key_raises() -> None:
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY=None))
@@ -87,6 +102,61 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     assert response.provider == "openai"
     assert response.status_code == 200
     assert response.upstream_request_id == "req-openai"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 3
+    assert response.usage.total_tokens == 13
+    assert response.usage.cached_tokens == 2
+    assert response.usage.reasoning_tokens == 1
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_123",
+                "object": "response",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 3,
+                    "total_tokens": 13,
+                    "input_tokens_details": {"cached_tokens": 2},
+                    "output_tokens_details": {"reasoning_tokens": 1},
+                },
+            },
+            headers={"OpenAI-Request-ID": "req-openai-response"},
+        )
+    )
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    adapter = OpenAIProviderAdapter(settings)
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+    }
+    assert caller_body["model"] == "client-model"
+    assert response.provider == "openai"
+    assert response.status_code == 200
+    assert response.upstream_request_id == "req-openai-response"
     assert response.usage is not None
     assert response.usage.prompt_tokens == 10
     assert response.usage.completion_tokens == 3

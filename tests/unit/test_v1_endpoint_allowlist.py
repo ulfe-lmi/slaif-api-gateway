@@ -45,11 +45,19 @@ def _chat_body() -> dict[str, object]:
     }
 
 
+def _responses_body() -> dict[str, object]:
+    return {
+        "model": "classroom-cheap",
+        "input": "hello",
+        "max_output_tokens": 20,
+    }
+
+
 def _app_with_auth(monkeypatch, authenticated_key: AuthenticatedGatewayKey):
     import slaif_gateway.api.openai_compat as openai_module
 
     app = create_app()
-    state: dict[str, int] = {"models_calls": 0, "chat_calls": 0}
+    state: dict[str, int] = {"models_calls": 0, "chat_calls": 0, "responses_calls": 0}
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
         return authenticated_key
@@ -67,23 +75,31 @@ def _app_with_auth(monkeypatch, authenticated_key: AuthenticatedGatewayKey):
         state["chat_calls"] += 1
         return JSONResponse(status_code=200, content={"id": "chatcmpl_test", "choices": []})
 
+    async def _fake_handle_response_create(*, payload, authenticated_key, settings):
+        _ = (payload, authenticated_key, settings)
+        state["responses_calls"] += 1
+        return JSONResponse(status_code=200, content={"id": "resp_test", "output": []})
+
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
     monkeypatch.setattr(openai_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(openai_module.ModelCatalogService, "list_visible_models", _fake_list_visible_models)
     monkeypatch.setattr(openai_module, "handle_chat_completion", _fake_handle_chat_completion)
+    monkeypatch.setattr(openai_module, "handle_response_create", _fake_handle_response_create)
     return app, state
 
 
-def test_allow_all_endpoints_can_call_models_and_chat(monkeypatch) -> None:
+def test_allow_all_endpoints_can_call_models_chat_and_responses(monkeypatch) -> None:
     app, state = _app_with_auth(monkeypatch, _auth(allow_all_endpoints=True))
     client = TestClient(app)
 
     models_response = client.get("/v1/models")
     chat_response = client.post("/v1/chat/completions", json=_chat_body())
+    responses_response = client.post("/v1/responses", json=_responses_body())
 
     assert models_response.status_code == 200
     assert chat_response.status_code == 200
-    assert state == {"models_calls": 1, "chat_calls": 1}
+    assert responses_response.status_code == 200
+    assert state == {"models_calls": 1, "chat_calls": 1, "responses_calls": 1}
 
 
 def test_models_endpoint_allow_list_allows_models_and_rejects_chat(monkeypatch) -> None:
@@ -92,16 +108,19 @@ def test_models_endpoint_allow_list_allows_models_and_rejects_chat(monkeypatch) 
 
     models_response = client.get("/v1/models")
     chat_response = client.post("/v1/chat/completions", json=_chat_body())
+    responses_response = client.post("/v1/responses", json=_responses_body())
 
     assert models_response.status_code == 200
     assert chat_response.status_code == 403
+    assert responses_response.status_code == 403
     assert chat_response.json()["error"] == {
         "message": "The requested endpoint is not allowed for this key",
         "type": "permission_error",
         "param": None,
         "code": "endpoint_not_allowed",
     }
-    assert state == {"models_calls": 1, "chat_calls": 0}
+    assert responses_response.json()["error"]["code"] == "endpoint_not_allowed"
+    assert state == {"models_calls": 1, "chat_calls": 0, "responses_calls": 0}
 
 
 def test_chat_endpoint_allow_list_allows_chat_and_rejects_models(monkeypatch) -> None:
@@ -110,12 +129,27 @@ def test_chat_endpoint_allow_list_allows_chat_and_rejects_models(monkeypatch) ->
 
     models_response = client.get("/v1/models")
     chat_response = client.post("/v1/chat/completions", json=_chat_body())
+    responses_response = client.post("/v1/responses", json=_responses_body())
 
     assert models_response.status_code == 403
     assert chat_response.status_code == 200
+    assert responses_response.status_code == 403
     assert models_response.json()["error"]["type"] == "permission_error"
     assert models_response.json()["error"]["code"] == "endpoint_not_allowed"
-    assert state == {"models_calls": 0, "chat_calls": 1}
+    assert responses_response.json()["error"]["code"] == "endpoint_not_allowed"
+    assert state == {"models_calls": 0, "chat_calls": 1, "responses_calls": 0}
+
+
+def test_responses_endpoint_allow_list_allows_responses_without_chat(monkeypatch) -> None:
+    app, state = _app_with_auth(monkeypatch, _auth(allowed_endpoints=("/v1/responses",)))
+    client = TestClient(app)
+
+    chat_response = client.post("/v1/chat/completions", json=_chat_body())
+    responses_response = client.post("/v1/responses", json=_responses_body())
+
+    assert chat_response.status_code == 403
+    assert responses_response.status_code == 200
+    assert state == {"models_calls": 0, "chat_calls": 0, "responses_calls": 1}
 
 
 def test_empty_endpoint_allow_list_rejects_existing_v1_endpoints(monkeypatch) -> None:
@@ -124,12 +158,15 @@ def test_empty_endpoint_allow_list_rejects_existing_v1_endpoints(monkeypatch) ->
 
     models_response = client.get("/v1/models")
     chat_response = client.post("/v1/chat/completions", json=_chat_body())
+    responses_response = client.post("/v1/responses", json=_responses_body())
 
     assert models_response.status_code == 403
     assert chat_response.status_code == 403
+    assert responses_response.status_code == 403
     assert models_response.json()["error"]["code"] == "endpoint_not_allowed"
     assert chat_response.json()["error"]["code"] == "endpoint_not_allowed"
-    assert state == {"models_calls": 0, "chat_calls": 0}
+    assert responses_response.json()["error"]["code"] == "endpoint_not_allowed"
+    assert state == {"models_calls": 0, "chat_calls": 0, "responses_calls": 0}
 
 
 def test_endpoint_rejection_happens_before_route_pricing_quota_or_provider_work(monkeypatch) -> None:
@@ -141,4 +178,3 @@ def test_endpoint_rejection_happens_before_route_pricing_quota_or_provider_work(
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "endpoint_not_allowed"
     assert state["chat_calls"] == 0
-
