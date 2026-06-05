@@ -40,6 +40,10 @@ but are not a production certification.
   `chat_audio_inputs` route capability, with bounded raw base64 `wav`/`mp3`
   input, audio URLs/data URLs rejected by default, no local transcription, and
   ordinary provider-usage finalization.
+- Chat Completions non-streaming audio output behind explicit
+  `chat_audio_outputs` route capability and audio-output pricing metadata,
+  with generated audio/transcripts forwarded to the client but not stored or
+  logged.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - Explicit Chat Completions route/model capability metadata, enforced
   separately from gateway-key endpoint/model/provider allowlists.

@@ -26,9 +26,10 @@ For exact reviewer-facing behavior, see:
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
 - [`docs/responses-compatibility.md`](docs/responses-compatibility.md) for the
   planned RC2 Responses API contract.
-- [`docs/key-templates.md`](docs/key-templates.md) and
-  [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for planned RC2 key
-  template and pricing-catalog direction.
+- [`docs/key-templates.md`](docs/key-templates.md) for implemented template
+  snapshots and single-key creation from template revisions, and
+  [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for local pricing
+  catalog behavior and future refresh direction.
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
 - [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
@@ -42,7 +43,9 @@ Implemented:
 
 - `GET /healthz` and `GET /readyz`.
 - Authenticated `GET /v1/models` backed by local provider and route metadata, filtered by the gateway key's effective model allow-list.
-- Non-streaming and SSE streaming `POST /v1/chat/completions` with request policy checks, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
+- Non-streaming and SSE streaming `POST /v1/chat/completions` with request field registry checks, scalar/request caps, route/model capability metadata, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
+- Current Chat Completions support includes text chat, streaming text, local function tools, non-streaming local custom tools, bounded `n > 1` multiple choices, image input to text output, inline file input to text output, audio input to text output, and non-streaming audio output when the resolved route/model explicitly enables the matching capability.
+- Chat Completions policy remains fail-closed for unknown fields and unsupported request shapes. Hosted/provider-side tools, MCP/connectors, web search, file search, code interpreter, computer use, image-generation tools, tool search, non-default service tiers, streaming custom tools, streaming audio output, file IDs/provider-side file lifecycle, and `n > 1` with audio output remain unsupported unless future explicit policy, pricing/accounting, forwarding, and tests add them.
 - `slaif-gateway bootstrap openai-completions-catalog` for seeding the local OpenAI provider config, exact Chat Completions routes, and explicit pricing rows from a curated in-repo catalog and an operator-controlled pricing CSV.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
@@ -60,18 +63,19 @@ Implemented:
 Not implemented yet:
 
 - Responses API. RC2 is planned to focus on limited stateless
-  `POST /v1/responses` support with default-off key policy, key templates,
-  pricing catalog support, bounded-overrun cost estimates, and explicit tool
-  controls. MCP/connectors, background mode, provider-side storage,
-  `previous_response_id`, conversations, response retrieval/cancel/delete,
-  image generation, and computer use remain excluded from the planned first
-  Responses slice. RC2 also plans calibration keys and usage-derived key
-  templates, so admins can derive participant limits from real
-  organizer/test-key usage.
+  `POST /v1/responses` support with default-off key policy, template-based
+  policy controls, pricing catalog support, bounded-overrun cost estimates,
+  and explicit tool controls. MCP/connectors, background mode, provider-side
+  storage, `previous_response_id`, conversations, response
+  retrieval/cancel/delete, image generation, and computer use remain excluded
+  from the planned first Responses slice.
+- Embeddings, legacy `/v1/completions`, `/v1/files`, `/v1/audio/*`, image
+  generation endpoints, batch endpoints, and Realtime API.
+- Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,
+  provider-side file lifecycle, streaming custom tools, streaming audio output,
+  custom audio-output voices, previous-audio references, and `n > 1` with
+  audio output.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
-- Legacy `POST /v1/completions`. The current bootstrap command rejects
-  `--include-legacy-completions` until a proper endpoint, forwarding,
-  accounting, pricing, and test slice is implemented.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the
   checked-in CI and RC-beta verification workflows.
@@ -111,12 +115,13 @@ for chunk in stream:
         print(chunk.choices[0].delta.content or "", end="")
 ```
 
-Common Chat Completions parameters such as `temperature`, `top_p`, `tools`,
+Common Chat Completions parameters such as `temperature`, `top_p`, local
+function `tools`, route-enabled non-streaming custom local tools,
 `tool_choice`, `response_format`, `seed`, `user`, `logprobs`, `metadata`, and
-service-tier options are passed through to the selected upstream provider unless
-the gateway explicitly rejects them. For streaming requests, the gateway forwards
-`stream_options.include_usage=true` so final provider usage can be captured for
-accounting.
+`n` are passed through to the selected upstream provider only after request
+field, request-cap, hosted-tool, and route/model capability checks pass. For
+streaming requests, the gateway forwards `stream_options.include_usage=true` so
+final provider usage can be captured for accounting.
 
 Chat Completions token/cost pre-reservation includes conservative serialized
 estimates for provider-forwarded non-message fields such as `tools` and
@@ -124,8 +129,18 @@ estimates for provider-forwarded non-message fields such as `tools` and
 provider calls; actual provider usage still finalizes accounting.
 
 Chat Completions `n` is preserved when omitted or exactly `1`. `n > 1` is
-intentionally rejected until multi-choice quota reservation and cost accounting
-are implemented; it is not silently clamped or dropped.
+supported only when the resolved route/model explicitly enables the
+multiple-choice capability and the configured `CHAT_MAX_CHOICES_PER_REQUEST`
+cap is respected. Input is estimated once, output reservation is
+choice-aware, and final provider usage/cost is not multiplied again by `n`.
+
+Image input, inline file input, audio input, and non-streaming audio output are
+implemented only behind explicit route/model capability gates and configured
+caps. SLAIF does not store or log raw images, files, audio payloads,
+transcripts, prompts, completions, raw request bodies, or raw response bodies.
+Final accounting uses provider usage/cost where available; URL/base64 byte
+length, audio duration, and transcript length are not invoice-grade billable
+token truth.
 
 `sk-slaif-` is the default generated gateway key prefix. New key generation uses `GATEWAY_KEY_PREFIX`, and authentication accepts only prefixes configured in `GATEWAY_KEY_ACCEPTED_PREFIXES`, which must include the active generation prefix.
 

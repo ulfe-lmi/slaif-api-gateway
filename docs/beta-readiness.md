@@ -45,6 +45,10 @@ operational guidance, not a production certification.
   explicitly enables `chat_audio_inputs`; raw base64 `wav`/`mp3` audio is
   bounded and forwarded without SLAIF fetching audio URLs, transcribing locally,
   storing, logging, or inferring exact audio cost from bytes or duration.
+- Chat Completions non-streaming audio output when the resolved route
+  explicitly enables `chat_audio_outputs` and the active pricing row provides
+  audio-output pricing metadata; generated audio/transcripts are forwarded to
+  the client but are not stored or logged.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.
