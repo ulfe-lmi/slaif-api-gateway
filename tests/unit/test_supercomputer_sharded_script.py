@@ -37,6 +37,16 @@ def test_supercomputer_script_requires_one_positive_integer_worker_argument() ->
     assert invalid.returncode != 0
     assert "worker count must be a positive integer" in invalid.stderr
 
+    extra = subprocess.run(
+        [str(SCRIPT), "1", "2"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert extra.returncode != 0
+    assert "Usage:" in extra.stderr
+
 
 def test_supercomputer_script_refuses_production_and_upstream_smoke_mode() -> None:
     production_env = os.environ.copy()
@@ -73,14 +83,26 @@ def test_supercomputer_script_text_preserves_db_and_secret_safety_contract() -> 
     assert "SLAIF_SUPERCOMPUTER_KEEP_DBS" in content
     assert "SLAIF_SUPERCOMPUTER_SKIP_BROWSER" in content
     assert "SLAIF_SUPERCOMPUTER_SKIP_DOCKER" in content
+    assert "SLAIF_SUPERCOMPUTER_PARALLEL_E2E" in content
     assert "TEST_DATABASE_URL" in content
     assert "DB-backed shard subprocesses received isolated TEST_DATABASE_URL values" in content
     assert "DATABASE_URL was not used for destructive setup" in content
+    assert "PostgreSQL availability required a generated create/drop database probe" in content
+    assert 'local probe_db="${DB_PREFIX}_probe"' in content
+    assert 'createdb "$probe_db"' in content
+    assert 'dropdb --if-exists "$probe_db"' in content
     assert "trap cleanup EXIT INT TERM" in content
     assert "run_db_file_job" in content
     assert "find tests/integration" not in content
     assert "RUN_UPSTREAM_TESTS=0" in content
     assert "ENABLE_EMAIL_DELIVERY=false" in content
+    assert "git ls-files | grep -E '(^|/)\\.codex($|/)'" in content
+    assert 'run_db_suite "integration" "tests/integration" "$WORKERS"' in content
+    assert 'run_db_suite "e2e" "tests/e2e" "$E2E_CONCURRENCY"' in content
+    assert "E2E_CONCURRENCY=1" in content
+    assert 'E2E_CONCURRENCY="$WORKERS"' in content
+    assert "run_browser_suite" in content
+    assert "tests/browser -m playwright" in content
 
     dangerous_patterns = [
         "dropdb $DATABASE" + "_URL",

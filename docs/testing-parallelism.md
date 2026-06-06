@@ -141,6 +141,9 @@ The script:
   `PYTEST_XDIST_WORKERS=<workers>`;
 - discovers integration and E2E test files dynamically and runs them as
   file-level shards;
+- runs integration files with max concurrency `<workers>`;
+- runs E2E files serially by default, still with one isolated database per
+  file, because E2E tests may need unique app/server/port resources;
 - creates a fresh generated PostgreSQL database for every DB-backed shard and
   passes it only through `TEST_DATABASE_URL`;
 - unsets `DATABASE_URL` and `TEST_REDIS_URL` for shard subprocesses so they do
@@ -160,6 +163,7 @@ Optional environment variables:
 | `SLAIF_SUPERCOMPUTER_KEEP_WORKDIR=1` | Keep the run directory explicitly; summaries/logs are otherwise still printed and retained in the selected run root. |
 | `SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1` | Skip browser tests with a summary note. |
 | `SLAIF_SUPERCOMPUTER_SKIP_DOCKER=1` | Skip Docker Compose config checks with a summary note. |
+| `SLAIF_SUPERCOMPUTER_PARALLEL_E2E=1` | Opt into E2E file-level concurrency up to `<workers>` after verifying the environment has safe per-file app/server/port isolation. Default E2E concurrency is 1. |
 | `SLAIF_SUPERCOMPUTER_PGHOST` | PostgreSQL host or Unix socket path override. |
 | `SLAIF_SUPERCOMPUTER_PGPORT` | PostgreSQL port override. |
 | `SLAIF_SUPERCOMPUTER_PGUSER` | PostgreSQL user override. |
@@ -172,9 +176,11 @@ Requirements and safety behavior:
 - The script refuses `RUN_UPSTREAM_TESTS=1`.
 - It does not install dependencies by default; run
   `python -m pip install -e ".[dev]"` first.
-- It needs `createdb`, `dropdb`, and `psql` for DB-backed shards. If those
-  commands are unavailable or cannot create user-owned databases, integration,
-  E2E, and browser phases are marked skipped with the exact reason.
+- It needs `createdb`, `dropdb`, and `psql` for DB-backed shards. PostgreSQL is
+  considered available only after the script creates and drops a generated
+  probe database under the safe run prefix. If the commands, connection, or
+  create/drop probe fail, integration, E2E, and browser phases are marked
+  skipped with the exact reason.
 - It never uses `DATABASE_URL` for destructive setup. If `DATABASE_URL` is set,
   the script records that it is ignored and unsets it for shard subprocesses.
 - Generated DB names use a `slaif_hpc_test_...` prefix by default, and cleanup
@@ -184,8 +190,10 @@ Requirements and safety behavior:
 Known limitations:
 
 - DB sharding is file-level. Each integration/E2E test file gets its own
-  generated database and runs serially inside that file. This is conservative
-  and intentionally avoids nested xdist against one DB.
+  generated database and runs serially inside that file. Integration files are
+  concurrent up to `<workers>`. E2E files are serial by default and may be made
+  file-concurrent only with `SLAIF_SUPERCOMPUTER_PARALLEL_E2E=1`. This is
+  conservative and intentionally avoids nested xdist against one DB.
 - Browser tests are serial by default. Parallel browser execution needs a future
   per-worker database, app port, and Playwright isolation workflow.
 - Redis-backed tests do not receive a shared `TEST_REDIS_URL` from the harness;
@@ -193,7 +201,9 @@ Known limitations:
   per-worker Redis DB or instance isolation.
 - The current script uses an existing PostgreSQL server reachable through normal
   user `createdb`/`dropdb`/`psql` commands. The temporary ramdisk PostgreSQL
-  cluster hook is documented but not implemented yet.
+  cluster hook is documented but not implemented yet; setting
+  `SLAIF_SUPERCOMPUTER_START_POSTGRES=1` is refused rather than treated as
+  supported.
 
 Troubleshooting:
 

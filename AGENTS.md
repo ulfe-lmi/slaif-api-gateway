@@ -266,10 +266,15 @@ scripts/test-supercomputer-sharded.sh 128
 Rules:
 
 - The harness uses the requested worker count for unit-test xdist workers and
-  as the maximum concurrent DB-backed shard count.
+  as the maximum concurrent integration shard count.
 - Integration and E2E shards must receive isolated PostgreSQL databases through
-  per-shard `TEST_DATABASE_URL` values. Never point destructive setup at
-  `DATABASE_URL`.
+  per-shard `TEST_DATABASE_URL` values. PostgreSQL is considered available only
+  after the harness proves it can create and drop a generated probe database
+  under the safe run prefix. Never point destructive setup at `DATABASE_URL`.
+- E2E test files run serially by default because they may need unique app,
+  server, or port resources. `SLAIF_SUPERCOMPUTER_PARALLEL_E2E=1` may opt into
+  E2E file-level concurrency only after the caller has verified the environment
+  is safe.
 - Browser tests remain serial by default inside this harness unless a future PR
   proves safe per-worker browser isolation.
 - The harness may use a ramdisk/work directory for logs, JUnit files, temp
@@ -279,7 +284,10 @@ Rules:
   `SLAIF_SUPERCOMPUTER_KEEP_WORKDIR`, `SLAIF_SUPERCOMPUTER_SKIP_BROWSER`,
   `SLAIF_SUPERCOMPUTER_SKIP_DOCKER`, `SLAIF_SUPERCOMPUTER_PGHOST`,
   `SLAIF_SUPERCOMPUTER_PGPORT`, `SLAIF_SUPERCOMPUTER_PGUSER`, and
-  `SLAIF_SUPERCOMPUTER_DB_PREFIX`.
+  `SLAIF_SUPERCOMPUTER_DB_PREFIX`. `SLAIF_SUPERCOMPUTER_START_POSTGRES=1`
+  remains a refused future hook; the current harness uses an existing
+  user-owned PostgreSQL server reachable through `psql`, `createdb`, and
+  `dropdb`.
 - It must refuse `APP_ENV=production` and `RUN_UPSTREAM_TESTS=1`.
 - It must not require real OpenAI/OpenRouter keys or send real email.
 - Codex final reports using this script must include worker count, command,

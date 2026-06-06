@@ -12,6 +12,7 @@ set -Eeuo pipefail
 #   SLAIF_SUPERCOMPUTER_KEEP_WORKDIR=1
 #   SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1
 #   SLAIF_SUPERCOMPUTER_SKIP_DOCKER=1
+#   SLAIF_SUPERCOMPUTER_PARALLEL_E2E=1
 #   SLAIF_SUPERCOMPUTER_PGHOST=/var/run/postgresql
 #   SLAIF_SUPERCOMPUTER_PGPORT=5432
 #   SLAIF_SUPERCOMPUTER_PGUSER=postgres
@@ -267,6 +268,11 @@ postgres_available() {
   command -v createdb >/dev/null 2>&1 || return 1
   command -v dropdb >/dev/null 2>&1 || return 1
   psql -d postgres -Atc "select 1" >/dev/null 2>&1 || return 1
+  local probe_db="${DB_PREFIX}_probe"
+  safe_db_name "$probe_db" || return 1
+  createdb "$probe_db" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$probe_db" >> "$DB_LIST_FILE"
+  dropdb --if-exists "$probe_db" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -382,7 +388,9 @@ throttle_jobs() {
 run_db_suite() {
   local suite="$1"
   local dir="$2"
+  local max_concurrency="$3"
   local files_file="$RUN_DIR/${suite}-files.txt"
+  [[ "$max_concurrency" =~ ^[1-9][0-9]*$ ]] || die "invalid $suite concurrency: $max_concurrency"
   find_test_files "$dir" > "$files_file"
   local count
   count="$(wc -l < "$files_file" | tr -d ' ')"
@@ -395,14 +403,14 @@ run_db_suite() {
     return 0
   fi
 
-  log "Starting $suite sharded run with $count files and max concurrency $WORKERS"
+  log "Starting $suite sharded run with $count files and max concurrency $max_concurrency"
   local suite_start index file
   suite_start="$(seconds_now)"
   index=0
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
     index=$((index + 1))
-    throttle_jobs "$WORKERS"
+    throttle_jobs "$max_concurrency"
     run_db_file_job "$suite" "$index" "$file" &
   done < "$files_file"
 
@@ -419,10 +427,10 @@ run_db_suite() {
   passed="$(grep -l $'\tPASS\t' "$SHARD_STATUS_DIR"/${suite}-*.status 2>/dev/null | wc -l | tr -d ' ')"
   failed_files="$(grep -l $'\tFAIL\t' "$SHARD_STATUS_DIR"/${suite}-*.status 2>/dev/null | wc -l | tr -d ' ')"
   if [[ "$failed" -eq 0 && "$failed_files" -eq 0 ]]; then
-    record_result "$suite" "PASS" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=0"
+    record_result "$suite" "PASS" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=0 max_concurrency=$max_concurrency"
     log "Finished $suite: PASS (${duration}s; files=$count)"
   else
-    record_result "$suite" "FAIL" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=$failed_files"
+    record_result "$suite" "FAIL" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=$failed_files max_concurrency=$max_concurrency"
     OVERALL_FAIL=1
     log "Finished $suite: FAIL (${duration}s; failed files=$failed_files)"
   fi
@@ -524,7 +532,11 @@ write_summary() {
     echo "safety_confirmations:"
     echo "- RUN_UPSTREAM_TESTS=1 refused; normal run did not request real upstream calls."
     echo "- DATABASE_URL was not used for destructive setup."
+    echo "- PostgreSQL availability required a generated create/drop database probe."
     echo "- DB-backed shard subprocesses received isolated TEST_DATABASE_URL values."
+    echo "- Integration DB files used max concurrency $WORKERS."
+    echo "- E2E DB files used max concurrency $E2E_CONCURRENCY."
+    echo "- Browser tests were serial or skipped."
     echo "- Real email delivery was disabled in shard subprocess environments."
   } > "$SUMMARY_FILE"
   cat "$SUMMARY_FILE"
@@ -573,7 +585,12 @@ record_result "dependency_sanity" "PASS" "0" "" "pytest, xdist, ruff, alembic av
 if postgres_available; then
   POSTGRES_STATUS="available"
 else
-  POSTGRES_STATUS="SKIP: PostgreSQL createdb/dropdb/psql unavailable or cannot create user-owned DBs"
+  POSTGRES_STATUS="SKIP: PostgreSQL psql/createdb/dropdb unavailable, connection failed, or generated create/drop probe failed"
+fi
+
+E2E_CONCURRENCY=1
+if [[ "${SLAIF_SUPERCOMPUTER_PARALLEL_E2E:-0}" == "1" ]]; then
+  E2E_CONCURRENCY="$WORKERS"
 fi
 
 run_logged "ruff" "$LOG_DIR/ruff.log" "$PY" -m ruff check .
@@ -600,8 +617,8 @@ run_logged "unit" "$LOG_DIR/unit.log" env \
   PATH="$PWD/.venv/bin:$PATH" \
   scripts/test-unit-parallel.sh
 
-run_db_suite "integration" "tests/integration"
-run_db_suite "e2e" "tests/e2e"
+run_db_suite "integration" "tests/integration" "$WORKERS"
+run_db_suite "e2e" "tests/e2e" "$E2E_CONCURRENCY"
 run_browser_suite
 
 write_summary
