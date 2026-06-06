@@ -114,3 +114,102 @@ The likely implementation sequence is:
 
 Until that workflow exists, CI and local scripts should not parallelize
 integration, E2E, or browser suites.
+
+## Supercomputer Sharded Harness
+
+`scripts/test-supercomputer-sharded.sh` is an opt-in harness for a trusted
+single-node high-core environment such as an interactive supercomputer node. It
+is not part of normal CI and is not required for local development.
+
+Run it with exactly one positional argument: the requested maximum worker count.
+
+```bash
+scripts/test-supercomputer-sharded.sh 128
+```
+
+The script:
+
+- records branch, commit, dirty working tree status, host, CPU/memory/disk, and
+  tool versions;
+- creates a unique run directory under `SLAIF_SUPERCOMPUTER_RAMDISK`, writable
+  `/dev/shm`, or `${TMPDIR:-/tmp}`;
+- stores logs, JUnit files, shard status files, and `SUMMARY.md` in that run
+  directory;
+- runs hygiene checks (`ruff`, Alembic heads, `git diff --check`, Docker Compose
+  config when available, hidden Unicode scan, and safety scan);
+- runs unit tests through `scripts/test-unit-parallel.sh` with
+  `PYTEST_XDIST_WORKERS=<workers>`;
+- discovers integration and E2E test files dynamically and runs them as
+  file-level shards;
+- creates a fresh generated PostgreSQL database for every DB-backed shard and
+  passes it only through `TEST_DATABASE_URL`;
+- unsets `DATABASE_URL` and `TEST_REDIS_URL` for shard subprocesses so they do
+  not share a destructive DB target or Redis state accidentally;
+- runs browser tests serially with an isolated database unless
+  `SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1`;
+- drops generated databases on cleanup unless
+  `SLAIF_SUPERCOMPUTER_KEEP_DBS=1`;
+- prints a copy-paste-friendly final summary and the summary path.
+
+Optional environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `SLAIF_SUPERCOMPUTER_RAMDISK` | Preferred run-directory root. |
+| `SLAIF_SUPERCOMPUTER_KEEP_DBS=1` | Keep generated shard databases for debugging. |
+| `SLAIF_SUPERCOMPUTER_KEEP_WORKDIR=1` | Keep the run directory explicitly; summaries/logs are otherwise still printed and retained in the selected run root. |
+| `SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1` | Skip browser tests with a summary note. |
+| `SLAIF_SUPERCOMPUTER_SKIP_DOCKER=1` | Skip Docker Compose config checks with a summary note. |
+| `SLAIF_SUPERCOMPUTER_PGHOST` | PostgreSQL host or Unix socket path override. |
+| `SLAIF_SUPERCOMPUTER_PGPORT` | PostgreSQL port override. |
+| `SLAIF_SUPERCOMPUTER_PGUSER` | PostgreSQL user override. |
+| `SLAIF_SUPERCOMPUTER_DB_PREFIX` | Generated DB-name prefix; must include a test/hpc marker. |
+| `SLAIF_SUPERCOMPUTER_START_POSTGRES=1` | Reserved future hook for a user-owned temporary cluster; the current script refuses it rather than pretending to support it. |
+
+Requirements and safety behavior:
+
+- The script refuses `APP_ENV=production`.
+- The script refuses `RUN_UPSTREAM_TESTS=1`.
+- It does not install dependencies by default; run
+  `python -m pip install -e ".[dev]"` first.
+- It needs `createdb`, `dropdb`, and `psql` for DB-backed shards. If those
+  commands are unavailable or cannot create user-owned databases, integration,
+  E2E, and browser phases are marked skipped with the exact reason.
+- It never uses `DATABASE_URL` for destructive setup. If `DATABASE_URL` is set,
+  the script records that it is ignored and unsets it for shard subprocesses.
+- Generated DB names use a `slaif_hpc_test_...` prefix by default, and cleanup
+  refuses to drop any DB outside the generated prefix.
+- Normal tests still use mocked upstream HTTP and disabled real email behavior.
+
+Known limitations:
+
+- DB sharding is file-level. Each integration/E2E test file gets its own
+  generated database and runs serially inside that file. This is conservative
+  and intentionally avoids nested xdist against one DB.
+- Browser tests are serial by default. Parallel browser execution needs a future
+  per-worker database, app port, and Playwright isolation workflow.
+- Redis-backed tests do not receive a shared `TEST_REDIS_URL` from the harness;
+  they use their own test fallback behavior. A future version may add explicit
+  per-worker Redis DB or instance isolation.
+- The current script uses an existing PostgreSQL server reachable through normal
+  user `createdb`/`dropdb`/`psql` commands. The temporary ramdisk PostgreSQL
+  cluster hook is documented but not implemented yet.
+
+Troubleshooting:
+
+- If DB-backed phases are skipped, check the `environment` and summary logs for
+  PostgreSQL command availability and connection details.
+- If a single shard fails, inspect the shard log listed in `SUMMARY.md`; shard
+  logs include the test file and generated DB name.
+- If the run is interrupted, cleanup still attempts to drop all generated DBs
+  whose names match the run prefix.
+
+Copy-paste block for a remote Codex runner:
+
+```bash
+git fetch origin
+git switch <branch>
+python -m pip install -e ".[dev]"
+scripts/test-supercomputer-sharded.sh 128
+cat <reported-run-dir>/SUMMARY.md
+```

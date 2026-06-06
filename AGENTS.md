@@ -251,6 +251,50 @@ Database integration tests have these allowed modes:
 
 Unit tests must remain independent of all database integration modes.
 
+#### Supercomputer sharded verification harness
+
+`scripts/test-supercomputer-sharded.sh <workers>` is an opt-in high-core
+verification harness for trusted local/HPC/Codex runs, not normal CI. It takes
+exactly one positional argument: the requested maximum worker count.
+
+Example:
+
+```bash
+scripts/test-supercomputer-sharded.sh 128
+```
+
+Rules:
+
+- The harness uses the requested worker count for unit-test xdist workers and
+  as the maximum concurrent DB-backed shard count.
+- Integration and E2E shards must receive isolated PostgreSQL databases through
+  per-shard `TEST_DATABASE_URL` values. Never point destructive setup at
+  `DATABASE_URL`.
+- Browser tests remain serial by default inside this harness unless a future PR
+  proves safe per-worker browser isolation.
+- The harness may use a ramdisk/work directory for logs, JUnit files, temp
+  dirs, and summaries. It prints a final `SUMMARY.md` path.
+- Optional environment variables include:
+  `SLAIF_SUPERCOMPUTER_RAMDISK`, `SLAIF_SUPERCOMPUTER_KEEP_DBS`,
+  `SLAIF_SUPERCOMPUTER_KEEP_WORKDIR`, `SLAIF_SUPERCOMPUTER_SKIP_BROWSER`,
+  `SLAIF_SUPERCOMPUTER_SKIP_DOCKER`, `SLAIF_SUPERCOMPUTER_PGHOST`,
+  `SLAIF_SUPERCOMPUTER_PGPORT`, `SLAIF_SUPERCOMPUTER_PGUSER`, and
+  `SLAIF_SUPERCOMPUTER_DB_PREFIX`.
+- It must refuse `APP_ENV=production` and `RUN_UPSTREAM_TESTS=1`.
+- It must not require real OpenAI/OpenRouter keys or send real email.
+- Codex final reports using this script must include worker count, command,
+  timings, failures, skipped phases, and DB isolation confirmation.
+
+Supercomputer Codex runner prompt:
+
+```bash
+git fetch origin
+git switch <branch>
+python -m pip install -e ".[dev]"
+scripts/test-supercomputer-sharded.sh 128
+cat <reported-run-dir>/SUMMARY.md
+```
+
 ### 2.12 Deployment
 
 - Dockerfile
