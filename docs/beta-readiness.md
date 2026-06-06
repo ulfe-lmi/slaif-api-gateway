@@ -183,7 +183,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   `POST /v1/responses` with string input or bounded text-only input item
   arrays, non-streaming JSON, typed SSE streaming, and non-streaming structured
   `text.format` JSON object/schema output, plus non-streaming local function
-  tools,
+  and custom tools,
   explicit key endpoint permission, route capability, provider route, and
   pricing metadata. Hosted/provider-side Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,

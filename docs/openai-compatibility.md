@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with string input or bounded text-only input item arrays, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool streaming, hosted tools, storage/state, background, and multimodal are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with string input or bounded text-only input item arrays, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function/custom tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, hosted tools, storage/state, background, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -43,6 +43,8 @@ Current support is intentionally narrow:
   matching Responses JSON-mode or structured-output capability;
 - non-streaming local/client-side function tools when route/model metadata
   explicitly enables Responses function-tool capability;
+- non-streaming local/client-side custom tools when route/model metadata
+  explicitly enables Responses custom-tool capability;
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
@@ -74,9 +76,10 @@ content, or `type: "message"` with `input_text` content parts. Function-call
 items, reasoning/stateful items, hosted-tool items, and image/file/audio
 content parts remain rejected. String-only `function_call_output` input items
 are supported as ordinary stateless input for local function-tool follow-up
-requests; media tool outputs remain rejected. Input arrays use ordinary
-input-token estimation and provider usage finalization; no prompt/input text is
-stored or logged.
+requests; string-only `custom_tool_call_output` items are supported as ordinary
+stateless input for caller-managed custom-tool follow-up requests. Media tool
+outputs remain rejected. Input arrays use ordinary input-token estimation and
+provider usage finalization; no prompt/input text is stored or logged.
 
 Responses local function tools are supported only as caller-side model intent:
 SLAIF forwards bounded `type=function` definitions and preserves provider
@@ -87,6 +90,18 @@ Chat Completions function-tool permission do not imply it. Function-tool
 streaming is intentionally unsupported in this slice. Hosted tools, web search,
 file search, code interpreter, MCP/connectors, computer use, image generation,
 and tool search remain rejected.
+
+Responses local custom tools are supported only as caller-side model intent:
+SLAIF forwards bounded `type=custom` definitions with omitted format, explicit
+text format, or grammar format using `lark`/`regex`, and preserves provider
+custom-tool call items. It does not execute custom tools, inspect or store
+generated custom-tool input, add special tool billing, or enable hosted
+authority. The feature requires explicit
+`capabilities.responses.custom_tools=true`; Responses text permission,
+Responses function-tool permission, and Chat Completions custom-tool permission
+do not imply it. Streaming custom tools are intentionally unsupported in this
+slice. Output arrays/lists for `custom_tool_call_output` remain rejected because
+Responses multimodal/file input is still unsupported.
 
 Endpoint and model permission are separate from capability permission. A key
 that is allowed to call `/v1/chat/completions` with a model is not thereby

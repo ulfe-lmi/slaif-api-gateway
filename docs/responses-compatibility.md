@@ -6,9 +6,10 @@ This document defines the RC2-beta support boundary for Responses API work.
 Current support is deliberately narrow: stateless, text-only
 `POST /v1/responses` with string input or bounded text-only input item arrays,
 non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
-output through `text.format`, and local/client-side function tools. It has no
-hosted tools, MCP/connectors, provider-side storage, background mode, previous
-response or conversation state, or multimodal input/output.
+output through `text.format`, local/client-side function tools, and
+non-streaming local/client-side custom tools. It has no hosted tools,
+MCP/connectors, provider-side storage, background mode, previous response or
+conversation state, or multimodal input/output.
 
 ## Supported Endpoint
 
@@ -33,8 +34,9 @@ Implemented request fields for the first slice:
 - `store` omitted or `false`
 - `text.format` as plain text, JSON object mode, or bounded JSON schema
   structured output
-- `tools` with local function-tool entries only
-- `tool_choice` as `none`, `auto`, `required`, or a named local function choice
+- `tools` with local function-tool or custom-tool entries only
+- `tool_choice` as `none`, `auto`, `required`, a named local function choice,
+  or a named local custom choice
 - `service_tier` omitted or `auto`
 
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
@@ -86,6 +88,25 @@ function-call item. Function definitions and string tool outputs are ordinary
 input material for admission estimates; final accounting still uses provider
 usage/cost once.
 
+Responses local custom tools are supported only as caller-side intent for
+stateless non-streaming requests. SLAIF forwards bounded custom tool
+definitions shaped as `{"type":"custom","name":...}` with optional
+`description` and optional `format` when the resolved route sets
+`capabilities.responses.custom_tools=true`. Omitted `format` preserves the
+OpenAI default of unconstrained text. Supported explicit formats are
+`{"type":"text"}` and
+`{"type":"grammar","syntax":"lark"|"regex","definition":...}`. Custom tool
+names, descriptions, grammar definitions, total custom format bytes, and tool
+counts are capped. A named custom `tool_choice` must reference a declared
+custom tool in the same request. SLAIF does not execute custom tools, inspect
+or store generated custom tool input, add a special billing category, or police
+downstream application behavior after a model returns a local custom-tool call
+item. String-only `custom_tool_call_output` items are supported as ordinary
+stateless input for caller-managed follow-up requests; content arrays,
+image/file outputs, and `custom_tool_call` input items remain rejected.
+`stream=true` with custom tools or custom-tool outputs is rejected in this
+slice.
+
 The first slice supports OpenAI Responses forwarding to `/v1/responses` when
 the selected route explicitly advertises Responses text/stateless capability
 and a `/v1/responses` pricing row exists. Streaming additionally requires
@@ -122,8 +143,14 @@ Rules:
 - Local function tools require explicit route/model
   `capabilities.responses.function_tools=true` metadata. Endpoint/model
   permission alone does not enable them.
+- Local custom tools require explicit route/model
+  `capabilities.responses.custom_tools=true` metadata. Function-tool
+  capability and Chat Completions custom-tool capability do not enable
+  Responses custom tools.
 - Function tools are supported only as caller-side intent because execution
   remains in the caller's application instead of inside the provider.
+- Custom tools are also caller-side intent; SLAIF forwards definitions and
+  preserves provider-returned custom-tool call items but never executes a tool.
 - Web search may be supported only with explicit `max_tool_calls`, model/tool
   allowlists, provider allowlists, and cost-bound calculations.
 - File search and code interpreter/container tools require explicit policy,

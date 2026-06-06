@@ -57,6 +57,16 @@ def test_function_tools_capability_passes_when_explicit() -> None:
     )
 
 
+def test_custom_tools_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["custom_tools"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        custom_tools_requested=True,
+    )
+
+
 def test_streaming_request_fails_when_capability_absent() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(
@@ -100,6 +110,30 @@ def test_function_tools_request_fails_when_capability_absent() -> None:
 
     assert exc_info.value.error_code == "responses_function_tool_capability_not_supported"
     assert exc_info.value.param == "tools"
+
+
+def test_custom_tools_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            custom_tools_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_custom_tool_capability_not_supported"
+    assert exc_info.value.param == "tools"
+
+
+def test_function_tools_capability_does_not_imply_custom_tools() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["function_tools"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            custom_tools_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_custom_tool_capability_not_supported"
 
 
 def test_streaming_request_fails_when_route_flag_absent() -> None:
@@ -148,3 +182,9 @@ def test_unknown_capability_metadata_rejects() -> None:
 def test_defaults_are_added_only_for_responses_routes() -> None:
     assert "responses" in ensure_default_responses_capabilities(None, endpoint="/v1/responses")
     assert ensure_default_responses_capabilities(None, endpoint="/v1/chat/completions") == {}
+
+
+def test_default_responses_capabilities_keep_custom_tools_disabled() -> None:
+    capabilities = default_responses_capabilities()
+
+    assert capabilities["custom_tools"] is False
