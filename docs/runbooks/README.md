@@ -40,3 +40,4 @@ Runbooks:
 - [Docker and Nginx troubleshooting](docker-nginx-troubleshooting.md)
 - [Admin access and lockout](admin-access.md)
 - [RC-beta upgrade checklist](rc-beta-upgrade.md)
+- [HPC verification and local tool bootstrap](../testing-hpc.md)
