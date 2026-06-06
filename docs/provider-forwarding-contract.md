@@ -68,7 +68,7 @@ choices are not enabled by that metadata.
 | Non-streaming Accept | `application/json` |
 | Streaming Accept | `text/event-stream` |
 | Content-Type | `application/json` |
-| Body preservation | Registry-classified OpenAI Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
+| Body reconstruction | Provider JSON is rebuilt from accepted Chat Completions fields after request policy, caps, capability checks, and gateway mutations; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
@@ -92,7 +92,7 @@ provider, and route/provider config overrides must reference env var names only.
 | Streaming Accept | `text/event-stream` |
 | Content-Type | `application/json` |
 | Model routing | Routes may use OpenRouter namespaced models such as `openai/...`, `anthropic/...`, `google/...`, or aliases that resolve to those names |
-| Body preservation | Registry-classified OpenAI-compatible Chat Completions fields are preserved when accepted; unknown top-level fields fail closed before forwarding |
+| Body reconstruction | Provider JSON is rebuilt from accepted Chat Completions fields after request policy, caps, capability checks, and gateway mutations; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
 | Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
@@ -125,6 +125,25 @@ Responses forwarding follows the same provider-secret boundary:
 - provider key values are never accepted from dashboard forms, request bodies,
   client headers, or import files;
 - diagnostics are bounded and sanitized.
+
+Provider-bound request bodies are not raw client JSON passthrough. For both
+implemented provider paths, SLAIF first parses the OpenAI-compatible request,
+validates the endpoint-specific field registry and caps, checks route/model
+capability metadata, applies gateway mutations such as resolved model
+substitution and output-token defaults, then constructs a fresh upstream JSON
+object from an explicit allowlist of supported fields. If a future policy
+result contains an unapproved top-level field, upstream body construction fails
+closed instead of removing a few known-denied fields and forwarding the rest.
+
+Some nested payloads are intentionally opaque only inside documented supported
+containers, such as local function-tool schemas, local custom-tool grammar
+definitions, `response_format` schemas, bounded `metadata`, image URLs or
+base64 image data, inline file `file_data`, and audio input/output fields where
+the current Chat Completions policy enables them. The gateway still understands
+the field path, type, size/count caps, capability requirement, redaction
+boundary, and accounting policy for each such container. These opaque values
+are inserted into a reconstructed parent object; the original client request
+dictionary is not forwarded as-is.
 
 Responses-specific rules for the current foundation:
 
