@@ -20,7 +20,7 @@ DEFAULT_WORKERS="$("$PY" - <<'PY'
 import os
 
 cores = os.cpu_count() or 1
-print(max(1, (cores * 3) // 4))
+print(max(1, min(20, cores)))
 PY
 )"
 

@@ -511,19 +511,20 @@ git diff --check
 ```
 
 For a faster explicit unit-only workflow, use pytest-xdist through the project
-wrapper. The default is three quarters of visible CPU cores, rounded down with a
-minimum of one worker:
+wrapper. The default is `min(20, visible CPU cores)` with a minimum of one
+worker:
 
 ```bash
 scripts/test-unit-parallel.sh
 PYTEST_XDIST_WORKERS=1 scripts/test-unit-parallel.sh
-PYTEST_XDIST_WORKERS=auto scripts/test-unit-parallel.sh
-PYTEST_XDIST_WORKERS=12 scripts/test-unit-parallel.sh
+PYTEST_XDIST_WORKERS=20 scripts/test-unit-parallel.sh
 ```
 
 `PYTEST_XDIST_ARGS` can override the xdist distribution arguments. Integration,
 E2E, and browser suites remain serial by default because they share database and
-browser resources unless a future per-worker database workflow is added.
+browser resources unless a future per-worker database workflow is added. See
+[`testing-parallelism.md`](testing-parallelism.md) for the current
+parallel-safety analysis.
 
 Database-backed tests use `TEST_DATABASE_URL`, not `DATABASE_URL`:
 

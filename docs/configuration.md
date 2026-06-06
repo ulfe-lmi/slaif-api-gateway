@@ -913,14 +913,13 @@ python -m pip install -e ".[dev]"
 scripts/test-unit-parallel.sh
 ```
 
-The unit wrapper computes the default worker count as three quarters of visible
-CPU cores, rounded down with a minimum of one worker. Override the worker count
-or distribution strategy when needed:
+The unit wrapper computes the default worker count as `min(20, visible CPU
+cores)` with a minimum of one worker. Override the worker count or distribution
+strategy when needed:
 
 ```bash
 PYTEST_XDIST_WORKERS=1 scripts/test-unit-parallel.sh
-PYTEST_XDIST_WORKERS=auto scripts/test-unit-parallel.sh
-PYTEST_XDIST_WORKERS=12 scripts/test-unit-parallel.sh
+PYTEST_XDIST_WORKERS=20 scripts/test-unit-parallel.sh
 PYTEST_XDIST_ARGS="--dist loadscope" scripts/test-unit-parallel.sh
 ```
 
@@ -932,6 +931,8 @@ unless a future per-worker isolation workflow proves parallel execution safe.
 Skipped browser tests still do not count as browser coverage. DB-backed tests
 must use `TEST_DATABASE_URL`; the parallel wrappers do not create, drop, or
 mutate databases and must not use `DATABASE_URL` for destructive setup.
+See [`docs/testing-parallelism.md`](testing-parallelism.md) for the current
+parallel-safety analysis and the per-worker database isolation plan.
 
 ## GitHub CI Configuration
 

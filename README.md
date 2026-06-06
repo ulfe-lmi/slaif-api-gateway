@@ -475,9 +475,16 @@ Run the normal local checks:
 
 ```bash
 python -m pytest tests/unit
+scripts/test-unit-parallel.sh
 python -m ruff check app tests
 alembic heads
 ```
+
+The parallel unit wrapper defaults to `min(20, visible CPU cores)` and can be
+overridden with `PYTEST_XDIST_WORKERS`. See
+[`docs/testing-parallelism.md`](docs/testing-parallelism.md) for the current
+parallel-safety analysis; integration, E2E, and browser suites remain serial by
+default unless each worker has isolated database/browser resources.
 
 Integration tests use `TEST_DATABASE_URL` when set, may use Testcontainers when Docker is available, and otherwise skip cleanly:
 
