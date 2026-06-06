@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.main import create_app
+from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderTimeoutError
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.accounting_errors import ReservationFinalizationError
 from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.responses_route_capabilities import default_responses_capabilities
@@ -89,6 +93,44 @@ def _responses_request(model: str = "classroom-responses") -> dict[str, object]:
         "input": "hello",
         "max_output_tokens": 20,
     }
+
+
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+def _response_stream_chunk(
+    payload: dict[str, object],
+    *,
+    usage: ProviderUsage | None = None,
+) -> ProviderStreamChunk:
+    return ProviderStreamChunk(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        data=json.dumps(payload, separators=(",", ":")),
+        raw_sse_event=_sse(payload),
+        json_body=payload,
+        usage=usage,
+        upstream_request_id="upstream-responses-stream",
+    )
+
+
+def _done_chunk() -> ProviderStreamChunk:
+    return ProviderStreamChunk(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        data="[DONE]",
+        raw_sse_event="data: [DONE]\n\n",
+        is_done=True,
+        upstream_request_id="upstream-responses-stream",
+    )
+
+
+def _completed_payload(*, include_usage: bool = True) -> dict[str, object]:
+    response: dict[str, object] = {"id": "resp_test"}
+    if include_usage:
+        response["usage"] = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+    return {"type": "response.completed", "response": response}
 
 
 def _wire_auth_and_db(monkeypatch, app, authenticated_key: AuthenticatedGatewayKey | None = None) -> None:
@@ -172,6 +214,20 @@ def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tu
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module.QuotaService, "release_reservation", _fake_release)
     return reserve_calls, release_calls
+
+
+def _wire_streaming_route(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(
+            requested_model,
+            responses_streaming=True,
+            route_supports_streaming=True,
+        )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
 
 
 def _wire_successful_forwarding(monkeypatch) -> list[str]:
@@ -415,6 +471,372 @@ def test_streaming_responses_path_finalizes_from_completed_usage(monkeypatch) ->
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
     assert finalize_calls == [("classroom-responses", True, completed_record_id)]
+
+
+def _wire_streaming_gateway(
+    monkeypatch,
+    *,
+    chunks: list[ProviderStreamChunk],
+    provider_error: Exception | None = None,
+    finalize_error: Exception | None = None,
+):
+    import slaif_gateway.services.responses_gateway as main_module
+
+    state: dict[str, list[object]] = {
+        "stream_calls": [],
+        "provider_completed_calls": [],
+        "finalize_calls": [],
+        "recovery_failure_calls": [],
+        "failure_calls": [],
+        "rate_release_calls": [],
+    }
+    completed_record_id = uuid.uuid4()
+    rate_reservation = SimpleNamespace(concurrency_reserved=False)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        _ = kwargs
+        return rate_reservation
+
+    async def _fake_release_rate_limit(reservation, *, suppress):
+        state["rate_release_calls"].append((reservation, suppress))
+
+    class _FakeAdapter:
+        async def stream_response(self, request):
+            state["stream_calls"].append(request)
+            for chunk in chunks:
+                yield chunk
+            if provider_error is not None:
+                raise provider_error
+
+    async def _fake_record_provider_completed_before_finalization(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        streaming=False,
+        started_at=None,
+        finished_at=None,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            route,
+            pricing_estimate,
+            request_id,
+            started_at,
+            finished_at,
+        )
+        state["provider_completed_calls"].append(
+            {
+                "endpoint": endpoint,
+                "streaming": streaming,
+                "usage": provider_response.usage,
+            }
+        )
+        return SimpleNamespace(usage_ledger_id=completed_record_id)
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+        provider_completed_usage_ledger_id=None,
+        streaming=False,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            route,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            started_at,
+            finished_at,
+        )
+        if finalize_error is not None:
+            raise finalize_error
+        state["finalize_calls"].append(
+            {
+                "endpoint": endpoint,
+                "streaming": streaming,
+                "provider_completed_usage_ledger_id": provider_completed_usage_ledger_id,
+            }
+        )
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.003"),
+            actual_cost_native=Decimal("0.003"),
+            native_currency="EUR",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            accounting_status="finalized",
+        )
+
+    async def _fake_mark_provider_completed_finalization_failed(
+        self,
+        usage_ledger_id,
+        reservation_id,
+        error,
+    ):
+        _ = self
+        state["recovery_failure_calls"].append(
+            {
+                "usage_ledger_id": usage_ledger_id,
+                "reservation_id": reservation_id,
+                "error": error,
+            }
+        )
+
+    async def _fake_record_provider_failure_and_release(self, *args, **kwargs):
+        _ = (self, args)
+        state["failure_calls"].append(kwargs)
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(main_module, "_release_rate_limit_concurrency", _fake_release_rate_limit)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_provider_completed_before_finalization",
+        _fake_record_provider_completed_before_finalization,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "mark_provider_completed_finalization_failed",
+        _fake_mark_provider_completed_finalization_failed,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_provider_failure_and_release",
+        _fake_record_provider_failure_and_release,
+    )
+    return state, completed_record_id, rate_reservation
+
+
+def test_streaming_provider_adapter_construction_failure_releases_reservation_and_rate_limit(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, _release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    failure_calls: list[dict[str, object]] = []
+    rate_release_calls: list[tuple[object, bool]] = []
+    rate_reservation = SimpleNamespace(concurrency_reserved=False)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        _ = kwargs
+        return rate_reservation
+
+    async def _fake_release_rate_limit(reservation, *, suppress):
+        rate_release_calls.append((reservation, suppress))
+
+    async def _fake_failure_and_release(**kwargs):
+        failure_calls.append(kwargs)
+
+    def _raise_missing_key(route, settings):
+        _ = (route, settings)
+        raise MissingProviderApiKeyError(provider="openai")
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(main_module, "_release_rate_limit_concurrency", _fake_release_rate_limit)
+    monkeypatch.setattr(main_module, "_record_provider_failure_and_release", _fake_failure_and_release)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _raise_missing_key)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "missing_provider_api_key"
+    assert reserve_calls == ["classroom-responses"]
+    assert len(failure_calls) == 1
+    assert failure_calls[0]["streaming"] is True
+    assert failure_calls[0]["provider_error"].error_code == "missing_provider_api_key"
+    assert rate_release_calls == [(rate_reservation, True)]
+    assert "hello" not in response.text
+    assert "sk-" not in response.text
+
+
+def test_streaming_responses_withholds_done_until_after_finalization(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_text.delta", "delta": "visible"}),
+        _response_stream_chunk(
+            _completed_payload(),
+            usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        _done_chunk(),
+    ]
+    state, completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert body.index("response.completed") < body.index("[DONE]")
+    assert state["provider_completed_calls"]
+    assert state["finalize_calls"] == [
+        {
+            "endpoint": "responses",
+            "streaming": True,
+            "provider_completed_usage_ledger_id": completed_record_id,
+        }
+    ]
+    assert state["failure_calls"] == []
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+
+
+def test_streaming_responses_missing_usage_emits_error_without_success_done(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_text.delta", "delta": "visible"}),
+        _response_stream_chunk(_completed_payload(include_usage=False), usage=None),
+        _done_chunk(),
+    ]
+    state, _completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "response.output_text.delta" in body
+    assert "responses_stream_usage_missing" in body
+    assert "data: [DONE]" not in body
+    assert body.count("response.completed") == 0
+    assert state["finalize_calls"] == []
+    assert len(state["failure_calls"]) == 1
+    assert state["failure_calls"][0]["streaming"] is True
+    assert state["failure_calls"][0]["error_code"] == "responses_stream_usage_missing"
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+
+
+def test_streaming_responses_finalization_failure_records_recovery_and_no_success_done(
+    monkeypatch,
+) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_text.delta", "delta": "visible"}),
+        _response_stream_chunk(
+            _completed_payload(),
+            usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        _done_chunk(),
+    ]
+    error = ReservationFinalizationError("finalization failed")
+    state, completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+        finalize_error=error,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "reservation_finalization_error" in body
+    assert "data: [DONE]" not in body
+    assert body.count("response.completed") == 0
+    assert state["provider_completed_calls"]
+    assert state["finalize_calls"] == []
+    assert len(state["recovery_failure_calls"]) == 1
+    assert state["recovery_failure_calls"][0]["usage_ledger_id"] == completed_record_id
+    assert state["recovery_failure_calls"][0]["error"] is error
+    assert state["failure_calls"] == []
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+
+
+def test_streaming_responses_provider_error_after_partial_output_releases_reservation(
+    monkeypatch,
+) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_text.delta", "delta": "visible"}),
+    ]
+    state, _completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+        provider_error=ProviderTimeoutError(provider="openai"),
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "response.output_text.delta" in body
+    assert "provider_timeout" in body
+    assert "data: [DONE]" not in body
+    assert "hello" not in body
+    assert state["finalize_calls"] == []
+    assert state["provider_completed_calls"] == []
+    assert len(state["failure_calls"]) == 1
+    assert state["failure_calls"][0]["streaming"] is True
+    assert state["failure_calls"][0]["error_code"] == "provider_timeout"
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
 
 
 def test_chat_endpoint_permission_does_not_allow_responses(monkeypatch) -> None:

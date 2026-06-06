@@ -157,6 +157,21 @@ async def handle_response_create(
                 )
                 rate_limit_reservation = None
                 return response
+            except ProviderError as exc:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=exc,
+                    request=request,
+                    streaming=True,
+                )
+                await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+                rate_limit_reservation = None
+                raise openai_error_from_provider_error(exc) from exc
             except Exception:
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
                 raise
@@ -216,7 +231,8 @@ async def handle_response_create(
             content=dict(provider_response.json_body),
         )
     except Exception:
-        await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+        if rate_limit_reservation is not None:
+            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
         raise
 
     await _release_rate_limit_concurrency(rate_limit_reservation, suppress=False)
@@ -340,6 +356,7 @@ def _streaming_responses_response(
         completed_chunk: ProviderStreamChunk | None = None
         upstream_request_id: str | None = None
         completed_event: str | None = None
+        terminal_done_event: str | None = None
         completed = False
         provider_status = "error"
         heartbeat_stop = asyncio.Event()
@@ -355,6 +372,9 @@ def _streaming_responses_response(
                     completed = True
                     completed_event = chunk.raw_sse_event
                     completed_chunk = chunk
+                    continue
+                if chunk.is_done:
+                    terminal_done_event = chunk.raw_sse_event
                     continue
                 yield chunk.raw_sse_event
 
@@ -411,6 +431,8 @@ def _streaming_responses_response(
                 provider_status = "success"
                 if completed_event is not None:
                     yield completed_event
+                if terminal_done_event is not None:
+                    yield terminal_done_event
             else:
                 await _record_provider_failure_and_release(
                     reservation=reservation,
