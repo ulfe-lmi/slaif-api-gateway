@@ -254,20 +254,15 @@ PY
 }
 
 read_pytest_counts() {
-  local __tests_var="$1"
-  local __passed_var="$2"
-  local __failed_var="$3"
-  local __skipped_var="$4"
-  local __note_var="$5"
-  shift 5
-  local parsed tests passed failed skipped note
+  local parsed count_tests count_passed count_failed count_skipped count_note
   parsed="$(parse_pytest_logs "$@")"
-  IFS=$'\t' read -r tests passed failed skipped note <<< "$parsed"
-  printf -v "$__tests_var" '%s' "${tests:-0}"
-  printf -v "$__passed_var" '%s' "${passed:-0}"
-  printf -v "$__failed_var" '%s' "${failed:-0}"
-  printf -v "$__skipped_var" '%s' "${skipped:-0}"
-  printf -v "$__note_var" '%s' "${note:-}"
+  IFS=$'\t' read -r count_tests count_passed count_failed count_skipped count_note <<< "$parsed"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "${count_tests:-0}" \
+    "${count_passed:-0}" \
+    "${count_failed:-0}" \
+    "${count_skipped:-0}" \
+    "${count_note:-}"
 }
 
 run_pytest_suite_logged() {
@@ -288,7 +283,7 @@ run_pytest_suite_logged() {
   set -e
   end="$(seconds_now)"
   duration=$((end - start))
-  read_pytest_counts tests passed failed skipped parse_note "$log_path"
+  IFS=$'\t' read -r tests passed failed skipped parse_note < <(read_pytest_counts "$log_path")
   note="$parse_note"
   if [[ "$status" -eq 0 ]]; then
     record_suite_result "$suite" "PASS" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note"
@@ -583,7 +578,7 @@ run_db_suite() {
       log_paths+=("$status_path_log")
     fi
   done
-  read_pytest_counts tests passed failed_tests skipped parse_note "${log_paths[@]}"
+  IFS=$'\t' read -r tests passed failed_tests skipped parse_note < <(read_pytest_counts "${log_paths[@]}")
   if [[ "$failed" -eq 0 && "$failed_files" -eq 0 ]]; then
     record_suite_result "$suite" "PASS" "$duration" "$tests" "$passed" "$failed_tests" "$skipped" "$SHARD_STATUS_DIR" \
       "files=$count passed_files=$passed_files failed_files=0 max_concurrency=$max_concurrency${parse_note:+ parse_note=$parse_note}"
@@ -644,7 +639,7 @@ run_browser_suite() {
     drop_db "$db_name"
   fi
   local tests passed failed skipped parse_note note
-  read_pytest_counts tests passed failed skipped parse_note "$log_path"
+  IFS=$'\t' read -r tests passed failed skipped parse_note < <(read_pytest_counts "$log_path")
   note="serial isolated DB${parse_note:+; parse_note=$parse_note}"
   if [[ "$status" -eq 0 ]]; then
     BROWSER_STATUS="ran serial: PASS"

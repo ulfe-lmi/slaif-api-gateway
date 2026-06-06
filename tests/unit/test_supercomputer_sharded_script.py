@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 
@@ -244,6 +246,93 @@ def test_supercomputer_summary_includes_bounded_failure_diagnostics() -> None:
     assert "parse_pytest_logs" in content
 
 
+def test_pytest_count_reader_prints_counts_without_caller_scope_mutation() -> None:
+    content = SCRIPT.read_text()
+
+    assert "read_pytest_counts() {" in content
+    assert "printf -v" not in content
+    assert "__tests_var" not in content
+    assert "count_tests" in content
+    assert "count_passed" in content
+    assert "count_failed" in content
+    assert "count_skipped" in content
+    assert 'IFS=$\'\\t\' read -r tests passed failed skipped parse_note < <(read_pytest_counts "$log_path")' in content
+    assert (
+        'IFS=$\'\\t\' read -r tests passed failed_tests skipped parse_note < '
+        '<(read_pytest_counts "${log_paths[@]}")'
+    ) in content
+    assert "record_suite_result \"$suite\" \"PASS\" \"$duration\" \"$tests\"" in content
+
+
+def test_pytest_count_reader_handles_expected_summary_shapes_under_set_u(tmp_path: Path) -> None:
+    content = SCRIPT.read_text()
+    function_block = content[
+        content.index("parse_pytest_logs() {") : content.index("\nDB_PREFIX_RAW=")
+    ]
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            PY="{sys.executable}"
+            {function_block}
+            for log_path in "$@"; do
+              IFS=$'\\t' read -r tests passed failed skipped note < <(read_pytest_counts "$log_path")
+              printf '%s|%s|%s|%s|%s\\n' "$tests" "$passed" "$failed" "$skipped" "$note"
+            done
+            """
+        )
+    )
+    probe.chmod(0o755)
+
+    cases = {
+        "all-pass.log": ("=================== 1848 passed in 30.96s ===================\n", "1848|1848|0|0|"),
+        "pass-fail.log": ("========= 127 passed, 1 failed in 11.00s =========\n", "128|127|1|0|"),
+        "pass-fail-skip.log": (
+            "===== 117 passed, 1 failed, 10 skipped in 11.00s =====\n",
+            "128|117|1|10|",
+        ),
+        "browser.log": ("==================== 1 passed in 7.00s ====================\n", "1|1|0|0|"),
+        "no-summary.log": ("no pytest summary here\n", "0|0|0|0|"),
+    }
+    log_paths = []
+    for filename, (body, _expected) in cases.items():
+        log_path = tmp_path / filename
+        log_path.write_text(body)
+        log_paths.append(log_path)
+
+    result = subprocess.run(
+        ["bash", str(probe), *(str(path) for path in log_paths)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+
+    for line, (_filename, (_body, expected_prefix)) in zip(lines, cases.items(), strict=True):
+        assert line.startswith(expected_prefix)
+    assert "no-summary.log: no pytest summary" in lines[-1]
+
+
+def test_summary_reporting_is_written_after_passing_unit_counts() -> None:
+    content = SCRIPT.read_text()
+
+    unit_call = content.index('run_pytest_suite_logged "unit"')
+    integration_call = content.index('run_db_suite "integration"')
+    e2e_call = content.index('run_db_suite "e2e"')
+    browser_call = content.index("\nrun_browser_suite\n", e2e_call)
+    summary_call = content.index("\nwrite_summary\n", browser_call)
+    assert unit_call < integration_call < e2e_call < browser_call < summary_call
+
+    assert 'echo "Summary path: $SUMMARY_FILE"' in content
+    assert "write_summary" in content
+    assert "| phase | status | duration_s | log | note |" in content
+    assert "| phase | status | duration_s | tests" not in content
+    assert "| suite | status | duration_s | tests | passed | failed | skipped | log / log_dir | note |" in content
+
+
 def test_supercomputer_db_suite_status_counting_tolerates_zero_matches() -> None:
     content = SCRIPT.read_text()
 
@@ -313,3 +402,22 @@ def test_no_committed_local_env_or_codex_state() -> None:
     ).stdout.splitlines()
     assert ".env" not in tracked
     assert not any(path.startswith(".codex/") or "/.codex/" in path for path in tracked)
+
+
+def test_no_hpc_report_specific_user_or_job_paths_are_committed() -> None:
+    checked_paths = [
+        AGENTS,
+        TESTING_DOC,
+        HPC_DOC,
+        HPC_SKILL,
+        SCRIPT,
+        SETUP_SCRIPT,
+        RUN_SCRIPT,
+    ]
+    combined = "\n".join(path.read_text() for path in checked_paths)
+    user_marker = "jp" + "ers"
+    account_marker = "cn" + "0393"
+    job_marker = "348" + "15129"
+    path_marker = f"/dev/shm/{user_marker}"
+    for marker in (user_marker, account_marker, path_marker, job_marker):
+        assert marker not in combined
