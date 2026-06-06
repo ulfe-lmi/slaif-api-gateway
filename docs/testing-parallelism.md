@@ -121,7 +121,8 @@ integration, E2E, or browser suites.
 single-node high-core environment such as an interactive supercomputer node. It
 is not part of normal CI and is not required for local development.
 
-Run it with exactly one positional argument: the requested maximum worker count.
+When Codex invokes the harness, the command takes exactly one positional
+argument: the requested maximum worker count.
 
 ```bash
 scripts/test-supercomputer-sharded.sh 128
@@ -153,6 +154,9 @@ The script:
 - drops generated databases on cleanup unless
   `SLAIF_SUPERCOMPUTER_KEEP_DBS=1`;
 - prints a copy-paste-friendly final summary and the summary path.
+- includes bounded error excerpts in `SUMMARY.md` for failing phase or shard
+  logs, so a Codex verification run can report failures without dumping huge
+  logs.
 
 Optional environment variables:
 
@@ -216,10 +220,80 @@ Troubleshooting:
 
 Copy-paste block for a remote Codex runner:
 
-```bash
+The intended HPC workflow is not direct-shell-only. The user SSHes or enters
+the HPC node, clones or updates this repository, starts Codex inside the
+repository, stays inside Codex, and pastes a verification prompt. Codex then
+uses its shell tool to run `scripts/test-supercomputer-sharded.sh 128`.
+
+The repository harness itself never invokes `codex`; Codex is the caller.
+
+If Codex shell execution fails before Bash starts with an error like
+`bwrap: execvp ... codex: No such file or directory`, the SLAIF harness did not
+run. Treat that as a Codex command-runner preflight failure, not as a SLAIF test
+failure. Relaunch Codex with a working shell-command configuration/environment,
+then retry the same verification prompt.
+
+Copy-paste prompt for Codex on the HPC node:
+
+```text
+This is verification only. Run shell commands yourself with your shell tool.
+Do not ask me to run commands. Do not create a branch. Do not edit files.
+Do not commit. Do not open a PR. Do not run /review. Do not fix failures.
+In no case modify repository code.
+
+First run this shell preflight:
+
+bash -lc 'set -euo pipefail; pwd; command -v bash; command -v git; command -v python; git rev-parse --show-toplevel'
+
+If the preflight itself fails before Bash starts with:
+bwrap: execvp ... codex: No such file or directory
+
+print exactly:
+
+RESULT=CODEX_COMMAND_RUNNER_BROKEN
+The SLAIF test harness did not run because Codex shell execution failed before Bash started.
+This is not a SLAIF test result.
+No repository commands were executed.
+No code was modified.
+
+If the preflight succeeds, run:
+
 git fetch origin
-git switch <branch>
+git switch main
+git pull --ff-only origin main
+git rev-parse HEAD
+git status --short
 python -m pip install -e ".[dev]"
-scripts/test-supercomputer-sharded.sh 128
-cat <reported-run-dir>/SUMMARY.md
+
+unset DATABASE_URL
+unset TEST_DATABASE_URL
+unset RUN_UPSTREAM_TESTS
+unset OPENAI_API_KEY
+unset OPENAI_UPSTREAM_API_KEY
+unset OPENROUTER_API_KEY
+export ENABLE_EMAIL_DELIVERY=false
+
+scripts/test-supercomputer-sharded.sh 128 2>&1 | tee /tmp/slaif-supercomputer-run.log
+
+SUMMARY_PATH="$(grep -E '^Summary path: ' /tmp/slaif-supercomputer-run.log | tail -1 | sed 's/^Summary path: //')"
+echo "SUMMARY_PATH=$SUMMARY_PATH"
+cat "$SUMMARY_PATH"
+
+Final report requirements:
+- RESULT=OK, RESULT=FAIL, or RESULT=CODEX_COMMAND_RUNNER_BROKEN
+- commit SHA tested
+- exact command used
+- worker count
+- summary path
+- phase table from SUMMARY.md
+- skipped phases and exact reasons
+- failing phases and failing shard log paths
+- first useful bounded error excerpt from each failing shard log
+- slowest shard list
+- PostgreSQL probe result
+- DB isolation confirmation
+- whether E2E used default serial mode
+- whether browser ran or skipped
+- final git status --short
+- safety confirmations: no code modified; no DATABASE_URL destructive setup; isolated TEST_DATABASE_URL per DB shard; no real upstream calls; no real email; no secrets printed or committed.
 ```

@@ -139,6 +139,24 @@ record_result() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$phase" "$status" "$duration" "$log_path" "$note" >> "$SUMMARY_TSV"
 }
 
+ERROR_EXCERPT_PATTERN='FAILED|ERROR|Traceback|AssertionError|OperationalError|Timeout|Exception|FATAL|could not|refused|permission denied|database .* does not exist|connection'
+
+print_bounded_log_excerpt() {
+  local log_path="$1"
+  if [[ -z "$log_path" || ! -f "$log_path" ]]; then
+    echo "(log unavailable)"
+    return 0
+  fi
+  local matches
+  matches="$(grep -Ein "$ERROR_EXCERPT_PATTERN" "$log_path" 2>/dev/null | head -80 || true)"
+  if [[ -n "$matches" ]]; then
+    printf '%s\n' "$matches"
+    return 0
+  fi
+  echo "(no error pattern match; last 120 log lines)"
+  tail -120 "$log_path" 2>/dev/null || true
+}
+
 run_logged() {
   local phase="$1"
   local log_path="$2"
@@ -439,14 +457,17 @@ run_db_suite() {
 run_browser_suite() {
   local suite="browser"
   if [[ "${SLAIF_SUPERCOMPUTER_SKIP_BROWSER:-0}" == "1" ]]; then
+    BROWSER_STATUS="skipped: SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1"
     record_result "$suite" "SKIP" "0" "" "SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1"
     return 0
   fi
   if ! check_python_dependency "playwright"; then
+    BROWSER_STATUS="skipped: playwright Python package unavailable"
     record_result "$suite" "SKIP" "0" "" "playwright Python package unavailable"
     return 0
   fi
   if [[ "$POSTGRES_STATUS" != "available" ]]; then
+    BROWSER_STATUS="skipped: $POSTGRES_STATUS"
     record_result "$suite" "SKIP" "0" "" "$POSTGRES_STATUS"
     return 0
   fi
@@ -481,8 +502,10 @@ run_browser_suite() {
     drop_db "$db_name"
   fi
   if [[ "$status" -eq 0 ]]; then
+    BROWSER_STATUS="ran serial: PASS"
     record_result "$suite" "PASS" "$duration" "$log_path" "serial isolated DB"
   else
+    BROWSER_STATUS="ran serial: FAIL ($log_path)"
     record_result "$suite" "FAIL" "$duration" "$log_path" "exit=$status"
     OVERALL_FAIL=1
   fi
@@ -501,6 +524,10 @@ write_summary() {
     echo "hostname: $(hostname)"
     echo "cpu_count: $CPU_COUNT"
     echo "total_duration_seconds: $total_duration"
+    echo "postgresql_status: $POSTGRES_STATUS"
+    echo "db_isolation: generated per-shard TEST_DATABASE_URL values only; DATABASE_URL ignored for destructive setup"
+    echo "e2e_mode: $E2E_MODE"
+    echo "browser_status: $BROWSER_STATUS"
     echo
     echo "| phase | status | duration_s | log | note |"
     echo "| --- | --- | ---: | --- | --- |"
@@ -511,8 +538,28 @@ write_summary() {
     echo "failures:"
     if grep -q $'\tFAIL\t' "$SUMMARY_TSV"; then
       grep $'\tFAIL\t' "$SUMMARY_TSV" || true
-      find "$SHARD_STATUS_DIR" -name '*.status' -print0 | xargs -r -0 grep -H $'\tFAIL\t' 2>/dev/null || true
     else
+      echo "none"
+    fi
+    echo
+    echo "failing_shard_status_entries:"
+    local shard_status_matches
+    shard_status_matches="$(find "$SHARD_STATUS_DIR" -name '*.status' -print0 | xargs -r -0 grep -H $'\tFAIL\t' 2>/dev/null || true)"
+    if [[ -n "$shard_status_matches" ]]; then
+      printf '%s\n' "$shard_status_matches"
+    else
+      echo "none"
+    fi
+    echo
+    echo "failing_shard_log_paths:"
+    local shard_failures=0
+    while IFS=$'\t' read -r suite status duration log_path file; do
+      if [[ "$status" == "FAIL" ]]; then
+        shard_failures=1
+        echo "- $suite $file: $log_path"
+      fi
+    done < <(find "$SHARD_STATUS_DIR" -name '*.status' -print0 | xargs -r -0 cat 2>/dev/null)
+    if [[ "$shard_failures" -eq 0 ]]; then
       echo "none"
     fi
     echo
@@ -529,6 +576,30 @@ write_summary() {
       | sort -t $'\t' -k3,3nr \
       | head -20 || true
     echo
+    echo "failure_log_excerpts:"
+    local excerpts=0
+    while IFS=$'\t' read -r phase status duration log_path note; do
+      if [[ "$status" == "FAIL" && -n "$log_path" && -f "$log_path" ]]; then
+        excerpts=1
+        echo "### $phase"
+        echo "log: $log_path"
+        print_bounded_log_excerpt "$log_path"
+        echo
+      fi
+    done < "$SUMMARY_TSV"
+    while IFS=$'\t' read -r suite status duration log_path file; do
+      if [[ "$status" == "FAIL" ]]; then
+        excerpts=1
+        echo "### $suite: $file"
+        echo "log: $log_path"
+        print_bounded_log_excerpt "$log_path"
+        echo
+      fi
+    done < <(find "$SHARD_STATUS_DIR" -name '*.status' -print0 | xargs -r -0 cat 2>/dev/null)
+    if [[ "$excerpts" -eq 0 ]]; then
+      echo "none"
+    fi
+    echo
     echo "safety_confirmations:"
     echo "- RUN_UPSTREAM_TESTS=1 refused; normal run did not request real upstream calls."
     echo "- DATABASE_URL was not used for destructive setup."
@@ -544,6 +615,7 @@ write_summary() {
 
 START_TIME="$(seconds_now)"
 OVERALL_FAIL=0
+BROWSER_STATUS="not run"
 
 log "Run directory: $RUN_DIR"
 {
@@ -589,8 +661,10 @@ else
 fi
 
 E2E_CONCURRENCY=1
+E2E_MODE="default serial (max concurrency 1)"
 if [[ "${SLAIF_SUPERCOMPUTER_PARALLEL_E2E:-0}" == "1" ]]; then
   E2E_CONCURRENCY="$WORKERS"
+  E2E_MODE="explicit parallel via SLAIF_SUPERCOMPUTER_PARALLEL_E2E=1 (max concurrency $WORKERS)"
 fi
 
 run_logged "ruff" "$LOG_DIR/ruff.log" "$PY" -m ruff check .
