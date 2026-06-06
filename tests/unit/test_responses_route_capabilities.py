@@ -27,6 +27,26 @@ def test_responses_streaming_route_capability_passes_when_explicit() -> None:
     )
 
 
+def test_json_mode_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["json_mode"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        json_mode_requested=True,
+    )
+
+
+def test_structured_output_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["structured_outputs"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        structured_output_requested=True,
+    )
+
+
 def test_streaming_request_fails_when_capability_absent() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(
@@ -37,6 +57,28 @@ def test_streaming_request_fails_when_capability_absent() -> None:
 
     assert exc_info.value.error_code == "responses_route_capability_not_supported"
     assert exc_info.value.param == "stream"
+
+
+def test_json_mode_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            json_mode_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_json_mode_not_supported"
+    assert exc_info.value.param == "text.format"
+
+
+def test_structured_output_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            structured_output_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_structured_output_not_supported"
+    assert exc_info.value.param == "text.format"
 
 
 def test_streaming_request_fails_when_route_flag_absent() -> None:

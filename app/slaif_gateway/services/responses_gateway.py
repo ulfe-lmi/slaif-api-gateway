@@ -64,6 +64,11 @@ from slaif_gateway.services.rate_limit_errors import RateLimitError, RedisRateLi
 from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
+from slaif_gateway.services.responses_request_policy import (
+    TEXT_FORMAT_JSON_OBJECT,
+    TEXT_FORMAT_JSON_SCHEMA,
+    responses_text_format_type,
+)
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
 )
@@ -107,7 +112,7 @@ async def handle_response_create(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = payload.model_dump(mode="python", exclude_none=True)
+    body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
     policy = ResponsesRequestPolicy(settings=settings)
     try:
         policy_result = policy.apply(body)
@@ -119,6 +124,7 @@ async def handle_response_create(
         authenticated_key=authenticated_key,
         effective_model=policy_result.effective_body["model"],
         streaming_requested=policy_result.effective_body.get("stream") is True,
+        text_format_type=responses_text_format_type(policy_result.effective_body),
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -243,6 +249,7 @@ async def _resolve_responses_route(
     authenticated_key: AuthenticatedGatewayKey,
     effective_model: str,
     streaming_requested: bool,
+    text_format_type: str | None,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -266,6 +273,8 @@ async def _resolve_responses_route(
                 route_capabilities=route.capabilities,
                 streaming_requested=streaming_requested,
                 route_supports_streaming=route.supports_streaming,
+                json_mode_requested=text_format_type == TEXT_FORMAT_JSON_OBJECT,
+                structured_output_requested=text_format_type == TEXT_FORMAT_JSON_SCHEMA,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

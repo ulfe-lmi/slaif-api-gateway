@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with non-streaming structured `text.format` JSON mode/schema support. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -37,6 +37,9 @@ Current support is intentionally narrow:
 - stateless text-only `POST /v1/responses`;
 - non-streaming JSON or typed SSE streaming when route/model metadata explicitly
   enables Responses streaming;
+- non-streaming structured text output through `text.format` JSON object mode
+  or bounded JSON schema when route/model metadata explicitly enables the
+  matching Responses JSON-mode or structured-output capability;
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
@@ -55,6 +58,12 @@ streaming accounting uses provider usage from the completed response event;
 `response.completed` is held until that finalization succeeds. If a provider
 also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization. Missing final usage is not treated as zero cost.
+
+Responses structured text output is not a tool and does not add a separate
+billing category. JSON schemas are capped, forwarded only under
+`text.format`, included in the admission-time input estimate, and not stored or
+logged. Structured `stream=true` requests are rejected in this slice; plain text
+Responses streaming remains unchanged.
 
 Responses tools are not supported in the foundation and must not be blind
 passthrough. Function tools are the safest first candidate for a later slice,

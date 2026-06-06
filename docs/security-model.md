@@ -59,6 +59,14 @@ fields from an otherwise unknown body. The only approved provider-body
 construction path is an endpoint-specific normalized upstream request contract
 followed by the canonical upstream payload builder.
 
+Responses structured text output follows the same boundary. JSON object mode
+and JSON schema `text.format` payloads are text-output constraints, not tools or
+hosted authority. JSON schemas are allowed only at the explicit
+`text.format.schema` path, require route/model capability metadata, are capped
+and counted for input estimation, and must not be stored or logged alongside
+Responses input text, output text, raw request bodies, raw response bodies, or
+provider event bodies.
+
 ## Chat Completions Capability Policy
 
 SLAIF permissions are endpoint, model, provider, capability/tool,

@@ -32,7 +32,13 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
-async def _create_responses_test_data(database_url: str, *, streaming: bool = False):
+async def _create_responses_test_data(
+    database_url: str,
+    *,
+    streaming: bool = False,
+    structured_outputs: bool = False,
+    json_mode: bool = False,
+):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
     from slaif_gateway.db.repositories.audit import AuditRepository
@@ -116,6 +122,8 @@ async def _create_responses_test_data(database_url: str, *, streaming: bool = Fa
 
             capabilities = default_responses_capabilities()
             capabilities["streaming"] = streaming
+            capabilities["structured_outputs"] = structured_outputs
+            capabilities["json_mode"] = json_mode
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -489,3 +497,136 @@ def test_openai_python_client_responses_rejects_store_and_stream_without_upstrea
             assert INPUT_TEXT not in str(stream_exc.value)
 
     assert upstream_route.calls == []
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_structured_text_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(database_url, structured_outputs=True)
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    output_text = '{"answer":"structured"}'
+    upstream_payload = {
+        "id": "resp_structured_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_structured_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": output_text,
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        "usage": {
+            "input_tokens": 9,
+            "output_tokens": 13,
+            "total_tokens": 22,
+        },
+        "store": False,
+    }
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-responses-structured-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "answer_schema",
+                        "schema": schema,
+                        "strict": True,
+                    }
+                },
+            )
+
+    assert response.id == "resp_structured_test"
+    assert response.output_text == output_text
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": INPUT_TEXT,
+        "max_output_tokens": 32,
+        "store": False,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 22
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+    assert state.usage_ledger.prompt_tokens == 9
+    assert state.usage_ledger.completion_tokens == 13
+    assert state.usage_ledger.total_tokens == 22
+
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        INPUT_TEXT,
+        output_text,
+        "answer_schema",
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
