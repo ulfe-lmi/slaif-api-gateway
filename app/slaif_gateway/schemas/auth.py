@@ -28,5 +28,6 @@ class AuthenticatedGatewayKey:
     token_limit_total: int | None
     request_limit_total: int | None
     rate_limit_policy: dict[str, int | None]
+    responses_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"

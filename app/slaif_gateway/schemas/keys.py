@@ -27,6 +27,7 @@ class CreateGatewayKeyInput:
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
     calibration_metadata: dict[str, object] = field(default_factory=dict)
+    responses_policy: dict[str, object] | None = None
     template_id: uuid.UUID | None = None
     template_revision_id: uuid.UUID | None = None
     allowed_providers: list[str] | None = None

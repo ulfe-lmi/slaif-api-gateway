@@ -413,6 +413,10 @@ policy-first:
   succeeds. Missing final usage is not treated as zero cost.
 - Local function and custom tools require explicit route capability metadata;
   tool JSON is not blind passthrough and SLAIF does not execute tools.
+- Key-template revisions may carry a sanitized `responses_policy` summary for
+  the implemented stateless local subset. Template-created keys copy only that
+  safe summary as provenance metadata; they still require normal key endpoint,
+  model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
 - `background`, `store`, `previous_response_id`, conversation/provider-side
   state, retrieval, delete, cancel, and input-item listing are excluded until
@@ -440,8 +444,10 @@ email bodies. Reasoning or thinking token counts are safe operational metadata
 when a provider exposes them.
 
 Recommendations are never automatic mutations. An admin must review assumptions
-and explicitly confirm any generated template or single-key creation. Bulk key
-creation from templates remains future work.
+and explicitly confirm any generated template or single-key creation. The
+implemented template policy surface covers only safe stateless local Responses
+capability summaries; hosted/stateful/multimodal policy and bulk key creation
+from templates remain future work.
 
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).

@@ -132,8 +132,10 @@ migrations automatically.
   can now preview calibration usage summaries and strict participant-policy
   proposals from CLI and admin web, then create durable key-template revisions
   from reviewed proposals. Single-key creation from a selected template revision
-  is implemented for normal standard keys; bulk participant-key generation,
-  policy mutation, and Responses-specific template policy remain future work.
+  is implemented for normal standard keys, including sanitized policy metadata
+  for the implemented stateless local Responses subset. Bulk participant-key
+  generation, policy mutation, and hosted/stateful/multimodal Responses
+  template policy remain future work.
   See `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - File, image, and audio endpoints are not implemented.

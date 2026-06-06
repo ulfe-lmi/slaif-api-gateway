@@ -121,6 +121,8 @@ Current revision 1 stores:
 - allowed endpoints, models, and providers from the reviewed proposal;
 - hosted capabilities requiring review;
 - an empty participant hosted-capability allowlist by default;
+- optional safe `responses_policy` metadata for the implemented stateless local
+  Responses subset;
 - request, token, per-request, and cost limits from local accounting metadata;
 - optional validity and email-delivery defaults;
 - a safe proposal snapshot with warnings and assumptions.
@@ -150,8 +152,38 @@ Rules:
 - archived templates are rejected;
 - hosted capabilities requiring review are rejected rather than silently enabled
   for participant keys;
-- Responses-specific template policy remains future work; `/v1/responses` and
-  `/v1/completions` are not allowed through this template-to-key workflow yet.
+- `/v1/responses` is allowed only when the immutable revision includes a safe
+  `template_snapshot.responses_policy` summary for implemented stateless local
+  capabilities;
+- `/v1/completions` and other unimplemented endpoints remain rejected.
+
+The supported Responses template policy surface is intentionally small. A
+revision may summarize only these implemented stateless local capabilities:
+
+- `text`
+- `stateless`
+- `streaming`
+- `json_mode`
+- `structured_outputs`
+- `function_tools`
+- `custom_tools`
+
+Allowed local tool types are limited to `function` and `custom`. The policy
+summary must keep `hosted_tools_allowed` empty and must set `stateful`,
+`storage`, `background`, and `multimodal` to `false`. Hosted web/file search,
+code interpreter, shell, `apply_patch`, local environments, skills, MCP or
+connectors, computer use, image generation, tool search, provider-side storage,
+background mode, stateful lifecycle, and multimodal Responses remain future
+work and are rejected for template-created keys. The summary is operator
+provenance metadata only; it must not contain raw tool definitions, JSON
+schemas, grammar definitions, model-generated tool input, tool outputs,
+prompts, completions, raw request bodies, or raw response bodies.
+
+When a key is created from a safe Responses template revision, the created
+standard key stores the sanitized `responses_policy` summary in key metadata for
+explainability. Runtime request authorization still requires normal endpoint,
+model, provider, route capability, pricing, quota, and provider-forwarding
+checks. A template policy does not bypass missing route capability or pricing.
 
 ## Existing Keys
 
@@ -195,3 +227,4 @@ Template previews should show safe summaries only:
 - bounded-overrun assumptions;
 - pricing catalog references;
 - template revision IDs.
+- sanitized stateless local Responses policy summaries.

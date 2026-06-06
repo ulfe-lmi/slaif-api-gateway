@@ -9,6 +9,7 @@ from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.key_modes import is_trusted_calibration_key
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.crypto import parse_gateway_key_public_id, verify_hmac_sha256_token
 
 
@@ -123,6 +124,7 @@ class GatewayAuthService:
 
         allowed_providers = None
         rate_limit_metadata: dict[str, object] = {}
+        responses_policy: dict[str, object] | None = None
         if isinstance(gateway_key.metadata_json, dict):
             providers = gateway_key.metadata_json.get("allowed_providers")
             if isinstance(providers, list):
@@ -130,6 +132,13 @@ class GatewayAuthService:
             raw_rate_limit_metadata = gateway_key.metadata_json.get("rate_limit_policy")
             if isinstance(raw_rate_limit_metadata, dict):
                 rate_limit_metadata = raw_rate_limit_metadata
+            raw_responses_policy = gateway_key.metadata_json.get("responses_policy")
+            if isinstance(raw_responses_policy, dict):
+                sanitized_policy = sanitize_metadata_mapping(
+                    raw_responses_policy,
+                    drop_content_keys=True,
+                )
+                responses_policy = sanitized_policy if isinstance(sanitized_policy, dict) else None
 
         window_seconds = rate_limit_metadata.get("window_seconds")
         if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
@@ -162,6 +171,7 @@ class GatewayAuthService:
                 "max_concurrent_requests": gateway_key.max_concurrent_requests,
                 "window_seconds": window_seconds,
             },
+            responses_policy=responses_policy,
             key_purpose=getattr(gateway_key, "key_purpose", "standard"),
             capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
         )

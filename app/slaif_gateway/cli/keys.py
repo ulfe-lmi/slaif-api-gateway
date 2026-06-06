@@ -343,6 +343,7 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
         "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
+        "responses_policy": _responses_policy_from_gateway_key(gateway_key),
     }
 
 
@@ -378,6 +379,16 @@ def _allowed_providers_from_gateway_key(gateway_key: GatewayKey) -> list[str] | 
     if isinstance(providers, list):
         return [str(provider) for provider in providers if str(provider).strip()]
     return []
+
+
+def _responses_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object] | None:
+    metadata_json = getattr(gateway_key, "metadata_json", None)
+    if not isinstance(metadata_json, dict):
+        return None
+    policy = metadata_json.get("responses_policy")
+    if not isinstance(policy, dict):
+        return None
+    return {str(key): value for key, value in policy.items() if isinstance(key, str)}
 
 
 def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, object]:

@@ -87,6 +87,15 @@
         <dd>{{ current_revision.allowed_hosted_capabilities|join(", ") or "None" }}</dd>
         <dt>Hosted capabilities requiring review</dt>
         <dd>{{ current_revision.hosted_capabilities_requiring_review|join(", ") or "None" }}</dd>
+        {% if current_revision.template_snapshot and current_revision.template_snapshot.responses_policy %}
+        {% set responses_policy = current_revision.template_snapshot.responses_policy %}
+        <dt>Responses policy</dt>
+        <dd>
+          Capabilities: {{ responses_policy.allowed_capabilities|join(", ") or "None" }};
+          local tools: {{ responses_policy.allowed_local_tool_types|join(", ") or "None" }};
+          hosted/stateful/multimodal: denied
+        </dd>
+        {% endif %}
       </dl>
     </section>
 

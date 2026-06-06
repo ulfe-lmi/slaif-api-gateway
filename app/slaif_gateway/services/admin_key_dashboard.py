@@ -10,6 +10,7 @@ from typing import Protocol
 
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
 class AdminKeyNotFoundError(Exception):
@@ -141,6 +142,8 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         allowed_endpoints_summary=_allowed_values_summary(row.allow_all_endpoints, row.allowed_endpoints),
         allowed_providers_summary=_allowed_providers_summary(row.metadata_json),
         rate_limit_policy_summary=_rate_limit_policy_summary(row),
+        responses_policy=_responses_policy(row.metadata_json),
+        responses_policy_summary=_responses_policy_summary(row.metadata_json),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -212,6 +215,27 @@ def _rate_limit_policy_summary(row: GatewayKey) -> str:
         if isinstance(window_seconds, int) and not isinstance(window_seconds, bool):
             parts.append(f"{window_seconds}s window")
     return ", ".join(parts) if parts else "Default"
+
+
+def _responses_policy(metadata_json: dict[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(metadata_json, dict):
+        return None
+    policy = metadata_json.get("responses_policy")
+    if not isinstance(policy, dict):
+        return None
+    sanitized = sanitize_metadata_mapping(policy, drop_content_keys=True)
+    return sanitized if isinstance(sanitized, dict) else None
+
+
+def _responses_policy_summary(metadata_json: dict[str, object] | None) -> str:
+    policy = _responses_policy(metadata_json)
+    if policy is None:
+        return "None"
+    capabilities = policy.get("allowed_capabilities")
+    tools = policy.get("allowed_local_tool_types")
+    capability_text = ", ".join(str(item) for item in capabilities) if isinstance(capabilities, list) else "None"
+    tool_text = ", ".join(str(item) for item in tools) if isinstance(tools, list) and tools else "None"
+    return f"Capabilities: {capability_text}; local tools: {tool_text}; hosted/stateful/multimodal: denied"
 
 
 def _clean_filter(value: str | None) -> str | None:

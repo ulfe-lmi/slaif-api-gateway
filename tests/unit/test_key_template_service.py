@@ -282,6 +282,121 @@ def test_create_key_from_template_revision_creates_standard_key_with_provenance(
     assert audit.rows[-1].action == "gateway_key.created_from_template"
 
 
+def test_create_key_from_template_allows_safe_responses_policy_metadata() -> None:
+    templates = FakeTemplatesRepository()
+    audit = FakeAuditRepository()
+    key_service = FakeKeyService()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=audit,
+        key_service=key_service,
+    )
+    template, revision = _template_revision(
+        templates,
+        allowed_endpoints=["/v1/responses"],
+        template_snapshot={"responses_policy": _responses_policy()},
+    )
+
+    result = asyncio.run(
+        service.create_key_from_revision(
+            template_revision_id=revision.id,
+            owner_id=uuid.uuid4(),
+            reason="Reviewed Responses template",
+            confirm_create_key_from_template=True,
+        )
+    )
+
+    payload = key_service.payloads[0]
+    assert result.created_key.template_id == template.id
+    assert payload.allowed_endpoints == ["/v1/responses"]
+    assert payload.responses_policy == {
+        "version": 1,
+        "allowed_capabilities": [
+            "text",
+            "stateless",
+            "streaming",
+            "json_mode",
+            "structured_outputs",
+            "function_tools",
+            "custom_tools",
+        ],
+        "allowed_local_tool_types": ["function", "custom"],
+        "hosted_tools_allowed": [],
+        "stateful": False,
+        "storage": False,
+        "background": False,
+        "multimodal": False,
+        "notes": "safe summary only",
+    }
+    assert "responses_policy" in audit.rows[-1].new_values
+
+
+def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    _template, revision = _template_revision(
+        templates,
+        allowed_endpoints=["/v1/responses"],
+        template_snapshot={"responses_policy": _responses_policy(storage=True)},
+    )
+
+    with pytest.raises(KeyTemplateError, match="storage"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+    revision.template_snapshot = {"responses_policy": _responses_policy(hosted_tools_allowed=["web_search"])}
+    with pytest.raises(KeyTemplateError, match="hosted tools"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+    revision.template_snapshot = {"responses_policy": _responses_policy(extra_field="raw_tool_schema")}
+    with pytest.raises(KeyTemplateError, match="unsupported Responses policy fields"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+
+def test_create_key_from_template_rejects_responses_without_safe_policy() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    _template, revision = _template_revision(templates, allowed_endpoints=["/v1/responses"])
+
+    with pytest.raises(KeyTemplateError, match="no safe Responses policy"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+
 def test_create_key_from_template_rejects_confirmation_archived_and_missing_owner_policy() -> None:
     templates = FakeTemplatesRepository()
     service = KeyTemplateService(
@@ -313,7 +428,7 @@ def test_create_key_from_template_rejects_confirmation_archived_and_missing_owne
             )
         )
     template.status = "active"
-    revision.allowed_endpoints = ["/v1/responses"]
+    revision.allowed_endpoints = ["/v1/completions"]
     with pytest.raises(KeyTemplateError, match="no implemented"):
         asyncio.run(
             service.create_key_from_revision(
@@ -424,7 +539,12 @@ def _preview(
     return CalibrationPreviewResult(summary=summary, proposal=proposal, is_empty=empty, warnings=warnings)
 
 
-def _template_revision(templates: FakeTemplatesRepository):
+def _template_revision(
+    templates: FakeTemplatesRepository,
+    *,
+    allowed_endpoints: list[str] | None = None,
+    template_snapshot: dict[str, object] | None = None,
+):
     template = SimpleNamespace(
         id=uuid.uuid4(),
         name="Participants",
@@ -437,7 +557,7 @@ def _template_revision(templates: FakeTemplatesRepository):
         template_id=template.id,
         template=template,
         revision_number=1,
-        allowed_endpoints=["/v1/chat/completions"],
+        allowed_endpoints=allowed_endpoints or ["/v1/chat/completions"],
         allowed_models=["gpt-4.1-mini"],
         allowed_providers=["openai"],
         allowed_hosted_capabilities=[],
@@ -447,9 +567,34 @@ def _template_revision(templates: FakeTemplatesRepository):
         cost_limit_eur=Decimal("0.030000000"),
         rate_limit_policy={"requests_per_minute": 20},
         validity_days_default=14,
+        template_snapshot=template_snapshot or {},
     )
     template.current_revision_id = revision.id
     template.revisions.append(revision)
     templates.templates.append(template)
     templates.revisions.append(revision)
     return template, revision
+
+
+def _responses_policy(**overrides: object) -> dict[str, object]:
+    policy: dict[str, object] = {
+        "version": 1,
+        "allowed_capabilities": [
+            "text",
+            "stateless",
+            "streaming",
+            "json_mode",
+            "structured_outputs",
+            "function_tools",
+            "custom_tools",
+        ],
+        "allowed_local_tool_types": ["function", "custom"],
+        "hosted_tools_allowed": [],
+        "stateful": False,
+        "storage": False,
+        "background": False,
+        "multimodal": False,
+        "notes": "safe summary only",
+    }
+    policy.update(overrides)
+    return policy

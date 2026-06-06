@@ -53,6 +53,8 @@ class AdminKeyListRow:
     allowed_endpoints_summary: str
     allowed_providers_summary: str
     rate_limit_policy_summary: str
+    responses_policy: dict[str, object] | None
+    responses_policy_summary: str
     created_at: datetime
     updated_at: datetime
 

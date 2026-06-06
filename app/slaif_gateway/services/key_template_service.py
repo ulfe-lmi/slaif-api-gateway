@@ -11,11 +11,54 @@ from typing import Protocol
 from slaif_gateway.db.models import AuditLog, KeyTemplate, KeyTemplateRevision
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
 from slaif_gateway.services.calibration_summary_service import CalibrationPreviewResult
-from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
+from slaif_gateway.services.key_policy_validation import (
+    IMPLEMENTED_CLIENT_ENDPOINTS,
+    RESPONSES_ENDPOINT,
+)
+from slaif_gateway.services.responses_route_capabilities import (
+    RESPONSES_CAPABILITY_CUSTOM_TOOLS,
+    RESPONSES_CAPABILITY_FUNCTION_TOOLS,
+    RESPONSES_CAPABILITY_JSON_MODE,
+    RESPONSES_CAPABILITY_STATELESS,
+    RESPONSES_CAPABILITY_STREAMING,
+    RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
+    RESPONSES_CAPABILITY_TEXT,
+)
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
-_UNIMPLEMENTED_ENDPOINTS = frozenset({"/v1/responses", "/v1/completions"})
+_CALIBRATION_TEMPLATE_UNIMPLEMENTED_ENDPOINTS = frozenset({RESPONSES_ENDPOINT, "/v1/completions"})
+_TEMPLATE_KEY_UNIMPLEMENTED_ENDPOINTS = frozenset({"/v1/completions"})
 _ALLOWED_DEFAULT_EMAIL_MODES = frozenset({"none", "pending"})
+_RESPONSES_POLICY_KEY = "responses_policy"
+_RESPONSES_POLICY_ALLOWED_KEYS = frozenset(
+    {
+        "version",
+        "allowed_capabilities",
+        "allowed_local_tool_types",
+        "hosted_tools_allowed",
+        "stateful",
+        "storage",
+        "background",
+        "multimodal",
+        "notes",
+    }
+)
+_RESPONSES_POLICY_ALLOWED_CAPABILITIES = frozenset(
+    {
+        RESPONSES_CAPABILITY_TEXT,
+        RESPONSES_CAPABILITY_STATELESS,
+        RESPONSES_CAPABILITY_STREAMING,
+        RESPONSES_CAPABILITY_JSON_MODE,
+        RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
+        RESPONSES_CAPABILITY_FUNCTION_TOOLS,
+        RESPONSES_CAPABILITY_CUSTOM_TOOLS,
+    }
+)
+_RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES = frozenset(
+    {RESPONSES_CAPABILITY_TEXT, RESPONSES_CAPABILITY_STATELESS}
+)
+_RESPONSES_POLICY_ALLOWED_LOCAL_TOOL_TYPES = frozenset({"function", "custom"})
+_RESPONSES_POLICY_FORBIDDEN_FLAGS = ("stateful", "storage", "background", "multimodal")
 
 
 class KeyTemplateError(ValueError):
@@ -162,7 +205,7 @@ class KeyTemplateService:
             raise KeyTemplateError("validity_days_default must be positive.")
 
         proposal = preview.proposal
-        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _UNIMPLEMENTED_ENDPOINTS
+        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _CALIBRATION_TEMPLATE_UNIMPLEMENTED_ENDPOINTS
         endpoints = tuple(endpoint for endpoint in proposal.proposed_allowed_endpoints if endpoint in implemented)
         if not endpoints:
             raise KeyTemplateError("Calibration proposal has no implemented participant endpoints.")
@@ -281,12 +324,13 @@ class KeyTemplateService:
                 "participant keys are not created from it yet."
             )
 
-        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _UNIMPLEMENTED_ENDPOINTS
+        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _TEMPLATE_KEY_UNIMPLEMENTED_ENDPOINTS
         allowed_endpoints = [endpoint for endpoint in revision.allowed_endpoints if endpoint in implemented]
         if not allowed_endpoints:
             raise KeyTemplateError("Template revision has no implemented participant endpoints.")
         if set(revision.allowed_endpoints) - set(allowed_endpoints):
             raise KeyTemplateError("Template revision includes unsupported endpoints.")
+        responses_policy = _responses_policy_for_revision(revision)
 
         start = _coerce_valid_from(valid_from)
         until = _resolve_template_valid_until(
@@ -313,6 +357,7 @@ class KeyTemplateService:
             allow_all_endpoints=False,
             key_purpose="standard",
             capability_policy_mode="standard",
+            responses_policy=responses_policy,
             template_id=template.id,
             template_revision_id=revision.id,
             allowed_providers=list(revision.allowed_providers) if revision.allowed_providers else None,
@@ -337,6 +382,7 @@ class KeyTemplateService:
                 "request_limit_total": revision.request_limit_total,
                 "token_limit_total": revision.token_limit_total,
                 "cost_limit_eur": str(revision.cost_limit_eur) if revision.cost_limit_eur else None,
+                "responses_policy": responses_policy,
             },
             note=cleaned_reason,
         )
@@ -495,3 +541,102 @@ def _rate_limit_policy_for_key(value: object) -> dict[str, int | None] | None:
             raise KeyTemplateError("Template revision has an invalid rate-limit policy.")
         policy[name] = item
     return policy or None
+
+
+def _responses_policy_for_revision(revision: KeyTemplateRevision) -> dict[str, object] | None:
+    endpoints = set(getattr(revision, "allowed_endpoints", None) or [])
+    snapshot = getattr(revision, "template_snapshot", None)
+    raw_policy = snapshot.get(_RESPONSES_POLICY_KEY) if isinstance(snapshot, dict) else None
+    if raw_policy is None:
+        if RESPONSES_ENDPOINT in endpoints:
+            raise KeyTemplateError(
+                "Template revision allows /v1/responses but has no safe Responses policy summary."
+            )
+        return None
+    return _normalize_responses_template_policy(raw_policy)
+
+
+def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object]:
+    if not isinstance(raw_policy, dict):
+        raise KeyTemplateError("Template revision has an invalid Responses policy summary.")
+    unknown_keys = set(str(key) for key in raw_policy) - _RESPONSES_POLICY_ALLOWED_KEYS
+    if unknown_keys:
+        raise KeyTemplateError("Template revision has unsupported Responses policy fields.")
+
+    version = raw_policy.get("version")
+    if isinstance(version, bool) or version != 1:
+        raise KeyTemplateError("Template revision has an unsupported Responses policy version.")
+
+    capabilities = _clean_string_list(
+        raw_policy.get("allowed_capabilities"),
+        allowed_values=_RESPONSES_POLICY_ALLOWED_CAPABILITIES,
+        field_name="Responses capabilities",
+    )
+    if not _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES.issubset(capabilities):
+        raise KeyTemplateError("Responses template policy must include text and stateless capabilities.")
+
+    local_tool_types = _clean_string_list(
+        raw_policy.get("allowed_local_tool_types", []),
+        allowed_values=_RESPONSES_POLICY_ALLOWED_LOCAL_TOOL_TYPES,
+        field_name="Responses local tool types",
+    )
+    if RESPONSES_CAPABILITY_FUNCTION_TOOLS in capabilities and "function" not in local_tool_types:
+        raise KeyTemplateError("Responses function-tool capability requires the function local tool type.")
+    if RESPONSES_CAPABILITY_CUSTOM_TOOLS in capabilities and "custom" not in local_tool_types:
+        raise KeyTemplateError("Responses custom-tool capability requires the custom local tool type.")
+    if "function" in local_tool_types and RESPONSES_CAPABILITY_FUNCTION_TOOLS not in capabilities:
+        raise KeyTemplateError("Responses function local tool type requires function_tools capability.")
+    if "custom" in local_tool_types and RESPONSES_CAPABILITY_CUSTOM_TOOLS not in capabilities:
+        raise KeyTemplateError("Responses custom local tool type requires custom_tools capability.")
+
+    hosted_tools = raw_policy.get("hosted_tools_allowed", [])
+    if hosted_tools not in ([], ()):
+        raise KeyTemplateError("Responses hosted tools remain unsupported for template-created keys.")
+    for flag in _RESPONSES_POLICY_FORBIDDEN_FLAGS:
+        value = raw_policy.get(flag, False)
+        if value is not False:
+            raise KeyTemplateError(f"Responses template policy cannot enable {flag}.")
+
+    policy: dict[str, object] = {
+        "version": 1,
+        "allowed_capabilities": list(capabilities),
+        "allowed_local_tool_types": list(local_tool_types),
+        "hosted_tools_allowed": [],
+        "stateful": False,
+        "storage": False,
+        "background": False,
+        "multimodal": False,
+    }
+    notes = raw_policy.get("notes")
+    if notes is not None:
+        cleaned_notes = _clean_optional_text(str(notes))
+        if cleaned_notes:
+            if len(cleaned_notes) > 1000:
+                raise KeyTemplateError("Responses template policy notes are too long.")
+            policy["notes"] = cleaned_notes
+    sanitized = sanitize_metadata_mapping(policy, drop_content_keys=True)
+    if not isinstance(sanitized, dict):
+        raise KeyTemplateError("Template revision has an invalid Responses policy summary.")
+    return sanitized
+
+
+def _clean_string_list(
+    value: object,
+    *,
+    allowed_values: frozenset[str],
+    field_name: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise KeyTemplateError(f"{field_name} must be a list.")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise KeyTemplateError(f"{field_name} must use string values.")
+        normalized = item.strip()
+        if normalized not in allowed_values:
+            raise KeyTemplateError(f"{field_name} includes an unsupported value.")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            cleaned.append(normalized)
+    return tuple(cleaned)

@@ -191,9 +191,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   Completions usage profiling, trusted calibration keys, calibration proposal
   previews, and durable key-template snapshots now provide the first persisted
   foundation for usage-derived participant policies. Single-key creation from a
-  selected template revision is implemented, but bulk participant-key
-  generation, policy mutation, and Responses-specific template policy remain
-  future work. See `responses-compatibility.md`.
+  selected template revision is implemented, including sanitized policy
+  metadata for the implemented stateless local Responses subset, but bulk
+  participant-key generation, policy mutation, and hosted/stateful/multimodal
+  Responses template policy remain future work. See
+  `responses-compatibility.md`.
 - Embeddings API is not implemented.
 - Chat Completions file IDs, file URLs, audio URLs, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with audio
