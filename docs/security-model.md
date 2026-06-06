@@ -55,7 +55,9 @@ header from the server-side provider secret and use an outbound header allowlist
 Provider-bound JSON request bodies are also reconstructed inside the gateway
 from validated, capped, capability-approved fields. The gateway does not forward
 the raw client request dictionary upstream or rely on removing a few denied
-fields from an otherwise unknown body.
+fields from an otherwise unknown body. The only approved provider-body
+construction path is an endpoint-specific normalized upstream request contract
+followed by the canonical upstream payload builder.
 
 ## Chat Completions Capability Policy
 

@@ -5,6 +5,10 @@ import copy
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.services.upstream_request_contracts import (
+    normalize_chat_completion_upstream_request,
+    normalize_responses_upstream_request,
+)
 from slaif_gateway.services.key_modes import CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
@@ -40,6 +44,30 @@ def _responses_policy_result(body: dict[str, object], **settings_overrides: obje
     return ResponsesRequestPolicy(_settings(**settings_overrides)).apply(body)
 
 
+def _normalize_chat_body(body: dict[str, object], **settings_overrides: object):
+    return _normalize_chat_body_with_resolved_model(body, resolved_model="gpt-4.1-mini", **settings_overrides)
+
+
+def _normalize_chat_body_with_resolved_model(
+    body: dict[str, object], *, resolved_model: str = "gpt-4.1-mini", **settings_overrides: object
+):
+    policy_result = _chat_policy_result(body, **settings_overrides)
+    return normalize_chat_completion_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model=resolved_model,
+    )
+
+
+def _normalize_responses_body(body: dict[str, object], *, resolved_model: str = "gpt-5.2"):
+    policy_result = _responses_policy_result(body)
+    return normalize_responses_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model=resolved_model,
+    )
+
+
 def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-alias",
@@ -47,10 +75,9 @@ def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     }
     original = copy.deepcopy(inbound)
 
-    policy_result = _chat_policy_result(inbound)
+    normalized_request = _normalize_chat_body_with_resolved_model(inbound)
     outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-4.1-mini",
+        normalized_request,
     )
 
     assert outbound == {
@@ -62,9 +89,9 @@ def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     assert outbound is not inbound
     assert outbound["messages"] is not inbound["messages"]
 
+    before_outbound_mutation = copy.deepcopy(inbound)
     outbound["messages"][0]["content"] = "mutated"
-    inbound["messages"][0]["content"] = "changed after build"
-    assert policy_result.effective_body["messages"][0]["content"] == "hello"
+    assert inbound == before_outbound_mutation
 
 
 def test_chat_scalar_function_and_response_format_fields_are_reconstructed_exactly() -> None:
@@ -106,10 +133,9 @@ def test_chat_scalar_function_and_response_format_fields_are_reconstructed_exact
         "max_tokens": 20,
     }
 
-    policy_result = _chat_policy_result(inbound)
+    normalized_request = _normalize_chat_body_with_resolved_model(inbound)
     outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-4.1-mini",
+        normalized_request,
     )
 
     assert outbound == {
@@ -157,10 +183,9 @@ def test_chat_custom_tool_reconstructs_opaque_format_only_under_custom_container
         "max_completion_tokens": 22,
     }
 
-    policy_result = _chat_policy_result(inbound)
+    normalized_request = _normalize_chat_body_with_resolved_model(inbound)
     outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-4.1-mini",
+        normalized_request,
     )
 
     assert outbound == {
@@ -170,6 +195,92 @@ def test_chat_custom_tool_reconstructs_opaque_format_only_under_custom_container
         "tools": inbound["tools"],
         "tool_choice": {"type": "custom", "custom": {"name": "emit_regex"}},
     }
+
+
+def test_chat_normalized_contract_deep_copies_opaque_containers() -> None:
+    inbound = {
+        "model": "classroom-alias",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "original text"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,b3JpZw==", "detail": "low"},
+                    },
+                    {
+                        "type": "file",
+                        "file": {"filename": "notes.txt", "file_data": "T1JJRw=="},
+                    },
+                    {"type": "input_audio", "input_audio": {"data": "T1JJRw==", "format": "wav"}},
+                ],
+            }
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string", "description": "original"}},
+                    },
+                },
+            },
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "emit_regex",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"syntax": "regex", "definition": "[a-z]+"},
+                    },
+                },
+            },
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "schema": {"type": "object"}},
+        },
+        "metadata": {"safe": {"nested": "original"}},
+        "modalities": ["text", "audio"],
+        "audio": {"format": "wav", "voice": "alloy"},
+        "max_completion_tokens": 18,
+    }
+
+    normalized_request = _normalize_chat_body(inbound, CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES=True)
+
+    inbound["messages"][0]["content"][0]["text"] = "changed"
+    inbound["messages"][0]["content"][1]["image_url"]["url"] = "data:image/png;base64,Q0hBTkdFRA=="
+    inbound["messages"][0]["content"][2]["file"]["file_data"] = "Q0hBTkdFRA=="
+    inbound["messages"][0]["content"][3]["input_audio"]["data"] = "Q0hBTkdFRA=="
+    inbound["tools"][0]["function"]["parameters"]["properties"]["query"]["description"] = "changed"
+    inbound["tools"][1]["custom"]["format"]["grammar"]["definition"] = "[0-9]+"
+    inbound["response_format"]["json_schema"]["schema"]["type"] = "array"
+    inbound["metadata"]["safe"]["nested"] = "changed"
+    inbound["audio"]["voice"] = "changed"
+
+    outbound = build_chat_completion_upstream_body(normalized_request)
+
+    assert outbound["messages"][0]["content"][0]["text"] == "original text"
+    assert outbound["messages"][0]["content"][1]["image_url"]["url"] == "data:image/png;base64,b3JpZw=="
+    assert outbound["messages"][0]["content"][2]["file"]["file_data"] == "T1JJRw=="
+    assert outbound["messages"][0]["content"][3]["input_audio"]["data"] == "T1JJRw=="
+    assert (
+        outbound["tools"][0]["function"]["parameters"]["properties"]["query"]["description"]
+        == "original"
+    )
+    assert outbound["tools"][1]["custom"]["format"]["grammar"]["definition"] == "[a-z]+"
+    assert outbound["response_format"]["json_schema"]["schema"]["type"] == "object"
+    assert outbound["metadata"]["safe"]["nested"] == "original"
+    assert outbound["audio"]["voice"] == "alloy"
+
+    outbound["tools"][0]["function"]["parameters"]["properties"]["query"]["description"] = "outbound"
+    outbound["metadata"]["safe"]["nested"] = "outbound"
+    rebuilt = build_chat_completion_upstream_body(normalized_request)
+    assert rebuilt["tools"][0]["function"]["parameters"]["properties"]["query"]["description"] == "original"
+    assert rebuilt["metadata"]["safe"]["nested"] == "original"
 
 
 def test_chat_multimodal_multiple_choice_and_audio_output_are_reconstructed_exactly() -> None:
@@ -198,10 +309,13 @@ def test_chat_multimodal_multiple_choice_and_audio_output_are_reconstructed_exac
         "max_completion_tokens": 18,
     }
 
-    policy_result = _chat_policy_result(inbound, CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES=True)
+    normalized_request = _normalize_chat_body_with_resolved_model(
+        inbound,
+        resolved_model="gpt-4.1-mini",
+        CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES=True,
+    )
     outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-4.1-mini",
+        normalized_request,
     )
 
     assert outbound == {
@@ -222,10 +336,9 @@ def test_chat_streaming_request_reconstructs_include_usage_mutation() -> None:
         "stream_options": {"include_usage": False},
     }
 
-    policy_result = _chat_policy_result(inbound)
+    normalized_request = _normalize_chat_body_with_resolved_model(inbound)
     outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-4.1-mini",
+        normalized_request,
     )
 
     assert outbound == {
@@ -246,10 +359,13 @@ def test_trusted_calibration_known_hosted_discovery_fields_are_reconstructed() -
         "max_tokens": 20,
     }
 
-    policy_result = _trusted_chat_policy_result(inbound)
-    outbound = build_chat_completion_upstream_body(
-        policy_result.effective_body,
+    normalized_request = normalize_chat_completion_upstream_request(
+        _trusted_chat_policy_result(inbound).effective_body,
+        requested_model="gpt-5-search-api",
         upstream_model="gpt-5-search-api",
+    )
+    outbound = build_chat_completion_upstream_body(
+        normalized_request,
     )
 
     assert outbound == {
@@ -295,25 +411,33 @@ def test_chat_unsupported_fields_reject_before_upstream_body_build(
 
 
 def test_chat_builder_fails_closed_if_policy_result_contains_unapproved_field() -> None:
-    with pytest.raises(ValueError, match="unapproved fields"):
-        build_chat_completion_upstream_body(
+    with pytest.raises(ValueError, match="unapproved top-level fields"):
+        normalize_chat_completion_upstream_request(
             {
                 "model": "classroom-alias",
                 "messages": [{"role": "user", "content": "hello"}],
                 "future_provider_field": "SHOULD_NOT_REACH_PROVIDER_NESTED",
             },
+            requested_model="classroom-alias",
             upstream_model="gpt-4.1-mini",
         )
+
+
+def test_chat_builder_rejects_raw_effective_body_mapping() -> None:
+    with pytest.raises(TypeError, match="normalized request contract"):
+        build_chat_completion_upstream_body({
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
 
 
 def test_responses_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {"model": "classroom-responses", "input": "hello"}
     original = copy.deepcopy(inbound)
 
-    policy_result = _responses_policy_result(inbound)
+    normalized_request = _normalize_responses_body(inbound)
     outbound = build_responses_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-5.2",
+        normalized_request,
     )
 
     assert outbound == {
@@ -341,10 +465,9 @@ def test_responses_full_supported_text_request_reconstructs_exact_upstream_body(
         "service_tier": "auto",
     }
 
-    policy_result = _responses_policy_result(inbound)
+    normalized_request = _normalize_responses_body(inbound)
     outbound = build_responses_upstream_body(
-        policy_result.effective_body,
-        upstream_model="gpt-5.2",
+        normalized_request,
     )
 
     assert outbound == {
@@ -361,6 +484,28 @@ def test_responses_full_supported_text_request_reconstructs_exact_upstream_body(
         "service_tier": "auto",
     }
     assert outbound["metadata"] is not inbound["metadata"]
+
+
+def test_responses_normalized_contract_deep_copies_opaque_containers() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "metadata": {"safe": {"nested": "original"}},
+        "text": {"format": {"type": "text"}},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["metadata"]["safe"]["nested"] = "changed"
+    inbound["text"]["format"]["type"] = "changed"
+
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound["metadata"]["safe"]["nested"] == "original"
+    assert outbound["text"]["format"]["type"] == "text"
+
+    outbound["metadata"]["safe"]["nested"] = "outbound"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["metadata"]["safe"]["nested"] == "original"
 
 
 @pytest.mark.parametrize(
@@ -430,8 +575,8 @@ def test_responses_nested_unsupported_fields_reject_without_value_leakage() -> N
 
 
 def test_responses_builder_fails_closed_if_policy_result_contains_unapproved_field() -> None:
-    with pytest.raises(ValueError, match="unapproved fields"):
-        build_responses_upstream_body(
+    with pytest.raises(ValueError, match="unapproved top-level fields"):
+        normalize_responses_upstream_request(
             {
                 "model": "classroom-responses",
                 "input": "hello",
@@ -439,5 +584,15 @@ def test_responses_builder_fails_closed_if_policy_result_contains_unapproved_fie
                 "max_output_tokens": 12,
                 "provider_state": {"id": "SHOULD_NOT_REACH_PROVIDER_NESTED"},
             },
+            requested_model="classroom-responses",
             upstream_model="gpt-5.2",
         )
+
+
+def test_responses_builder_rejects_raw_effective_body_mapping() -> None:
+    with pytest.raises(TypeError, match="normalized request contract"):
+        build_responses_upstream_body({
+            "model": "gpt-5.2",
+            "input": "hello",
+            "store": False,
+        })

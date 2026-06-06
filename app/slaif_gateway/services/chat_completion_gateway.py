@@ -75,6 +75,7 @@ from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.upstream_request_contracts import normalize_chat_completion_upstream_request
 from slaif_gateway.services.upstream_payloads import build_chat_completion_upstream_body
 from slaif_gateway.services.usage_profile_service import (
     UsageProfileService,
@@ -94,6 +95,27 @@ class _RateLimitReservation:
     gateway_key_id: uuid.UUID
     request_id: str
     concurrency_reserved: bool
+
+
+def _build_safe_chat_completion_upstream_body(
+    *,
+    policy_result: ChatCompletionPolicyResult,
+    upstream_model: str,
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_chat_completion_upstream_request(
+            policy_result.effective_body,
+            requested_model=policy_result.effective_body["model"],
+            upstream_model=upstream_model,
+        )
+        return build_chat_completion_upstream_body(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Request contains fields that are not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
 
 
 async def handle_chat_completion(
@@ -148,6 +170,10 @@ async def handle_chat_completion(
         policy_result=policy_result,
         request=request,
     )
+    upstream_body = _build_safe_chat_completion_upstream_body(
+        policy_result=policy_result,
+        upstream_model=route.resolved_model,
+    )
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
@@ -176,6 +202,7 @@ async def handle_chat_completion(
                     settings=settings,
                     request=request,
                     rate_limit_reservation=rate_limit_reservation,
+                    upstream_body=upstream_body,
                 )
                 rate_limit_reservation = None
                 return response
@@ -187,10 +214,7 @@ async def handle_chat_completion(
             provider=route.provider,
             upstream_model=route.resolved_model,
             endpoint="chat.completions",
-            body=build_chat_completion_upstream_body(
-                policy_result.effective_body,
-                upstream_model=route.resolved_model,
-            ),
+            body=upstream_body,
             request_id=request_id,
         )
         try:
@@ -266,16 +290,14 @@ def _streaming_chat_completion_response(
     settings: Settings,
     request: Request | None,
     rate_limit_reservation: _RateLimitReservation | None,
+    upstream_body: dict[str, object],
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
         provider=route.provider,
         upstream_model=route.resolved_model,
         endpoint="chat.completions",
-        body=build_chat_completion_upstream_body(
-            policy_result.effective_body,
-            upstream_model=route.resolved_model,
-        ),
+        body=upstream_body,
         request_id=request_id,
     )
 

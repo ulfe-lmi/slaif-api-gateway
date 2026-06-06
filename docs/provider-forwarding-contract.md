@@ -134,6 +134,10 @@ substitution and output-token defaults, then constructs a fresh upstream JSON
 object from an explicit allowlist of supported fields. If a future policy
 result contains an unapproved top-level field, upstream body construction fails
 closed instead of removing a few known-denied fields and forwarding the rest.
+The approved construction path is an endpoint-specific normalized upstream
+request contract followed by the canonical upstream payload builder; provider
+adapters receive only the rebuilt `ProviderRequest.body`, never the raw client
+request mapping.
 
 Some nested payloads are intentionally opaque only inside documented supported
 containers, such as local function-tool schemas, local custom-tool grammar
