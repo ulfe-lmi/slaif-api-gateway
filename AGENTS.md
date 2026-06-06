@@ -257,6 +257,20 @@ Unit tests must remain independent of all database integration modes.
 verification harness for trusted local/HPC/Codex runs, not normal CI. It takes
 exactly one positional argument: the requested maximum worker count.
 
+For HPC/user-local preparation, prefer the repository helper artifacts instead
+of re-deriving the shell sequence manually:
+
+- `docs/testing-hpc.md`
+- `scripts/setup-hpc-test-env.sh`
+- `scripts/run-hpc-supercomputer-verify.sh`
+- `agents/skills/hpc-supercomputer-verify/SKILL.md`
+
+The recommended HPC flow uses a user-local PostgreSQL toolchain, a temporary
+localhost TCP PostgreSQL cluster, user-local Playwright Chromium assets, and
+user-local browser runtime libraries when needed. Use a cleaned environment for
+`git` commands if shared-library/module pollution breaks `git fetch` or
+`git pull`.
+
 Example:
 
 ```bash

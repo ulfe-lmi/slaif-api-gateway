@@ -37,6 +37,10 @@ The current default distribution remains `--dist loadscope`.
 parallel, then runs integration, E2E, and browser suites serially. It does not
 create, mutate, or drop test databases.
 
+For HPC-specific environment bootstrapping, including user-local PostgreSQL,
+Playwright, browser runtime libraries, and cleaned `git` command patterns, see
+[docs/testing-hpc.md](testing-hpc.md).
+
 ## Shared-State Inventory
 
 Database-backed tests must use `TEST_DATABASE_URL`, never `DATABASE_URL`, for
