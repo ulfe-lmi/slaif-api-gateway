@@ -135,6 +135,31 @@ def test_function_call_output_input_item_passes_as_string_only_tool_result() -> 
     assert result.estimated_input_tokens > 0
 
 
+def test_custom_tool_call_output_input_item_passes_as_string_only_tool_result() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {"role": "user", "content": "call the custom tool"},
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": "safe custom result",
+                },
+            ]
+        )
+    )
+
+    assert result.effective_body["input"] == [
+        {"role": "user", "content": "call the custom tool"},
+        {
+            "type": "custom_tool_call_output",
+            "call_id": "call_123",
+            "output": "safe custom result",
+        },
+    ]
+    assert result.estimated_input_tokens > 0
+
+
 @pytest.mark.parametrize(
     ("input_value", "param", "code"),
     [
@@ -147,6 +172,10 @@ def test_function_call_output_input_item_passes_as_string_only_tool_result() -> 
         ([{"type": "function_call_output", "call_id": "call_123", "output": [{"type": "input_image", "image_url": "secret"}]}], "input[0].output", "responses_function_call_output_invalid"),
         ([{"type": "function_call_output", "output": "secret"}], "input[0].call_id", "responses_function_call_output_invalid"),
         ([{"type": "function_call_output", "call_id": "call_123", "output": "secret", "extra": "x"}], "input[0].extra", "responses_function_call_output_invalid"),
+        ([{"type": "custom_tool_call", "call_id": "call_123", "input": "secret"}], "input[0].type", "responses_input_tool_item_not_supported"),
+        ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": [{"type": "input_text", "text": "secret"}]}], "input[0].output", "responses_custom_tool_call_output_invalid"),
+        ([{"type": "custom_tool_call_output", "output": "secret"}], "input[0].call_id", "responses_custom_tool_call_output_invalid"),
+        ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": "secret", "id": "item_123"}], "input[0].id", "responses_custom_tool_call_output_invalid"),
         ([{"role": "user", "content": [{"type": "input_image", "image_url": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
         ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
         ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
@@ -229,6 +258,24 @@ def test_function_call_output_cap_rejects_without_raw_output() -> None:
         )
 
     assert exc_info.value.error_code == "responses_function_call_output_too_large"
+    assert "secret output" not in exc_info.value.safe_message
+
+
+def test_custom_tool_call_output_cap_rejects_without_raw_output() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)).apply(
+            _body(
+                input=[
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_123",
+                        "output": "secret output",
+                    }
+                ]
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_custom_tool_call_output_too_large"
     assert "secret output" not in exc_info.value.safe_message
 
 
@@ -490,7 +537,6 @@ def test_function_tool_choice_string_options_pass(tool_choice: str) -> None:
         ([], "tools", "responses_tool_invalid_shape"),
         ([{"type": "web_search"}], "tools[0].type", "responses_hosted_tool_not_supported"),
         ([{"type": "mcp", "server_url": "https://example.invalid"}], "tools[0].type", "responses_mcp_not_supported"),
-        ([{"type": "custom", "name": "run"}], "tools[0].type", "responses_hosted_tool_not_supported"),
         ([{"type": "function", "name": "bad name", "parameters": {}}], "tools[0].name", "responses_tool_invalid_shape"),
         ([{"type": "function", "name": "lookup", "parameters": []}], "tools[0].parameters", "responses_tool_invalid_shape"),
         ([{"type": "function", "name": "lookup", "parameters": {}, "server_url": "https://example.invalid"}], "tools[0]", "responses_mcp_not_supported"),
@@ -542,11 +588,176 @@ def test_function_tool_caps_reject_without_schema_leakage() -> None:
     assert "secret description" not in description_exc.value.safe_message
 
 
+def test_custom_tools_pass_with_omitted_text_and_grammar_formats() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            tools=[
+                {"type": "custom", "name": "freeform", "description": "Local custom intent."},
+                {"type": "custom", "name": "texty", "format": {"type": "text"}},
+                {
+                    "type": "custom",
+                    "name": "emit_lark",
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "lark",
+                        "definition": "start: WORD",
+                    },
+                },
+                {
+                    "type": "custom",
+                    "name": "emit_regex",
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "regex",
+                        "definition": "[a-z]+",
+                    },
+                },
+            ],
+            tool_choice={"type": "custom", "name": "emit_regex"},
+        )
+    )
+
+    assert result.effective_body["tools"] == [
+        {"type": "custom", "name": "freeform", "description": "Local custom intent."},
+        {"type": "custom", "name": "texty", "format": {"type": "text"}},
+        {
+            "type": "custom",
+            "name": "emit_lark",
+            "format": {"type": "grammar", "syntax": "lark", "definition": "start: WORD"},
+        },
+        {
+            "type": "custom",
+            "name": "emit_regex",
+            "format": {"type": "grammar", "syntax": "regex", "definition": "[a-z]+"},
+        },
+    ]
+    assert result.effective_body["tool_choice"] == {"type": "custom", "name": "emit_regex"}
+    assert result.estimated_input_tokens > 0
+
+
+@pytest.mark.parametrize(
+    ("tool", "param", "code"),
+    [
+        ({"type": "custom", "name": "bad name"}, "tools[0].name", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "defer_loading": True}, "tools[0].defer_loading", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "server_url": "https://example.invalid"}, "tools[0]", "responses_mcp_not_supported"),
+        ({"type": "custom", "name": "run", "description": 1}, "tools[0].description", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "format": "text"}, "tools[0].format", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "format": {"type": "json"}}, "tools[0].format.type", "responses_custom_tool_format_not_supported"),
+        ({"type": "custom", "name": "run", "format": {"type": "text", "extra": "x"}}, "tools[0].format.extra", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "json", "definition": "secret"}}, "tools[0].format.syntax", "responses_custom_tool_format_not_supported"),
+        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex"}}, "tools[0].format.definition", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex", "definition": ""}}, "tools[0].format.definition", "responses_tool_invalid_shape"),
+        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex", "definition": "secret", "extra": "x"}}, "tools[0].format.extra", "responses_tool_invalid_shape"),
+    ],
+)
+def test_custom_tool_validation_rejects_invalid_shapes_without_payload_leakage(
+    tool: dict[str, object],
+    param: str,
+    code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(_body(tools=[tool]))
+
+    assert exc_info.value.error_code == code
+    assert exc_info.value.param == param
+    assert "secret" not in exc_info.value.safe_message
+    assert "https://example.invalid" not in exc_info.value.safe_message
+
+
+def test_custom_tool_caps_reject_without_definition_leakage() -> None:
+    with pytest.raises(RequestPolicyError) as name_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES=4)).apply(
+            _body(tools=[{"type": "custom", "name": "lookup"}])
+        )
+    with pytest.raises(RequestPolicyError) as description_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES=4)).apply(
+            _body(tools=[{"type": "custom", "name": "run", "description": "secret description"}])
+        )
+    with pytest.raises(RequestPolicyError) as definition_exc:
+        ResponsesRequestPolicy(
+            Settings(RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=4)
+        ).apply(
+            _body(
+                tools=[
+                    {
+                        "type": "custom",
+                        "name": "run",
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "regex",
+                            "definition": "secret grammar",
+                        },
+                    }
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as count_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOLS_PER_REQUEST=1)).apply(
+            _body(
+                tools=[
+                    {"type": "custom", "name": "one"},
+                    {"type": "custom", "name": "two"},
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as total_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=64)).apply(
+            _body(
+                tools=[
+                    {
+                        "type": "custom",
+                        "name": "one",
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "regex",
+                            "definition": "secret grammar one",
+                        },
+                    },
+                    {
+                        "type": "custom",
+                        "name": "two",
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "regex",
+                            "definition": "secret grammar two",
+                        },
+                    },
+                ]
+            )
+        )
+
+    assert name_exc.value.error_code == "responses_tool_invalid_shape"
+    assert description_exc.value.error_code == "responses_tool_invalid_shape"
+    assert "secret description" not in description_exc.value.safe_message
+    assert definition_exc.value.error_code == "responses_custom_tool_format_too_large"
+    assert "secret grammar" not in definition_exc.value.safe_message
+    assert count_exc.value.error_code == "responses_tool_count_exceeded"
+    assert total_exc.value.error_code == "responses_custom_tool_format_too_large"
+    assert "secret grammar" not in total_exc.value.safe_message
+
+
+def test_duplicate_tool_names_across_function_and_custom_reject() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(
+                tools=[
+                    {"type": "function", "name": "lookup", "parameters": {}},
+                    {"type": "custom", "name": "lookup"},
+                ]
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_tool_invalid_shape"
+    assert exc_info.value.param == "tools[1].name"
+
+
 @pytest.mark.parametrize(
     ("tool_choice", "param", "code"),
     [
         ("sometimes", "tool_choice", "responses_tool_choice_invalid"),
         ({"type": "function", "name": "missing"}, "tool_choice.name", "responses_tool_choice_invalid"),
+        ({"type": "custom", "name": "missing"}, "tool_choice.name", "responses_tool_choice_invalid"),
         ({"type": "web_search"}, "tool_choice.type", "responses_hosted_tool_not_supported"),
         ({"type": "mcp", "server_label": "x"}, "tool_choice.type", "responses_mcp_not_supported"),
         ({"type": "function", "function": {"name": "lookup"}}, "tool_choice.function", "responses_tool_choice_invalid"),
@@ -599,6 +810,39 @@ def test_streaming_function_tools_rejected_before_forwarding() -> None:
         )
 
     assert exc_info.value.error_code == "responses_function_tool_streaming_not_supported"
+    assert exc_info.value.param == "tools"
+
+
+def test_streaming_custom_tools_rejected_before_forwarding() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(
+                stream=True,
+                tools=[{"type": "custom", "name": "emit_text"}],
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_custom_tool_streaming_not_supported"
+    assert exc_info.value.param == "tools"
+
+
+def test_streaming_custom_tool_output_rejected_before_forwarding() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(
+                stream=True,
+                input=[
+                    {"role": "user", "content": "continue"},
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_123",
+                        "output": "safe custom result",
+                    },
+                ],
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_custom_tool_streaming_not_supported"
     assert exc_info.value.param == "tools"
 
 

@@ -69,12 +69,12 @@ provider event bodies.
 
 Responses text input item arrays follow the same boundary. They are accepted
 only as stateless text message input with supported roles and string or
-`input_text` content parts. String-only `function_call_output` items are
-accepted as ordinary stateless input for local function-tool follow-up
-requests. Function-call items, reasoning/stateful items, hosted-tool items, and
-image/file/audio content parts are rejected before provider forwarding. Input
-item text and string tool outputs are counted for admission estimates but are
-not stored or logged.
+`input_text` content parts. String-only `function_call_output` and
+`custom_tool_call_output` items are accepted as ordinary stateless input for
+local-tool follow-up requests. Function-call/custom-tool-call items,
+reasoning/stateful items, hosted-tool items, and image/file/audio content parts
+are rejected before provider forwarding. Input item text and string tool
+outputs are counted for admission estimates but are not stored or logged.
 
 Responses local function tools follow the same boundary. They require explicit
 route/model `capabilities.responses.function_tools=true` metadata and are
@@ -84,6 +84,17 @@ ordinary input material, and are not stored or logged. SLAIF does not execute
 functions, does not add special tool billing, and does not enable hosted tools,
 MCP/connectors, web search, file search, code interpreter, computer use, image
 generation, tool search, storage, or background mode through this capability.
+
+Responses local custom tools follow the same boundary. They require explicit
+route/model `capabilities.responses.custom_tools=true` metadata and are
+canonicalized from bounded `tools[].type=custom` definitions with optional text
+or grammar format. Custom grammar definitions and string-only
+`custom_tool_call_output` items are ordinary input material for admission
+estimates and are not stored or logged. SLAIF does not execute custom tools,
+inspect or store generated custom-tool input, add special tool billing, or
+enable hosted tools, MCP/connectors, web search, file search, code interpreter,
+shell/apply-patch/local environments, computer use, image generation, tool
+search, storage, or background mode through this capability.
 
 ## Chat Completions Capability Policy
 
@@ -385,7 +396,8 @@ Completions hardening only; it does not implement Responses API behavior.
 
 Responses API support is limited to stateless, text-only `POST /v1/responses`
 with string input or bounded text-only input item arrays, non-streaming JSON,
-and typed SSE streaming. It is default-off and
+typed SSE streaming, non-streaming local function tools, and non-streaming
+local custom tools. It is default-off and
 policy-first:
 
 - Responses must be explicitly enabled per key through the `/v1/responses`
@@ -399,8 +411,8 @@ policy-first:
   response event. The completed event, and any upstream `data: [DONE]` marker if
   present, are not emitted as normal success until usage-backed finalization
   succeeds. Missing final usage is not treated as zero cost.
-- Tools are not supported in the foundation. Future supported tool types must
-  be explicitly allowed; tool JSON is not blind passthrough.
+- Local function and custom tools require explicit route capability metadata;
+  tool JSON is not blind passthrough and SLAIF does not execute tools.
 - MCP/connectors are excluded.
 - `background`, `store`, `previous_response_id`, conversation/provider-side
   state, retrieval, delete, cancel, and input-item listing are excluded until
@@ -718,9 +730,9 @@ never recover or send old plaintext keys.
   or allowlisted.
 - Native Anthropic API support is not implemented.
 - Responses API support is limited to stateless, text-only
-  `POST /v1/responses` with typed SSE streaming and non-streaming local
-  function tools; hosted Responses tools, stateful lifecycle routes, and
-  multimodal Responses remain future work under
+  `POST /v1/responses` with typed SSE streaming, non-streaming local function
+  tools, and non-streaming local custom tools; hosted Responses tools, stateful
+  lifecycle routes, and multimodal Responses remain future work under
   `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or

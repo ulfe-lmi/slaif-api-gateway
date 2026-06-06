@@ -464,7 +464,8 @@ string input or bounded text-only input item arrays, non-streaming JSON, typed
 SSE text streaming, and non-streaming structured `text.format` JSON
 object/schema output when route capability metadata allows it. It also supports
 non-streaming local/client-side function tools when route capability metadata
-allows them. It reuses
+allows them, and non-streaming local/client-side custom tools when route
+capability metadata allows them. It reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 
@@ -483,16 +484,28 @@ allows them. It reuses
 - `RESPONSES_MAX_TEXT_FORMAT_DESCRIPTION_BYTES=4096`
 - `RESPONSES_MAX_TOOLS_PER_REQUEST=64`
 - `RESPONSES_MAX_FUNCTION_TOOLS_PER_REQUEST=64`
+- `RESPONSES_MAX_CUSTOM_TOOLS_PER_REQUEST=64`
 - `RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES=128`
 - `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=4096`
 - `RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES=65536`
 - `RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES=262144`
 - `RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES=262144`
+- `RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES=128`
+- `RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES=4096`
+- `RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=65536`
+- `RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=262144`
+- `RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=262144`
 
 These are validation caps, not feature toggles. Responses still requires a key
 with `/v1/responses` in its endpoint policy, a resolved route with explicit
 Responses text/stateless capability metadata, and an active `/v1/responses`
 pricing row.
+
+Responses custom-tool settings cap local/client-side custom tool names,
+descriptions, grammar definitions, total custom format bytes, and string-only
+`custom_tool_call_output` follow-up input. They do not enable hosted tools,
+MCP/connectors, provider-side storage, tool execution, multimodal tool
+outputs, or streaming custom tools.
 
 ## Planned Responses Tool Configuration
 

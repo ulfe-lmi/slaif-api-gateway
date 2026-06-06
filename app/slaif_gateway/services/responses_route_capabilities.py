@@ -13,6 +13,7 @@ RESPONSES_CAPABILITY_STATELESS = "stateless"
 RESPONSES_CAPABILITY_STREAMING = "streaming"
 RESPONSES_CAPABILITY_TOOLS = "tools"
 RESPONSES_CAPABILITY_FUNCTION_TOOLS = "function_tools"
+RESPONSES_CAPABILITY_CUSTOM_TOOLS = "custom_tools"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -26,6 +27,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_STREAMING,
         RESPONSES_CAPABILITY_TOOLS,
         RESPONSES_CAPABILITY_FUNCTION_TOOLS,
+        RESPONSES_CAPABILITY_CUSTOM_TOOLS,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -44,6 +46,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_STREAMING: False,
         RESPONSES_CAPABILITY_TOOLS: False,
         RESPONSES_CAPABILITY_FUNCTION_TOOLS: False,
+        RESPONSES_CAPABILITY_CUSTOM_TOOLS: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -89,6 +92,7 @@ def enforce_responses_route_capabilities(
     json_mode_requested: bool = False,
     structured_output_requested: bool = False,
     function_tools_requested: bool = False,
+    custom_tools_requested: bool = False,
 ) -> None:
     """Require explicit text+stateless Responses metadata and fail closed."""
 
@@ -158,6 +162,15 @@ def enforce_responses_route_capabilities(
                 field="tools",
                 error_code="responses_function_tool_capability_not_supported",
                 safe_message="This model route does not support Responses function tools.",
+            )
+        )
+    if custom_tools_requested and capabilities.get(RESPONSES_CAPABILITY_CUSTOM_TOOLS) is not True:
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_CUSTOM_TOOLS,
+                field="tools",
+                error_code="responses_custom_tool_capability_not_supported",
+                safe_message="This model route does not support Responses custom tools.",
             )
         )
 

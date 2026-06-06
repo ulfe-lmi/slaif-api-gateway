@@ -634,6 +634,86 @@ def test_responses_function_call_output_item_reconstructs_exact_upstream_body() 
     }
 
 
+def test_responses_custom_tools_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [{"role": "user", "content": "use custom"}],
+        "tools": [
+            {"type": "custom", "name": "freeform"},
+            {"type": "custom", "name": "texty", "format": {"type": "text"}},
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "description": "Local custom intent.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            },
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": "use custom"}],
+        "max_output_tokens": 12,
+        "store": False,
+        "tools": [
+            {"type": "custom", "name": "freeform"},
+            {"type": "custom", "name": "texty", "format": {"type": "text"}},
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "description": "Local custom intent.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            },
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+    assert outbound["tools"] is not inbound["tools"]
+    assert "format" not in outbound["tools"][0]
+
+
+def test_responses_custom_tool_output_item_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {"role": "user", "content": "use custom"},
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_123",
+                "output": "safe custom result",
+            },
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {"role": "user", "content": "use custom"},
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_123",
+                "output": "safe custom result",
+            },
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+
+
 def test_responses_streaming_input_array_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-responses",
@@ -830,6 +910,35 @@ def test_responses_function_tool_schema_deep_copy_isolation() -> None:
     outbound["tools"][0]["parameters"]["properties"]["query"]["type"] = "boolean"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["tools"][0]["parameters"]["properties"]["query"]["type"] == "string"
+
+
+def test_responses_custom_tool_format_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "tools": [
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            }
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["tools"][0]["format"]["definition"] = "[0-9]+"
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["tools"][0]["format"]["definition"] == "[a-z]+"
+
+    outbound["tools"][0]["format"]["definition"] = "[A-Z]+"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["tools"][0]["format"]["definition"] == "[a-z]+"
 
 
 @pytest.mark.parametrize(

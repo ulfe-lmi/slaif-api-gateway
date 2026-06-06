@@ -156,8 +156,11 @@ Responses-specific rules for the current foundation:
   Supported arrays are reconstructed from message roles plus string content or
   `input_text` content parts; string-only `function_call_output` items are
   reconstructed as ordinary stateless input for local function-tool follow-up
-  requests. Function-call items, reasoning/stateful items, hosted-tool items,
-  and image/file/audio parts are rejected before provider forwarding;
+  requests, and string-only `custom_tool_call_output` items are reconstructed
+  as ordinary stateless input for caller-managed custom-tool follow-up
+  requests. Function-call/custom-tool-call items, reasoning/stateful items,
+  hosted-tool items, and image/file/audio parts are rejected before provider
+  forwarding;
 - local Responses function tools are reconstructed only from
   `tools[].type=function`, `name`, optional `description`, `parameters`, and
   optional `strict` after count/name/description/schema caps. Named
@@ -165,6 +168,13 @@ Responses-specific rules for the current foundation:
   function. Function-tool schemas are opaque only under `tools[].parameters`;
   the gateway does not execute functions and does not forward hosted tool
   authority markers;
+- local Responses custom tools are reconstructed only from
+  `tools[].type=custom`, `name`, optional `description`, and optional `format`
+  after count/name/description/grammar caps. Omitted custom format remains
+  omitted. Explicit format is limited to text or grammar with `lark`/`regex`.
+  Named custom `tool_choice` is reconstructed only when it references a
+  declared local custom tool. The gateway does not execute custom tools, store
+  generated custom-tool input, or forward hosted tool authority markers;
 - non-streaming JSON and typed SSE streaming are supported when route/model
   metadata explicitly enables Responses streaming;
 - non-streaming `text.format` JSON object mode and JSON schema structured

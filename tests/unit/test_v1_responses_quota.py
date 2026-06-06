@@ -57,12 +57,14 @@ def _route_result(
     responses_json_mode: bool = False,
     responses_structured_outputs: bool = False,
     responses_function_tools: bool = False,
+    responses_custom_tools: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
     capabilities["json_mode"] = responses_json_mode
     capabilities["structured_outputs"] = responses_structured_outputs
     capabilities["function_tools"] = responses_function_tools
+    capabilities["custom_tools"] = responses_custom_tools
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -112,6 +114,25 @@ def _responses_function_tool_request(model: str = "classroom-responses") -> dict
             }
         ],
         "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+
+def _responses_custom_tool_request(model: str = "classroom-responses") -> dict[str, object]:
+    return {
+        **_responses_request(model),
+        "tools": [
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "description": "Local custom intent.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            }
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
     }
 
 
@@ -391,6 +412,61 @@ def test_responses_function_tools_require_capability_before_rate_pricing_quota_p
     assert provider_calls == []
 
 
+def test_responses_custom_tools_require_capability_before_rate_pricing_quota_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model, responses_function_tools=True)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_responses_custom_tool_request(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_custom_tool_capability_not_supported"
+    assert rate_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert provider_calls == []
+
+
 def test_responses_function_tool_path_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 
@@ -501,6 +577,128 @@ def test_responses_function_tool_path_forwards_canonical_body_and_finalizes(monk
                 }
             ],
             "tool_choice": {"type": "function", "name": "lookup"},
+        }
+    ]
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+    assert finalize_calls == ["classroom-responses"]
+
+
+def test_responses_custom_tool_path_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls: list[str] = []
+    seen_bodies: list[dict[str, object]] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model, responses_custom_tools=True)
+
+    class _FakeAdapter:
+        async def forward_response(self, request):
+            seen_bodies.append(dict(request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={
+                    "id": "resp_custom_tool_test",
+                    "object": "response",
+                    "output": [
+                        {
+                            "id": "ctc_123",
+                            "type": "custom_tool_call",
+                            "call_id": "call_123",
+                            "name": "emit_regex",
+                            "input": "safe",
+                        }
+                    ],
+                },
+                usage=ProviderUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11),
+            )
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+        provider_completed_usage_ledger_id=None,
+        streaming=False,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            started_at,
+            finished_at,
+            provider_completed_usage_ledger_id,
+            streaming,
+        )
+        assert endpoint == "responses"
+        finalize_calls.append(route.requested_model)
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.003"),
+            actual_cost_native=Decimal("0.003"),
+            native_currency="EUR",
+            prompt_tokens=5,
+            completion_tokens=6,
+            total_tokens=11,
+            accounting_status="finalized",
+        )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_responses_custom_tool_request(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["output"][0]["type"] == "custom_tool_call"
+    assert seen_bodies == [
+        {
+            "model": "gpt-5.2",
+            "input": "hello",
+            "max_output_tokens": 20,
+            "store": False,
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "emit_regex",
+                    "description": "Local custom intent.",
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "regex",
+                        "definition": "[a-z]+",
+                    },
+                }
+            ],
+            "tool_choice": {"type": "custom", "name": "emit_regex"},
         }
     ]
     assert reserve_calls == ["classroom-responses"]

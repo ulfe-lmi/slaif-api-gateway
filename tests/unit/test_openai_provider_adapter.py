@@ -235,6 +235,77 @@ async def test_openai_response_posts_function_tool_request(respx_mock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_response_posts_custom_tool_request(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_custom_tool_123",
+                "object": "response",
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call_123",
+                        "name": "emit_regex",
+                        "input": "safe",
+                    }
+                ],
+                "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+            },
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "description": "Local custom intent.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            }
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "custom",
+                "name": "emit_regex",
+                "description": "Local custom intent.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "[a-z]+",
+                },
+            }
+        ],
+        "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+    assert response.json_body["output"][0]["type"] == "custom_tool_call"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 13
+
+
+@pytest.mark.asyncio
 async def test_openai_response_posts_structured_text_format_request(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=httpx.Response(

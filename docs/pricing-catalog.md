@@ -26,13 +26,14 @@ Successful accounting still finalizes from actual provider usage when available.
 For implemented Responses, the local cost estimate uses the request policy's
 total estimated input tokens. That total includes string input, text input item
 arrays, structured `text.format` schemas, local function-tool definitions, and
-string-only `function_call_output` input items when they are enabled by route
-capability. Local Responses function tools do not add a separate billing
-category: function definitions are ordinary input material, generated function
+local custom-tool definitions, plus string-only `function_call_output` and
+`custom_tool_call_output` input items when they are enabled by route
+capability. Local Responses function/custom tools do not add a separate billing
+category: tool definitions are ordinary input material, generated local tool
 calls are ordinary output material according to provider usage, and a later
 tool-result request is a separate gateway request. SLAIF does not store raw
-function schemas, generated arguments, function-call output text, or raw
-request/response bodies.
+function schemas, custom grammar definitions, generated arguments/custom-tool
+input, tool output text, or raw request/response bodies.
 
 Chat Completions image input to text output is enabled only behind explicit
 route capability and request caps. Image URL/data URL wrapper text is included
@@ -338,16 +339,21 @@ are not provider invoice certification.
 The current `POST /v1/responses` foundation supports stateless text input to
 text output for string input or bounded text-only input item arrays,
 non-streaming JSON, typed SSE streaming, and non-streaming structured
-`text.format` JSON object/schema output. It requires an active
+`text.format` JSON object/schema output, plus non-streaming local
+function/custom tools when route capability metadata allows them. It requires
+an active
 pricing row whose endpoint is `/v1/responses`; Chat Completions pricing rows
 are not silently reused. Admission-time reservation uses the estimated text
 input, input item text/wrappers, instructions, bounded structured text
 format/schema payload when present, and effective `max_output_tokens`.
+Local function/custom tool definitions and string tool-result inputs are
+ordinary input material for this estimate.
 Post-call finalization uses provider usage fields such as `input_tokens`,
 `output_tokens`, `total_tokens`, and cached/reasoning token details when
 exposed by the provider and supported by the existing accounting schema. Input
-item arrays and structured text output have no separate billing category in
-SLAIF; they use ordinary Responses token/cost accounting.
+item arrays, structured text output, and local function/custom tools have no
+separate billing category in SLAIF; they use ordinary Responses token/cost
+accounting.
 
 Streaming finalization uses usage from the provider's completed response event;
 missing final usage is not treated as zero cost. Responses hosted tools,
