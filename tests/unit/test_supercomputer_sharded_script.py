@@ -8,14 +8,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts/test-supercomputer-sharded.sh"
+SETUP_SCRIPT = REPO_ROOT / "scripts/setup-hpc-test-env.sh"
+RUN_SCRIPT = REPO_ROOT / "scripts/run-hpc-supercomputer-verify.sh"
 AGENTS = REPO_ROOT / "AGENTS.md"
 TESTING_DOC = REPO_ROOT / "docs/testing-parallelism.md"
+HPC_DOC = REPO_ROOT / "docs/testing-hpc.md"
+HPC_SKILL = REPO_ROOT / "agents/skills/hpc-supercomputer-verify/SKILL.md"
 
 
 def test_supercomputer_script_exists_executable_and_syntax_valid() -> None:
     assert SCRIPT.exists()
     assert SCRIPT.stat().st_mode & stat.S_IXUSR
     subprocess.run(["bash", "-n", str(SCRIPT)], cwd=REPO_ROOT, check=True)
+    subprocess.run(["bash", "-n", str(SETUP_SCRIPT)], cwd=REPO_ROOT, check=True)
+    subprocess.run(["bash", "-n", str(RUN_SCRIPT)], cwd=REPO_ROOT, check=True)
 
 
 def test_supercomputer_script_requires_one_positive_integer_worker_argument() -> None:
@@ -131,9 +137,19 @@ def test_supercomputer_script_text_preserves_db_and_secret_safety_contract() -> 
     for pattern in codex_invocation_patterns:
         assert pattern not in content
 
+    for repo_script in (SCRIPT, SETUP_SCRIPT, RUN_SCRIPT):
+        script_text = repo_script.read_text()
+        assert ".codex/packages" not in script_text
+        assert "command -v codex" not in script_text
+
+    for repo_script in (SCRIPT, RUN_SCRIPT):
+        script_text = repo_script.read_text()
+        assert "RUN_UPSTREAM_TESTS=0" in script_text or "unset RUN_UPSTREAM_TESTS" in script_text
+        assert "ENABLE_EMAIL_DELIVERY=false" in script_text or 'ENABLE_EMAIL_DELIVERY="false"' in script_text
+
 
 def test_supercomputer_docs_describe_inside_codex_verification_workflow() -> None:
-    docs = AGENTS.read_text() + "\n" + TESTING_DOC.read_text()
+    docs = AGENTS.read_text() + "\n" + TESTING_DOC.read_text() + "\n" + HPC_DOC.read_text()
     normalized_docs = " ".join(docs.split())
 
     assert "starts Codex" in normalized_docs
@@ -166,6 +182,38 @@ def test_supercomputer_docs_describe_inside_codex_verification_workflow() -> Non
     assert "first useful bounded error excerpt from each failing shard log" in docs
 
 
+def test_hpc_skill_and_docs_cover_vega_environment_preparation() -> None:
+    assert HPC_SKILL.exists()
+    assert not (REPO_ROOT / ".codex/skills/hpc-supercomputer-verify/SKILL.md").exists()
+
+    docs = "\n".join(
+        [
+            HPC_SKILL.read_text(),
+            HPC_DOC.read_text(),
+            TESTING_DOC.read_text(),
+            AGENTS.read_text(),
+        ]
+    )
+    normalized_docs = " ".join(docs.split())
+
+    assert "user stays inside Codex" in normalized_docs
+    assert "Codex runs the shell commands" in normalized_docs
+    assert "Repo scripts never invoke `codex`" in docs or "Repository scripts must never invoke" in docs
+    assert "Redis" in docs
+    assert "redis-server" in docs
+    assert "Redis-backed integration tests do not skip" in docs or "Redis-dependent pytest tests skip" in docs
+    assert "Docker Compose" in docs
+    assert "standalone Docker Compose" in docs
+    assert "thin `docker compose" in docs or "thin `docker` wrapper" in docs
+    assert "Docker daemon" in docs
+    assert "Do not install or require a Docker daemon" in docs or "does not need a Docker daemon" in docs
+    assert ".env.example" in docs
+    assert "ignored local `.env`" in docs
+    assert "Validation phases" in docs
+    assert "Test suites" in docs
+    assert "Validation phases are not pytest tests" in docs or "non-pytest checks" in docs
+
+
 def test_supercomputer_summary_includes_bounded_failure_diagnostics() -> None:
     content = SCRIPT.read_text()
 
@@ -184,14 +232,84 @@ def test_supercomputer_summary_includes_bounded_failure_diagnostics() -> None:
     assert "E2E_MODE=\"default serial (max concurrency 1)\"" in content
     assert "BROWSER_STATUS=\"not run\"" in content
     assert "Browser tests were serial or skipped" in content
+    assert "Validation phases" in content
+    assert "Test suites" in content
+    assert "| phase | status | duration_s | log | note |" in content
+    assert "| suite | status | duration_s | tests | passed | failed | skipped | log / log_dir | note |" in content
+    assert "total skipped" in content
+    assert "RESULT=OK_FULL" in content
+    assert "RESULT=FAIL_REAL_TEST" in content
+    assert "RESULT=ENVIRONMENT_BLOCKED" in content
+    assert "RESULT=HARNESS_BUG" in content
+    assert "parse_pytest_logs" in content
 
 
 def test_supercomputer_db_suite_status_counting_tolerates_zero_matches() -> None:
     content = SCRIPT.read_text()
 
     assert "count_shard_status_matches()" in content
-    assert 'passed="$(count_shard_status_matches "$suite" "PASS")"' in content
+    assert 'passed_files="$(count_shard_status_matches "$suite" "PASS")"' in content
     assert 'failed_files="$(count_shard_status_matches "$suite" "FAIL")"' in content
     assert "grep -q \"$status_marker\"" in content
     assert "grep -l $'\\tPASS\\t'" not in content
     assert "grep -l $'\\tFAIL\\t'" not in content
+
+
+def test_hpc_setup_provisions_redis_and_compose_without_daemon() -> None:
+    setup = SETUP_SCRIPT.read_text()
+    runner = RUN_SCRIPT.read_text()
+
+    assert "SLAIF_HPC_REDIS_PREFIX" in setup
+    assert "SLAIF_HPC_REDIS_VERSION" in setup
+    assert "redis-server --version" in setup
+    assert "redis-cli --version" in setup
+    assert "https://download.redis.io/releases/redis-${REDIS_VERSION}.tar.gz" in setup
+    assert "env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CPATH -u PKG_CONFIG_PATH -u PYTHONPATH" in setup
+    assert "make MALLOC=libc" in setup
+    assert "CC=/usr/bin/gcc" in setup
+    assert "SLAIF_HPC_DOCKER_COMPOSE_PREFIX" in setup
+    assert "SLAIF_HPC_DOCKER_COMPOSE_VERSION" in setup
+    assert "docker compose version" in setup
+    assert "docker compose config" in setup
+    assert "This user-local wrapper only supports: docker compose ..." in setup
+    assert ".env.example" in setup
+    assert "git -C \"$REPO_ROOT\" check-ignore -q .env" in setup
+    assert "docker daemon" not in setup.lower()
+
+    assert "SLAIF_HPC_REDIS_PREFIX" in runner
+    assert "SLAIF_HPC_DOCKER_COMPOSE_PREFIX" in runner
+    assert "Redis prefix" in runner
+    assert "Docker Compose wrapper prefix" in runner
+    assert "Compose .env status" in runner
+    assert "unset DATABASE_URL" in runner
+    assert "unset RUN_UPSTREAM_TESTS" in runner
+    assert "unset OPENAI_API_KEY" in runner
+    assert "ENABLE_EMAIL_DELIVERY=\"false\"" in runner
+    assert "SLAIF_HPC_REDIS_PREFIX}/bin" in runner
+    assert "SLAIF_HPC_DOCKER_COMPOSE_PREFIX}/bin" in runner
+
+
+def test_hpc_reporting_keeps_validation_counts_out_of_validation_table() -> None:
+    content = SCRIPT.read_text()
+
+    validation_header = "| phase | status | duration_s | log | note |"
+    suite_header = "| suite | status | duration_s | tests | passed | failed | skipped | log / log_dir | note |"
+    assert validation_header in content
+    assert suite_header in content
+    assert "| phase | status | duration_s | tests" not in content
+    assert "record_validation_result" in content
+    assert "record_suite_result" in content
+    assert "pytest_skipped_tests: $total_skipped" in content
+    assert "total_skipped" in content
+
+
+def test_no_committed_local_env_or_codex_state() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    assert ".env" not in tracked
+    assert not any(path.startswith(".codex/") or "/.codex/" in path for path in tracked)

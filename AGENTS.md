@@ -266,10 +266,10 @@ of re-deriving the shell sequence manually:
 - `agents/skills/hpc-supercomputer-verify/SKILL.md`
 
 The recommended HPC flow uses a user-local PostgreSQL toolchain, a temporary
-localhost TCP PostgreSQL cluster, user-local Playwright Chromium assets, and
-user-local browser runtime libraries when needed. Use a cleaned environment for
-`git` commands if shared-library/module pollution breaks `git fetch` or
-`git pull`.
+localhost TCP PostgreSQL cluster, user-local Redis tooling, user-local Docker
+Compose config tooling, user-local Playwright Chromium assets, and user-local
+browser runtime libraries when needed. Use a cleaned environment for `git`
+commands if shared-library/module pollution breaks `git fetch` or `git pull`.
 
 Example:
 
@@ -293,6 +293,18 @@ Rules:
   proves safe per-worker browser isolation.
 - The harness may use a ramdisk/work directory for logs, JUnit files, temp
   dirs, and summaries. It prints a final `SUMMARY.md` path.
+- Redis-backed integration tests must execute in a full HPC verification. If
+  Redis-dependent pytest tests skip because `TEST_REDIS_URL` is unset and
+  `redis-server` is unavailable, treat that as an environment gap, not a full
+  pass.
+- Docker Compose config validation should pass through an existing
+  `docker compose`, a module-provided Compose tool, or user-local standalone
+  Compose plus the thin `docker compose ...` wrapper prepared by
+  `scripts/setup-hpc-test-env.sh`. Do not install or require a Docker daemon
+  for this validation.
+- `SUMMARY.md` must report two separate tables: `Validation phases` for
+  non-pytest checks and `Test suites` for pytest counts. Validation phases must
+  not show misleading `tests=0` columns.
 - Optional environment variables include:
   `SLAIF_SUPERCOMPUTER_RAMDISK`, `SLAIF_SUPERCOMPUTER_KEEP_DBS`,
   `SLAIF_SUPERCOMPUTER_KEEP_WORKDIR`, `SLAIF_SUPERCOMPUTER_SKIP_BROWSER`,
@@ -305,7 +317,8 @@ Rules:
 - It must refuse `APP_ENV=production` and `RUN_UPSTREAM_TESTS=1`.
 - It must not require real OpenAI/OpenRouter keys or send real email.
 - Codex final reports using this script must include worker count, command,
-  timings, failures, skipped phases, and DB isolation confirmation.
+  timings, failures, skipped phases, pytest totals, Redis/Docker environment
+  status, and DB isolation confirmation.
 
 Supercomputer Codex runner prompt:
 
@@ -372,7 +385,7 @@ Final report requirements:
 - exact command used
 - worker count
 - summary path
-- phase table from SUMMARY.md
+- `Validation phases` and `Test suites` tables from SUMMARY.md
 - skipped phases and exact reasons
 - failing phases and failing shard log paths
 - first useful bounded error excerpt from each failing shard log

@@ -11,6 +11,7 @@ Optional environment variables:
   SLAIF_HPC_GIT_PULL=1        Run cleaned git fetch/switch/pull before tests
   SLAIF_HPC_PGPORT=55432      TCP port for the temporary PostgreSQL cluster
   SLAIF_HPC_RUN_LOG=...       Harness tee log path
+  SLAIF_HPC_SETUP_ENV_FILE=... Reusable setup export file path
 EOF
 }
 
@@ -37,7 +38,11 @@ WORKERS="${1:-128}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETUP_SCRIPT="${REPO_ROOT}/scripts/setup-hpc-test-env.sh"
-ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/slaif-hpc-env.XXXXXX")"
+ENV_FILE="${SLAIF_HPC_SETUP_ENV_FILE:-$(mktemp "${TMPDIR:-/tmp}/slaif-hpc-env.XXXXXX")}"
+REMOVE_ENV_FILE=1
+if [[ -n "${SLAIF_HPC_SETUP_ENV_FILE:-}" ]]; then
+  REMOVE_ENV_FILE=0
+fi
 RUN_LOG="${SLAIF_HPC_RUN_LOG:-/tmp/slaif-supercomputer-run.log}"
 RUNROOT_BASE="${SLAIF_HPC_RUNROOT_BASE:-/dev/shm/${USER:-user}/slaif-hpc-pg}"
 PGROOT="${RUNROOT_BASE}/cluster"
@@ -52,7 +57,9 @@ cleanup() {
   if [[ -x "${WRAPBIN}/pg_ctl" && -s "${PGDATA}/PG_VERSION" ]]; then
     "${WRAPBIN}/pg_ctl" -D "${PGDATA}" -m fast stop > "${RUNROOT_BASE}/pg_stop.log" 2>&1 || true
   fi
-  rm -f "$ENV_FILE"
+  if [[ "$REMOVE_ENV_FILE" -eq 1 ]]; then
+    rm -f "$ENV_FILE"
+  fi
   exit "$rc"
 }
 trap cleanup EXIT INT TERM
@@ -64,6 +71,13 @@ clean_git() {
 "$SETUP_SCRIPT" --write-env-file "$ENV_FILE"
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+
+log "Tool prefixes after setup:"
+log "  PostgreSQL: ${SLAIF_HPC_POSTGRES_PREFIX:-unknown}"
+log "  Redis: ${SLAIF_HPC_REDIS_PREFIX:-unknown}"
+log "  Docker Compose wrapper: ${SLAIF_HPC_DOCKER_COMPOSE_PREFIX:-unknown}"
+log "  Playwright browsers: ${PLAYWRIGHT_BROWSERS_PATH:-unknown}"
+log "  Compose .env status: ${SLAIF_HPC_DOCKER_ENV_STATUS:-unknown}"
 
 if [[ "${SLAIF_HPC_GIT_PULL:-0}" == "1" ]]; then
   log "Running cleaned git fetch/switch/pull"
@@ -105,6 +119,12 @@ export SLAIF_SUPERCOMPUTER_PGUSER="${USER:-user}"
 export ENABLE_EMAIL_DELIVERY="false"
 export PYTHON="${REPO_ROOT}/.venv/bin/python"
 export PATH="${WRAPBIN}:${REPO_ROOT}/.venv/bin:${PATH}"
+if [[ -n "${SLAIF_HPC_REDIS_PREFIX:-}" ]]; then
+  export PATH="${SLAIF_HPC_REDIS_PREFIX}/bin:${PATH}"
+fi
+if [[ -n "${SLAIF_HPC_DOCKER_COMPOSE_PREFIX:-}" ]]; then
+  export PATH="${SLAIF_HPC_DOCKER_COMPOSE_PREFIX}/bin:${PATH}"
+fi
 
 unset DATABASE_URL || true
 unset TEST_DATABASE_URL || true
@@ -123,6 +143,12 @@ dropdb --if-exists "$probe_db"
   cd "$REPO_ROOT"
   log "Current HEAD: $(clean_git rev-parse HEAD)"
   clean_git status --short || true
+  echo "HPC tool paths:"
+  echo "  PostgreSQL prefix: ${SLAIF_HPC_POSTGRES_PREFIX:-unknown}"
+  echo "  Redis prefix: ${SLAIF_HPC_REDIS_PREFIX:-unknown}"
+  echo "  Docker Compose wrapper prefix: ${SLAIF_HPC_DOCKER_COMPOSE_PREFIX:-unknown}"
+  echo "  Playwright browsers path: ${PLAYWRIGHT_BROWSERS_PATH:-unknown}"
+  echo "  Compose .env status: ${SLAIF_HPC_DOCKER_ENV_STATUS:-unknown}"
   scripts/test-supercomputer-sharded.sh "$WORKERS" 2>&1 | tee "$RUN_LOG"
   harness_rc="${PIPESTATUS[0]}"
   summary_path="$(grep -E '^Summary path: ' "$RUN_LOG" | tail -1 | sed 's/^Summary path: //')"
@@ -134,4 +160,3 @@ dropdb --if-exists "$probe_db"
   fi
   exit "$harness_rc"
 )
-
