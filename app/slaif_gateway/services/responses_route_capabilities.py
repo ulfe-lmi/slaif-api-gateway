@@ -15,6 +15,8 @@ RESPONSES_CAPABILITY_TOOLS = "tools"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
+RESPONSES_CAPABILITY_JSON_MODE = "json_mode"
+RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS = "structured_outputs"
 
 KNOWN_RESPONSES_CAPABILITIES = frozenset(
     {
@@ -25,6 +27,8 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
+        RESPONSES_CAPABILITY_JSON_MODE,
+        RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
     }
 )
 
@@ -40,6 +44,8 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
+        RESPONSES_CAPABILITY_JSON_MODE: False,
+        RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS: False,
     }
 
 
@@ -77,6 +83,8 @@ def enforce_responses_route_capabilities(
     route_capabilities: Mapping[str, object] | None,
     streaming_requested: bool = False,
     route_supports_streaming: bool = False,
+    json_mode_requested: bool = False,
+    structured_output_requested: bool = False,
 ) -> None:
     """Require explicit text+stateless Responses metadata and fail closed."""
 
@@ -118,6 +126,27 @@ def enforce_responses_route_capabilities(
                     safe_message="This provider route does not support streaming Responses.",
                 )
             )
+    if json_mode_requested and capabilities.get(RESPONSES_CAPABILITY_JSON_MODE) is not True:
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_JSON_MODE,
+                field="text.format",
+                error_code="responses_json_mode_not_supported",
+                safe_message="This model route does not support Responses JSON mode.",
+            )
+        )
+    if (
+        structured_output_requested
+        and capabilities.get(RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
+                field="text.format",
+                error_code="responses_structured_output_not_supported",
+                safe_message="This model route does not support Responses structured output.",
+            )
+        )
 
 
 def _parse_route_capabilities(route_capabilities: Mapping[str, object] | None) -> dict[str, bool]:

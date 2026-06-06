@@ -6,7 +6,8 @@ This document defines the RC2-beta support boundary for Responses API work.
 Current support is deliberately narrow: stateless, text-only
 `POST /v1/responses` with non-streaming JSON and typed SSE streaming, no tools,
 no provider-side storage, no background mode, no previous response or
-conversation state, and no multimodal input or output.
+conversation state, and no multimodal input or output. Non-streaming Responses
+also supports bounded structured text output through `text.format`.
 
 ## Supported Endpoint
 
@@ -29,7 +30,8 @@ Implemented request fields for the first slice:
 - `stream` omitted, `false`, or `true` when the resolved route explicitly
   advertises Responses streaming support
 - `store` omitted or `false`
-- `text.format` only as plain text
+- `text.format` as plain text, JSON object mode, or bounded JSON schema
+  structured output
 - `service_tier` omitted or `auto`
 
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
@@ -39,6 +41,18 @@ output cap. Streaming uses typed Responses SSE events such as
 `response.created`, `response.output_text.delta`, `response.completed`, and
 `error`; SLAIF does not translate Responses streams into Chat Completions
 chunks.
+
+Structured text output is a text-output constraint, not a tool or hosted
+provider-side authority. JSON object mode uses
+`text.format={"type":"json_object"}` and requires explicit
+`capabilities.responses.json_mode=true`. JSON schema structured output uses
+`text.format={"type":"json_schema","name":...,"schema":...}` with optional
+`description` and `strict`, and requires explicit
+`capabilities.responses.structured_outputs=true`. JSON schemas are forwarded
+only inside this explicit `text.format` container, are capped, counted in the
+admission-time input estimate, and are not stored or logged. Structured
+`stream=true` requests are intentionally rejected in this slice; plain text
+Responses streaming remains supported when the route advertises streaming.
 
 The first slice supports OpenAI Responses forwarding to `/v1/responses` when
 the selected route explicitly advertises Responses text/stateless capability

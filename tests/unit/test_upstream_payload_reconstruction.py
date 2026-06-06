@@ -505,6 +505,67 @@ def test_responses_streaming_text_request_reconstructs_exact_upstream_body() -> 
     }
 
 
+def test_responses_json_object_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "return JSON",
+        "text": {"format": {"type": "json_object"}},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "return JSON",
+        "max_output_tokens": 12,
+        "store": False,
+        "text": {"format": {"type": "json_object"}},
+    }
+
+
+def test_responses_json_schema_request_reconstructs_exact_upstream_body() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    inbound = {
+        "model": "classroom-responses",
+        "input": "answer",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "description": "Answer object.",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "answer",
+        "max_output_tokens": 12,
+        "store": False,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "description": "Answer object.",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+    }
+    assert outbound["text"]["format"]["schema"] is not schema
+
+
 def test_responses_normalized_contract_deep_copies_opaque_containers() -> None:
     inbound = {
         "model": "classroom-responses",
@@ -525,6 +586,33 @@ def test_responses_normalized_contract_deep_copies_opaque_containers() -> None:
     outbound["metadata"]["safe"]["nested"] = "outbound"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["metadata"]["safe"]["nested"] == "original"
+
+
+def test_responses_json_schema_container_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            }
+        },
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["text"]["format"]["schema"]["properties"]["answer"]["type"] = "integer"
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
+
+    outbound["text"]["format"]["schema"]["properties"]["answer"]["type"] = "boolean"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
 
 
 @pytest.mark.parametrize(

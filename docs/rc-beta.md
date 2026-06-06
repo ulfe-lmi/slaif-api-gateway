@@ -119,7 +119,8 @@ migrations automatically.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
 - Responses API support is limited to stateless, text-only
-  `POST /v1/responses` with non-streaming JSON and typed SSE streaming,
+  `POST /v1/responses` with non-streaming JSON, typed SSE streaming, and
+  non-streaming structured `text.format` JSON object/schema output,
   explicit key endpoint permission, route capability, provider route, and
   pricing metadata. Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,

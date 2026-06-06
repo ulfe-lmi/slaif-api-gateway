@@ -154,6 +154,10 @@ Responses-specific rules for the current foundation:
 - only stateless text input/text output is supported;
 - non-streaming JSON and typed SSE streaming are supported when route/model
   metadata explicitly enables Responses streaming;
+- non-streaming `text.format` JSON object mode and JSON schema structured
+  output are forwarded only when route/model metadata explicitly enables
+  `capabilities.responses.json_mode=true` or
+  `capabilities.responses.structured_outputs=true`;
 - `store=false` is injected when omitted;
 - `max_output_tokens` is defaulted or capped before forwarding;
 - streaming preserves Responses event types such as `response.created`,
@@ -163,6 +167,9 @@ Responses-specific rules for the current foundation:
   holds `response.completed` until finalization succeeds, and does not forward
   any upstream `data: [DONE]` marker as success before that finalization;
   missing final usage is not finalized as zero cost;
+- structured `stream=true` requests are rejected in this slice; JSON schemas are
+  accepted only as bounded opaque payloads inside `text.format`, counted for
+  input estimation, and not stored or logged;
 - tool fields are rejected and are not blind passthrough;
 - future supported tool types must be explicitly allowlisted by key or key
   template;

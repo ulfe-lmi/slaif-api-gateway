@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -26,7 +27,18 @@ _SUPPORTED_FIELDS = frozenset(
         "service_tier",
     }
 )
-_TEXT_FORMAT_TYPES = frozenset({"text"})
+TEXT_FORMAT_TEXT = "text"
+TEXT_FORMAT_JSON_OBJECT = "json_object"
+TEXT_FORMAT_JSON_SCHEMA = "json_schema"
+STRUCTURED_TEXT_FORMAT_TYPES = frozenset({TEXT_FORMAT_JSON_OBJECT, TEXT_FORMAT_JSON_SCHEMA})
+_TEXT_FORMAT_TYPES = frozenset(
+    {
+        TEXT_FORMAT_TEXT,
+        TEXT_FORMAT_JSON_OBJECT,
+        TEXT_FORMAT_JSON_SCHEMA,
+    }
+)
+_TEXT_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -64,7 +76,7 @@ class ResponsesRequestPolicy:
         self._validate_stateless_fields(effective_body)
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
-        self._validate_text_config(effective_body.get("text"))
+        self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
         estimated_input_tokens = self._estimate_input_tokens(
@@ -215,7 +227,7 @@ class ResponsesRequestPolicy:
                 "The 'metadata' field exceeds the gateway size limit.",
             )
 
-    def _validate_text_config(self, value: Any) -> None:
+    def _validate_text_config(self, value: Any, *, stream: Any) -> None:
         if value is None:
             return
         if not isinstance(value, Mapping):
@@ -244,15 +256,145 @@ class ResponsesRequestPolicy:
         if format_type not in _TEXT_FORMAT_TYPES:
             _raise(
                 "text.format",
-                "responses_field_not_supported",
-                "Structured Responses output is not enabled by this gateway.",
+                "responses_text_format_not_supported",
+                "This Responses text format type is not enabled by this gateway.",
             )
+        if format_type in STRUCTURED_TEXT_FORMAT_TYPES and stream is True:
+            _raise(
+                "text.format",
+                "responses_structured_streaming_not_supported",
+                "Structured Responses streaming is not enabled by this gateway.",
+            )
+        if format_type == TEXT_FORMAT_TEXT:
+            self._validate_text_format_text(text_format)
+            return
+        if format_type == TEXT_FORMAT_JSON_OBJECT:
+            self._validate_text_format_json_object(text_format)
+            return
+        self._validate_text_format_json_schema(text_format)
+
+    def _validate_text_format_text(self, text_format: Mapping[str, Any]) -> None:
         unknown_format = set(text_format) - {"type"}
         if unknown_format:
             _raise(
                 f"text.format.{sorted(unknown_format)[0]}",
                 "responses_field_not_supported",
                 "This Responses text format field is not enabled by this gateway.",
+            )
+        self._validate_text_format_size(text_format)
+
+    def _validate_text_format_json_object(self, text_format: Mapping[str, Any]) -> None:
+        unknown_format = set(text_format) - {"type"}
+        if unknown_format:
+            _raise(
+                f"text.format.{sorted(unknown_format)[0]}",
+                "responses_field_not_supported",
+                "This Responses JSON object format field is not enabled by this gateway.",
+            )
+        self._validate_text_format_size(text_format)
+
+    def _validate_text_format_json_schema(self, text_format: Mapping[str, Any]) -> None:
+        unknown_format = set(text_format) - {"type", "name", "schema", "description", "strict"}
+        if unknown_format:
+            _raise(
+                f"text.format.{sorted(unknown_format)[0]}",
+                "responses_field_not_supported",
+                "This Responses JSON schema format field is not enabled by this gateway.",
+            )
+
+        name = text_format.get("name")
+        if not isinstance(name, str) or not name:
+            _raise(
+                "text.format.name",
+                "responses_text_format_invalid",
+                "Responses JSON schema text format requires a non-empty name.",
+            )
+        if not _TEXT_FORMAT_NAME_PATTERN.fullmatch(name):
+            _raise(
+                "text.format.name",
+                "responses_text_format_invalid",
+                "Responses JSON schema text format name uses unsupported characters.",
+            )
+        self._validate_string_bytes(
+            name,
+            param="text.format.name",
+            max_bytes=self._settings.RESPONSES_MAX_TEXT_FORMAT_NAME_BYTES,
+            code="responses_text_format_too_large",
+        )
+
+        schema = text_format.get("schema")
+        if not isinstance(schema, Mapping):
+            _raise(
+                "text.format.schema",
+                "responses_json_schema_invalid",
+                "Responses JSON schema text format requires a schema object.",
+            )
+        self._validate_json_bytes(
+            schema,
+            param="text.format.schema",
+            max_bytes=self._settings.RESPONSES_MAX_JSON_SCHEMA_BYTES,
+            too_large_code="responses_json_schema_too_large",
+            invalid_code="responses_json_schema_invalid",
+            field_label="Responses JSON schema",
+        )
+
+        description = text_format.get("description")
+        if description is not None:
+            if not isinstance(description, str):
+                _raise(
+                    "text.format.description",
+                    "responses_field_invalid_type",
+                    "Responses JSON schema text format description must be a string.",
+                )
+            self._validate_string_bytes(
+                description,
+                param="text.format.description",
+                max_bytes=self._settings.RESPONSES_MAX_TEXT_FORMAT_DESCRIPTION_BYTES,
+                code="responses_text_format_too_large",
+            )
+
+        strict = text_format.get("strict")
+        if strict is not None and not isinstance(strict, bool):
+            _raise(
+                "text.format.strict",
+                "responses_field_invalid_type",
+                "Responses JSON schema text format strict flag must be a boolean.",
+            )
+        self._validate_text_format_size(text_format)
+
+    def _validate_text_format_size(self, text_format: Mapping[str, Any]) -> None:
+        self._validate_json_bytes(
+            text_format,
+            param="text.format",
+            max_bytes=self._settings.RESPONSES_MAX_TEXT_FORMAT_BYTES,
+            too_large_code="responses_text_format_too_large",
+            invalid_code="responses_text_format_invalid",
+            field_label="Responses text format",
+        )
+
+    def _validate_json_bytes(
+        self,
+        value: Any,
+        *,
+        param: str,
+        max_bytes: int,
+        too_large_code: str,
+        invalid_code: str,
+        field_label: str,
+    ) -> None:
+        try:
+            field_bytes = canonical_json_bytes(value)
+        except ValueError:
+            _raise(
+                param,
+                invalid_code,
+                f"{field_label} must be JSON-compatible.",
+            )
+        if len(field_bytes) > max_bytes:
+            _raise(
+                param,
+                too_large_code,
+                f"{field_label} exceeds the gateway size limit.",
             )
 
     def _resolve_output_token_limit(self, body: dict[str, Any]) -> tuple[int, bool]:
@@ -295,13 +437,31 @@ class ResponsesRequestPolicy:
                 total_bytes += len(canonical_json_bytes({field: body[field]}))
         return max(1, (total_bytes + 2) // 3)
 
-    def _validate_string_bytes(self, value: str, *, param: str, max_bytes: int) -> None:
+    def _validate_string_bytes(
+        self,
+        value: str,
+        *,
+        param: str,
+        max_bytes: int,
+        code: str = "responses_field_too_large",
+    ) -> None:
         if len(value.encode("utf-8")) > max_bytes:
             _raise(
                 param,
-                "responses_field_too_large",
+                code,
                 f"The '{param}' field exceeds the gateway size limit.",
             )
+
+
+def responses_text_format_type(body: Mapping[str, Any]) -> str | None:
+    text = body.get("text")
+    if not isinstance(text, Mapping):
+        return None
+    text_format = text.get("format")
+    if not isinstance(text_format, Mapping):
+        return None
+    format_type = text_format.get("type")
+    return format_type if isinstance(format_type, str) else None
 
 
 def _unsupported_code_for_field(field_name: str) -> str:

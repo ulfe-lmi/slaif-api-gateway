@@ -54,9 +54,13 @@ def _route_result(
     *,
     responses_streaming: bool = False,
     route_supports_streaming: bool = False,
+    responses_json_mode: bool = False,
+    responses_structured_outputs: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
+    capabilities["json_mode"] = responses_json_mode
+    capabilities["structured_outputs"] = responses_structured_outputs
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -1000,6 +1004,188 @@ def test_route_capability_error_happens_before_pricing_quota_provider(monkeypatc
     assert pricing_calls == []
     assert quota_calls == []
     assert provider_calls == []
+
+
+def test_structured_output_capability_error_happens_before_rate_pricing_quota_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={
+            **_responses_request(),
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "schema": {"type": "object"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_structured_output_not_supported"
+    assert rate_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert provider_calls == []
+
+
+def test_json_mode_capability_error_happens_before_rate_pricing_quota_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "text": {"format": {"type": "json_object"}}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_json_mode_not_supported"
+    assert rate_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert provider_calls == []
+
+
+def test_structured_output_request_forwards_with_explicit_capability(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, _release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls = _wire_successful_forwarding(monkeypatch)
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model, responses_structured_outputs=True)
+
+    forwarded_bodies: list[dict[str, object]] = []
+
+    class _FakeAdapter:
+        async def forward_response(self, request):
+            assert request.endpoint == "responses"
+            forwarded_bodies.append(dict(request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "resp_test", "object": "response"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={
+            **_responses_request(),
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "schema": {"type": "object"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert forwarded_bodies == [
+        {
+            "model": "gpt-5.2",
+            "input": "hello",
+            "max_output_tokens": 20,
+            "store": False,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "schema": {"type": "object"},
+                }
+            },
+        }
+    ]
+    assert reserve_calls == ["classroom-responses"]
+    assert finalize_calls == ["classroom-responses"]
 
 
 def test_pricing_failure_happens_before_quota_reservation(monkeypatch) -> None:
