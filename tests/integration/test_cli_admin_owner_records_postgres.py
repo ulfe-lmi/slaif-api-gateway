@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli.main import app
 from slaif_gateway.db.models import AdminUser, AuditLog, Cohort, GatewayKey, Institution, OneTimeSecret, Owner
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.utils.passwords import verify_admin_password
 from slaif_gateway.utils.secrets import generate_secret_key
 from tests.integration.db_test_utils import run_alembic_upgrade_head
@@ -170,6 +171,23 @@ async def _audit_count(
             if action is not None:
                 statement = statement.where(AuditLog.action == action)
             return int((await session.execute(statement)).scalar_one())
+    finally:
+        await engine.dispose()
+
+
+async def _create_test_chat_route(database_url: str, *, requested_model: str) -> None:
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            await ModelRoutesRepository(session).create_model_route(
+                requested_model=requested_model,
+                provider="openai",
+                upstream_model=requested_model,
+                endpoint="/v1/chat/completions",
+                enabled=True,
+            )
+            await session.commit()
     finally:
         await engine.dispose()
 
@@ -563,6 +581,7 @@ def test_bootstrap_cli_records_can_issue_gateway_key(
     cli_env: str,
 ) -> None:
     records = _create_bootstrap_records(runner)
+    _run(_create_test_chat_route(cli_env, requested_model="gpt-test-mini"))
 
     key_result = runner.invoke(
         app,
