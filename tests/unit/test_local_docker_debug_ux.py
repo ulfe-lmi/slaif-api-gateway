@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -62,7 +63,7 @@ def test_parallel_test_scripts_are_explicit_and_syntax_valid() -> None:
         subprocess.run(["bash", "-n", str(script)], cwd=REPO_ROOT, check=True)
 
     unit_content = unit_script.read_text()
-    assert "(cores * 3) // 4" in unit_content
+    assert "min(20, cores)" in unit_content
     assert '--dist loadscope' in unit_content
     assert 'pytest tests/unit -n "$WORKERS"' in unit_content
 
@@ -76,7 +77,7 @@ def test_openai_gateway_smoke_example_compiles_and_uses_openai_env_convention() 
     example = REPO_ROOT / "examples/openai_gateway_smoke.py"
     content = example.read_text()
 
-    subprocess.run(["python", "-m", "py_compile", str(example)], cwd=REPO_ROOT, check=True)
+    subprocess.run([sys.executable, "-m", "py_compile", str(example)], cwd=REPO_ROOT, check=True)
     forbidden = [
         "SLAIF" + "_API_KEY",
         "SLAIF" + "_BASE_URL",
