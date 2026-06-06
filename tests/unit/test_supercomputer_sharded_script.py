@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -274,7 +275,7 @@ def test_pytest_count_reader_handles_expected_summary_shapes_under_set_u(tmp_pat
             f"""\
             #!/usr/bin/env bash
             set -Eeuo pipefail
-            PY="{os.environ.get("PYTHON", ".venv/bin/python")}"
+            PY="{sys.executable}"
             {function_block}
             for log_path in "$@"; do
               IFS=$'\\t' read -r tests passed failed skipped note < <(read_pytest_counts "$log_path")
