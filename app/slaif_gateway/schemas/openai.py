@@ -27,3 +27,13 @@ class ChatCompletionRequest(BaseModel):
     stream: bool | None = False
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
+
+
+class ResponsesCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+    input: Any | None = None
+    stream: bool | None = False
+    store: bool | None = None
+    max_output_tokens: int | None = None

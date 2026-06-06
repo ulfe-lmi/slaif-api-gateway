@@ -334,8 +334,10 @@ Docker and Nginx troubleshooting guidance is in
 - This deployment packaging is not a formal production certification,
   compliance attestation, or penetration test.
 - No CI/CD system is required or added by this repository packaging.
-- Native Anthropic API, Responses API, embeddings, files, images, and audio
-  endpoints remain unsupported unless separately implemented and documented.
+- Native Anthropic API, Responses tools/stateful routes, embeddings, files,
+  images, and audio endpoints remain unsupported unless separately implemented
+  and documented. The only current Responses support is stateless text-only
+  `POST /v1/responses`.
 - Admin bulk/import/upload workflows are application features documented in
   README.md, `docs/security-model.md`, and `docs/compatibility-matrix.md`; the
   deployment packaging does not add separate asynchronous import/export job

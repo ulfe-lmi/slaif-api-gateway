@@ -10,6 +10,9 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.chat_completion_route_capabilities import (
     ensure_default_chat_completion_capabilities,
 )
+from slaif_gateway.services.responses_route_capabilities import (
+    ensure_default_responses_capabilities,
+)
 from slaif_gateway.services.record_errors import RecordNotFoundError
 
 
@@ -60,7 +63,7 @@ class ModelRouteService:
             enabled=enabled,
             visible_in_models=visible_in_models,
             supports_streaming=supports_streaming,
-            capabilities=ensure_default_chat_completion_capabilities(
+            capabilities=_ensure_default_capabilities(
                 capabilities,
                 supports_streaming=supports_streaming,
                 endpoint=normalize_endpoint(endpoint),
@@ -164,7 +167,7 @@ class ModelRouteService:
             enabled=enabled,
             visible_in_models=visible_in_models,
             supports_streaming=supports_streaming,
-            capabilities=ensure_default_chat_completion_capabilities(
+            capabilities=_ensure_default_capabilities(
                 capabilities,
                 supports_streaming=supports_streaming,
                 endpoint=normalize_endpoint(endpoint),
@@ -191,7 +194,23 @@ def normalize_endpoint(value: str) -> str:
     endpoint = _required_text(value, "Endpoint")
     if endpoint == "chat.completions":
         return CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "responses":
+        return "/v1/responses"
     return endpoint
+
+
+def _ensure_default_capabilities(
+    capabilities: dict[str, object] | None,
+    *,
+    supports_streaming: bool,
+    endpoint: str,
+) -> dict[str, object]:
+    normalized = ensure_default_chat_completion_capabilities(
+        capabilities,
+        supports_streaming=supports_streaming,
+        endpoint=endpoint,
+    )
+    return ensure_default_responses_capabilities(normalized, endpoint=endpoint)
 
 
 def _parse_route_id(route_id: uuid.UUID | str) -> uuid.UUID:

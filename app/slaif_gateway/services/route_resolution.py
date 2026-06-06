@@ -62,6 +62,7 @@ class RouteResolutionService:
     """Resolve client-facing model names to an enabled provider/upstream model."""
 
     CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+    RESPONSES_ENDPOINT = "/v1/responses"
 
     def __init__(
         self,
@@ -76,6 +77,8 @@ class RouteResolutionService:
         self,
         requested_model: str,
         authenticated_key: AuthenticatedGatewayKey,
+        *,
+        endpoint: str = CHAT_COMPLETIONS_ENDPOINT,
     ) -> RouteResolutionResult:
         if not requested_model:
             raise ModelNotFoundError("Model name is required")
@@ -97,7 +100,7 @@ class RouteResolutionService:
         provider_by_name = {config.provider: config for config in provider_configs}
 
         routes = await self._model_routes_repository.list_model_routes(
-            endpoint=self.CHAT_COMPLETIONS_ENDPOINT,
+            endpoint=endpoint,
             limit=1000,
         )
 

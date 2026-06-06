@@ -10,7 +10,7 @@ from slaif_gateway.db.models import GatewayKey, QuotaReservation
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -23,6 +23,7 @@ from slaif_gateway.services.quota_errors import (
 )
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+_RESPONSES_ENDPOINT = "/v1/responses"
 _DEFAULT_RESERVATION_TTL = timedelta(minutes=15)
 
 
@@ -48,9 +49,10 @@ class QuotaService:
         *,
         authenticated_key: AuthenticatedGatewayKey,
         route: RouteResolutionResult,
-        policy: ChatCompletionPolicyResult,
+        policy: ChatCompletionPolicyResult | ResponsesPolicyResult,
         cost_estimate: ChatCostEstimate,
         request_id: str,
+        endpoint: str = _CHAT_COMPLETIONS_ENDPOINT,
         now: datetime | None = None,
     ) -> QuotaReservationResult:
         check_now = _aware_now(now)
@@ -81,7 +83,7 @@ class QuotaService:
         reservation = await self._quota_reservations_repository.create_reservation(
             gateway_key_id=authenticated_key.gateway_key_id,
             request_id=request_id,
-            endpoint=_CHAT_COMPLETIONS_ENDPOINT,
+            endpoint=_normalize_endpoint(endpoint),
             requested_model=route.requested_model,
             reserved_cost_eur=reserved_cost_eur,
             reserved_tokens=reserved_tokens,
@@ -203,6 +205,15 @@ def _validate_tokens(value: int) -> int:
     if value < 0:
         raise InvalidQuotaEstimateError("Estimated tokens must be non-negative", param="estimated_tokens")
     return value
+
+
+def _normalize_endpoint(value: str) -> str:
+    endpoint = value.strip()
+    if endpoint == "chat.completions":
+        return _CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "responses":
+        return _RESPONSES_ENDPOINT
+    return endpoint
 
 
 def _reservation_result(row: QuotaReservation) -> QuotaReservationResult:

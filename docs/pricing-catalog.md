@@ -322,6 +322,20 @@ upstream call happens during finalization.
 All costs are SLAIF local accounting assumptions for quota and reporting. They
 are not provider invoice certification.
 
+## Stateless Responses Text Pricing
+
+The current `POST /v1/responses` foundation supports only stateless,
+non-streaming text input to text output. It requires an active pricing row whose
+endpoint is `/v1/responses`; Chat Completions pricing rows are not silently
+reused. Admission-time reservation uses the estimated text input plus effective
+`max_output_tokens`. Post-call finalization uses provider usage fields such as
+`input_tokens`, `output_tokens`, `total_tokens`, and cached/reasoning token
+details when exposed by the provider and supported by the existing accounting
+schema.
+
+Responses tools, streaming, provider-side storage/state, image/file/audio
+inputs, and audio output are not priced or enabled in this foundation.
+
 ## Worst-Case Single-Request Cost
 
 Before forwarding a Responses request, the gateway should compute a conservative

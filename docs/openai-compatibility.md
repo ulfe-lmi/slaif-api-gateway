@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; planned RC2 scope is limited stateless support under `docs/responses-compatibility.md` |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Not implemented | Stateless text-only, non-streaming foundation. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Tools, storage/state, background, streaming, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -27,28 +27,30 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 
 Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error handlers. The gateway does not claim 100% OpenAI platform compatibility outside the rows marked implemented.
 
-## Planned Responses API Scope
+## Responses API Scope
 
-`POST /v1/responses` is not implemented in RC1. Responses API support is the
-planned RC2 feature family and is constrained by
+`POST /v1/responses` has a narrow RC2 foundation and is constrained by
 [`responses-compatibility.md`](responses-compatibility.md).
 
-Planned RC2 support is intentionally narrow:
+Current support is intentionally narrow:
 
-- stateless `POST /v1/responses` first;
+- stateless text-only `POST /v1/responses`;
+- non-streaming only;
 - default-off per key;
-- explicit endpoint, model, provider, and tool policy;
-- bounded-overrun cost estimates before tool policies are enabled;
+- explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
 - no `store=true` or provider-side response retrieval;
 - no `previous_response_id`;
 - no `conversation`/provider-side state;
+- no tools;
 - no MCP/connectors;
+- no image/file/audio input or output;
 - no response delete/cancel/retrieve/list input items initially.
 
-Responses tools must not be blind passthrough. Function tools are the safest
-first candidate, web search requires explicit `max_tool_calls` and cost bounds,
-and file search/code interpreter require separate pricing, ownership, and audit
+Responses tools are not supported in the foundation and must not be blind
+passthrough. Function tools are the safest first candidate for a later slice,
+web search requires explicit `max_tool_calls` and cost bounds, and file
+search/code interpreter require separate pricing, ownership, and audit
 treatment before support is claimed.
 
 Endpoint and model permission are separate from capability permission. A key
@@ -410,9 +412,11 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 
 ## What Is Not Implemented
 
-- Responses API in RC1. It is planned for RC2 under
-  `docs/responses-compatibility.md`, with stateful/background/provider-side
-  storage features and MCP excluded from the initial scope.
+- Responses retrieval/delete/cancel/list endpoints, streaming Responses,
+  Responses tools, Responses multimodal input/output, provider-side storage,
+  background mode, previous-response/conversation state, and MCP/connectors.
+  Only the stateless text-only `POST /v1/responses` foundation is implemented;
+  see `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration
   keys can use broad discovery policy only for routed Chat Completions requests.

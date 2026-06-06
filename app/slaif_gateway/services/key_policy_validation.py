@@ -11,7 +11,10 @@ from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT
 from slaif_gateway.services.route_resolution import matches_model_route
 
 MODELS_ENDPOINT = "/v1/models"
-IMPLEMENTED_CLIENT_ENDPOINTS = frozenset({MODELS_ENDPOINT, CHAT_COMPLETIONS_ENDPOINT})
+RESPONSES_ENDPOINT = "/v1/responses"
+IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
+    {MODELS_ENDPOINT, CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT}
+)
 
 
 class _ModelRoutesRepository(Protocol):
@@ -49,10 +52,11 @@ async def validate_gateway_key_policy(
         if normalized.allow_all_endpoints
         else set(normalized.allowed_endpoints)
     )
-    if not normalized.allow_all_models and CHAT_COMPLETIONS_ENDPOINT in effective_endpoints:
+    model_backed_endpoints = effective_endpoints & {CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT}
+    if not normalized.allow_all_models and model_backed_endpoints:
         if not normalized.allowed_models:
             raise InvalidGatewayKeyPolicyError(
-                "Select at least one allowed model or allow all models for /v1/chat/completions.",
+                "Select at least one allowed model or allow all models for model-backed endpoints.",
                 param="allowed_models",
             )
 
@@ -113,13 +117,16 @@ async def _validate_models_have_routes(
     endpoints: set[str],
     model_routes_repository: _ModelRoutesRepository,
 ) -> None:
-    chat_routes = await model_routes_repository.list_enabled_model_routes(
-        endpoint=CHAT_COMPLETIONS_ENDPOINT
-    )
     require_visible = endpoints == {MODELS_ENDPOINT}
+    endpoints_to_check = (CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT)
+    if endpoints and not require_visible:
+        endpoints_to_check = tuple(endpoint for endpoint in endpoints_to_check if endpoint in endpoints)
 
     for model in allowed_models:
-        candidates = [route for route in chat_routes if matches_model_route(model, route)]
+        candidates = []
+        for endpoint in endpoints_to_check:
+            routes = await model_routes_repository.list_enabled_model_routes(endpoint=endpoint)
+            candidates.extend(route for route in routes if matches_model_route(model, route))
         if require_visible:
             candidates = [route for route in candidates if route.visible_in_models]
         if candidates:

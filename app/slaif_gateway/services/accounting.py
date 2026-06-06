@@ -21,7 +21,7 @@ from slaif_gateway.schemas.accounting import (
     ProviderFailureAccountingResult,
 )
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderResponse
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -41,12 +41,14 @@ from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+_RESPONSES_ENDPOINT = "/v1/responses"
 _EUR = "EUR"
 _ONE_MILLION = Decimal("1000000")
 _PROVIDER_COMPLETED_PENDING = "provider_completed_finalization_pending"
 _PROVIDER_COMPLETED_FAILED = "provider_completed_finalization_failed"
 _ACCOUNTING_FINALIZATION_FAILED = "accounting_finalization_failed"
-_OVERRUN_POLICY = "chat_completions_admit_then_finalize_v1"
+_OVERRUN_POLICY_CHAT = "chat_completions_admit_then_finalize_v1"
+_OVERRUN_POLICY_RESPONSES = "responses_admit_then_finalize_v1"
 _COST_SOURCE_SLAIF = "slaif_calculated"
 _COST_SOURCE_PROVIDER = "provider_reported"
 
@@ -214,7 +216,7 @@ class AccountingService:
         reservation_id: uuid.UUID,
         authenticated_key: AuthenticatedGatewayKey,
         route: RouteResolutionResult,
-        policy: ChatCompletionPolicyResult,
+        policy: ChatCompletionPolicyResult | ResponsesPolicyResult,
         pricing_estimate: ChatCostEstimate,
         provider_response: ProviderResponse,
         request_id: str,
@@ -249,6 +251,7 @@ class AccountingService:
             actual_tokens=usage.total_tokens,
             reserved_cost_eur=reservation.reserved_cost_eur,
             reserved_tokens=reservation.reserved_tokens,
+            endpoint=_normalize_endpoint(endpoint),
         )
 
         await self._gateway_keys_repository.finalize_reserved_counters(
@@ -350,6 +353,7 @@ class AccountingService:
             actual_tokens=usage.total_tokens,
             reserved_cost_eur=reservation.reserved_cost_eur,
             reserved_tokens=reservation.reserved_tokens,
+            endpoint=_normalize_endpoint(endpoint),
         )
 
         existing = await self._usage_ledger_repository.get_usage_record_by_request_id(request_id)
@@ -493,10 +497,11 @@ class AccountingService:
         reservation_id: uuid.UUID,
         authenticated_key: AuthenticatedGatewayKey,
         route: RouteResolutionResult,
-        policy: ChatCompletionPolicyResult,
+        policy: ChatCompletionPolicyResult | ResponsesPolicyResult,
         pricing_estimate: ChatCostEstimate,
         request_id: str,
         error_type: str,
+        endpoint: str = "chat.completions",
         error_code: str | None = None,
         status_code: int | None = None,
         provider_diagnostic: Mapping[str, object] | None = None,
@@ -540,7 +545,7 @@ class AccountingService:
             reservation_id=reservation.id,
             authenticated_key=authenticated_key,
             route=route,
-            endpoint=_normalize_endpoint("chat.completions"),
+            endpoint=_normalize_endpoint(endpoint),
             pricing_estimate=pricing_estimate,
             error_type=error_type,
             error_code=error_code,
@@ -949,6 +954,7 @@ def _reservation_overrun_metadata(
     actual_tokens: int,
     reserved_cost_eur: Decimal,
     reserved_tokens: int,
+    endpoint: str = _CHAT_COMPLETIONS_ENDPOINT,
 ) -> dict[str, object]:
     token_overrun = actual_tokens > reserved_tokens
     cost_overrun = actual_cost_eur > reserved_cost_eur
@@ -960,7 +966,7 @@ def _reservation_overrun_metadata(
         "token_reservation_overrun": token_overrun,
         "cost_reservation_overrun": cost_overrun,
         "reservation_overrun": token_overrun or cost_overrun,
-        "overrun_policy": _OVERRUN_POLICY,
+        "overrun_policy": _overrun_policy(endpoint),
     }
 
 
@@ -975,7 +981,15 @@ def _normalize_endpoint(value: str) -> str:
     endpoint = value.strip()
     if endpoint == "chat.completions":
         return _CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "responses":
+        return _RESPONSES_ENDPOINT
     return endpoint
+
+
+def _overrun_policy(endpoint: str) -> str:
+    if endpoint == _RESPONSES_ENDPOINT:
+        return _OVERRUN_POLICY_RESPONSES
+    return _OVERRUN_POLICY_CHAT
 
 
 def _aware_now(value: datetime | None = None) -> datetime:

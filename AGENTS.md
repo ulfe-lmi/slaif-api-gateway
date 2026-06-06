@@ -320,13 +320,14 @@ Current implemented `/v1` endpoints:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/responses` for stateless, non-streaming, text-only input/output
 
 Future endpoints:
 
 - `POST /v1/embeddings` only if a later implementation adds endpoint
   forwarding, pricing/accounting, and tests
-- `POST /v1/responses` is the planned RC2-beta feature family, not current RC1
-  behavior unless a later implementation PR adds and tests it
+- Responses retrieval/delete/cancel/list/input-item endpoints only if a later
+  implementation adds ownership, forwarding, pricing/accounting, and tests
 
 Rules:
 
@@ -345,14 +346,25 @@ Rules:
 
 ### 4.1.1 Responses API / RC2-beta direction
 
-The next release-candidate beta feature family is Responses API support.
+The next release-candidate beta feature family is Responses API support. The
+current foundation implements only stateless, non-streaming, text-only
+`POST /v1/responses`.
 
-RC2 goal:
+Implemented foundation:
 
-- Add `POST /v1/responses` support for OpenAI-compatible clients.
 - Preserve SLAIF's core promise: gateway keys, provider-secret isolation,
   PostgreSQL hard quota/accounting, auditability, and no plaintext secret
   leakage.
+- Require explicit key endpoint permission, route/model Responses
+  text/stateless capability, provider route, and `/v1/responses` pricing.
+- Inject `store=false` when omitted and inject/default `max_output_tokens`
+  through the existing output cap settings.
+- Reject tools, streaming, background mode, provider-side storage/state,
+  previous response IDs, conversations, multimodal input/output,
+  MCP/connectors, and response retrieval/delete/cancel/list/input-item routes.
+
+Future RC2 goal:
+
 - Support Responses tools only through explicit key/template policies and
   bounded-overrun cost estimates.
 
@@ -402,9 +414,9 @@ Tool policy:
 - Streaming custom tools, file IDs, file URLs, audio URLs, audio data URLs by
   default, streaming audio output, custom audio-output voices, previous-audio
   references, `n > 1` with audio output, video/alternate media part shapes,
-  `/v1/files`, `/v1/audio/*`, Realtime, and `/v1/responses` remain unsupported
-  unless a future scoped PR implements capability policy, caps,
-  pricing/accounting, forwarding, and tests.
+  `/v1/files`, `/v1/audio/*`, and Realtime remain unsupported unless a future
+  scoped PR implements capability policy, caps, pricing/accounting, forwarding,
+  and tests.
 - Do not blindly pass through Responses tools.
 - Supported tool types must be explicitly allowlisted per key or key template.
 - MCP is out of scope for RC2.
@@ -489,8 +501,8 @@ Rules:
   custom values.
 - Recommended templates should include request limits, input/output/reasoning
   token limits, tool-call limits, per-request caps, and allowed
-  endpoints/models/providers. Responses policy remains future work until
-  `/v1/responses` is implemented.
+  endpoints/models/providers. Responses-specific template/tool policy remains
+  future work beyond the stateless text foundation.
 - Admins must see assumptions and may edit recommended values before creating a
   template or keys.
 - Calibration-derived templates should record source key, source time window,
@@ -2229,9 +2241,10 @@ The implemented core includes:
 Remaining work should be treated as future scoped projects, not as missing
 foundation for the current RC-beta:
 
-1. Responses API support, including default-off key policy, explicit tool
-   controls, bounded-overrun cost estimates, unsupported stateful/background
-   field rejection, and provider/accounting/dashboard tests.
+1. Responses API expansion beyond the stateless text foundation, including
+   explicit tool controls, bounded-overrun cost estimates, stateful/background
+   ownership policy, retrieval/delete/cancel/list routes, and
+   provider/accounting/dashboard tests.
 2. Versioned key templates and template-derived bulk key workflows.
 3. Usage-derived quota or template recommendations built from trusted
    calibration keys and the existing safe usage-profile rows.
