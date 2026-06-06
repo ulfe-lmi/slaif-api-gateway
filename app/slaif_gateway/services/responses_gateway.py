@@ -155,7 +155,6 @@ async def handle_response_create(
                     rate_limit_reservation=rate_limit_reservation,
                     upstream_body=upstream_body,
                 )
-                rate_limit_reservation = None
                 return response
             except ProviderError as exc:
                 await _record_provider_failure_and_release(
@@ -511,6 +510,7 @@ def _streaming_responses_response(
                     try:
                         await heartbeat_task
                     except asyncio.CancelledError:
+                        # Expected after explicitly cancelling the heartbeat task during stream cleanup.
                         pass
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
                 record_provider_call_result(
