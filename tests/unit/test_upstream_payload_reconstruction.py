@@ -486,6 +486,98 @@ def test_responses_full_supported_text_request_reconstructs_exact_upstream_body(
     assert outbound["metadata"] is not inbound["metadata"]
 
 
+def test_responses_input_array_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {"role": "system", "content": "system text"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "second"},
+                ],
+            },
+        ],
+        "instructions": "answer briefly",
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {"role": "system", "content": "system text"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "second"},
+                ],
+                "type": "message",
+            },
+        ],
+        "instructions": "answer briefly",
+        "max_output_tokens": 12,
+        "store": False,
+    }
+    assert outbound["input"] is not inbound["input"]
+    assert outbound["input"][1]["content"] is not inbound["input"][1]["content"]
+
+
+def test_responses_input_array_structured_request_reconstructs_exact_upstream_body() -> None:
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    inbound = {
+        "model": "classroom-responses",
+        "input": [{"role": "user", "content": "return an object"}],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "schema": schema,
+            }
+        },
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": "return an object"}],
+        "max_output_tokens": 12,
+        "store": False,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "schema": schema,
+            }
+        },
+    }
+
+
+def test_responses_streaming_input_array_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [{"role": "user", "content": "stream this"}],
+        "stream": True,
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": "stream this"}],
+        "max_output_tokens": 12,
+        "stream": True,
+        "store": False,
+    }
+
+
 def test_responses_streaming_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-responses",
@@ -613,6 +705,28 @@ def test_responses_json_schema_container_deep_copy_isolation() -> None:
     outbound["text"]["format"]["schema"]["properties"]["answer"]["type"] = "boolean"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
+
+
+def test_responses_input_item_array_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "original"}],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["input"][0]["content"][0]["text"] = "changed"
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["input"][0]["content"][0]["text"] == "original"
+
+    outbound["input"][0]["content"][0]["text"] = "outbound"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["input"][0]["content"][0]["text"] == "original"
 
 
 @pytest.mark.parametrize(

@@ -157,7 +157,7 @@ class NormalizedChatCompletionUpstreamRequest:
 class NormalizedResponsesUpstreamRequest:
     requested_model: str
     upstream_model: str
-    input: str
+    input: str | tuple[Mapping[str, Any], ...]
 
     instructions: object = _UNSET
     max_output_tokens: object = _UNSET
@@ -170,7 +170,12 @@ class NormalizedResponsesUpstreamRequest:
     service_tier: object = _UNSET
 
     def as_upstream_fields(self) -> dict[str, Any]:
-        fields: dict[str, Any] = {"input": self.input}
+        input_value: Any
+        if isinstance(self.input, tuple):
+            input_value = [copy.deepcopy(item) for item in self.input]
+        else:
+            input_value = self.input
+        fields: dict[str, Any] = {"input": input_value}
         for name in self.__dataclass_fields__:
             if name in {"requested_model", "upstream_model", "input"}:
                 continue
@@ -258,7 +263,11 @@ def normalize_responses_upstream_request(
     return NormalizedResponsesUpstreamRequest(
         requested_model=requested_model,
         upstream_model=upstream_model,
-        input=copy.deepcopy(body["input"]),
+        input=(
+            tuple(copy.deepcopy(item) for item in body["input"])
+            if isinstance(body["input"], list)
+            else copy.deepcopy(body["input"])
+        ),
         instructions=_select_field(body.get("instructions", _UNSET)),
         max_output_tokens=_select_field(body.get("max_output_tokens", _UNSET)),
         temperature=_select_field(body.get("temperature", _UNSET)),

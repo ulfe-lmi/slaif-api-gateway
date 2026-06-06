@@ -180,8 +180,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
 - Responses API support is limited to stateless, text-only
-  `POST /v1/responses` with non-streaming JSON, typed SSE streaming, and
-  non-streaming structured `text.format` JSON object/schema output,
+  `POST /v1/responses` with string input or bounded text-only input item
+  arrays, non-streaming JSON, typed SSE streaming, and non-streaming structured
+  `text.format` JSON object/schema output,
   explicit key endpoint permission, route capability, provider route, and
   pricing metadata. Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,

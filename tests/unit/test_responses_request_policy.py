@@ -75,14 +75,117 @@ def test_unsupported_fields_reject_before_forwarding(field: str, value: object, 
     assert "resp_123" not in exc_info.value.safe_message
 
 
-def test_list_input_rejected_for_first_text_only_slice() -> None:
+def test_list_input_with_user_text_message_passes() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(input=[{"role": "user", "content": "hello"}])
+    )
+
+    assert result.effective_body["input"] == [{"role": "user", "content": "hello"}]
+    assert result.estimated_input_tokens > 0
+
+
+def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {"role": "system", "content": "system text"},
+                {"role": "developer", "content": "developer text"},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "user part"}],
+                },
+                {"role": "assistant", "content": "assistant text"},
+            ]
+        )
+    )
+
+    assert result.effective_body["input"] == [
+        {"role": "system", "content": "system text"},
+        {"role": "developer", "content": "developer text"},
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "user part"}],
+            "type": "message",
+        },
+        {"role": "assistant", "content": "assistant text"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("input_value", "param", "code"),
+    [
+        ([], "input", "responses_input_invalid"),
+        ([{"role": "user", "content": ""}], "input[0].content", "responses_input_invalid"),
+        ([{"role": "admin", "content": "secret"}], "input[0].role", "responses_input_item_role_not_supported"),
+        ([{"role": "user", "content": "secret", "name": "x"}], "input[0].name", "responses_input_item_invalid"),
+        ([{"type": "function_call", "role": "user", "content": "secret"}], "input[0].type", "responses_input_tool_item_not_supported"),
+        ([{"type": "reasoning", "role": "user", "content": "secret"}], "input[0].type", "responses_input_item_type_not_supported"),
+        ([{"role": "user", "content": [{"type": "input_image", "image_url": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
+        ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
+        ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
+    ],
+)
+def test_list_input_rejects_unsupported_shapes_without_raw_text(
+    input_value: object,
+    param: str,
+    code: str,
+) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
-            _body(input=[{"role": "user", "content": "hello"}])
+        ResponsesRequestPolicy(Settings()).apply(_body(input=input_value))
+
+    assert exc_info.value.error_code == code
+    assert exc_info.value.param == param
+    assert "secret" not in exc_info.value.safe_message
+
+
+def test_list_input_caps_reject_without_raw_text() -> None:
+    settings = Settings(
+        RESPONSES_MAX_INPUT_ITEMS=1,
+        RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=4,
+        RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=8,
+        RESPONSES_MAX_TEXT_CONTENT_PARTS_PER_ITEM=1,
+    )
+
+    with pytest.raises(RequestPolicyError) as count_exc:
+        ResponsesRequestPolicy(settings).apply(
+            _body(input=[{"role": "user", "content": "one"}, {"role": "user", "content": "two"}])
+        )
+    with pytest.raises(RequestPolicyError) as item_exc:
+        ResponsesRequestPolicy(settings).apply(
+            _body(input=[{"role": "user", "content": "secret text"}])
+        )
+    with pytest.raises(RequestPolicyError) as total_exc:
+        ResponsesRequestPolicy(
+            Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4)
+        ).apply(
+            _body(
+                input=[
+                    {"role": "user", "content": "abc"},
+                    {"role": "user", "content": "def"},
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as parts_exc:
+        ResponsesRequestPolicy(settings).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "a"},
+                            {"type": "input_text", "text": "b"},
+                        ],
+                    }
+                ]
+            )
         )
 
-    assert exc_info.value.error_code == "responses_field_invalid_type"
-    assert exc_info.value.param == "input"
+    assert count_exc.value.error_code == "responses_input_item_count_exceeded"
+    assert item_exc.value.error_code == "responses_input_item_too_large"
+    assert "secret text" not in item_exc.value.safe_message
+    assert total_exc.value.error_code == "responses_input_item_too_large"
+    assert parts_exc.value.error_code == "responses_input_item_count_exceeded"
 
 
 def test_oversized_input_and_instructions_reject_without_raw_text() -> None:
