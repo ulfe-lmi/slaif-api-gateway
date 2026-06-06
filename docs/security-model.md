@@ -357,14 +357,19 @@ Completions hardening only; it does not implement Responses API behavior.
 
 ## Responses API Security Model
 
-Responses API support is limited to stateless, non-streaming, text-only
-`POST /v1/responses`. It is default-off and policy-first:
+Responses API support is limited to stateless, text-only `POST /v1/responses`
+with non-streaming JSON and typed SSE streaming. It is default-off and
+policy-first:
 
 - Responses must be explicitly enabled per key through the `/v1/responses`
   endpoint allowlist.
 - Endpoint, model, provider, and tool allowlists all apply.
 - Route/model metadata must explicitly advertise Responses text/stateless
   capability; Chat Completions capabilities do not imply Responses capability.
+- Streaming also requires explicit Responses streaming capability and route
+  streaming support. Typed provider events are forwarded without storing
+  streamed deltas, and final accounting uses provider usage from the completed
+  response event. Missing final usage is not treated as zero cost.
 - Tools are not supported in the foundation. Future supported tool types must
   be explicitly allowed; tool JSON is not blind passthrough.
 - MCP/connectors are excluded.
@@ -683,8 +688,8 @@ never recover or send old plaintext keys.
   migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
   or allowlisted.
 - Native Anthropic API support is not implemented.
-- Responses API support is limited to stateless, non-streaming, text-only
-  `POST /v1/responses`; Responses tools, streaming, stateful lifecycle routes,
+- Responses API support is limited to stateless, text-only
+  `POST /v1/responses` with typed SSE streaming; Responses tools, stateful lifecycle routes,
   and multimodal Responses remain future work under
   `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.

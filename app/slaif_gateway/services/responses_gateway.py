@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 
+import anyio
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.accounting_errors import openai_error_from_accounting_error
@@ -31,18 +35,21 @@ from slaif_gateway.metrics import (
     increment_accounting_failure,
     increment_provider_http_error,
     increment_quota_rejection,
+    increment_rate_limit_heartbeat_failure,
     increment_rate_limit_rejection,
     increment_rate_limit_release_failure,
     observe_provider_call,
+    record_provider_call_result,
 )
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.factory import get_provider_adapter
+from slaif_gateway.providers.streaming import format_responses_error_event
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse
+from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.rate_limits import RateLimitPolicy
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -111,6 +118,7 @@ async def handle_response_create(
     route = await _resolve_responses_route(
         authenticated_key=authenticated_key,
         effective_model=policy_result.effective_body["model"],
+        streaming_requested=policy_result.effective_body.get("stream") is True,
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -132,6 +140,27 @@ async def handle_response_create(
             request_id=request_id,
             request=request,
         )
+
+        if policy_result.effective_body.get("stream") is True:
+            try:
+                response = _streaming_responses_response(
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    reservation=reservation,
+                    request_id=request_id,
+                    settings=settings,
+                    request=request,
+                    rate_limit_reservation=rate_limit_reservation,
+                    upstream_body=upstream_body,
+                )
+                rate_limit_reservation = None
+                return response
+            except Exception:
+                await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+                raise
+
         provider_request = ProviderRequest(
             provider=route.provider,
             upstream_model=route.resolved_model,
@@ -198,6 +227,7 @@ async def _resolve_responses_route(
     *,
     authenticated_key: AuthenticatedGatewayKey,
     effective_model: str,
+    streaming_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -217,7 +247,11 @@ async def _resolve_responses_route(
                 authenticated_key,
                 endpoint=RESPONSES_ENDPOINT,
             )
-            enforce_responses_route_capabilities(route_capabilities=route.capabilities)
+            enforce_responses_route_capabilities(
+                route_capabilities=route.capabilities,
+                streaming_requested=streaming_requested,
+                route_supports_streaming=route.supports_streaming,
+            )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
         except RequestPolicyError as exc:
@@ -279,6 +313,201 @@ async def _reserve_responses_quota(
         await session_iterator.aclose()
 
 
+def _streaming_responses_response(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ResponsesPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    reservation: QuotaReservationResult,
+    request_id: str,
+    settings: Settings,
+    request: Request | None,
+    rate_limit_reservation: _RateLimitReservation | None,
+    upstream_body: dict[str, object],
+) -> StreamingResponse:
+    adapter = get_provider_adapter(route, settings)
+    provider_request = ProviderRequest(
+        provider=route.provider,
+        upstream_model=route.resolved_model,
+        endpoint=RESPONSES_PROVIDER_ENDPOINT,
+        body=upstream_body,
+        request_id=request_id,
+    )
+
+    async def _events():
+        start = time.perf_counter()
+        completed_chunk: ProviderStreamChunk | None = None
+        upstream_request_id: str | None = None
+        completed_event: str | None = None
+        completed = False
+        provider_status = "error"
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = _start_rate_limit_heartbeat(
+            rate_limit_reservation,
+            stop_event=heartbeat_stop,
+        )
+        try:
+            async for chunk in adapter.stream_response(provider_request):
+                if chunk.upstream_request_id:
+                    upstream_request_id = chunk.upstream_request_id
+                if _is_responses_completed_chunk(chunk):
+                    completed = True
+                    completed_event = chunk.raw_sse_event
+                    completed_chunk = chunk
+                    continue
+                yield chunk.raw_sse_event
+
+            if completed and completed_chunk is not None and completed_chunk.usage is not None:
+                provider_response = _provider_response_from_response_stream(
+                    chunk=completed_chunk,
+                    upstream_request_id=upstream_request_id,
+                )
+                provider_completed_record = await _record_provider_completed_before_finalization(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    cost_estimate=cost_estimate,
+                    provider_response=provider_response,
+                    request_id=request_id,
+                    request=request,
+                )
+                try:
+                    accounting_result = await _finalize_successful_response(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        provider_response=provider_response,
+                        request_id=request_id,
+                        request=request,
+                        streaming=True,
+                        provider_completed_usage_ledger_id=(
+                            provider_completed_record.usage_ledger_id
+                        ),
+                    )
+                except AccountingError as exc:
+                    await _mark_provider_completed_finalization_failed(
+                        usage_ledger_id=provider_completed_record.usage_ledger_id,
+                        reservation_id=reservation.reservation_id,
+                        error=exc,
+                        request=request,
+                    )
+                    raise
+                except QuotaError as exc:
+                    await _mark_provider_completed_finalization_failed(
+                        usage_ledger_id=provider_completed_record.usage_ledger_id,
+                        reservation_id=reservation.reservation_id,
+                        error=exc,
+                        request=request,
+                    )
+                    raise
+                _record_success_metrics(
+                    route=route,
+                    provider_response=provider_response,
+                    accounting_result=accounting_result,
+                )
+                provider_status = "success"
+                if completed_event is not None:
+                    yield completed_event
+            else:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=ProviderError(
+                        "Provider Responses stream completed without final usage.",
+                        provider=route.provider,
+                        upstream_status_code=200 if completed else None,
+                        error_code="responses_stream_usage_missing",
+                    ),
+                    request=request,
+                    streaming=True,
+                )
+                provider_status = "incomplete"
+                yield format_responses_error_event(
+                    message=(
+                        "Provider Responses stream completed without final usage metadata; "
+                        "accounting could not finalize successfully."
+                    ),
+                    code="responses_stream_usage_missing",
+                    request_id=request_id,
+                )
+        except asyncio.CancelledError:
+            with anyio.CancelScope(shield=True):
+                await _release_streaming_reservation_after_error(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=ProviderError(
+                        "Client disconnected during streaming Responses request.",
+                        provider=route.provider,
+                        error_code="client_disconnected",
+                    ),
+                    request=request,
+                )
+            raise
+        except ProviderError as exc:
+            await _release_streaming_reservation_after_error(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                provider_error=exc,
+                request=request,
+            )
+            yield format_responses_error_event(
+                message=exc.safe_message,
+                code=exc.error_code,
+            )
+        except AccountingError as exc:
+            increment_accounting_failure(exc.error_code)
+            yield format_responses_error_event(
+                message=exc.safe_message,
+                code=exc.error_code,
+            )
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            yield format_responses_error_event(
+                message=exc.safe_message,
+                code=exc.error_code,
+            )
+        finally:
+            with anyio.CancelScope(shield=True):
+                heartbeat_stop.set()
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+                await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+                record_provider_call_result(
+                    provider=route.provider,
+                    endpoint=RESPONSES_PROVIDER_ENDPOINT,
+                    status=provider_status,
+                    duration_seconds=time.perf_counter() - start,
+                )
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def _reserve_redis_rate_limit(
     *,
     authenticated_key: AuthenticatedGatewayKey,
@@ -330,6 +559,44 @@ async def _reserve_redis_rate_limit(
     )
 
 
+def _start_rate_limit_heartbeat(
+    reservation: _RateLimitReservation | None,
+    *,
+    stop_event: asyncio.Event,
+) -> asyncio.Task[None] | None:
+    if reservation is None or not reservation.concurrency_reserved:
+        return None
+    interval = reservation.policy.concurrency_heartbeat_seconds or 30
+    return asyncio.create_task(
+        _heartbeat_rate_limit_concurrency_loop(
+            reservation,
+            interval_seconds=interval,
+            stop_event=stop_event,
+        )
+    )
+
+
+async def _heartbeat_rate_limit_concurrency_loop(
+    reservation: _RateLimitReservation,
+    *,
+    interval_seconds: int,
+    stop_event: asyncio.Event,
+) -> None:
+    while True:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            return
+        except TimeoutError:
+            try:
+                await reservation.service.heartbeat_concurrency(
+                    gateway_key_id=reservation.gateway_key_id,
+                    request_id=reservation.request_id,
+                    policy=reservation.policy,
+                )
+            except RateLimitError as exc:
+                increment_rate_limit_heartbeat_failure(exc.error_code)
+
+
 async def _record_provider_failure_and_release(
     *,
     reservation: QuotaReservationResult,
@@ -339,6 +606,176 @@ async def _record_provider_failure_and_release(
     cost_estimate: ChatCostEstimate,
     request_id: str,
     provider_error: ProviderError,
+    request: Request | None,
+    streaming: bool = False,
+) -> None:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        kwargs = {
+            "request_id": request_id,
+            "endpoint": RESPONSES_PROVIDER_ENDPOINT,
+            "error_type": provider_error.error_code,
+            "error_code": provider_error.error_code,
+            "status_code": provider_error.upstream_status_code,
+        }
+        if provider_error.diagnostic is not None:
+            kwargs["provider_diagnostic"] = provider_error.diagnostic.to_safe_dict()
+        if streaming:
+            kwargs["streaming"] = True
+        await accounting_service.record_provider_failure_and_release(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            policy_result,
+            cost_estimate,
+            **kwargs,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    except AccountingError as exc:
+        increment_accounting_failure(exc.error_code)
+        raise openai_error_from_accounting_error(exc) from exc
+    except QuotaError as exc:
+        increment_quota_rejection(exc.error_code)
+        raise openai_error_from_quota_error(exc) from exc
+    finally:
+        await session_iterator.aclose()
+
+
+async def _release_streaming_reservation_after_error(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ResponsesPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    request_id: str,
+    provider_error: ProviderError,
+    request: Request | None,
+) -> None:
+    try:
+        await _record_provider_failure_and_release(
+            reservation=reservation,
+            authenticated_key=authenticated_key,
+            route=route,
+            policy_result=policy_result,
+            cost_estimate=cost_estimate,
+            request_id=request_id,
+            provider_error=provider_error,
+            request=request,
+            streaming=True,
+        )
+    except AccountingError as accounting_exc:
+        increment_accounting_failure(accounting_exc.error_code)
+        raise
+    except QuotaError as quota_exc:
+        increment_quota_rejection(quota_exc.error_code)
+        raise
+
+
+async def _finalize_successful_response(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ResponsesPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    provider_response: ProviderResponse,
+    request_id: str,
+    request: Request | None,
+    streaming: bool = False,
+    provider_completed_usage_ledger_id: uuid.UUID | None = None,
+) -> FinalizedAccountingResult:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        kwargs = {
+            "request_id": request_id,
+            "endpoint": RESPONSES_PROVIDER_ENDPOINT,
+        }
+        if streaming:
+            kwargs["streaming"] = True
+        if provider_completed_usage_ledger_id is not None:
+            kwargs["provider_completed_usage_ledger_id"] = provider_completed_usage_ledger_id
+        result = await accounting_service.finalize_successful_response(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            policy_result,
+            cost_estimate,
+            provider_response,
+            **kwargs,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
+
+
+async def _record_provider_completed_before_finalization(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    cost_estimate: ChatCostEstimate,
+    provider_response: ProviderResponse,
+    request_id: str,
+    request: Request | None,
+):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        result = await accounting_service.record_provider_completed_before_finalization(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            provider_response,
+            request_id=request_id,
+            endpoint=RESPONSES_PROVIDER_ENDPOINT,
+            streaming=True,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
+
+
+async def _mark_provider_completed_finalization_failed(
+    *,
+    usage_ledger_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+    error: Exception,
     request: Request | None,
 ) -> None:
     session_iterator = _db_session_iterator(request)
@@ -353,69 +790,13 @@ async def _record_provider_failure_and_release(
             quota_reservations_repository=QuotaReservationsRepository(session),
             usage_ledger_repository=UsageLedgerRepository(session),
         )
-        await accounting_service.record_provider_failure_and_release(
-            reservation.reservation_id,
-            authenticated_key,
-            route,
-            policy_result,
-            cost_estimate,
-            request_id=request_id,
-            endpoint=RESPONSES_PROVIDER_ENDPOINT,
-            error_type=provider_error.error_code,
-            error_code=provider_error.error_code,
-            status_code=provider_error.upstream_status_code,
-            provider_diagnostic=provider_error.diagnostic.to_safe_dict()
-            if provider_error.diagnostic is not None
-            else None,
+        await accounting_service.mark_provider_completed_finalization_failed(
+            usage_ledger_id,
+            reservation_id,
+            error,
         )
         if hasattr(session, "commit"):
             await session.commit()
-    except AccountingError as exc:
-        increment_accounting_failure(exc.error_code)
-        raise openai_error_from_accounting_error(exc) from exc
-    except QuotaError as exc:
-        increment_quota_rejection(exc.error_code)
-        raise openai_error_from_quota_error(exc) from exc
-    finally:
-        await session_iterator.aclose()
-
-
-async def _finalize_successful_response(
-    *,
-    reservation: QuotaReservationResult,
-    authenticated_key: AuthenticatedGatewayKey,
-    route: RouteResolutionResult,
-    policy_result: ResponsesPolicyResult,
-    cost_estimate: ChatCostEstimate,
-    provider_response: ProviderResponse,
-    request_id: str,
-    request: Request | None,
-) -> FinalizedAccountingResult:
-    session_iterator = _db_session_iterator(request)
-    try:
-        session = await anext(session_iterator)
-    except StopAsyncIteration as exc:
-        raise _database_session_unavailable_error() from exc
-
-    try:
-        accounting_service = AccountingService(
-            gateway_keys_repository=GatewayKeysRepository(session),
-            quota_reservations_repository=QuotaReservationsRepository(session),
-            usage_ledger_repository=UsageLedgerRepository(session),
-        )
-        result = await accounting_service.finalize_successful_response(
-            reservation.reservation_id,
-            authenticated_key,
-            route,
-            policy_result,
-            cost_estimate,
-            provider_response,
-            request_id=request_id,
-            endpoint=RESPONSES_PROVIDER_ENDPOINT,
-        )
-        if hasattr(session, "commit"):
-            await session.commit()
-        return result
     finally:
         await session_iterator.aclose()
 
@@ -455,6 +836,29 @@ def _record_success_metrics(
             endpoint=RESPONSES_PROVIDER_ENDPOINT,
             upstream_status_code=provider_response.status_code,
         )
+
+
+def _provider_response_from_response_stream(
+    *,
+    chunk: ProviderStreamChunk,
+    upstream_request_id: str | None,
+) -> ProviderResponse:
+    return ProviderResponse(
+        provider=chunk.provider,
+        upstream_model=chunk.upstream_model,
+        status_code=200,
+        json_body=dict(chunk.json_body or {}),
+        upstream_request_id=upstream_request_id or chunk.upstream_request_id,
+        usage=chunk.usage,
+        raw_cost_native=chunk.raw_cost_native,
+        native_currency=chunk.native_currency,
+        headers={},
+    )
+
+
+def _is_responses_completed_chunk(chunk: ProviderStreamChunk) -> bool:
+    payload = chunk.json_body
+    return isinstance(payload, dict) and payload.get("type") == "response.completed"
 
 
 class _RateLimitReservation:

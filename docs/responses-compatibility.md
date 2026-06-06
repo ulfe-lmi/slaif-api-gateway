@@ -3,10 +3,10 @@
 Status: limited foundation implemented on current `main`.
 
 This document defines the RC2-beta support boundary for Responses API work.
-Current support is deliberately narrow: stateless, non-streaming, text-only
-`POST /v1/responses` with no tools, no provider-side storage, no background
-mode, no previous response or conversation state, and no multimodal input or
-output.
+Current support is deliberately narrow: stateless, text-only
+`POST /v1/responses` with non-streaming JSON and typed SSE streaming, no tools,
+no provider-side storage, no background mode, no previous response or
+conversation state, and no multimodal input or output.
 
 ## Supported Endpoint
 
@@ -26,7 +26,8 @@ Implemented request fields for the first slice:
 - `temperature`
 - `top_p`
 - bounded `metadata`
-- `stream` omitted or `false`
+- `stream` omitted, `false`, or `true` when the resolved route explicitly
+  advertises Responses streaming support
 - `store` omitted or `false`
 - `text.format` only as plain text
 - `service_tier` omitted or `auto`
@@ -34,14 +35,18 @@ Implemented request fields for the first slice:
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
 the gateway remains stateless even when an upstream default would store
 responses. If `max_output_tokens` is omitted, SLAIF injects the existing default
-output cap. The route is non-streaming only.
+output cap. Streaming uses typed Responses SSE events such as
+`response.created`, `response.output_text.delta`, `response.completed`, and
+`error`; SLAIF does not translate Responses streams into Chat Completions
+chunks.
 
 The first slice supports OpenAI Responses forwarding to `/v1/responses` when
 the selected route explicitly advertises Responses text/stateless capability
-and a `/v1/responses` pricing row exists. OpenRouter Responses forwarding is
-implemented only for explicitly configured `/v1/responses` OpenRouter routes;
-OpenRouter support remains beta/stateless and is not enabled by model allowlist
-alone.
+and a `/v1/responses` pricing row exists. Streaming additionally requires
+`capabilities.responses.streaming=true` and a streaming-capable route.
+OpenRouter Responses forwarding, including streaming, is implemented only for
+explicitly configured `/v1/responses` OpenRouter routes; OpenRouter support
+remains beta/stateless and is not enabled by model allowlist alone.
 
 ## First Supported Mode
 
@@ -117,6 +122,12 @@ The existing reserve-before-provider-call model remains mandatory:
 4. Reserve PostgreSQL hard quota before provider forwarding.
 5. Forward to the selected provider after reservation.
 6. Finalize actual usage and cost from provider usage metadata.
+
+For streaming Responses, SLAIF reserves before opening the provider stream,
+forwards typed SSE events without storing streamed deltas, and finalizes once
+from provider usage on the completed response event. Missing completed-event
+usage is not treated as zero cost; the reservation is released through the
+streaming failure path and the client receives a safe typed `error` event.
 
 Current Chat Completions already uses admission-time budget checks plus
 post-call spend accounting. Successful Chat Completions calls finalize actual

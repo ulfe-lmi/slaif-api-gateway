@@ -18,6 +18,23 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def _responses_request(body: dict[str, object] | None = None) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openrouter",
+        upstream_model="openai/gpt-responses-test",
+        endpoint="responses",
+        body=body or {
+            "model": "client-model",
+            "input": "hello",
+            "store": False,
+            "stream": True,
+            "max_output_tokens": 20,
+        },
+        request_id="gw-resp-123",
+        extra_headers={"Authorization": "Bearer gateway-key"},
+    )
+
+
 def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
     body = {
@@ -82,6 +99,75 @@ def test_openrouter_streaming_uses_provider_key_and_parses_cost() -> None:
     assert sent_body["messages"] == body["messages"]
     assert body["model"] == "client-model"
     assert body["stream_options"]["include_usage"] is False
+
+
+def test_openrouter_responses_streaming_preserves_typed_events_and_parses_completed_usage() -> None:
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    original_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_or_123",
+            "object": "response",
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 6,
+                "total_tokens": 11,
+                "cost_usd": "0.0012",
+            },
+        },
+    }
+    sse = (
+        _sse({"type": "response.created", "response": {"id": "resp_or_123"}})
+        + _sse({"type": "response.output_text.delta", "delta": "hello"})
+        + _sse(completed)
+    )
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://openrouter.ai/api/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"x-openrouter-request-id": "upstream-openrouter"},
+                )
+            )
+            chunks = [chunk async for chunk in adapter.stream_response(_responses_request(original_body))]
+            return upstream, chunks
+
+    upstream, chunks = asyncio.run(_collect())
+
+    assert [chunk.json_body["type"] for chunk in chunks if chunk.json_body is not None] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert chunks[2].usage is not None
+    assert chunks[2].usage.prompt_tokens == 5
+    assert chunks[2].usage.completion_tokens == 6
+    assert chunks[2].usage.total_tokens == 11
+    assert chunks[2].raw_cost_native == Decimal("0.0012")
+    assert chunks[2].native_currency == "USD"
+
+    sent = upstream.calls[0].request
+    assert sent.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert sent.headers["authorization"] != "Bearer gateway-key"
+    assert sent.headers["accept"] == "text/event-stream"
+    sent_body = json.loads(sent.content)
+    assert sent_body == {
+        "model": "openai/gpt-responses-test",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    assert original_body["model"] == "client-model"
 
 
 def test_openrouter_streaming_injects_usage_options_when_client_omits_them() -> None:

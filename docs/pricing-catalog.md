@@ -324,8 +324,8 @@ are not provider invoice certification.
 
 ## Stateless Responses Text Pricing
 
-The current `POST /v1/responses` foundation supports only stateless,
-non-streaming text input to text output. It requires an active pricing row whose
+The current `POST /v1/responses` foundation supports stateless text input to
+text output for non-streaming JSON and typed SSE streaming. It requires an active pricing row whose
 endpoint is `/v1/responses`; Chat Completions pricing rows are not silently
 reused. Admission-time reservation uses the estimated text input plus effective
 `max_output_tokens`. Post-call finalization uses provider usage fields such as
@@ -333,8 +333,10 @@ reused. Admission-time reservation uses the estimated text input plus effective
 details when exposed by the provider and supported by the existing accounting
 schema.
 
-Responses tools, streaming, provider-side storage/state, image/file/audio
-inputs, and audio output are not priced or enabled in this foundation.
+Streaming finalization uses usage from the provider's completed response event;
+missing final usage is not treated as zero cost. Responses tools,
+provider-side storage/state, image/file/audio inputs, and audio output are not
+priced or enabled in this foundation.
 
 ## Worst-Case Single-Request Cost
 

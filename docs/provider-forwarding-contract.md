@@ -151,9 +151,16 @@ dictionary is not forwarded as-is.
 
 Responses-specific rules for the current foundation:
 
-- only non-streaming text input/text output is supported;
+- only stateless text input/text output is supported;
+- non-streaming JSON and typed SSE streaming are supported when route/model
+  metadata explicitly enables Responses streaming;
 - `store=false` is injected when omitted;
 - `max_output_tokens` is defaulted or capped before forwarding;
+- streaming preserves Responses event types such as `response.created`,
+  `response.output_text.delta`, `response.completed`, and safe `error` events;
+  it is not converted into Chat Completions chunks;
+- streaming finalization uses provider usage from the completed response event,
+  and missing final usage is not finalized as zero cost;
 - tool fields are rejected and are not blind passthrough;
 - future supported tool types must be explicitly allowlisted by key or key
   template;

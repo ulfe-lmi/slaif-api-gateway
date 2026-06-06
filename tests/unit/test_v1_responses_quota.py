@@ -11,7 +11,7 @@ from slaif_gateway.main import create_app
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
-from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
+from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
@@ -45,7 +45,14 @@ def _fake_authenticated_gateway_key(
     )
 
 
-def _route_result(requested_model: str = "classroom-responses") -> RouteResolutionResult:
+def _route_result(
+    requested_model: str = "classroom-responses",
+    *,
+    responses_streaming: bool = False,
+    route_supports_streaming: bool = False,
+) -> RouteResolutionResult:
+    capabilities = default_responses_capabilities()
+    capabilities["streaming"] = responses_streaming
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -54,7 +61,8 @@ def _route_result(requested_model: str = "classroom-responses") -> RouteResoluti
         route_match_type="exact",
         route_pattern=requested_model,
         priority=100,
-        capabilities={"responses": default_responses_capabilities()},
+        capabilities={"responses": capabilities},
+        supports_streaming=route_supports_streaming,
     )
 
 
@@ -252,6 +260,163 @@ def test_valid_responses_path_reserves_finalizes_then_returns_provider_response(
     assert finalize_calls == ["classroom-responses"]
 
 
+def test_streaming_responses_path_finalizes_from_completed_usage(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls: list[tuple[str, bool, uuid.UUID | None]] = []
+    completed_record_id = uuid.uuid4()
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(
+            requested_model,
+            responses_streaming=True,
+            route_supports_streaming=True,
+        )
+
+    class _FakeAdapter:
+        async def stream_response(self, request):
+            assert request.endpoint == "responses"
+            assert request.body == {
+                "model": "gpt-5.2",
+                "input": "hello",
+                "max_output_tokens": 20,
+                "stream": True,
+                "store": False,
+            }
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data='{"type":"response.created","response":{"id":"resp_test"}}',
+                raw_sse_event='data: {"type":"response.created","response":{"id":"resp_test"}}\n\n',
+                json_body={"type": "response.created", "response": {"id": "resp_test"}},
+                upstream_request_id="upstream-responses-stream",
+            )
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data='{"type":"response.output_text.delta","delta":"hello"}',
+                raw_sse_event='data: {"type":"response.output_text.delta","delta":"hello"}\n\n',
+                json_body={"type": "response.output_text.delta", "delta": "hello"},
+                upstream_request_id="upstream-responses-stream",
+            )
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data='{"type":"response.completed","response":{"id":"resp_test"}}',
+                raw_sse_event='data: {"type":"response.completed","response":{"id":"resp_test"}}\n\n',
+                json_body={"type": "response.completed", "response": {"id": "resp_test"}},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                upstream_request_id="upstream-responses-stream",
+            )
+
+    async def _fake_record_provider_completed_before_finalization(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        streaming=False,
+        started_at=None,
+        finished_at=None,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            route,
+            pricing_estimate,
+            request_id,
+            started_at,
+            finished_at,
+        )
+        assert endpoint == "responses"
+        assert streaming is True
+        assert provider_response.usage is not None
+        return type(
+            "ProviderCompletedRecord",
+            (),
+            {"usage_ledger_id": completed_record_id},
+        )()
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+        provider_completed_usage_ledger_id=None,
+        streaming=False,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            started_at,
+            finished_at,
+        )
+        assert endpoint == "responses"
+        finalize_calls.append((route.requested_model, streaming, provider_completed_usage_ledger_id))
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.003"),
+            actual_cost_native=Decimal("0.003"),
+            native_currency="EUR",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            accounting_status="finalized",
+        )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_provider_completed_before_finalization",
+        _fake_record_provider_completed_before_finalization,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "response.created" in body
+    assert "response.output_text.delta" in body
+    assert "response.completed" in body
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+    assert finalize_calls == [("classroom-responses", True, completed_record_id)]
+
+
 def test_chat_endpoint_permission_does_not_allow_responses(monkeypatch) -> None:
     app = create_app()
     _wire_auth_and_db(
@@ -299,14 +464,67 @@ def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None
 
     response = TestClient(app).post(
         "/v1/responses",
+        json={**_responses_request(), "store": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_store_not_supported"
+    assert route_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+
+
+def test_streaming_capability_error_happens_before_rate_pricing_quota_provider(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
         json={**_responses_request(), "stream": True},
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "responses_streaming_not_supported"
-    assert route_calls == []
+    assert response.json()["error"]["code"] == "responses_route_capability_not_supported"
+    assert rate_calls == []
     assert pricing_calls == []
     assert quota_calls == []
+    assert provider_calls == []
 
 
 def test_route_capability_error_happens_before_pricing_quota_provider(monkeypatch) -> None:

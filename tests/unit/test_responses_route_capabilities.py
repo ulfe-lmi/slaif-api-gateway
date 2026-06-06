@@ -16,6 +16,44 @@ def test_responses_text_route_capability_passes_when_explicit() -> None:
     )
 
 
+def test_responses_streaming_route_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["streaming"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        streaming_requested=True,
+        route_supports_streaming=True,
+    )
+
+
+def test_streaming_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            streaming_requested=True,
+            route_supports_streaming=True,
+        )
+
+    assert exc_info.value.error_code == "responses_route_capability_not_supported"
+    assert exc_info.value.param == "stream"
+
+
+def test_streaming_request_fails_when_route_flag_absent() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["streaming"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            streaming_requested=True,
+            route_supports_streaming=False,
+        )
+
+    assert exc_info.value.error_code == "responses_route_capability_not_supported"
+    assert exc_info.value.param == "stream"
+
+
 def test_missing_responses_capability_fails_closed() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(route_capabilities={"chat_completions": {"chat_text": True}})
