@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NoReturn
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
@@ -695,5 +695,5 @@ def _unsupported_code_for_field(field_name: str) -> str:
     return "responses_field_not_supported"
 
 
-def _raise(param: str, code: str, message: str) -> None:
+def _raise(param: str, code: str, message: str) -> NoReturn:
     raise ResponsesRequestPolicyError(message, param=param, error_code=code)
