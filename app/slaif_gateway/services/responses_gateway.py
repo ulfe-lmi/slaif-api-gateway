@@ -67,6 +67,7 @@ from slaif_gateway.services.responses_request_policy import ResponsesRequestPoli
 from slaif_gateway.services.responses_request_policy import (
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA,
+    responses_function_tools_requested,
     responses_text_format_type,
 )
 from slaif_gateway.services.responses_route_capabilities import (
@@ -125,6 +126,7 @@ async def handle_response_create(
         effective_model=policy_result.effective_body["model"],
         streaming_requested=policy_result.effective_body.get("stream") is True,
         text_format_type=responses_text_format_type(policy_result.effective_body),
+        function_tools_requested=responses_function_tools_requested(policy_result.effective_body),
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -250,6 +252,7 @@ async def _resolve_responses_route(
     effective_model: str,
     streaming_requested: bool,
     text_format_type: str | None,
+    function_tools_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -275,6 +278,7 @@ async def _resolve_responses_route(
                 route_supports_streaming=route.supports_streaming,
                 json_mode_requested=text_format_type == TEXT_FORMAT_JSON_OBJECT,
                 structured_output_requested=text_format_type == TEXT_FORMAT_JSON_SCHEMA,
+                function_tools_requested=function_tools_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

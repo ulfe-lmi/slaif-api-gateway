@@ -23,6 +23,17 @@ custom tools are route-enabled. This can over-reserve, but prevents large
 tool/schema payloads from passing cost checks with a messages-only estimate.
 Successful accounting still finalizes from actual provider usage when available.
 
+For implemented Responses, the local cost estimate uses the request policy's
+total estimated input tokens. That total includes string input, text input item
+arrays, structured `text.format` schemas, local function-tool definitions, and
+string-only `function_call_output` input items when they are enabled by route
+capability. Local Responses function tools do not add a separate billing
+category: function definitions are ordinary input material, generated function
+calls are ordinary output material according to provider usage, and a later
+tool-result request is a separate gateway request. SLAIF does not store raw
+function schemas, generated arguments, function-call output text, or raw
+request/response bodies.
+
 Chat Completions image input to text output is enabled only behind explicit
 route capability and request caps. Image URL/data URL wrapper text is included
 in the ordinary message input estimate, but SLAIF does not treat image bytes as
@@ -339,7 +350,7 @@ item arrays and structured text output have no separate billing category in
 SLAIF; they use ordinary Responses token/cost accounting.
 
 Streaming finalization uses usage from the provider's completed response event;
-missing final usage is not treated as zero cost. Responses tools,
+missing final usage is not treated as zero cost. Responses hosted tools,
 provider-side storage/state, image/file/audio inputs, and audio output are not
 priced or enabled in this foundation.
 

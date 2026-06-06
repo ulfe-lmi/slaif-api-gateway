@@ -1060,6 +1060,12 @@ chat_audio_inputs
 chat_audio_outputs
 chat_service_tier_non_default
 chat_multiple_choices
+responses.text
+responses.stateless
+responses.streaming
+responses.json_mode
+responses.structured_outputs
+responses.function_tools
 ```
 
 Route/model capability metadata is separate from gateway-key endpoint/model

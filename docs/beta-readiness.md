@@ -182,9 +182,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Responses API support is limited to stateless, text-only
   `POST /v1/responses` with string input or bounded text-only input item
   arrays, non-streaming JSON, typed SSE streaming, and non-streaming structured
-  `text.format` JSON object/schema output,
+  `text.format` JSON object/schema output, plus non-streaming local function
+  tools,
   explicit key endpoint permission, route capability, provider route, and
-  pricing metadata. Responses tools,
+  pricing metadata. Hosted/provider-side Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,
   multimodal input/output, and MCP/connectors remain future work. Safe Chat
   Completions usage profiling, trusted calibration keys, calibration proposal
@@ -219,7 +220,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses tools/stateful routes, embeddings, files endpoints, image
+- No Responses hosted tools/stateful routes, embeddings, files endpoints, image
   endpoints, or audio endpoints in RC1.
 - No MFA or full RBAC.
 - No production certification or compliance claim.
@@ -231,8 +232,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Add formal security review or penetration testing before production claims.
 - Continue Responses API as scoped RC2 work under
   `responses-compatibility.md`; decide separately whether to implement
-  Responses tools/stateful routes, bulk key send-now, embeddings, and native
-  provider adapters.
+  Responses hosted tools/stateful routes, bulk key send-now, embeddings, and
+  native provider adapters.
 - Exercise the production/operator runbooks in at least one production-like
   staging deployment.
 - Continue tuning monitoring and alert routing for the target deployment.

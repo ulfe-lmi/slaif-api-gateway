@@ -69,10 +69,21 @@ provider event bodies.
 
 Responses text input item arrays follow the same boundary. They are accepted
 only as stateless text message input with supported roles and string or
-`input_text` content parts. Function-call items, function-call-output items,
-reasoning/stateful items, hosted-tool items, and image/file/audio content parts
-are rejected before provider forwarding. Input item text is counted for
-admission estimates but is not stored or logged.
+`input_text` content parts. String-only `function_call_output` items are
+accepted as ordinary stateless input for local function-tool follow-up
+requests. Function-call items, reasoning/stateful items, hosted-tool items, and
+image/file/audio content parts are rejected before provider forwarding. Input
+item text and string tool outputs are counted for admission estimates but are
+not stored or logged.
+
+Responses local function tools follow the same boundary. They require explicit
+route/model `capabilities.responses.function_tools=true` metadata and are
+canonicalized from bounded `tools[].type=function` definitions. Function
+schemas are opaque only inside `tools[].parameters`, are capped and counted as
+ordinary input material, and are not stored or logged. SLAIF does not execute
+functions, does not add special tool billing, and does not enable hosted tools,
+MCP/connectors, web search, file search, code interpreter, computer use, image
+generation, tool search, storage, or background mode through this capability.
 
 ## Chat Completions Capability Policy
 
@@ -707,8 +718,9 @@ never recover or send old plaintext keys.
   or allowlisted.
 - Native Anthropic API support is not implemented.
 - Responses API support is limited to stateless, text-only
-  `POST /v1/responses` with typed SSE streaming; Responses tools, stateful lifecycle routes,
-  and multimodal Responses remain future work under
+  `POST /v1/responses` with typed SSE streaming and non-streaming local
+  function tools; hosted Responses tools, stateful lifecycle routes, and
+  multimodal Responses remain future work under
   `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or

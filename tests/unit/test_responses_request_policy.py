@@ -55,8 +55,6 @@ def test_omitted_max_output_tokens_injects_default() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
-        ("tools", [], "responses_tools_not_supported"),
-        ("tool_choice", "auto", "responses_tools_not_supported"),
         ("previous_response_id", "resp_123", "responses_state_not_supported"),
         ("conversation", "conv_123", "responses_state_not_supported"),
         ("background", True, "responses_background_not_supported"),
@@ -112,6 +110,31 @@ def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
     ]
 
 
+def test_function_call_output_input_item_passes_as_string_only_tool_result() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {"role": "user", "content": "call the tool"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": '{"result":"safe"}',
+                },
+            ]
+        )
+    )
+
+    assert result.effective_body["input"] == [
+        {"role": "user", "content": "call the tool"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": '{"result":"safe"}',
+        },
+    ]
+    assert result.estimated_input_tokens > 0
+
+
 @pytest.mark.parametrize(
     ("input_value", "param", "code"),
     [
@@ -121,6 +144,9 @@ def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
         ([{"role": "user", "content": "secret", "name": "x"}], "input[0].name", "responses_input_item_invalid"),
         ([{"type": "function_call", "role": "user", "content": "secret"}], "input[0].type", "responses_input_tool_item_not_supported"),
         ([{"type": "reasoning", "role": "user", "content": "secret"}], "input[0].type", "responses_input_item_type_not_supported"),
+        ([{"type": "function_call_output", "call_id": "call_123", "output": [{"type": "input_image", "image_url": "secret"}]}], "input[0].output", "responses_function_call_output_invalid"),
+        ([{"type": "function_call_output", "output": "secret"}], "input[0].call_id", "responses_function_call_output_invalid"),
+        ([{"type": "function_call_output", "call_id": "call_123", "output": "secret", "extra": "x"}], "input[0].extra", "responses_function_call_output_invalid"),
         ([{"role": "user", "content": [{"type": "input_image", "image_url": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
         ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
         ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
@@ -186,6 +212,24 @@ def test_list_input_caps_reject_without_raw_text() -> None:
     assert "secret text" not in item_exc.value.safe_message
     assert total_exc.value.error_code == "responses_input_item_too_large"
     assert parts_exc.value.error_code == "responses_input_item_count_exceeded"
+
+
+def test_function_call_output_cap_rejects_without_raw_output() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES=4)).apply(
+            _body(
+                input=[
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_123",
+                        "output": "secret output",
+                    }
+                ]
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_function_call_output_too_large"
+    assert "secret output" not in exc_info.value.safe_message
 
 
 def test_oversized_input_and_instructions_reject_without_raw_text() -> None:
@@ -384,6 +428,178 @@ def test_streaming_structured_text_format_rejected_before_forwarding() -> None:
 
     assert exc_info.value.error_code == "responses_structured_streaming_not_supported"
     assert exc_info.value.param == "text.format"
+
+
+def test_function_tool_request_passes_and_canonicalizes_tool_choice() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Perform a local lookup.",
+                    "parameters": schema,
+                    "strict": True,
+                }
+            ],
+            tool_choice={"type": "function", "name": "lookup"},
+        )
+    )
+
+    assert result.effective_body["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "parameters": schema,
+            "description": "Perform a local lookup.",
+            "strict": True,
+        }
+    ]
+    assert result.effective_body["tool_choice"] == {"type": "function", "name": "lookup"}
+    assert result.estimated_input_tokens > 0
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", "none", "required"])
+def test_function_tool_choice_string_options_pass(tool_choice: str) -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            tool_choice=tool_choice,
+        )
+    )
+
+    assert result.effective_body["tool_choice"] == tool_choice
+
+
+@pytest.mark.parametrize(
+    ("tools", "param", "code"),
+    [
+        ([], "tools", "responses_tool_invalid_shape"),
+        ([{"type": "web_search"}], "tools[0].type", "responses_hosted_tool_not_supported"),
+        ([{"type": "mcp", "server_url": "https://example.invalid"}], "tools[0].type", "responses_mcp_not_supported"),
+        ([{"type": "custom", "name": "run"}], "tools[0].type", "responses_hosted_tool_not_supported"),
+        ([{"type": "function", "name": "bad name", "parameters": {}}], "tools[0].name", "responses_tool_invalid_shape"),
+        ([{"type": "function", "name": "lookup", "parameters": []}], "tools[0].parameters", "responses_tool_invalid_shape"),
+        ([{"type": "function", "name": "lookup", "parameters": {}, "server_url": "https://example.invalid"}], "tools[0]", "responses_mcp_not_supported"),
+        ([{"type": "function", "name": "lookup", "parameters": {}, "strict": "true"}], "tools[0].strict", "responses_tool_invalid_shape"),
+    ],
+)
+def test_function_tool_validation_rejects_invalid_shapes_without_schema_leakage(
+    tools: list[dict[str, object]],
+    param: str,
+    code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(_body(tools=tools))
+
+    assert exc_info.value.error_code == code
+    assert exc_info.value.param == param
+    assert "https://example.invalid" not in exc_info.value.safe_message
+
+
+def test_function_tool_caps_reject_without_schema_leakage() -> None:
+    schema = {"type": "object", "description": "secret schema marker"}
+
+    with pytest.raises(RequestPolicyError) as schema_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES=16)).apply(
+            _body(tools=[{"type": "function", "name": "lookup", "parameters": schema}])
+        )
+    with pytest.raises(RequestPolicyError) as name_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES=4)).apply(
+            _body(tools=[{"type": "function", "name": "lookup", "parameters": {}}])
+        )
+    with pytest.raises(RequestPolicyError) as description_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=4)).apply(
+            _body(
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "find",
+                        "description": "secret description",
+                        "parameters": {},
+                    }
+                ]
+            )
+        )
+
+    assert schema_exc.value.error_code == "responses_function_tool_schema_too_large"
+    assert "secret schema marker" not in schema_exc.value.safe_message
+    assert name_exc.value.error_code == "responses_tool_invalid_shape"
+    assert description_exc.value.error_code == "responses_tool_invalid_shape"
+    assert "secret description" not in description_exc.value.safe_message
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "param", "code"),
+    [
+        ("sometimes", "tool_choice", "responses_tool_choice_invalid"),
+        ({"type": "function", "name": "missing"}, "tool_choice.name", "responses_tool_choice_invalid"),
+        ({"type": "web_search"}, "tool_choice.type", "responses_hosted_tool_not_supported"),
+        ({"type": "mcp", "server_label": "x"}, "tool_choice.type", "responses_mcp_not_supported"),
+        ({"type": "function", "function": {"name": "lookup"}}, "tool_choice.function", "responses_tool_choice_invalid"),
+    ],
+)
+def test_function_tool_choice_rejects_invalid_shapes(
+    tool_choice: object,
+    param: str,
+    code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+                tool_choice=tool_choice,
+            )
+        )
+
+    assert exc_info.value.error_code == code
+    assert exc_info.value.param == param
+
+
+def test_tool_choice_without_tools_rejects() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(_body(tool_choice="none"))
+
+    assert exc_info.value.error_code == "responses_tool_choice_invalid"
+    assert exc_info.value.param == "tool_choice"
+
+
+def test_streaming_function_tools_rejected_before_forwarding() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(
+                stream=True,
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            )
+        )
+
+    assert exc_info.value.error_code == "responses_function_tool_streaming_not_supported"
+    assert exc_info.value.param == "tools"
 
 
 def test_json_output_is_secret_safe_for_policy_result() -> None:

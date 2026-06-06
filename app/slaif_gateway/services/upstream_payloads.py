@@ -58,6 +58,8 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
     "store",
     "text",
     "service_tier",
+    "tools",
+    "tool_choice",
 )
 
 

@@ -47,6 +47,16 @@ def test_structured_output_capability_passes_when_explicit() -> None:
     )
 
 
+def test_function_tools_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["function_tools"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        function_tools_requested=True,
+    )
+
+
 def test_streaming_request_fails_when_capability_absent() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(
@@ -79,6 +89,17 @@ def test_structured_output_request_fails_when_capability_absent() -> None:
 
     assert exc_info.value.error_code == "responses_structured_output_not_supported"
     assert exc_info.value.param == "text.format"
+
+
+def test_function_tools_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            function_tools_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_function_tool_capability_not_supported"
+    assert exc_info.value.param == "tools"
 
 
 def test_streaming_request_fails_when_route_flag_absent() -> None:
