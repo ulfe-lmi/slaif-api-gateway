@@ -559,6 +559,81 @@ def test_responses_input_array_structured_request_reconstructs_exact_upstream_bo
     }
 
 
+def test_responses_function_tools_request_reconstructs_exact_upstream_body() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "opaque schema"}},
+        "required": ["query"],
+    }
+    inbound = {
+        "model": "classroom-responses",
+        "input": [{"role": "user", "content": "use lookup"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": "Local lookup intent.",
+                "parameters": schema,
+                "strict": True,
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": "use lookup"}],
+        "max_output_tokens": 12,
+        "store": False,
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": schema,
+                "description": "Local lookup intent.",
+                "strict": True,
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+    assert outbound["tools"] is not inbound["tools"]
+    assert outbound["tools"][0]["parameters"] is not schema
+
+
+def test_responses_function_call_output_item_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {"role": "user", "content": "use lookup"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": '{"result":"safe"}',
+            },
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {"role": "user", "content": "use lookup"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": '{"result":"safe"}',
+            },
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+
+
 def test_responses_streaming_input_array_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-responses",
@@ -729,12 +804,38 @@ def test_responses_input_item_array_deep_copy_isolation() -> None:
     assert rebuilt["input"][0]["content"][0]["text"] == "original"
 
 
+def test_responses_function_tool_schema_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["tools"][0]["parameters"]["properties"]["query"]["type"] = "integer"
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["tools"][0]["parameters"]["properties"]["query"]["type"] == "string"
+
+    outbound["tools"][0]["parameters"]["properties"]["query"]["type"] = "boolean"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["tools"][0]["parameters"]["properties"]["query"]["type"] == "string"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
         ("unknown_top_level", "SHOULD_NOT_REACH_PROVIDER_TOP_LEVEL", "responses_field_not_supported"),
-        ("tools", [], "responses_tools_not_supported"),
-        ("tool_choice", "auto", "responses_tools_not_supported"),
         ("parallel_tool_calls", True, "responses_tools_not_supported"),
         ("previous_response_id", "resp_SHOULD_NOT_APPEAR_IN_ERROR", "responses_state_not_supported"),
         ("conversation", "conv_SHOULD_NOT_APPEAR_IN_ERROR", "responses_state_not_supported"),

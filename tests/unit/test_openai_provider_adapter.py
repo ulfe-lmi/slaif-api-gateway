@@ -174,6 +174,67 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_response_posts_function_tool_request(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_tool_123",
+                "object": "response",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_123",
+                        "name": "lookup",
+                        "arguments": '{"query":"safe"}',
+                    }
+                ],
+                "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+            },
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+    assert response.json_body["output"][0]["type"] == "function_call"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 13
+
+
+@pytest.mark.asyncio
 async def test_openai_response_posts_structured_text_format_request(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=httpx.Response(

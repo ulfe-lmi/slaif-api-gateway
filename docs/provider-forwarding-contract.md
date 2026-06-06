@@ -154,9 +154,17 @@ Responses-specific rules for the current foundation:
 - only stateless text input/text output is supported;
 - `input` may be a string or a bounded text-only message/input item array.
   Supported arrays are reconstructed from message roles plus string content or
-  `input_text` content parts; function-call items, function-call-output items,
-  reasoning/stateful items, hosted-tool items, and image/file/audio parts are
-  rejected before provider forwarding;
+  `input_text` content parts; string-only `function_call_output` items are
+  reconstructed as ordinary stateless input for local function-tool follow-up
+  requests. Function-call items, reasoning/stateful items, hosted-tool items,
+  and image/file/audio parts are rejected before provider forwarding;
+- local Responses function tools are reconstructed only from
+  `tools[].type=function`, `name`, optional `description`, `parameters`, and
+  optional `strict` after count/name/description/schema caps. Named
+  `tool_choice` is reconstructed only when it references a declared local
+  function. Function-tool schemas are opaque only under `tools[].parameters`;
+  the gateway does not execute functions and does not forward hosted tool
+  authority markers;
 - non-streaming JSON and typed SSE streaming are supported when route/model
   metadata explicitly enables Responses streaming;
 - non-streaming `text.format` JSON object mode and JSON schema structured

@@ -38,6 +38,7 @@ async def _create_responses_test_data(
     streaming: bool = False,
     structured_outputs: bool = False,
     json_mode: bool = False,
+    function_tools: bool = False,
 ):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -124,6 +125,7 @@ async def _create_responses_test_data(
             capabilities["streaming"] = streaming
             capabilities["structured_outputs"] = structured_outputs
             capabilities["json_mode"] = json_mode
+            capabilities["function_tools"] = function_tools
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -874,6 +876,129 @@ def test_openai_python_client_responses_structured_text_e2e(
         INPUT_TEXT,
         output_text,
         "answer_schema",
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_function_tool_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(database_url, function_tools=True)
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "resp_function_tool_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "fc_function_tool_test",
+                "type": "function_call",
+                "call_id": "call_function_tool_test",
+                "name": "lookup",
+                "arguments": '{"query":"safe"}',
+                "status": "completed",
+            }
+        ],
+        "usage": {
+            "input_tokens": 17,
+            "output_tokens": 19,
+            "total_tokens": 36,
+        },
+        "store": False,
+    }
+    tools = [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Local lookup intent.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-responses-function-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                tools=tools,
+                tool_choice={"type": "function", "name": "lookup"},
+            )
+
+    assert response.id == "resp_function_tool_test"
+    assert response.output[0].type == "function_call"
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": INPUT_TEXT,
+        "max_output_tokens": 32,
+        "store": False,
+        "tools": tools,
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 36
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+    assert state.usage_ledger.prompt_tokens == 17
+    assert state.usage_ledger.completion_tokens == 19
+    assert state.usage_ledger.total_tokens == 36
+
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        INPUT_TEXT,
+        "Local lookup intent.",
+        '{"query":"safe"}',
         created.plaintext_key,
         FAKE_OPENAI_UPSTREAM_KEY,
     ):

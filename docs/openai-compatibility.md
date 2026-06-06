@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with string input or bounded text-only input item arrays plus non-streaming structured `text.format` JSON mode/schema support. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with string input or bounded text-only input item arrays, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool streaming, hosted tools, storage/state, background, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -41,13 +41,15 @@ Current support is intentionally narrow:
 - non-streaming structured text output through `text.format` JSON object mode
   or bounded JSON schema when route/model metadata explicitly enables the
   matching Responses JSON-mode or structured-output capability;
+- non-streaming local/client-side function tools when route/model metadata
+  explicitly enables Responses function-tool capability;
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
 - no `store=true` or provider-side response retrieval;
 - no `previous_response_id`;
 - no `conversation`/provider-side state;
-- no tools;
+- no hosted/provider-side tools;
 - no MCP/connectors;
 - no image/file/audio input or output;
 - no response delete/cancel/retrieve/list input items initially.
@@ -69,16 +71,22 @@ Responses streaming remains unchanged.
 Responses input item arrays support only stateless text message input:
 `role` `user`, `assistant`, `system`, or `developer` with non-empty string
 content, or `type: "message"` with `input_text` content parts. Function-call
-items, function-call-output items, reasoning/stateful items, hosted-tool items,
-and image/file/audio content parts remain rejected. Input arrays use ordinary
+items, reasoning/stateful items, hosted-tool items, and image/file/audio
+content parts remain rejected. String-only `function_call_output` input items
+are supported as ordinary stateless input for local function-tool follow-up
+requests; media tool outputs remain rejected. Input arrays use ordinary
 input-token estimation and provider usage finalization; no prompt/input text is
 stored or logged.
 
-Responses tools are not supported in the foundation and must not be blind
-passthrough. Function tools are the safest first candidate for a later slice,
-web search requires explicit `max_tool_calls` and cost bounds, and file
-search/code interpreter require separate pricing, ownership, and audit
-treatment before support is claimed.
+Responses local function tools are supported only as caller-side model intent:
+SLAIF forwards bounded `type=function` definitions and preserves provider
+function-call output items, but it does not execute functions or add special
+tool billing. The feature requires explicit
+`capabilities.responses.function_tools=true`; Responses text permission and
+Chat Completions function-tool permission do not imply it. Function-tool
+streaming is intentionally unsupported in this slice. Hosted tools, web search,
+file search, code interpreter, MCP/connectors, computer use, image generation,
+and tool search remain rejected.
 
 Endpoint and model permission are separate from capability permission. A key
 that is allowed to call `/v1/chat/completions` with a model is not thereby
@@ -439,7 +447,7 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 
 ## What Is Not Implemented
 
-- Responses retrieval/delete/cancel/list endpoints, Responses tools,
+- Responses retrieval/delete/cancel/list endpoints, Responses hosted tools,
   Responses multimodal input/output, provider-side storage,
   background mode, previous-response/conversation state, and MCP/connectors.
   Only the stateless text-only `POST /v1/responses` foundation is implemented,

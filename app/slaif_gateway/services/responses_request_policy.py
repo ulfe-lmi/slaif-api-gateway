@@ -25,6 +25,8 @@ _SUPPORTED_FIELDS = frozenset(
         "store",
         "text",
         "service_tier",
+        "tools",
+        "tool_choice",
     }
 )
 TEXT_FORMAT_TEXT = "text"
@@ -42,6 +44,12 @@ _TEXT_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SUPPORTED_INPUT_MESSAGE_ROLES = frozenset({"user", "assistant", "system", "developer"})
 _SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
 _SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
+_SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
+_SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
+    {"type", "name", "description", "parameters", "strict"}
+)
+_SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
+_FUNCTION_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _MULTIMODAL_INPUT_ITEM_TYPES = frozenset(
     {
         "input_image",
@@ -55,7 +63,6 @@ _MULTIMODAL_INPUT_ITEM_TYPES = frozenset(
 _TOOL_INPUT_ITEM_TYPES = frozenset(
     {
         "function_call",
-        "function_call_output",
         "custom_tool_call",
         "custom_tool_call_output",
         "web_search_call",
@@ -69,6 +76,27 @@ _TOOL_INPUT_ITEM_TYPES = frozenset(
         "tool_search_call",
         "shell_call",
         "local_shell_call",
+    }
+)
+_HOSTED_TOOL_TYPES = frozenset(
+    {
+        "web_search",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "web_search_2025_08_26",
+        "file_search",
+        "code_interpreter",
+        "computer",
+        "computer_use",
+        "computer_use_preview",
+        "image_generation",
+        "tool_search",
+        "mcp",
+        "shell",
+        "local_shell",
+        "apply_patch",
+        "namespace",
+        "custom",
     }
 )
 
@@ -110,12 +138,23 @@ class ResponsesRequestPolicy:
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
         self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
+        tools_schema_bytes = self._validate_tools(effective_body)
+        tool_choice_bytes = self._validate_tool_choice(effective_body)
+        function_tools_requested = responses_function_tools_requested(effective_body)
+        if effective_body.get("stream") is True and function_tools_requested:
+            _raise(
+                "tools",
+                "responses_function_tool_streaming_not_supported",
+                "Streaming Responses function tools are not enabled by this gateway.",
+            )
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
         estimated_input_tokens = self._estimate_input_tokens(
             input_text_bytes=input_text_bytes,
             instructions=instructions,
             body=effective_body,
+            tools_schema_bytes=tools_schema_bytes,
+            tool_choice_bytes=tool_choice_bytes,
         )
         if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
             _raise(
@@ -209,6 +248,8 @@ class ResponsesRequestPolicy:
             )
 
         item_type = item.get("type")
+        if item_type == "function_call_output":
+            return self._validate_function_call_output_item(item, param=param)
         if item_type is not None and item_type != "message":
             if item_type in _MULTIMODAL_INPUT_ITEM_TYPES:
                 code = "responses_input_multimodal_not_supported"
@@ -253,6 +294,51 @@ class ResponsesRequestPolicy:
         if item_type == "message":
             canonical_item["type"] = "message"
         return canonical_item, text_bytes
+
+    def _validate_function_call_output_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int]:
+        unknown = set(item) - _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_function_call_output_invalid",
+                "This Responses function call output field is not enabled by this gateway.",
+            )
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            _raise(
+                f"{param}.call_id",
+                "responses_function_call_output_invalid",
+                "Responses function call output items require a non-empty call_id.",
+            )
+        self._validate_string_bytes(
+            call_id,
+            param=f"{param}.call_id",
+            max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES,
+            code="responses_function_call_output_invalid",
+        )
+        output = item.get("output")
+        if not isinstance(output, str):
+            _raise(
+                f"{param}.output",
+                "responses_function_call_output_invalid",
+                "Responses function call output must be a string in this gateway.",
+            )
+        self._validate_string_bytes(
+            output,
+            param=f"{param}.output",
+            max_bytes=self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES,
+            code="responses_function_call_output_too_large",
+        )
+        return {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": output,
+        }, len(output.encode("utf-8"))
 
     def _validate_input_item_content(self, content: Any, *, param: str) -> tuple[str | list[dict[str, str]], int]:
         if isinstance(content, str):
@@ -589,6 +675,242 @@ class ResponsesRequestPolicy:
             field_label="Responses text format",
         )
 
+    def _validate_tools(self, body: dict[str, Any]) -> int:
+        value = body.get("tools")
+        if value is None:
+            return 0
+        if not isinstance(value, list):
+            _raise(
+                "tools",
+                "responses_tool_invalid_shape",
+                "The 'tools' field must be a list of Responses function tools.",
+            )
+        if not value:
+            _raise(
+                "tools",
+                "responses_tool_invalid_shape",
+                "The 'tools' field must contain at least one function tool when provided.",
+            )
+        if len(value) > self._settings.RESPONSES_MAX_TOOLS_PER_REQUEST:
+            _raise(
+                "tools",
+                "responses_tool_count_exceeded",
+                "The Responses tools array has too many entries.",
+            )
+        if len(value) > self._settings.RESPONSES_MAX_FUNCTION_TOOLS_PER_REQUEST:
+            _raise(
+                "tools",
+                "responses_tool_count_exceeded",
+                "The Responses function tools array has too many entries.",
+            )
+
+        canonical_tools: list[dict[str, Any]] = []
+        total_schema_bytes = 0
+        seen_names: set[str] = set()
+        for index, tool in enumerate(value):
+            canonical_tool, schema_bytes = self._validate_function_tool(
+                tool,
+                param=f"tools[{index}]",
+            )
+            name = canonical_tool["name"]
+            if name in seen_names:
+                _raise(
+                    f"tools[{index}].name",
+                    "responses_tool_invalid_shape",
+                    "Responses function tool names must be unique.",
+                )
+            seen_names.add(name)
+            total_schema_bytes += schema_bytes
+            if total_schema_bytes > self._settings.RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES:
+                _raise(
+                    "tools",
+                    "responses_function_tool_schema_too_large",
+                    "The total Responses function tool schema size exceeds the gateway limit.",
+                )
+            canonical_tools.append(canonical_tool)
+
+        body["tools"] = canonical_tools
+        return len(canonical_json_bytes({"tools": canonical_tools}))
+
+    def _validate_function_tool(
+        self,
+        tool: Any,
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int]:
+        if not isinstance(tool, Mapping):
+            _raise(
+                param,
+                "responses_tool_invalid_shape",
+                "Responses tools must be function tool objects.",
+            )
+        tool_type = tool.get("type")
+        if tool_type != "function":
+            code = (
+                "responses_hosted_tool_not_supported"
+                if tool_type in _HOSTED_TOOL_TYPES
+                else "responses_tool_type_not_supported"
+            )
+            if tool_type == "mcp" or _contains_provider_authority_marker(tool):
+                code = "responses_mcp_not_supported"
+            _raise(
+                f"{param}.type",
+                code,
+                "Only local Responses function tools are enabled by this gateway.",
+            )
+        if _contains_provider_authority_marker(tool):
+            _raise(
+                param,
+                "responses_mcp_not_supported",
+                "Provider-side tool authority markers are not enabled by this gateway.",
+            )
+        unknown = set(tool) - _SUPPORTED_FUNCTION_TOOL_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_tool_invalid_shape",
+                "This Responses function tool field is not enabled by this gateway.",
+            )
+
+        name = tool.get("name")
+        if not isinstance(name, str) or not name:
+            _raise(
+                f"{param}.name",
+                "responses_tool_invalid_shape",
+                "Responses function tools require a non-empty name.",
+            )
+        if not _FUNCTION_TOOL_NAME_PATTERN.fullmatch(name):
+            _raise(
+                f"{param}.name",
+                "responses_tool_invalid_shape",
+                "Responses function tool names use unsupported characters.",
+            )
+        self._validate_string_bytes(
+            name,
+            param=f"{param}.name",
+            max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES,
+            code="responses_tool_invalid_shape",
+        )
+
+        parameters = tool.get("parameters")
+        if not isinstance(parameters, Mapping):
+            _raise(
+                f"{param}.parameters",
+                "responses_tool_invalid_shape",
+                "Responses function tools require a parameters schema object.",
+            )
+        schema_bytes = self._validate_json_bytes(
+            parameters,
+            param=f"{param}.parameters",
+            max_bytes=self._settings.RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES,
+            too_large_code="responses_function_tool_schema_too_large",
+            invalid_code="responses_tool_invalid_shape",
+            field_label="Responses function tool schema",
+            return_size=True,
+        )
+
+        canonical_tool: dict[str, Any] = {
+            "type": "function",
+            "name": name,
+            "parameters": copy.deepcopy(dict(parameters)),
+        }
+
+        description = tool.get("description")
+        if description is not None:
+            if not isinstance(description, str):
+                _raise(
+                    f"{param}.description",
+                    "responses_tool_invalid_shape",
+                    "Responses function tool descriptions must be strings.",
+                )
+            self._validate_string_bytes(
+                description,
+                param=f"{param}.description",
+                max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES,
+                code="responses_tool_invalid_shape",
+            )
+            canonical_tool["description"] = description
+
+        strict = tool.get("strict")
+        if strict is not None:
+            if not isinstance(strict, bool):
+                _raise(
+                    f"{param}.strict",
+                    "responses_tool_invalid_shape",
+                    "Responses function tool strict flags must be booleans.",
+                )
+            canonical_tool["strict"] = strict
+        return canonical_tool, schema_bytes
+
+    def _validate_tool_choice(self, body: dict[str, Any]) -> int:
+        if "tool_choice" not in body:
+            return 0
+        value = body.get("tool_choice")
+        tools = body.get("tools")
+        if tools is None:
+            _raise(
+                "tool_choice",
+                "responses_tool_choice_invalid",
+                "Responses tool_choice requires function tools in this gateway.",
+            )
+        if isinstance(value, str):
+            if value not in {"none", "auto", "required"}:
+                _raise(
+                    "tool_choice",
+                    "responses_tool_choice_invalid",
+                    "Responses tool_choice must be none, auto, required, or a function choice.",
+                )
+            return len(canonical_json_bytes({"tool_choice": value}))
+        if not isinstance(value, Mapping):
+            _raise(
+                "tool_choice",
+                "responses_tool_choice_invalid",
+                "Responses tool_choice must be none, auto, required, or a function choice.",
+            )
+        if _contains_provider_authority_marker(value):
+            _raise(
+                "tool_choice",
+                "responses_mcp_not_supported",
+                "Provider-side tool choices are not enabled by this gateway.",
+            )
+        if value.get("type") != "function":
+            code = (
+                "responses_hosted_tool_not_supported"
+                if value.get("type") in _HOSTED_TOOL_TYPES
+                else "responses_tool_choice_invalid"
+            )
+            if value.get("type") == "mcp":
+                code = "responses_mcp_not_supported"
+            _raise(
+                "tool_choice.type",
+                code,
+                "Only local Responses function tool choices are enabled by this gateway.",
+            )
+        unknown = set(value) - _SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS
+        if unknown:
+            _raise(
+                f"tool_choice.{sorted(unknown)[0]}",
+                "responses_tool_choice_invalid",
+                "This Responses tool choice field is not enabled by this gateway.",
+            )
+        name = value.get("name")
+        if not isinstance(name, str) or not name:
+            _raise(
+                "tool_choice.name",
+                "responses_tool_choice_invalid",
+                "Responses function tool choices require a non-empty tool name.",
+            )
+        declared_names = {tool["name"] for tool in tools if isinstance(tool, Mapping)}
+        if name not in declared_names:
+            _raise(
+                "tool_choice.name",
+                "responses_tool_choice_invalid",
+                "Responses function tool_choice must reference a declared function tool.",
+            )
+        canonical_choice = {"type": "function", "name": name}
+        body["tool_choice"] = canonical_choice
+        return len(canonical_json_bytes({"tool_choice": canonical_choice}))
+
     def _validate_json_bytes(
         self,
         value: Any,
@@ -598,7 +920,8 @@ class ResponsesRequestPolicy:
         too_large_code: str,
         invalid_code: str,
         field_label: str,
-    ) -> None:
+        return_size: bool = False,
+    ) -> int | None:
         try:
             field_bytes = canonical_json_bytes(value)
         except ValueError:
@@ -613,6 +936,9 @@ class ResponsesRequestPolicy:
                 too_large_code,
                 f"{field_label} exceeds the gateway size limit.",
             )
+        if return_size:
+            return len(field_bytes)
+        return None
 
     def _resolve_output_token_limit(self, body: dict[str, Any]) -> tuple[int, bool]:
         value = body.get("max_output_tokens")
@@ -645,10 +971,13 @@ class ResponsesRequestPolicy:
         input_text_bytes: int,
         instructions: str | None,
         body: Mapping[str, Any],
+        tools_schema_bytes: int = 0,
+        tool_choice_bytes: int = 0,
     ) -> int:
         total_bytes = input_text_bytes
         if instructions is not None:
             total_bytes += len(instructions.encode("utf-8"))
+        total_bytes += tools_schema_bytes + tool_choice_bytes
         for field in ("text",):
             if field in body and body[field] is not None:
                 total_bytes += len(canonical_json_bytes({field: body[field]}))
@@ -681,8 +1010,36 @@ def responses_text_format_type(body: Mapping[str, Any]) -> str | None:
     return format_type if isinstance(format_type, str) else None
 
 
+def responses_function_tools_requested(body: Mapping[str, Any]) -> bool:
+    if body.get("tools") is not None or "tool_choice" in body:
+        return True
+    return _input_contains_function_call_output(body.get("input"))
+
+
+def _input_contains_function_call_output(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if isinstance(item, Mapping) and item.get("type") == "function_call_output":
+            return True
+    return False
+
+
+def _contains_provider_authority_marker(value: Mapping[str, Any]) -> bool:
+    forbidden = {
+        "server_url",
+        "connector_id",
+        "authorization",
+        "require_approval",
+        "approval_request",
+        "headers",
+        "secrets",
+    }
+    return any(field in value for field in forbidden)
+
+
 def _unsupported_code_for_field(field_name: str) -> str:
-    if field_name == "tools" or field_name == "tool_choice" or field_name == "parallel_tool_calls":
+    if field_name == "parallel_tool_calls":
         return "responses_tools_not_supported"
     if field_name in {"previous_response_id", "conversation"}:
         return "responses_state_not_supported"

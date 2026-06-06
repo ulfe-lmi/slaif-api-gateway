@@ -171,6 +171,72 @@ async def test_openrouter_response_posts_non_streaming_request(respx_mock) -> No
 
 
 @pytest.mark.asyncio
+async def test_openrouter_response_posts_function_tool_request(respx_mock) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_or_tool_123",
+                "object": "response",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_123",
+                        "name": "lookup",
+                        "arguments": '{"query":"safe"}',
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 4,
+                    "total_tokens": 15,
+                    "cost_usd": "0.00042",
+                },
+            },
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert sent_body == {
+        "model": "openai/gpt-5.2",
+        "input": "hello",
+        "store": False,
+        "max_output_tokens": 20,
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+    assert response.json_body["output"][0]["type"] == "function_call"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
 async def test_openrouter_response_posts_structured_text_format_request(respx_mock) -> None:
     route = respx_mock.post("https://openrouter.ai/api/v1/responses").mock(
         return_value=httpx.Response(

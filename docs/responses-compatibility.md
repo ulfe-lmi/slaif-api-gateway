@@ -5,10 +5,10 @@ Status: limited foundation implemented on current `main`.
 This document defines the RC2-beta support boundary for Responses API work.
 Current support is deliberately narrow: stateless, text-only
 `POST /v1/responses` with string input or bounded text-only input item arrays,
-non-streaming JSON and typed SSE streaming, no tools, no provider-side storage,
-no background mode, no previous response or conversation state, and no
-multimodal input or output. Non-streaming Responses also supports bounded
-structured text output through `text.format`.
+non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
+output through `text.format`, and local/client-side function tools. It has no
+hosted tools, MCP/connectors, provider-side storage, background mode, previous
+response or conversation state, or multimodal input/output.
 
 ## Supported Endpoint
 
@@ -33,6 +33,8 @@ Implemented request fields for the first slice:
 - `store` omitted or `false`
 - `text.format` as plain text, JSON object mode, or bounded JSON schema
   structured output
+- `tools` with local function-tool entries only
+- `tool_choice` as `none`, `auto`, `required`, or a named local function choice
 - `service_tier` omitted or `auto`
 
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
@@ -61,12 +63,28 @@ Supported item shapes are simple message objects such as
 `{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`.
 Supported roles are `user`, `assistant`, `system`, and `developer`; content may
 be a non-empty text string or a bounded list of `input_text` content parts.
-Function-call items, function-call-output items, reasoning/stateful items,
-hosted-tool items, and image/file/audio content parts are rejected before Redis
-rate limiting, pricing lookup, quota reservation, or provider forwarding. Input
-item arrays use the same Responses text/stateless route capability as string
-input. They compose with plain text streaming and non-streaming structured
-`text.format`; structured streaming remains rejected.
+Function-call items, reasoning/stateful items, hosted-tool items, and
+image/file/audio content parts are rejected before Redis rate limiting, pricing
+lookup, quota reservation, or provider forwarding. String-only
+`function_call_output` items are supported as ordinary stateless input for local
+function-tool follow-up requests; image/file outputs in tool-result items remain
+rejected. Input item arrays use the same Responses text/stateless route
+capability as string input. They compose with plain text streaming,
+non-streaming structured `text.format`, and local function tools; structured
+streaming and function-tool streaming remain rejected.
+
+Responses local function tools are supported only as caller-side intent. SLAIF
+forwards bounded function definitions shaped as
+`{"type":"function","name":...,"parameters":...}` with optional `description`
+and `strict` when the resolved route sets
+`capabilities.responses.function_tools=true`. Function names, descriptions,
+per-tool schemas, total tool schema bytes, and tool counts are capped. A named
+`tool_choice` must reference a declared function in the same request. SLAIF
+does not execute functions, does not add a special tool billing category, and
+does not police downstream application behavior after a model returns a local
+function-call item. Function definitions and string tool outputs are ordinary
+input material for admission estimates; final accounting still uses provider
+usage/cost once.
 
 The first slice supports OpenAI Responses forwarding to `/v1/responses` when
 the selected route explicitly advertises Responses text/stateless capability
@@ -101,9 +119,11 @@ Responses tools must not be blindly passed through.
 Rules:
 
 - Endpoint and model permission do not imply capability permission.
-- Tools must be explicitly allowed by key or key template.
-- Function tools are the safest first supported class because execution remains
-  in the caller's application instead of inside the provider.
+- Local function tools require explicit route/model
+  `capabilities.responses.function_tools=true` metadata. Endpoint/model
+  permission alone does not enable them.
+- Function tools are supported only as caller-side intent because execution
+  remains in the caller's application instead of inside the provider.
 - Web search may be supported only with explicit `max_tool_calls`, model/tool
   allowlists, provider allowlists, and cost-bound calculations.
 - File search and code interpreter/container tools require explicit policy,
