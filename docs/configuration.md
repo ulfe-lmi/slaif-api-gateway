@@ -460,12 +460,17 @@ template-based participant key creation remains future work.
 ## Responses API Configuration
 
 The current Responses API foundation is stateless and text-only. It supports
-non-streaming JSON, typed SSE text streaming, and non-streaming structured
-`text.format` JSON object/schema output when route capability metadata allows
-it. It reuses `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
+string input or bounded text-only input item arrays, non-streaming JSON, typed
+SSE text streaming, and non-streaming structured `text.format` JSON
+object/schema output when route capability metadata allows it. It reuses
+`DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 
 - `RESPONSES_MAX_INPUT_TEXT_BYTES=262144`
+- `RESPONSES_MAX_INPUT_ITEMS=128`
+- `RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=262144`
+- `RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=1048576`
+- `RESPONSES_MAX_TEXT_CONTENT_PARTS_PER_ITEM=64`
 - `RESPONSES_MAX_INSTRUCTIONS_BYTES=65536`
 - `RESPONSES_MAX_METADATA_BYTES=16384`
 - `RESPONSES_MAX_METADATA_KEYS=32`

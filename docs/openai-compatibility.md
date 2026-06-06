@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with non-streaming structured `text.format` JSON mode/schema support. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation with string input or bounded text-only input item arrays plus non-streaming structured `text.format` JSON mode/schema support. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -35,6 +35,7 @@ Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error h
 Current support is intentionally narrow:
 
 - stateless text-only `POST /v1/responses`;
+- `input` as a string or bounded text-only message/input item array;
 - non-streaming JSON or typed SSE streaming when route/model metadata explicitly
   enables Responses streaming;
 - non-streaming structured text output through `text.format` JSON object mode
@@ -64,6 +65,14 @@ billing category. JSON schemas are capped, forwarded only under
 `text.format`, included in the admission-time input estimate, and not stored or
 logged. Structured `stream=true` requests are rejected in this slice; plain text
 Responses streaming remains unchanged.
+
+Responses input item arrays support only stateless text message input:
+`role` `user`, `assistant`, `system`, or `developer` with non-empty string
+content, or `type: "message"` with `input_text` content parts. Function-call
+items, function-call-output items, reasoning/stateful items, hosted-tool items,
+and image/file/audio content parts remain rejected. Input arrays use ordinary
+input-token estimation and provider usage finalization; no prompt/input text is
+stored or logged.
 
 Responses tools are not supported in the foundation and must not be blind
 passthrough. Function tools are the safest first candidate for a later slice,

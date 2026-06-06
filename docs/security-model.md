@@ -67,6 +67,13 @@ and counted for input estimation, and must not be stored or logged alongside
 Responses input text, output text, raw request bodies, raw response bodies, or
 provider event bodies.
 
+Responses text input item arrays follow the same boundary. They are accepted
+only as stateless text message input with supported roles and string or
+`input_text` content parts. Function-call items, function-call-output items,
+reasoning/stateful items, hosted-tool items, and image/file/audio content parts
+are rejected before provider forwarding. Input item text is counted for
+admission estimates but is not stored or logged.
+
 ## Chat Completions Capability Policy
 
 SLAIF permissions are endpoint, model, provider, capability/tool,
@@ -366,7 +373,8 @@ Completions hardening only; it does not implement Responses API behavior.
 ## Responses API Security Model
 
 Responses API support is limited to stateless, text-only `POST /v1/responses`
-with non-streaming JSON and typed SSE streaming. It is default-off and
+with string input or bounded text-only input item arrays, non-streaming JSON,
+and typed SSE streaming. It is default-off and
 policy-first:
 
 - Responses must be explicitly enabled per key through the `/v1/responses`

@@ -4,10 +4,11 @@ Status: limited foundation implemented on current `main`.
 
 This document defines the RC2-beta support boundary for Responses API work.
 Current support is deliberately narrow: stateless, text-only
-`POST /v1/responses` with non-streaming JSON and typed SSE streaming, no tools,
-no provider-side storage, no background mode, no previous response or
-conversation state, and no multimodal input or output. Non-streaming Responses
-also supports bounded structured text output through `text.format`.
+`POST /v1/responses` with string input or bounded text-only input item arrays,
+non-streaming JSON and typed SSE streaming, no tools, no provider-side storage,
+no background mode, no previous response or conversation state, and no
+multimodal input or output. Non-streaming Responses also supports bounded
+structured text output through `text.format`.
 
 ## Supported Endpoint
 
@@ -21,7 +22,7 @@ and tests add them.
 Implemented request fields for the first slice:
 
 - `model`
-- `input` as a text string
+- `input` as a text string or bounded text-only message/input item array
 - `instructions` as optional text
 - `max_output_tokens`
 - `temperature`
@@ -53,6 +54,19 @@ only inside this explicit `text.format` container, are capped, counted in the
 admission-time input estimate, and are not stored or logged. Structured
 `stream=true` requests are intentionally rejected in this slice; plain text
 Responses streaming remains supported when the route advertises streaming.
+
+Responses input item arrays are accepted only for stateless text message input.
+Supported item shapes are simple message objects such as
+`{"role":"user","content":"..."}` and explicit message items such as
+`{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`.
+Supported roles are `user`, `assistant`, `system`, and `developer`; content may
+be a non-empty text string or a bounded list of `input_text` content parts.
+Function-call items, function-call-output items, reasoning/stateful items,
+hosted-tool items, and image/file/audio content parts are rejected before Redis
+rate limiting, pricing lookup, quota reservation, or provider forwarding. Input
+item arrays use the same Responses text/stateless route capability as string
+input. They compose with plain text streaming and non-streaming structured
+`text.format`; structured streaming remains rejected.
 
 The first slice supports OpenAI Responses forwarding to `/v1/responses` when
 the selected route explicitly advertises Responses text/stateless capability
@@ -154,6 +168,10 @@ reservation-overrun and cost-source metadata, and rely on negative-balance
 lockout for subsequent calls. This hardening does not implement
 `/v1/responses` or `/v1/completions`, and it does not add multimodal/audio/file
 pricing.
+
+Responses input item text and item wrappers are included in the normal
+admission-time input estimate. They do not create a new billing category; final
+accounting still uses provider-reported usage/cost once.
 
 With tool-enabled Responses, a request that starts under a key limit may exceed
 the remaining limit because the model can spend the bounded tool budget before

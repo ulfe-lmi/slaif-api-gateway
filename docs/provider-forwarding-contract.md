@@ -152,6 +152,11 @@ dictionary is not forwarded as-is.
 Responses-specific rules for the current foundation:
 
 - only stateless text input/text output is supported;
+- `input` may be a string or a bounded text-only message/input item array.
+  Supported arrays are reconstructed from message roles plus string content or
+  `input_text` content parts; function-call items, function-call-output items,
+  reasoning/stateful items, hosted-tool items, and image/file/audio parts are
+  rejected before provider forwarding;
 - non-streaming JSON and typed SSE streaming are supported when route/model
   metadata explicitly enables Responses streaming;
 - non-streaming `text.format` JSON object mode and JSON schema structured
