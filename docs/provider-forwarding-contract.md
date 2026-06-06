@@ -160,7 +160,9 @@ Responses-specific rules for the current foundation:
   `response.output_text.delta`, `response.completed`, and safe `error` events;
   it is not converted into Chat Completions chunks;
 - streaming finalization uses provider usage from the completed response event,
-  and missing final usage is not finalized as zero cost;
+  holds `response.completed` until finalization succeeds, and does not forward
+  any upstream `data: [DONE]` marker as success before that finalization;
+  missing final usage is not finalized as zero cost;
 - tool fields are rejected and are not blind passthrough;
 - future supported tool types must be explicitly allowlisted by key or key
   template;
@@ -361,6 +363,12 @@ Streaming has an extra finalization rule because content may already have reache
 - If finalization succeeds, that record is marked finalized and `[DONE]` is emitted.
 - If finalization fails, the record is marked with `needs_reconciliation=true` and `recovery_state=provider_completed_finalization_failed`; `[DONE]` is not emitted.
 - Operator reconciliation can later finalize these provider-completed rows using stored usage/cost metadata without calling providers.
+
+Responses streaming uses typed SSE events rather than Chat Completions chunk
+objects. For Responses, the gateway holds `response.completed` until
+usage-backed finalization succeeds; if an upstream provider also sends
+`data: [DONE]`, it is held behind the completed event and is not emitted on
+missing-usage or finalization-failure paths.
 
 Streaming does not expand request policy. Hosted/provider-side tools, custom
 tools, web search, MCP/connectors, external web access, file/audio content,

@@ -125,9 +125,13 @@ The existing reserve-before-provider-call model remains mandatory:
 
 For streaming Responses, SLAIF reserves before opening the provider stream,
 forwards typed SSE events without storing streamed deltas, and finalizes once
-from provider usage on the completed response event. Missing completed-event
-usage is not treated as zero cost; the reservation is released through the
-streaming failure path and the client receives a safe typed `error` event.
+from provider usage on the completed response event. The `response.completed`
+event is held until usage-backed finalization succeeds. If an upstream provider
+also emits `data: [DONE]`, SLAIF does not forward it as a normal success marker
+before finalization; it is emitted only after the completed event on successful
+finalization. Missing completed-event usage is not treated as zero cost; the
+reservation is released through the streaming failure path and the client
+receives a safe typed `error` event instead of a normal terminal success marker.
 
 Current Chat Completions already uses admission-time budget checks plus
 post-call spend accounting. Successful Chat Completions calls finalize actual

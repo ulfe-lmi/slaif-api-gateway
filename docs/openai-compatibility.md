@@ -52,7 +52,9 @@ Responses streaming preserves typed provider events such as `response.created`,
 `response.output_text.delta`, `response.completed`, and safe `error` events. It
 does not translate Responses streams into Chat Completions chunk objects. Final
 streaming accounting uses provider usage from the completed response event;
-missing final usage is not treated as zero cost.
+`response.completed` is held until that finalization succeeds. If a provider
+also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
+before finalization. Missing final usage is not treated as zero cost.
 
 Responses tools are not supported in the foundation and must not be blind
 passthrough. Function tools are the safest first candidate for a later slice,

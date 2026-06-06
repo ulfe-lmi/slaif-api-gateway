@@ -369,7 +369,9 @@ policy-first:
 - Streaming also requires explicit Responses streaming capability and route
   streaming support. Typed provider events are forwarded without storing
   streamed deltas, and final accounting uses provider usage from the completed
-  response event. Missing final usage is not treated as zero cost.
+  response event. The completed event, and any upstream `data: [DONE]` marker if
+  present, are not emitted as normal success until usage-backed finalization
+  succeeds. Missing final usage is not treated as zero cost.
 - Tools are not supported in the foundation. Future supported tool types must
   be explicitly allowed; tool JSON is not blind passthrough.
 - MCP/connectors are excluded.
