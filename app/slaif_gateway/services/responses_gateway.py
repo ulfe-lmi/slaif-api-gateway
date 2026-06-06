@@ -62,6 +62,7 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.upstream_payloads import build_responses_upstream_body
 
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
@@ -109,7 +110,10 @@ async def handle_response_create(
             provider=route.provider,
             upstream_model=route.resolved_model,
             endpoint=RESPONSES_PROVIDER_ENDPOINT,
-            body=dict(policy_result.effective_body),
+            body=build_responses_upstream_body(
+                policy_result.effective_body,
+                upstream_model=route.resolved_model,
+            ),
             request_id=request_id,
         )
         try:

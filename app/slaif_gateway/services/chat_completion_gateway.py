@@ -75,6 +75,7 @@ from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.upstream_payloads import build_chat_completion_upstream_body
 from slaif_gateway.services.usage_profile_service import (
     UsageProfileService,
     build_chat_completion_tool_metadata,
@@ -186,7 +187,10 @@ async def handle_chat_completion(
             provider=route.provider,
             upstream_model=route.resolved_model,
             endpoint="chat.completions",
-            body=dict(policy_result.effective_body),
+            body=build_chat_completion_upstream_body(
+                policy_result.effective_body,
+                upstream_model=route.resolved_model,
+            ),
             request_id=request_id,
         )
         try:
@@ -268,7 +272,10 @@ def _streaming_chat_completion_response(
         provider=route.provider,
         upstream_model=route.resolved_model,
         endpoint="chat.completions",
-        body=dict(policy_result.effective_body),
+        body=build_chat_completion_upstream_body(
+            policy_result.effective_body,
+            upstream_model=route.resolved_model,
+        ),
         request_id=request_id,
     )
 

@@ -79,7 +79,6 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
         "tool_choice": "auto",
         "response_format": {"type": "json_object"},
         "n": 1,
-        "x_unknown_json_compatible": {"preserved": True},
     }
 
     response = await adapter.forward_chat_completion(_request(caller_body))
@@ -97,7 +96,15 @@ async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) ->
     assert sent_body["tool_choice"] == "auto"
     assert sent_body["response_format"] == {"type": "json_object"}
     assert sent_body["n"] == 1
-    assert sent_body["x_unknown_json_compatible"] == {"preserved": True}
+    assert set(sent_body) == {
+        "model",
+        "messages",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "n",
+    }
     assert caller_body["model"] == "client-model"
     assert response.provider == "openai"
     assert response.status_code == 200

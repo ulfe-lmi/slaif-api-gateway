@@ -52,6 +52,10 @@ and reports only env var names, never secret values.
 Client `Authorization` headers contain gateway-issued keys and are never
 forwarded upstream. Provider adapters construct a new upstream `Authorization`
 header from the server-side provider secret and use an outbound header allowlist.
+Provider-bound JSON request bodies are also reconstructed inside the gateway
+from validated, capped, capability-approved fields. The gateway does not forward
+the raw client request dictionary upstream or rely on removing a few denied
+fields from an otherwise unknown body.
 
 ## Chat Completions Capability Policy
 
