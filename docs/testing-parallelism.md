@@ -38,8 +38,8 @@ parallel, then runs integration, E2E, and browser suites serially. It does not
 create, mutate, or drop test databases.
 
 For HPC-specific environment bootstrapping, including user-local PostgreSQL,
-Playwright, browser runtime libraries, and cleaned `git` command patterns, see
-[docs/testing-hpc.md](testing-hpc.md).
+Redis, Docker Compose config tooling, Playwright, browser runtime libraries,
+and cleaned `git` command patterns, see [docs/testing-hpc.md](testing-hpc.md).
 
 ## Shared-State Inventory
 
@@ -161,6 +161,10 @@ The script:
 - includes bounded error excerpts in `SUMMARY.md` for failing phase or shard
   logs, so a Codex verification run can report failures without dumping huge
   logs.
+- reports validation checks and pytest suites in separate tables. Validation
+  phases such as `ruff`, `alembic_heads`, `git_diff_check`, `hidden_unicode`,
+  `safety_scan`, and `docker_compose_config` are not pytest tests and therefore
+  do not show misleading `tests=0` counts.
 
 Optional environment variables:
 
@@ -194,6 +198,13 @@ Requirements and safety behavior:
 - Generated DB names use a `slaif_hpc_test_...` prefix by default, and cleanup
   refuses to drop any DB outside the generated prefix.
 - Normal tests still use mocked upstream HTTP and disabled real email behavior.
+- Redis-backed integration tests require `redis-server` on `PATH` or an
+  isolated Redis test URL. Redis-dependent pytest skips are treated as an
+  incomplete environment, not a full verification.
+- Docker Compose config validation should pass on HPC through existing
+  `docker compose`, a module-provided Compose tool, or the user-local standalone
+  Compose wrapper prepared by `scripts/setup-hpc-test-env.sh`. No Docker daemon
+  installation is required for `docker compose config`.
 
 Known limitations:
 
@@ -217,6 +228,12 @@ Troubleshooting:
 
 - If DB-backed phases are skipped, check the `environment` and summary logs for
   PostgreSQL command availability and connection details.
+- If Redis-backed tests are skipped, run `scripts/setup-hpc-test-env.sh` so
+  `redis-server` and `redis-cli` are available on `PATH`.
+- If `docker_compose_config` is skipped, use the setup script to provision
+  standalone Compose and its thin `docker compose` wrapper. If config rendering
+  needs environment values, the setup script may copy `.env.example` to an
+  ignored local `.env`; never commit `.env`.
 - If a single shard fails, inspect the shard log listed in `SUMMARY.md`; shard
   logs include the test file and generated DB name.
 - If the run is interrupted, cleanup still attempts to drop all generated DBs
@@ -289,7 +306,7 @@ Final report requirements:
 - exact command used
 - worker count
 - summary path
-- phase table from SUMMARY.md
+- `Validation phases` and `Test suites` tables from SUMMARY.md
 - skipped phases and exact reasons
 - failing phases and failing shard log paths
 - first useful bounded error excerpt from each failing shard log

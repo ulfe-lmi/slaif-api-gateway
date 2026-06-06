@@ -41,3 +41,5 @@ Runbooks:
 - [Admin access and lockout](admin-access.md)
 - [RC-beta upgrade checklist](rc-beta-upgrade.md)
 - [HPC verification and local tool bootstrap](../testing-hpc.md)
+  documents the Codex-inside-HPC workflow, user-local PostgreSQL/Redis/Compose
+  provisioning, and the two-table validation/test-suite summary format.

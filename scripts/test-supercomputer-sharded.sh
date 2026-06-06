@@ -110,10 +110,14 @@ JUNIT_DIR="$RUN_DIR/junit"
 TMP_ROOT="$RUN_DIR/tmp"
 SUMMARY_FILE="$RUN_DIR/SUMMARY.md"
 SUMMARY_TSV="$RUN_DIR/summary.tsv"
+VALIDATION_TSV="$RUN_DIR/validation.tsv"
+SUITE_TSV="$RUN_DIR/test-suites.tsv"
 DB_LIST_FILE="$RUN_DIR/created-dbs.txt"
 SHARD_STATUS_DIR="$RUN_DIR/shard-status"
 mkdir -p "$LOG_DIR" "$JUNIT_DIR" "$TMP_ROOT" "$SHARD_STATUS_DIR"
 : > "$SUMMARY_TSV"
+: > "$VALIDATION_TSV"
+: > "$SUITE_TSV"
 : > "$DB_LIST_FILE"
 
 export TMPDIR="$TMP_ROOT"
@@ -130,13 +134,30 @@ seconds_now() {
   date +%s
 }
 
-record_result() {
+record_validation_result() {
   local phase="$1"
   local status="$2"
   local duration="$3"
   local log_path="$4"
   local note="$5"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$phase" "$status" "$duration" "$log_path" "$note" >> "$SUMMARY_TSV"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$phase" "$status" "$duration" "$log_path" "$note" >> "$VALIDATION_TSV"
+  printf 'validation\t%s\t%s\t%s\t%s\t%s\n' "$phase" "$status" "$duration" "$log_path" "$note" >> "$SUMMARY_TSV"
+}
+
+record_suite_result() {
+  local suite="$1"
+  local status="$2"
+  local duration="$3"
+  local tests="$4"
+  local passed="$5"
+  local failed="$6"
+  local skipped="$7"
+  local log_path="$8"
+  local note="$9"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$suite" "$status" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note" >> "$SUITE_TSV"
+  printf 'suite\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$suite" "$status" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note" >> "$SUMMARY_TSV"
 }
 
 ERROR_EXCERPT_PATTERN='FAILED|ERROR|Traceback|AssertionError|OperationalError|Timeout|Exception|FATAL|could not|refused|permission denied|database .* does not exist|connection'
@@ -176,12 +197,107 @@ run_logged() {
   end="$(seconds_now)"
   duration=$((end - start))
   if [[ "$status" -eq 0 ]]; then
-    record_result "$phase" "PASS" "$duration" "$log_path" ""
+    record_validation_result "$phase" "PASS" "$duration" "$log_path" ""
     log "Finished $phase: PASS (${duration}s)"
   else
-    record_result "$phase" "FAIL" "$duration" "$log_path" "exit=$status"
+    record_validation_result "$phase" "FAIL" "$duration" "$log_path" "exit=$status"
     OVERALL_FAIL=1
     log "Finished $phase: FAIL (${duration}s; log: $log_path)"
+  fi
+  return 0
+}
+
+parse_pytest_logs() {
+  "$PY" - "$@" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+status_re = re.compile(
+    r"(\d+)\s+"
+    r"(passed|failed|skipped|error|errors|xfailed|xpassed|deselected|warnings?)\b"
+)
+summary_hint = re.compile(
+    r"\b(passed|failed|skipped|error|errors|xfailed|xpassed)\b.*\bin\b"
+)
+
+totals = {"passed": 0, "failed": 0, "skipped": 0}
+parse_errors = []
+for raw_path in sys.argv[1:]:
+    path = Path(raw_path)
+    if not path.is_file():
+        parse_errors.append(f"{raw_path}: missing")
+        continue
+    text = path.read_text(encoding="utf-8", errors="replace")
+    candidates = [
+        line
+        for line in text.splitlines()
+        if summary_hint.search(line) and "==" in line
+    ]
+    if not candidates:
+        candidates = [line for line in text.splitlines() if summary_hint.search(line)]
+    if not candidates:
+        parse_errors.append(f"{raw_path}: no pytest summary")
+        continue
+    line = candidates[-1]
+    counts = {}
+    for value, label in status_re.findall(line):
+        label = "error" if label == "errors" else label
+        counts[label] = counts.get(label, 0) + int(value)
+    totals["passed"] += counts.get("passed", 0) + counts.get("xpassed", 0)
+    totals["failed"] += counts.get("failed", 0) + counts.get("error", 0)
+    totals["skipped"] += counts.get("skipped", 0) + counts.get("xfailed", 0)
+
+tests = totals["passed"] + totals["failed"] + totals["skipped"]
+print(f"{tests}\t{totals['passed']}\t{totals['failed']}\t{totals['skipped']}\t{'; '.join(parse_errors)}")
+PY
+}
+
+read_pytest_counts() {
+  local __tests_var="$1"
+  local __passed_var="$2"
+  local __failed_var="$3"
+  local __skipped_var="$4"
+  local __note_var="$5"
+  shift 5
+  local parsed tests passed failed skipped note
+  parsed="$(parse_pytest_logs "$@")"
+  IFS=$'\t' read -r tests passed failed skipped note <<< "$parsed"
+  printf -v "$__tests_var" '%s' "${tests:-0}"
+  printf -v "$__passed_var" '%s' "${passed:-0}"
+  printf -v "$__failed_var" '%s' "${failed:-0}"
+  printf -v "$__skipped_var" '%s' "${skipped:-0}"
+  printf -v "$__note_var" '%s' "${note:-}"
+}
+
+run_pytest_suite_logged() {
+  local suite="$1"
+  local log_path="$2"
+  shift 2
+  local start end duration status tests passed failed skipped parse_note note
+  start="$(seconds_now)"
+  log "Starting $suite"
+  set +e
+  {
+    echo "Suite: $suite"
+    echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Command: $*"
+    "$@"
+  } >"$log_path" 2>&1
+  status=$?
+  set -e
+  end="$(seconds_now)"
+  duration=$((end - start))
+  read_pytest_counts tests passed failed skipped parse_note "$log_path"
+  note="$parse_note"
+  if [[ "$status" -eq 0 ]]; then
+    record_suite_result "$suite" "PASS" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note"
+    log "Finished $suite: PASS (${duration}s; tests=$tests skipped=$skipped)"
+  else
+    note="${note:+$note; }exit=$status"
+    record_suite_result "$suite" "FAIL" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note"
+    OVERALL_FAIL=1
+    log "Finished $suite: FAIL (${duration}s; log: $log_path)"
   fi
   return 0
 }
@@ -428,11 +544,11 @@ run_db_suite() {
   local count
   count="$(wc -l < "$files_file" | tr -d ' ')"
   if [[ "$count" == "0" ]]; then
-    record_result "$suite" "SKIP" "0" "" "no test files found"
+    record_suite_result "$suite" "SKIP" "0" "0" "0" "0" "0" "" "no test files found"
     return 0
   fi
   if [[ "$POSTGRES_STATUS" != "available" ]]; then
-    record_result "$suite" "SKIP" "0" "" "$POSTGRES_STATUS"
+    record_suite_result "$suite" "SKIP" "0" "0" "0" "0" "0" "" "$POSTGRES_STATUS"
     return 0
   fi
 
@@ -455,15 +571,26 @@ run_db_suite() {
     fi
   done
 
-  local duration passed failed_files
+  local duration passed_files failed_files tests passed failed_tests skipped parse_note log_paths=()
   duration=$(($(seconds_now) - suite_start))
-  passed="$(count_shard_status_matches "$suite" "PASS")"
+  passed_files="$(count_shard_status_matches "$suite" "PASS")"
   failed_files="$(count_shard_status_matches "$suite" "FAIL")"
+  local status_path status_path_suite status_path_status status_path_duration status_path_log status_path_file
+  for status_path in "$SHARD_STATUS_DIR"/${suite}-*.status; do
+    [[ -e "$status_path" ]] || continue
+    IFS=$'\t' read -r status_path_suite status_path_status status_path_duration status_path_log status_path_file < "$status_path"
+    if [[ -n "$status_path_log" ]]; then
+      log_paths+=("$status_path_log")
+    fi
+  done
+  read_pytest_counts tests passed failed_tests skipped parse_note "${log_paths[@]}"
   if [[ "$failed" -eq 0 && "$failed_files" -eq 0 ]]; then
-    record_result "$suite" "PASS" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=0 max_concurrency=$max_concurrency"
+    record_suite_result "$suite" "PASS" "$duration" "$tests" "$passed" "$failed_tests" "$skipped" "$SHARD_STATUS_DIR" \
+      "files=$count passed_files=$passed_files failed_files=0 max_concurrency=$max_concurrency${parse_note:+ parse_note=$parse_note}"
     log "Finished $suite: PASS (${duration}s; files=$count)"
   else
-    record_result "$suite" "FAIL" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=$failed_files max_concurrency=$max_concurrency"
+    record_suite_result "$suite" "FAIL" "$duration" "$tests" "$passed" "$failed_tests" "$skipped" "$SHARD_STATUS_DIR" \
+      "files=$count passed_files=$passed_files failed_files=$failed_files max_concurrency=$max_concurrency${parse_note:+ parse_note=$parse_note}"
     OVERALL_FAIL=1
     log "Finished $suite: FAIL (${duration}s; failed files=$failed_files)"
   fi
@@ -473,17 +600,17 @@ run_browser_suite() {
   local suite="browser"
   if [[ "${SLAIF_SUPERCOMPUTER_SKIP_BROWSER:-0}" == "1" ]]; then
     BROWSER_STATUS="skipped: SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1"
-    record_result "$suite" "SKIP" "0" "" "SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1"
+    record_suite_result "$suite" "SKIP" "0" "0" "0" "0" "0" "" "SLAIF_SUPERCOMPUTER_SKIP_BROWSER=1"
     return 0
   fi
   if ! check_python_dependency "playwright"; then
     BROWSER_STATUS="skipped: playwright Python package unavailable"
-    record_result "$suite" "SKIP" "0" "" "playwright Python package unavailable"
+    record_suite_result "$suite" "SKIP" "0" "0" "0" "0" "0" "" "playwright Python package unavailable"
     return 0
   fi
   if [[ "$POSTGRES_STATUS" != "available" ]]; then
     BROWSER_STATUS="skipped: $POSTGRES_STATUS"
-    record_result "$suite" "SKIP" "0" "" "$POSTGRES_STATUS"
+    record_suite_result "$suite" "SKIP" "0" "0" "0" "0" "0" "" "$POSTGRES_STATUS"
     return 0
   fi
   local db_name="${DB_PREFIX}_browser_1"
@@ -516,12 +643,15 @@ run_browser_suite() {
   if [[ "${SLAIF_SUPERCOMPUTER_KEEP_DBS:-0}" != "1" ]]; then
     drop_db "$db_name"
   fi
+  local tests passed failed skipped parse_note note
+  read_pytest_counts tests passed failed skipped parse_note "$log_path"
+  note="serial isolated DB${parse_note:+; parse_note=$parse_note}"
   if [[ "$status" -eq 0 ]]; then
     BROWSER_STATUS="ran serial: PASS"
-    record_result "$suite" "PASS" "$duration" "$log_path" "serial isolated DB"
+    record_suite_result "$suite" "PASS" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "$note"
   else
     BROWSER_STATUS="ran serial: FAIL ($log_path)"
-    record_result "$suite" "FAIL" "$duration" "$log_path" "exit=$status"
+    record_suite_result "$suite" "FAIL" "$duration" "$tests" "$passed" "$failed" "$skipped" "$log_path" "${note}; exit=$status"
     OVERALL_FAIL=1
   fi
 }
@@ -529,9 +659,31 @@ run_browser_suite() {
 write_summary() {
   local total_duration
   total_duration=$(($(seconds_now) - START_TIME))
+  local total_tests total_passed total_failed total_skipped
+  total_tests="$(awk -F '\t' '{sum += $4} END {print sum + 0}' "$SUITE_TSV")"
+  total_passed="$(awk -F '\t' '{sum += $5} END {print sum + 0}' "$SUITE_TSV")"
+  total_failed="$(awk -F '\t' '{sum += $6} END {print sum + 0}' "$SUITE_TSV")"
+  total_skipped="$(awk -F '\t' '{sum += $7} END {print sum + 0}' "$SUITE_TSV")"
+  local validation_fail_count validation_skip_count suite_fail_count suite_skip_count result
+  validation_fail_count="$(awk -F '\t' '$2 == "FAIL" {count++} END {print count + 0}' "$VALIDATION_TSV")"
+  validation_skip_count="$(awk -F '\t' '$2 == "SKIP" {count++} END {print count + 0}' "$VALIDATION_TSV")"
+  suite_fail_count="$(awk -F '\t' '$2 == "FAIL" {count++} END {print count + 0}' "$SUITE_TSV")"
+  suite_skip_count="$(awk -F '\t' '$2 == "SKIP" {count++} END {print count + 0}' "$SUITE_TSV")"
+  if [[ "$suite_fail_count" -gt 0 || "$total_failed" -gt 0 ]]; then
+    result="RESULT=FAIL_REAL_TEST"
+  elif [[ "$validation_skip_count" -gt 0 || "$suite_skip_count" -gt 0 || "$total_skipped" -gt 0 ]]; then
+    result="RESULT=ENVIRONMENT_BLOCKED"
+  elif [[ "$validation_fail_count" -gt 0 ]]; then
+    result="RESULT=FAIL_REAL_TEST"
+  elif [[ "$total_tests" -eq 0 ]]; then
+    result="RESULT=HARNESS_BUG"
+  else
+    result="RESULT=OK_FULL"
+  fi
   {
     echo "SUPERCOMPUTER TEST SUMMARY"
     echo
+    echo "$result"
     echo "commit: $COMMIT"
     echo "branch: $BRANCH"
     echo "workers: $WORKERS"
@@ -544,15 +696,36 @@ write_summary() {
     echo "e2e_mode: $E2E_MODE"
     echo "browser_status: $BROWSER_STATUS"
     echo
+    echo "Validation phases"
+    echo
     echo "| phase | status | duration_s | log | note |"
     echo "| --- | --- | ---: | --- | --- |"
     while IFS=$'\t' read -r phase status duration log_path note; do
       echo "| $phase | $status | $duration | $log_path | $note |"
-    done < "$SUMMARY_TSV"
+    done < "$VALIDATION_TSV"
+    echo
+    echo "Test suites"
+    echo
+    echo "| suite | status | duration_s | tests | passed | failed | skipped | log / log_dir | note |"
+    echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    while IFS=$'\t' read -r suite status duration tests passed failed skipped log_path note; do
+      echo "| $suite | $status | $duration | $tests | $passed | $failed | $skipped | $log_path | $note |"
+    done < "$SUITE_TSV"
+    echo
+    echo "Totals"
+    echo
+    echo "- total tests: $total_tests"
+    echo "- total passed: $total_passed"
+    echo "- total failed: $total_failed"
+    echo "- total skipped: $total_skipped"
+    echo
+    echo "${total_tests} tests, ${total_passed} passed, ${total_failed} failed, ${total_skipped} skipped"
     echo
     echo "failures:"
-    if grep -q $'\tFAIL\t' "$SUMMARY_TSV"; then
-      grep $'\tFAIL\t' "$SUMMARY_TSV" || true
+    if awk -F '\t' '$2 == "FAIL" {found=1} END {exit found ? 0 : 1}' "$VALIDATION_TSV" || \
+       awk -F '\t' '$2 == "FAIL" {found=1} END {exit found ? 0 : 1}' "$SUITE_TSV"; then
+      awk -F '\t' '$2 == "FAIL" {print "validation\t" $0}' "$VALIDATION_TSV" || true
+      awk -F '\t' '$2 == "FAIL" {print "suite\t" $0}' "$SUITE_TSV" || true
     else
       echo "none"
     fi
@@ -579,8 +752,14 @@ write_summary() {
     fi
     echo
     echo "skips:"
-    if grep -q $'\tSKIP\t' "$SUMMARY_TSV"; then
-      grep $'\tSKIP\t' "$SUMMARY_TSV" || true
+    if awk -F '\t' '$2 == "SKIP" {found=1} END {exit found ? 0 : 1}' "$VALIDATION_TSV" || \
+       awk -F '\t' '$2 == "SKIP" {found=1} END {exit found ? 0 : 1}' "$SUITE_TSV" || \
+       [[ "$total_skipped" -gt 0 ]]; then
+      awk -F '\t' '$2 == "SKIP" {print "validation\t" $0}' "$VALIDATION_TSV" || true
+      awk -F '\t' '$2 == "SKIP" {print "suite\t" $0}' "$SUITE_TSV" || true
+      if [[ "$total_skipped" -gt 0 ]]; then
+        echo "pytest_skipped_tests: $total_skipped"
+      fi
     else
       echo "none"
     fi
@@ -596,12 +775,21 @@ write_summary() {
     while IFS=$'\t' read -r phase status duration log_path note; do
       if [[ "$status" == "FAIL" && -n "$log_path" && -f "$log_path" ]]; then
         excerpts=1
-        echo "### $phase"
+        echo "### validation: $phase"
         echo "log: $log_path"
         print_bounded_log_excerpt "$log_path"
         echo
       fi
-    done < "$SUMMARY_TSV"
+    done < "$VALIDATION_TSV"
+    while IFS=$'\t' read -r suite status duration tests passed failed skipped log_path note; do
+      if [[ "$status" == "FAIL" && -n "$log_path" && -f "$log_path" && "$log_path" != "$SHARD_STATUS_DIR" ]]; then
+        excerpts=1
+        echo "### suite: $suite"
+        echo "log: $log_path"
+        print_bounded_log_excerpt "$log_path"
+        echo
+      fi
+    done < "$SUITE_TSV"
     while IFS=$'\t' read -r suite status duration log_path file; do
       if [[ "$status" == "FAIL" ]]; then
         excerpts=1
@@ -623,6 +811,8 @@ write_summary() {
     echo "- Integration DB files used max concurrency $WORKERS."
     echo "- E2E DB files used max concurrency $E2E_CONCURRENCY."
     echo "- Browser tests were serial or skipped."
+    echo "- Validation phases are reported separately from pytest test suites."
+    echo "- Pytest test counts appear only in the Test suites table and totals."
     echo "- Real email delivery was disabled in shard subprocess environments."
   } > "$SUMMARY_FILE"
   cat "$SUMMARY_FILE"
@@ -653,7 +843,7 @@ log "Run directory: $RUN_DIR"
   redis-server --version 2>/dev/null || true
   docker --version 2>/dev/null || true
 } > "$LOG_DIR/environment.log" 2>&1
-record_result "environment" "PASS" "0" "$LOG_DIR/environment.log" "dirty tree recorded if present"
+record_validation_result "environment" "PASS" "0" "$LOG_DIR/environment.log" "dirty tree recorded if present"
 
 if ! check_python_dependency "pytest"; then
   die "pytest is unavailable. Run $PY -m pip install -e \".[dev]\" first."
@@ -667,7 +857,7 @@ fi
 if ! check_python_dependency "alembic"; then
   die "alembic is unavailable. Run $PY -m pip install -e \".[dev]\" first."
 fi
-record_result "dependency_sanity" "PASS" "0" "" "pytest, xdist, ruff, alembic available"
+record_validation_result "dependency_sanity" "PASS" "0" "" "pytest, xdist, ruff, alembic available"
 
 if postgres_available; then
   POSTGRES_STATUS="available"
@@ -689,14 +879,14 @@ run_logged "hidden_unicode" "$LOG_DIR/hidden-unicode.log" hidden_unicode_scan
 run_logged "safety_scan" "$LOG_DIR/safety-scan.log" safety_scan
 
 if [[ "${SLAIF_SUPERCOMPUTER_SKIP_DOCKER:-0}" == "1" ]]; then
-  record_result "docker_compose_config" "SKIP" "0" "" "SLAIF_SUPERCOMPUTER_SKIP_DOCKER=1"
+  record_validation_result "docker_compose_config" "SKIP" "0" "" "SLAIF_SUPERCOMPUTER_SKIP_DOCKER=1"
 elif command -v docker >/dev/null 2>&1; then
   run_logged "docker_compose_config" "$LOG_DIR/docker-compose-config.log" docker compose config
 else
-  record_result "docker_compose_config" "SKIP" "0" "" "docker unavailable"
+  record_validation_result "docker_compose_config" "SKIP" "0" "" "docker unavailable"
 fi
 
-run_logged "unit" "$LOG_DIR/unit.log" env \
+run_pytest_suite_logged "unit" "$LOG_DIR/unit.log" env \
   -u DATABASE_URL \
   -u TEST_DATABASE_URL \
   -u TEST_REDIS_URL \
