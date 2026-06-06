@@ -8,6 +8,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts/test-supercomputer-sharded.sh"
+AGENTS = REPO_ROOT / "AGENTS.md"
+TESTING_DOC = REPO_ROOT / "docs/testing-parallelism.md"
 
 
 def test_supercomputer_script_exists_executable_and_syntax_valid() -> None:
@@ -116,3 +118,69 @@ def test_supercomputer_script_text_preserves_db_and_secret_safety_contract() -> 
     ]
     for pattern in dangerous_patterns:
         assert pattern not in content
+
+    codex_invocation_patterns = [
+        "\ncodex",
+        "\tcodex",
+        " codex ",
+        "exec codex",
+        "command -v codex",
+        "$(codex",
+        "`codex",
+    ]
+    for pattern in codex_invocation_patterns:
+        assert pattern not in content
+
+
+def test_supercomputer_docs_describe_inside_codex_verification_workflow() -> None:
+    docs = AGENTS.read_text() + "\n" + TESTING_DOC.read_text()
+    normalized_docs = " ".join(docs.split())
+
+    assert "starts Codex" in normalized_docs
+    assert "inside the repository" in normalized_docs
+    assert "stays inside Codex" in normalized_docs
+    assert "Codex is the caller" in docs
+    assert "uses its shell tool" in docs
+    assert "Repository scripts must never invoke" in docs
+    assert "The repository harness itself never invokes" in docs
+    assert (
+        "bash -lc 'set -euo pipefail; pwd; command -v bash; command -v git; "
+        "command -v python; git rev-parse --show-toplevel'"
+    ) in docs
+    assert "RESULT=CODEX_COMMAND_RUNNER_BROKEN" in docs
+    assert "bwrap: execvp ... codex: No such file or directory" in docs
+    assert "not a SLAIF test failure" in docs
+    assert "Codex command-runner preflight failure" in docs
+    assert "Do not edit files." in docs
+    assert "Do not ask me to run commands." in docs
+    assert "Do not create a branch." in docs
+    assert "Do not commit." in docs
+    assert "Do not open a PR." in docs
+    assert "Do not run /review." in docs
+    assert "Do not fix failures." in docs
+    assert "In no case modify repository code." in docs
+    assert "No repository commands were executed." in docs
+    assert "No code was modified." in docs
+    assert "scripts/test-supercomputer-sharded.sh 128" in docs
+    assert "SUMMARY_PATH=" in docs
+    assert "first useful bounded error excerpt from each failing shard log" in docs
+
+
+def test_supercomputer_summary_includes_bounded_failure_diagnostics() -> None:
+    content = SCRIPT.read_text()
+
+    assert "ERROR_EXCERPT_PATTERN" in content
+    assert "print_bounded_log_excerpt" in content
+    assert "head -80" in content
+    assert "tail -120" in content
+    assert "failing_shard_status_entries:" in content
+    assert "failing_shard_log_paths:" in content
+    assert "failure_log_excerpts:" in content
+    assert "postgresql_status: $POSTGRES_STATUS" in content
+    assert "db_isolation: generated per-shard TEST_DATABASE_URL values only" in content
+    assert "e2e_mode: $E2E_MODE" in content
+    assert "browser_status: $BROWSER_STATUS" in content
+    assert "PostgreSQL availability required a generated create/drop database probe" in content
+    assert "E2E_MODE=\"default serial (max concurrency 1)\"" in content
+    assert "BROWSER_STATUS=\"not run\"" in content
+    assert "Browser tests were serial or skipped" in content
