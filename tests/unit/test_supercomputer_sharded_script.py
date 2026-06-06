@@ -184,3 +184,14 @@ def test_supercomputer_summary_includes_bounded_failure_diagnostics() -> None:
     assert "E2E_MODE=\"default serial (max concurrency 1)\"" in content
     assert "BROWSER_STATUS=\"not run\"" in content
     assert "Browser tests were serial or skipped" in content
+
+
+def test_supercomputer_db_suite_status_counting_tolerates_zero_matches() -> None:
+    content = SCRIPT.read_text()
+
+    assert "count_shard_status_matches()" in content
+    assert 'passed="$(count_shard_status_matches "$suite" "PASS")"' in content
+    assert 'failed_files="$(count_shard_status_matches "$suite" "FAIL")"' in content
+    assert "grep -q \"$status_marker\"" in content
+    assert "grep -l $'\\tPASS\\t'" not in content
+    assert "grep -l $'\\tFAIL\\t'" not in content

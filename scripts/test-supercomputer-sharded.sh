@@ -403,6 +403,21 @@ throttle_jobs() {
   done
 }
 
+count_shard_status_matches() {
+  local suite="$1"
+  local expected_status="$2"
+  local count=0
+  local status_marker=$'\t'"$expected_status"$'\t'
+  local status_path
+  for status_path in "$SHARD_STATUS_DIR"/${suite}-*.status; do
+    [[ -e "$status_path" ]] || continue
+    if grep -q "$status_marker" "$status_path"; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
+}
+
 run_db_suite() {
   local suite="$1"
   local dir="$2"
@@ -442,8 +457,8 @@ run_db_suite() {
 
   local duration passed failed_files
   duration=$(($(seconds_now) - suite_start))
-  passed="$(grep -l $'\tPASS\t' "$SHARD_STATUS_DIR"/${suite}-*.status 2>/dev/null | wc -l | tr -d ' ')"
-  failed_files="$(grep -l $'\tFAIL\t' "$SHARD_STATUS_DIR"/${suite}-*.status 2>/dev/null | wc -l | tr -d ' ')"
+  passed="$(count_shard_status_matches "$suite" "PASS")"
+  failed_files="$(count_shard_status_matches "$suite" "FAIL")"
   if [[ "$failed" -eq 0 && "$failed_files" -eq 0 ]]; then
     record_result "$suite" "PASS" "$duration" "$SHARD_STATUS_DIR" "files=$count passed=$passed failed=0 max_concurrency=$max_concurrency"
     log "Finished $suite: PASS (${duration}s; files=$count)"
