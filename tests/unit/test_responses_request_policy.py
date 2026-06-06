@@ -36,6 +36,13 @@ def test_valid_string_input_injects_store_false_and_preserves_supported_fields()
     assert result.estimated_input_tokens > 0
 
 
+def test_stream_true_is_policy_valid_before_route_capability_check() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(_body(stream=True))
+
+    assert result.effective_body["stream"] is True
+    assert result.effective_body["store"] is False
+
+
 def test_omitted_max_output_tokens_injects_default() -> None:
     result = ResponsesRequestPolicy(Settings(DEFAULT_MAX_OUTPUT_TOKENS=77)).apply(
         {"model": "gpt-test", "input": "hello"}
@@ -53,7 +60,6 @@ def test_omitted_max_output_tokens_injects_default() -> None:
         ("previous_response_id", "resp_123", "responses_state_not_supported"),
         ("conversation", "conv_123", "responses_state_not_supported"),
         ("background", True, "responses_background_not_supported"),
-        ("stream", True, "responses_streaming_not_supported"),
         ("store", True, "responses_store_not_supported"),
         ("include", ["message.input_image.image_url"], "responses_multimodal_not_supported"),
         ("unknown_future_field", {"x": "y"}, "responses_field_not_supported"),
@@ -102,6 +108,15 @@ def test_scalar_controls_reject_invalid_types(field: str) -> None:
 
     assert exc_info.value.error_code == "responses_field_invalid_type"
     assert exc_info.value.param == field
+
+
+@pytest.mark.parametrize("value", ["true", 1, {}, []])
+def test_stream_rejects_non_bool_values(value: object) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(_body(stream=value))
+
+    assert exc_info.value.error_code == "responses_field_invalid_type"
+    assert exc_info.value.param == "stream"
 
 
 def test_metadata_must_be_bounded_object_without_leaking_values() -> None:

@@ -179,9 +179,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Bulk key synchronous `send-now` execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
-- Responses API support is limited to stateless, non-streaming, text-only
-  `POST /v1/responses` with explicit key endpoint permission, route capability,
-  provider route, and pricing metadata. Responses tools, streaming,
+- Responses API support is limited to stateless, text-only
+  `POST /v1/responses` with non-streaming JSON and typed SSE streaming,
+  explicit key endpoint permission, route capability, provider route, and
+  pricing metadata. Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,
   multimodal input/output, and MCP/connectors remain future work. Safe Chat
   Completions usage profiling, trusted calibration keys, calibration proposal

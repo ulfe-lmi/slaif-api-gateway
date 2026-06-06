@@ -75,6 +75,8 @@ class ResponsesRouteCapabilityError(RequestPolicyError):
 def enforce_responses_route_capabilities(
     *,
     route_capabilities: Mapping[str, object] | None,
+    streaming_requested: bool = False,
+    route_supports_streaming: bool = False,
 ) -> None:
     """Require explicit text+stateless Responses metadata and fail closed."""
 
@@ -96,6 +98,26 @@ def enforce_responses_route_capabilities(
     for finding in required:
         if capabilities.get(finding.capability) is not True:
             raise ResponsesRouteCapabilityError(finding)
+
+    if streaming_requested:
+        if capabilities.get(RESPONSES_CAPABILITY_STREAMING) is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_STREAMING,
+                    field="stream",
+                    error_code="responses_route_capability_not_supported",
+                    safe_message="This model route does not support streaming Responses.",
+                )
+            )
+        if route_supports_streaming is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_STREAMING,
+                    field="stream",
+                    error_code="responses_route_capability_not_supported",
+                    safe_message="This provider route does not support streaming Responses.",
+                )
+            )
 
 
 def _parse_route_capabilities(route_capabilities: Mapping[str, object] | None) -> dict[str, bool]:

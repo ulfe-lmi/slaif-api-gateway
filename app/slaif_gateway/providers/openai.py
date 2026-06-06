@@ -119,6 +119,31 @@ class OpenAIProviderAdapter(ProviderAdapter):
         response = await self._post_json(_RESPONSES_PATH, json=body, headers=headers)
         return self._provider_response(request, response)
 
+    async def stream_response(
+        self,
+        request: ProviderRequest,
+    ) -> AsyncIterator[ProviderStreamChunk]:
+        if request.endpoint not in {"/v1/responses", "responses"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        body = dict(request.body)
+        body["model"] = request.upstream_model
+        body["stream"] = True
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="text/event-stream",
+        )
+
+        async for chunk in self._stream_sse(_RESPONSES_PATH, json=body, headers=headers):
+            yield self._provider_response_stream_chunk(request, chunk)
+
     async def _post_json(
         self,
         path: str,
@@ -241,7 +266,9 @@ class OpenAIProviderAdapter(ProviderAdapter):
         response: httpx.Response,
         payload: Mapping[str, Any] | None,
     ) -> None:
-        if not isinstance(payload, Mapping) or "error" not in payload:
+        if not isinstance(payload, Mapping):
+            return
+        if "error" not in payload and payload.get("type") != "error":
             return
         raise ProviderHTTPError(
             provider=self.provider_name,
@@ -268,6 +295,25 @@ class OpenAIProviderAdapter(ProviderAdapter):
             upstream_request_id=_upstream_request_id(response.headers, payload or {}),
         )
 
+    def _provider_response_stream_chunk(self, request: ProviderRequest, chunk) -> ProviderStreamChunk:
+        response, event = chunk
+        payload = event.json_body
+        response_payload = _responses_event_response_payload(payload)
+        usage_payload = response_payload if response_payload is not None else payload
+        return ProviderStreamChunk(
+            provider=self.provider_name,
+            upstream_model=request.upstream_model,
+            data=event.data,
+            raw_sse_event=event.raw_event,
+            json_body=payload,
+            is_done=event.is_done,
+            usage=self.parse_usage(usage_payload) if usage_payload is not None else None,
+            upstream_request_id=_upstream_request_id(
+                response.headers,
+                response_payload or payload or {},
+            ),
+        )
+
 
 def _upstream_request_id(headers: Mapping[str, str], payload: Mapping[str, Any]) -> str | None:
     for header_name in _UPSTREAM_REQUEST_ID_HEADERS:
@@ -283,3 +329,12 @@ def _json_or_none(response: httpx.Response) -> object | None:
         return response.json()
     except ValueError:
         return None
+
+
+def _responses_event_response_payload(payload: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping) or payload.get("type") != "response.completed":
+        return None
+    response_payload = payload.get("response")
+    if not isinstance(response_payload, Mapping):
+        return None
+    return response_payload

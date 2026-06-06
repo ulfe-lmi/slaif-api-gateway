@@ -129,17 +129,13 @@ class ResponsesRequestPolicy:
         return value
 
     def _validate_stateless_fields(self, body: dict[str, Any]) -> None:
-        if body.get("stream") is True:
-            _raise(
-                "stream",
-                "responses_streaming_not_supported",
-                "Streaming Responses are not enabled by this gateway.",
-            )
-        if "stream" in body and body.get("stream") is not False and body.get("stream") is not None:
+        if "stream" in body and (
+            body.get("stream") is not None and not isinstance(body.get("stream"), bool)
+        ):
             _raise(
                 "stream",
                 "responses_field_invalid_type",
-                "The 'stream' field must be false when provided.",
+                "The 'stream' field must be a boolean when provided.",
             )
         if body.get("store") is True:
             _raise(

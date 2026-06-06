@@ -24,6 +24,23 @@ def _request(body: dict[str, object] | None = None) -> ProviderRequest:
     )
 
 
+def _responses_request(body: dict[str, object] | None = None) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="gpt-responses-test",
+        endpoint="responses",
+        body=body or {
+            "model": "client-model",
+            "input": "hello",
+            "store": False,
+            "stream": True,
+            "max_output_tokens": 20,
+        },
+        request_id="gw-resp-123",
+        extra_headers={"Authorization": "Bearer gateway-key", "X-Request-ID": "client-request"},
+    )
+
+
 def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
@@ -84,6 +101,73 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     assert sent_body["messages"] == original_body["messages"]
     assert original_body["model"] == "client-model"
     assert original_body["stream_options"]["include_usage"] is False
+
+
+def test_openai_responses_streaming_preserves_typed_events_and_parses_completed_usage() -> None:
+    original_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_123",
+            "object": "response",
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 6,
+                "total_tokens": 11,
+                "input_tokens_details": {"cached_tokens": 2},
+                "output_tokens_details": {"reasoning_tokens": 1},
+            },
+        },
+    }
+    sse = (
+        _sse({"type": "response.created", "response": {"id": "resp_123"}})
+        + _sse({"type": "response.output_text.delta", "delta": "hello"})
+        + _sse(completed)
+    )
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(200, content=sse.encode(), headers={"x-request-id": "upstream"})
+            )
+            chunks = [chunk async for chunk in adapter.stream_response(_responses_request(original_body))]
+            return upstream, chunks
+
+    upstream, chunks = asyncio.run(_collect())
+
+    assert [chunk.json_body["type"] for chunk in chunks if chunk.json_body is not None] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert chunks[1].raw_sse_event == _sse({"type": "response.output_text.delta", "delta": "hello"})
+    assert chunks[2].usage is not None
+    assert chunks[2].usage.prompt_tokens == 5
+    assert chunks[2].usage.completion_tokens == 6
+    assert chunks[2].usage.total_tokens == 11
+    assert chunks[2].usage.cached_tokens == 2
+    assert chunks[2].usage.reasoning_tokens == 1
+
+    sent = upstream.calls[0].request
+    assert sent.headers["authorization"] == "Bearer openai-upstream-key"
+    assert sent.headers["authorization"] != "Bearer gateway-key"
+    assert sent.headers["accept"] == "text/event-stream"
+    sent_body = json.loads(sent.content)
+    assert sent_body == {
+        "model": "gpt-responses-test",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    assert original_body["model"] == "client-model"
 
 
 def test_openai_streaming_missing_key_is_safe() -> None:

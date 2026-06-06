@@ -118,9 +118,10 @@ migrations automatically.
 - Bulk synchronous `send-now` key import execution is not implemented.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
-- Responses API support is limited to stateless, non-streaming, text-only
-  `POST /v1/responses` with explicit key endpoint permission, route capability,
-  provider route, and pricing metadata. Responses tools, streaming,
+- Responses API support is limited to stateless, text-only
+  `POST /v1/responses` with non-streaming JSON and typed SSE streaming,
+  explicit key endpoint permission, route capability, provider route, and
+  pricing metadata. Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,
   multimodal input/output, and MCP/connectors remain future work. Current Chat
   Completions usage profiling and trusted calibration keys, available from CLI

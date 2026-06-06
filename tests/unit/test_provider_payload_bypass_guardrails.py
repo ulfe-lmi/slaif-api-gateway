@@ -13,6 +13,7 @@ ALLOWED_UPSTREAM_BUILDERS = {
 
 ALLOWED_UPSTREAM_BODY_PARAMETERS = {
     ("app/slaif_gateway/services/chat_completion_gateway.py", "_streaming_chat_completion_response", "upstream_body"),
+    ("app/slaif_gateway/services/responses_gateway.py", "_streaming_responses_response", "upstream_body"),
 }
 
 

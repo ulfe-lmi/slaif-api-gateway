@@ -72,6 +72,26 @@ def format_openai_error_event(
     return format_sse_data(json.dumps(payload, separators=(",", ":")))
 
 
+def format_responses_error_event(
+    *,
+    message: str,
+    code: str | None,
+    param: str | None = None,
+    request_id: str | None = None,
+) -> str:
+    """Format a safe Responses typed error event for an already-open stream."""
+    payload: dict[str, object | None] = {
+        "type": "error",
+        "message": message,
+        "code": code,
+        "param": param,
+        "sequence_number": 0,
+    }
+    if request_id is not None:
+        payload["request_id"] = request_id
+    return format_sse_data(json.dumps(payload, separators=(",", ":")))
+
+
 def with_streaming_usage_options(body: Mapping[str, Any]) -> dict[str, Any]:
     """Return a streaming upstream body that requests provider final usage metadata."""
     upstream_body = dict(body)

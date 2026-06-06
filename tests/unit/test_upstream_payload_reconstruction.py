@@ -486,6 +486,25 @@ def test_responses_full_supported_text_request_reconstructs_exact_upstream_body(
     assert outbound["metadata"] is not inbound["metadata"]
 
 
+def test_responses_streaming_text_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "stream": True,
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "max_output_tokens": 12,
+        "stream": True,
+        "store": False,
+    }
+
+
 def test_responses_normalized_contract_deep_copies_opaque_containers() -> None:
     inbound = {
         "model": "classroom-responses",
@@ -524,7 +543,7 @@ def test_responses_normalized_contract_deep_copies_opaque_containers() -> None:
         ("audio", {"format": "wav"}, "responses_multimodal_not_supported"),
         ("stream_options", {"include_usage": True}, "responses_field_not_supported"),
         ("store", True, "responses_store_not_supported"),
-        ("stream", True, "responses_streaming_not_supported"),
+        ("stream", "true", "responses_field_invalid_type"),
         ("service_tier", "priority", "responses_service_tier_not_supported"),
     ],
 )

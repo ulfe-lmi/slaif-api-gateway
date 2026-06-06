@@ -42,6 +42,16 @@ class ProviderAdapter(ABC):
         if False:  # pragma: no cover
             yield None  # type: ignore[misc]
 
+    async def stream_response(
+        self,
+        request: ProviderRequest,
+    ) -> AsyncIterator[ProviderStreamChunk]:
+        """Stream a Responses request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
+
     def parse_usage(self, payload: Mapping[str, Any]) -> ProviderUsage | None:
         """Parse optional usage metadata from an upstream JSON response."""
         usage = payload.get("usage")

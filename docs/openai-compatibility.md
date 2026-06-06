@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Not implemented | Stateless text-only, non-streaming foundation. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Tools, storage/state, background, streaming, and multimodal are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-only foundation. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Tools, storage/state, background, and multimodal are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -35,7 +35,8 @@ Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error h
 Current support is intentionally narrow:
 
 - stateless text-only `POST /v1/responses`;
-- non-streaming only;
+- non-streaming JSON or typed SSE streaming when route/model metadata explicitly
+  enables Responses streaming;
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
@@ -46,6 +47,12 @@ Current support is intentionally narrow:
 - no MCP/connectors;
 - no image/file/audio input or output;
 - no response delete/cancel/retrieve/list input items initially.
+
+Responses streaming preserves typed provider events such as `response.created`,
+`response.output_text.delta`, `response.completed`, and safe `error` events. It
+does not translate Responses streams into Chat Completions chunk objects. Final
+streaming accounting uses provider usage from the completed response event;
+missing final usage is not treated as zero cost.
 
 Responses tools are not supported in the foundation and must not be blind
 passthrough. Function tools are the safest first candidate for a later slice,
@@ -412,11 +419,12 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 
 ## What Is Not Implemented
 
-- Responses retrieval/delete/cancel/list endpoints, streaming Responses,
-  Responses tools, Responses multimodal input/output, provider-side storage,
+- Responses retrieval/delete/cancel/list endpoints, Responses tools,
+  Responses multimodal input/output, provider-side storage,
   background mode, previous-response/conversation state, and MCP/connectors.
-  Only the stateless text-only `POST /v1/responses` foundation is implemented;
-  see `docs/responses-compatibility.md`.
+  Only the stateless text-only `POST /v1/responses` foundation is implemented,
+  including non-streaming JSON and typed SSE streaming; see
+  `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration
   keys can use broad discovery policy only for routed Chat Completions requests.

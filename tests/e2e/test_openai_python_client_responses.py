@@ -28,7 +28,11 @@ INPUT_TEXT = "Hello from SLAIF Responses test"
 OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
 
-async def _create_responses_test_data(database_url: str):
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+async def _create_responses_test_data(database_url: str, *, streaming: bool = False):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
     from slaif_gateway.db.repositories.audit import AuditRepository
@@ -110,6 +114,9 @@ async def _create_responses_test_data(database_url: str):
                 )
                 await providers.set_provider_enabled(provider_config.id, enabled=True)
 
+            capabilities = default_responses_capabilities()
+            capabilities["streaming"] = streaming
+
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
                 provider="openai",
@@ -118,8 +125,8 @@ async def _create_responses_test_data(database_url: str):
                 endpoint=RESPONSES_ENDPOINT,
                 priority=1,
                 visible_in_models=True,
-                supports_streaming=False,
-                capabilities={"responses": default_responses_capabilities()},
+                supports_streaming=streaming,
+                capabilities={"responses": capabilities},
                 notes="Responses E2E route",
             )
             await pricing.create_pricing_rule(
@@ -277,6 +284,166 @@ def test_openai_python_client_responses_text_e2e(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.e2e
+def test_openai_python_client_responses_streaming_text_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_responses_test_data(database_url, streaming=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    completed_response = {
+        "id": "resp_stream_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_stream_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": OUTPUT_TEXT,
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 11,
+            "total_tokens": 18,
+            "input_tokens_details": {"cached_tokens": 2},
+            "output_tokens_details": {"reasoning_tokens": 3},
+        },
+        "store": False,
+    }
+    sse = (
+        _sse(
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_stream_test",
+                    "object": "response",
+                    "created_at": 123,
+                    "status": "in_progress",
+                    "model": TEST_RESPONSES_MODEL,
+                },
+            }
+        )
+        + _sse(
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 1,
+                "item_id": "msg_stream_test",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": OUTPUT_TEXT,
+            }
+        )
+        + _sse(
+            {
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": completed_response,
+            }
+        )
+    )
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={
+                        "content-type": "text/event-stream",
+                        "x-request-id": "upstream-openai-responses-stream-e2e",
+                    },
+                )
+            )
+
+            client = OpenAI()
+            stream = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                stream=True,
+            )
+            events = list(stream)
+
+    event_types = [event.type for event in events]
+    assert event_types == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    deltas = [getattr(event, "delta", None) for event in events]
+    assert OUTPUT_TEXT in deltas
+
+    completed_events = [event for event in events if event.type == "response.completed"]
+    assert completed_events
+    assert completed_events[0].response.id == "resp_stream_test"
+    assert completed_events[0].response.usage.total_tokens == 18
+
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    upstream_body = json.loads(upstream_request.content)
+    assert upstream_body == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": INPUT_TEXT,
+        "max_output_tokens": 32,
+        "stream": True,
+        "store": False,
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 18
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+    assert state.usage_ledger.streaming is True
+    assert state.usage_ledger.provider == "openai"
+    assert state.usage_ledger.prompt_tokens == 7
+    assert state.usage_ledger.completion_tokens == 11
+    assert state.usage_ledger.total_tokens == 18
+
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        INPUT_TEXT,
+        OUTPUT_TEXT,
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
 def test_openai_python_client_responses_rejects_store_and_stream_without_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -318,7 +485,7 @@ def test_openai_python_client_responses_rejects_store_and_stream_without_upstrea
                     input=INPUT_TEXT,
                     stream=True,
                 )
-            assert stream_exc.value.code == "responses_streaming_not_supported"
+            assert stream_exc.value.code == "responses_route_capability_not_supported"
             assert INPUT_TEXT not in str(stream_exc.value)
 
     assert upstream_route.calls == []
