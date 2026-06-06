@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Mapping
 from typing import Any
+
+import copy
+
+from slaif_gateway.services.upstream_request_contracts import (
+    NormalizedChatCompletionUpstreamRequest,
+    NormalizedResponsesUpstreamRequest,
+)
 
 
 CHAT_COMPLETION_UPSTREAM_FIELDS: tuple[str, ...] = (
@@ -57,54 +62,54 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
 
 
 def build_chat_completion_upstream_body(
-    effective_body: Mapping[str, Any],
-    *,
-    upstream_model: str,
+    normalized_request: NormalizedChatCompletionUpstreamRequest,
 ) -> dict[str, Any]:
     """Build a fresh Chat Completions provider payload from approved fields only."""
 
     return _build_upstream_body(
-        effective_body,
-        upstream_model=upstream_model,
-        allowed_fields=CHAT_COMPLETION_UPSTREAM_FIELDS,
+        normalized_request,
+        allowed_fields=frozenset(CHAT_COMPLETION_UPSTREAM_FIELDS),
         endpoint_label="Chat Completions",
     )
 
 
 def build_responses_upstream_body(
-    effective_body: Mapping[str, Any],
-    *,
-    upstream_model: str,
+    normalized_request: NormalizedResponsesUpstreamRequest,
 ) -> dict[str, Any]:
     """Build a fresh Responses provider payload from approved fields only."""
 
     return _build_upstream_body(
-        effective_body,
-        upstream_model=upstream_model,
-        allowed_fields=RESPONSES_UPSTREAM_FIELDS,
+        normalized_request,
+        allowed_fields=frozenset(RESPONSES_UPSTREAM_FIELDS),
         endpoint_label="Responses",
     )
 
 
 def _build_upstream_body(
-    effective_body: Mapping[str, Any],
+    normalized_request: NormalizedChatCompletionUpstreamRequest
+    | NormalizedResponsesUpstreamRequest,
     *,
-    upstream_model: str,
-    allowed_fields: tuple[str, ...],
+    allowed_fields: frozenset[str],
     endpoint_label: str,
 ) -> dict[str, Any]:
-    unknown_fields = sorted(set(effective_body) - set(allowed_fields))
+    if not isinstance(
+        normalized_request,
+        (NormalizedChatCompletionUpstreamRequest, NormalizedResponsesUpstreamRequest),
+    ):
+        raise TypeError(
+            f"{endpoint_label} upstream payload must be built from a normalized request contract."
+        )
+
+    outbound: dict[str, Any] = {"model": normalized_request.upstream_model}
+    fields = normalized_request.as_upstream_fields()
+    unknown_fields = sorted(set(fields) - (set(allowed_fields) - {"model"}))
     if unknown_fields:
         joined = ", ".join(str(field) for field in unknown_fields)
         raise ValueError(f"{endpoint_label} upstream payload contains unapproved fields: {joined}")
 
-    outbound: dict[str, Any] = {}
     for field in allowed_fields:
         if field == "model":
-            outbound["model"] = upstream_model
             continue
-        if field in effective_body:
-            outbound[field] = copy.deepcopy(effective_body[field])
-    if "model" not in outbound:
-        outbound["model"] = upstream_model
+        if field in fields:
+            outbound[field] = copy.deepcopy(fields[field])
     return outbound

@@ -62,6 +62,7 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.upstream_request_contracts import normalize_responses_upstream_request
 from slaif_gateway.services.upstream_payloads import build_responses_upstream_body
 
 RESPONSES_ENDPOINT = "/v1/responses"
@@ -69,6 +70,27 @@ RESPONSES_PROVIDER_ENDPOINT = "responses"
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
+
+
+def _build_safe_responses_upstream_body(
+    *,
+    policy_result: ResponsesPolicyResult,
+    upstream_model: str,
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_responses_upstream_request(
+            policy_result.effective_body,
+            requested_model=policy_result.effective_body["model"],
+            upstream_model=upstream_model,
+        )
+        return build_responses_upstream_body(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Request contains fields that are not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
 
 
 async def handle_response_create(
@@ -91,6 +113,10 @@ async def handle_response_create(
         effective_model=policy_result.effective_body["model"],
         request=request,
     )
+    upstream_body = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model=route.resolved_model,
+    )
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
@@ -110,10 +136,7 @@ async def handle_response_create(
             provider=route.provider,
             upstream_model=route.resolved_model,
             endpoint=RESPONSES_PROVIDER_ENDPOINT,
-            body=build_responses_upstream_body(
-                policy_result.effective_body,
-                upstream_model=route.resolved_model,
-            ),
+            body=upstream_body,
             request_id=request_id,
         )
         try:
