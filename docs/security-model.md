@@ -266,14 +266,17 @@ forwarding, forwards the request, then finalizes or releases the reservation
 after provider response/error handling.
 
 Chat Completions billing is an admission-time budget check plus post-call spend
-accounting. It is not hard real-time spend interruption inside one upstream
-call. If a successful provider response reports actual tokens or cost above the
-reservation, SLAIF finalizes the actual usage, marks the reservation finalized,
-updates used counters, and records safe overrun metadata in the usage ledger.
-That may leave a key above its configured local limits or with negative
-remaining balance. Subsequent calls are then blocked by normal PostgreSQL quota
-admission checks until limits are raised, usage is reset, or the key otherwise
-becomes compliant.
+accounting. For `stream=true`, the per-key Streaming Live-Burn Margin feature
+adds a provisional operational brake that can interrupt a Chat Completions
+stream when estimated live burn crosses the configured cost or token cutoff.
+This is not invoice-grade billing truth and does not replace PostgreSQL hard
+quota. If a successful provider response reports actual tokens or cost above
+the reservation, SLAIF finalizes the actual usage, marks the reservation
+finalized, updates used counters, and records safe overrun metadata in the
+usage ledger. That may leave a key above its configured local limits or with
+negative remaining balance. Subsequent calls are then blocked by normal
+PostgreSQL quota admission checks until limits are raised, usage is reset, or
+the key otherwise becomes compliant.
 
 The usage ledger records metadata, token counts, cost, provider/model status,
 and safe diagnostics. It does not store prompt text, completion text, uploaded
@@ -376,16 +379,18 @@ response-format schemas, metadata values, raw request/response bodies, gateway
 keys, provider keys, Authorization headers, cookies, CSRF/session tokens, and
 encrypted payloads are not stored or logged by streaming diagnostics.
 
-Streaming live-burn margin is a planned future milestone, not implemented
-runtime behavior. Its governance contract is
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). Any future
-implementation may store only safe provisional counters and low-cardinality
-metadata; it must not store prompt text, completion text, streamed chunk text,
-tool arguments or outputs, media payloads, raw request bodies, raw response
+Chat Completions streaming live-burn monitoring is implemented only for
+`POST /v1/chat/completions` with `stream=true`. It estimates visible generated
+text deltas, including function tool-call name/argument deltas, counts them,
+and discards the text. It may store only safe provisional counters and
+low-cardinality metadata; it must not store prompt text, completion text,
+streamed chunk text, tool arguments or outputs, media payloads, raw request
 bodies, provider keys, gateway plaintext keys, Authorization headers, cookies,
 CSRF/session tokens, encrypted payloads, or nonces. PostgreSQL remains
-authoritative for hard quota/accounting, Redis remains temporary operational
-state only, and provider final usage/cost remains authoritative when available.
+authoritative for hard quota/accounting, Redis and in-memory live state remain
+temporary operational state only, and provider final usage/cost remains
+authoritative when available. Responses live-burn monitoring remains future
+work under [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 
 ## Chat Completions Non-Message Input Estimation
 

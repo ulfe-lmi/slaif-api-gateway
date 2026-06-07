@@ -567,6 +567,129 @@ class AccountingService:
             error_code=error_code,
         )
 
+    async def record_streaming_live_burn_interrupted_estimate(
+        self,
+        reservation_id: uuid.UUID,
+        authenticated_key: AuthenticatedGatewayKey,
+        route: RouteResolutionResult,
+        pricing_estimate: ChatCostEstimate,
+        request_id: str,
+        *,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+        estimated_total_tokens: int,
+        estimated_cost_eur: Decimal,
+        response_metadata: Mapping[str, object],
+        endpoint: str = "chat.completions",
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> FinalizedAccountingResult:
+        """Finalize an intentional Chat streaming live-burn abort with safe estimates."""
+        finished = _aware_now(finished_at)
+        reservation = await self._locked_pending_reservation(
+            reservation_id,
+            authenticated_key=authenticated_key,
+        )
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id_for_quota_update(
+            authenticated_key.gateway_key_id
+        )
+        if gateway_key is None:
+            raise ReservationFinalizationError("Gateway key was not found during finalization")
+
+        total_tokens = _non_negative_int(estimated_total_tokens, "estimated_total_tokens")
+        input_tokens = min(_non_negative_int(estimated_input_tokens, "estimated_input_tokens"), total_tokens)
+        output_tokens = min(
+            _non_negative_int(estimated_output_tokens, "estimated_output_tokens"),
+            max(total_tokens - input_tokens, 0),
+        )
+        actual_cost_eur = _non_negative_decimal(estimated_cost_eur, "estimated_cost_eur")
+
+        await self._gateway_keys_repository.finalize_reserved_counters(
+            gateway_key,
+            reserved_cost_eur=reservation.reserved_cost_eur,
+            reserved_tokens_total=reservation.reserved_tokens,
+            reserved_requests_total=reservation.reserved_requests,
+            actual_cost_eur=actual_cost_eur,
+            actual_tokens_total=total_tokens,
+            actual_requests_total=1,
+            last_used_at=finished,
+        )
+        reservation = await self._quota_reservations_repository.mark_pending_reservation_finalized(
+            reservation,
+            finalized_at=finished,
+        )
+
+        started = _aware_now(started_at or getattr(reservation, "created_at", None))
+        overrun_metadata = _reservation_overrun_metadata(
+            actual_cost_eur=actual_cost_eur,
+            actual_tokens=total_tokens,
+            reserved_cost_eur=reservation.reserved_cost_eur,
+            reserved_tokens=reservation.reserved_tokens,
+            endpoint=_normalize_endpoint(endpoint),
+        )
+        sanitized_response_metadata = sanitize_metadata_mapping(
+            response_metadata,
+            drop_content_keys=True,
+        )
+        safe_metadata = {
+            **(
+                sanitized_response_metadata
+                if isinstance(sanitized_response_metadata, dict)
+                else {}
+            ),
+            **overrun_metadata,
+            "accounting_estimate_reason": "chat_streaming_live_burn_interrupted",
+        }
+        try:
+            ledger = await self._usage_ledger_repository.create_usage_record(
+                request_id=request_id,
+                quota_reservation_id=reservation.id,
+                gateway_key_id=authenticated_key.gateway_key_id,
+                owner_id=authenticated_key.owner_id,
+                cohort_id=authenticated_key.cohort_id,
+                endpoint=_normalize_endpoint(endpoint),
+                provider=route.provider,
+                requested_model=route.requested_model,
+                resolved_model=route.resolved_model,
+                streaming=True,
+                success=False,
+                accounting_status="estimated",
+                http_status=200,
+                error_type="streaming_live_burn_limit_exceeded",
+                error_message="streaming_live_burn_limit_exceeded",
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_eur=actual_cost_eur,
+                actual_cost_eur=actual_cost_eur,
+                actual_cost_native=None,
+                native_currency=_normalize_currency(pricing_estimate.native_currency),
+                usage_raw={},
+                response_metadata=safe_metadata,
+                started_at=started,
+                finished_at=finished,
+                latency_ms=_latency_ms(started, finished),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LedgerWriteError() from exc
+
+        return FinalizedAccountingResult(
+            usage_ledger_id=ledger.id,
+            reservation_id=reservation.id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+            actual_cost_eur=actual_cost_eur,
+            actual_cost_native=None,
+            native_currency=_normalize_currency(pricing_estimate.native_currency),
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=total_tokens,
+            accounting_status=ledger.accounting_status,
+        )
+
     async def _locked_pending_reservation(
         self,
         reservation_id: uuid.UUID,
@@ -727,6 +850,22 @@ def _optional_token_count(value: int | None, field_name: str) -> int | None:
         raise InvalidUsageError("Provider usage token counts must be integers", param=field_name)
     if value < 0:
         raise InvalidUsageError("Provider usage token counts must be non-negative", param=field_name)
+    return value
+
+
+def _non_negative_int(value: int, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidUsageError("Estimated token counts must be integers", param=field_name)
+    if value < 0:
+        raise InvalidUsageError("Estimated token counts must be non-negative", param=field_name)
+    return value
+
+
+def _non_negative_decimal(value: Decimal, field_name: str) -> Decimal:
+    if not isinstance(value, Decimal):
+        raise InvalidUsageError("Estimated cost must use Decimal", param=field_name)
+    if value < 0:
+        raise InvalidUsageError("Estimated cost must be non-negative", param=field_name)
     return value
 
 

@@ -253,6 +253,20 @@ class GatewayKeysRepository:
         await self._session.flush()
         return True
 
+    async def update_gateway_key_metadata(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        metadata_json: dict[str, object],
+    ) -> bool:
+        gateway_key = await self.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            return False
+
+        gateway_key.metadata_json = metadata_json
+        await self._session.flush()
+        return True
+
     async def update_gateway_key_request_policy(
         self,
         gateway_key_id: uuid.UUID,

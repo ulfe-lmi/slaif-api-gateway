@@ -33,6 +33,7 @@ class CreateGatewayKeyInput:
     allowed_providers: list[str] | None = None
     confirm_trusted_calibration: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
     note: str | None = None
 
 
@@ -49,6 +50,7 @@ class CreatedGatewayKey:
     valid_from: datetime
     valid_until: datetime
     rate_limit_policy: dict[str, int | None] | None = None
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
     template_id: uuid.UUID | None = None
@@ -111,6 +113,16 @@ class UpdateGatewayKeyRateLimitsInput:
 
     gateway_key_id: uuid.UUID
     rate_limit_policy: dict[str, int | None] | None = None
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
+@dataclass(slots=True)
+class UpdateGatewayKeyChatStreamingLiveBurnInput:
+    """Input payload for changing Chat Completions streaming live-burn policy."""
+
+    gateway_key_id: uuid.UUID
+    chat_streaming_live_burn_policy: dict[str, object]
     actor_admin_id: uuid.UUID | None = None
     reason: str | None = None
 
@@ -183,6 +195,7 @@ class GatewayKeyManagementResult:
     allow_all_endpoints: bool | None = None
     key_purpose: str | None = None
     capability_policy_mode: str | None = None
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

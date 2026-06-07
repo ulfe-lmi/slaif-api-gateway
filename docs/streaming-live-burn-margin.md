@@ -1,9 +1,9 @@
 # Streaming Live-Burn Margin Milestone
 
-**Project:** SLAIF API Gateway  
-**Status:** development-governance milestone / planned feature family  
-**Implementation order:** Chat Completions first, Responses second  
-**Primary intent:** reduce streaming quota-overrun risk by interrupting active streams when live output estimates cross a per-key margin  
+**Project:** SLAIF API Gateway
+**Status:** Chat Completions streaming implemented; Responses live-burn remains future work
+**Implementation order:** Chat Completions first, Responses second
+**Primary intent:** reduce streaming quota-overrun risk by interrupting active streams when live output estimates cross a per-key margin
 **Non-goal:** replacing final provider-usage accounting or turning chunk estimates into invoice-grade billing truth
 
 ---
@@ -36,12 +36,17 @@ live burn estimates are provisional
 missing provider usage remains incomplete/reconciliable, not normal success
 ```
 
-Default policy:
+Implemented Chat Completions policy:
 
-```text
-streaming_live_burn_enabled = true
-streaming_live_burn_cost_margin_eur = 0
-streaming_live_burn_output_token_margin = 0
+```json
+{
+  "chat_streaming_live_burn": {
+    "version": 1,
+    "enabled": true,
+    "cost_margin_eur": "0.000000000",
+    "token_margin": 0
+  }
+}
 ```
 
 Sign convention:
@@ -132,28 +137,33 @@ For OpenAI-style routes, SLAIF may compute cost from provider usage and local pr
 
 A provisional estimate calculated during an active stream.
 
-Initial supported surfaces:
+Implemented Chat Completions surface:
 
 ```text
 Chat Completions:
   choices[].delta.content
+  choices[].delta.tool_calls[].function.name
+  choices[].delta.tool_calls[].function.arguments
+```
 
+Future Responses surface:
+
+```text
 Responses:
   response.output_text.delta
 ```
 
-The estimate is used to decide whether to interrupt the active stream. It is not invoice-grade billing truth.
+The estimate is used to decide whether to interrupt an active Chat Completions
+stream. It is not invoice-grade billing truth.
 
 ### 3.5 Streaming live-burn margin
 
 The per-key margin used to compute live interruption thresholds.
 
-Recommended internal names:
+Implemented Chat Completions metadata key:
 
 ```text
-streaming_live_burn_enabled
-streaming_live_burn_cost_margin_eur
-streaming_live_burn_output_token_margin
+chat_streaming_live_burn
 ```
 
 Recommended operator label:
@@ -178,15 +188,15 @@ Final provider usage remains authoritative.
 The margin is subtracted from the remaining budget to obtain the live cutoff:
 
 ```text
-live_cost_cutoff = remaining_cost_eur - streaming_live_burn_cost_margin_eur
-live_token_cutoff = remaining_output_tokens - streaming_live_burn_output_token_margin
+live_cost_cutoff = remaining_cost_eur - cost_margin_eur
+live_token_cutoff = remaining_tokens - token_margin
 ```
 
 Stop when either dimension is crossed:
 
 ```text
-stop if estimated_stream_cost_eur >= live_cost_cutoff
-stop if estimated_stream_output_tokens >= live_token_cutoff
+stop if estimated_request_cost_so_far >= live_cost_cutoff
+stop if estimated_request_tokens_so_far >= live_token_cutoff
 ```
 
 Whichever threshold is hit first stops the stream.
@@ -199,7 +209,7 @@ Assume:
 remaining_cost_eur = 1.00
 ```
 
-| `streaming_live_burn_cost_margin_eur` | Cutoff | Interpretation |
+| `cost_margin_eur` | Cutoff | Interpretation |
 |---:|---:|---|
 | `+0.20` | `0.80` | Restrictive. Stop early; aim to leave about €0.20 unspent. |
 | `0.00` | `1.00` | Boundary. Stop near estimated zero balance. |
@@ -213,7 +223,7 @@ Assume:
 remaining_output_tokens = 10_000
 ```
 
-| `streaming_live_burn_output_token_margin` | Cutoff | Interpretation |
+| `token_margin` | Cutoff | Interpretation |
 |---:|---:|---|
 | `+2_000` | `8_000` | Restrictive. Stop early; aim to leave about 2k output tokens. |
 | `0` | `10_000` | Boundary. Stop near estimated token quota boundary. |
@@ -224,14 +234,14 @@ remaining_output_tokens = 10_000
 If monitoring is disabled:
 
 ```text
-streaming_live_burn_enabled = false
+chat_streaming_live_burn.enabled = false
 ```
 
 then:
 
 ```text
-streaming_live_burn_cost_margin_eur is ignored
-streaming_live_burn_output_token_margin is ignored
+chat_streaming_live_burn.cost_margin_eur is ignored
+chat_streaming_live_burn.token_margin is ignored
 ```
 
 The request remains subject to ordinary policy validation, quota reservation, output caps, provider completion, final provider-usage accounting, and reconciliation rules.
@@ -242,7 +252,8 @@ The request remains subject to ordinary policy validation, quota reservation, ou
 
 ### 5.1 Per-key only in the first version
 
-The first implementation should be one policy per gateway key.
+The first implementation is one Chat Completions streaming policy per gateway
+key.
 
 Do not split margins by:
 
@@ -261,27 +272,28 @@ The actual estimate can still use the resolved provider/model/pricing for the cu
 
 ### 5.2 Effective defaults
 
-Every key has effective defaults:
+Every key has effective defaults for Chat Completions streaming:
 
 ```text
-streaming_live_burn_enabled = true
-streaming_live_burn_cost_margin_eur = 0
-streaming_live_burn_output_token_margin = 0
+enabled = true
+cost_margin_eur = 0
+token_margin = 0
 ```
 
-A global fallback may exist for migration/operator rollout, but the key-level effective policy should be visible to operators.
+Missing metadata has the same effect as the default policy. The effective policy
+is visible to operators in the admin key pages and CLI output.
 
-### 5.3 Suggested metadata shape
+### 5.3 Implemented metadata shape
 
-If implemented using key metadata, a safe shape is:
+The Chat Completions implementation persists safe key metadata:
 
 ```json
 {
-  "streaming_live_burn": {
+  "chat_streaming_live_burn": {
     "version": 1,
     "enabled": true,
-    "cost_margin_eur": "0.00",
-    "output_token_margin": 0
+    "cost_margin_eur": "0.000000000",
+    "token_margin": 0
   }
 }
 ```
@@ -302,17 +314,19 @@ Exact database field names, constraints, defaults, and migrations must be define
 
 ### 5.5 Key-template policy
 
-Templates may carry safe live-burn policy summaries for future keys.
+Template-specific live-burn policy is future work. Keys created through current
+template workflows receive the normal default Chat Completions streaming
+live-burn policy unless their creation path explicitly sets a per-key override.
 
-Safe template summary example:
+Possible future safe template summary:
 
 ```json
 {
-  "streaming_live_burn": {
+  "chat_streaming_live_burn": {
     "version": 1,
     "enabled": true,
-    "cost_margin_eur": "0.10",
-    "output_token_margin": 500
+    "cost_margin_eur": "0.100000000",
+    "token_margin": 500
   }
 }
 ```
@@ -358,14 +372,19 @@ The effective remaining budget used for live-burn thresholds must be derived fro
 Conceptual expression:
 
 ```text
-effective_remaining_for_this_stream =
-    key limit
-  - finalized used counters
-  - other active reservations
-  + this stream's own reservation if already included in reserved counters
+cost_budget_for_this_request =
+  key.cost_limit_eur
+  - key.cost_used_eur
+  - max(key.cost_reserved_eur - current_reservation.cost_reserved_eur, 0)
+
+token_budget_for_this_request =
+  key.token_limit_total
+  - key.tokens_used_total
+  - max(key.tokens_reserved_total - current_reservation.tokens_reserved_total, 0)
 ```
 
-The exact implementation must follow current quota-service invariants.
+The Chat Completions implementation follows this formula after a successful
+PostgreSQL quota reservation.
 
 ---
 
@@ -373,14 +392,13 @@ The exact implementation must follow current quota-service invariants.
 
 ### 7.1 First supported estimation surface
 
-Start with visible text deltas only:
+The Chat Completions implementation estimates visible generated output deltas:
 
 ```text
 Chat Completions:
   choices[].delta.content
-
-Responses:
-  response.output_text.delta
+  choices[].delta.tool_calls[].function.name
+  choices[].delta.tool_calls[].function.arguments
 ```
 
 Do not initially estimate live burn for:
@@ -407,10 +425,10 @@ estimated_output_tokens =
     ceil(max(local_text_token_estimate, utf8_bytes_seen / 3) * safety_multiplier)
 ```
 
-Suggested default:
+Implemented setting:
 
 ```text
-STREAMING_LIVE_BURN_ESTIMATE_SAFETY_MULTIPLIER=1.15
+CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER=1.15
 ```
 
 If the project has an existing dependency-free token estimator, reuse it. If not, a byte/character heuristic is acceptable for the first implementation, provided the documentation states clearly that the estimate is provisional.
@@ -475,7 +493,8 @@ unless usage-backed finalization genuinely reaches the existing success path.
 
 ### 8.3 Responses SSE behavior
 
-Emit a safe Responses-compatible error event:
+Responses live-burn interruption is not implemented yet. A future Responses PR
+must emit a safe Responses-compatible error event:
 
 ```text
 event: error
@@ -527,18 +546,20 @@ record safe live-burn trigger metadata
 
 ### 9.2 If provider final usage is missing
 
-If final usage is missing:
+If final usage is missing after an intentional Chat Completions live-burn abort:
 
 ```text
 do not finalize as normal success
 do not emit normal successful terminal marker
-record interrupted/incomplete/reconciliable state
-store only safe estimate counters if current accounting policy permits
+record interrupted estimated accounting
+store only safe estimate counters and metadata
 ```
 
-The first implementation should not silently convert live estimates into final invoice-grade usage.
-
-A future explicitly approved policy could debit estimated usage when provider usage is unavailable after a live-burn abort, but that would be a separate accounting policy change with its own docs, tests, and operator warning.
+The Chat Completions implementation debits an estimated interrupted usage event
+when the gateway intentionally stops the provider stream before final usage
+arrives. This avoids a zero-cost abuse path. The estimate is marked
+`accounting_status="estimated"`, `success=false`, and
+`estimate_is_invoice_grade=false`; it is not invoice-grade billing truth.
 
 ### 9.3 Safe metadata
 
@@ -546,17 +567,15 @@ Safe metadata may include:
 
 ```json
 {
-  "streaming_live_burn": {
-    "enabled": true,
-    "triggered": true,
-    "reason": "cost",
-    "estimated_output_tokens_at_stop": 1234,
-    "estimated_cost_eur_at_stop": "0.1234",
-    "cost_margin_eur": "0.00",
-    "output_token_margin": 0,
-    "estimate_safety_multiplier": "1.15",
-    "provider_final_usage_available": false
-  }
+  "streaming_live_burn_enabled": true,
+  "streaming_live_burn_triggered": true,
+  "streaming_live_burn_stop_reason": "cost",
+  "estimated_tokens_at_stop": 1234,
+  "estimated_cost_eur_at_stop": "0.123400000",
+  "cost_margin_eur": "0.000000000",
+  "token_margin": 0,
+  "final_provider_usage_available": false,
+  "estimate_is_invoice_grade": false
 }
 ```
 
@@ -639,35 +658,20 @@ user-provided content
 
 ## 11. Configuration model
 
-Suggested global defaults:
+Implemented Chat Completions settings:
 
 ```env
-DEFAULT_STREAMING_LIVE_BURN_ENABLED=true
-DEFAULT_STREAMING_LIVE_BURN_COST_MARGIN_EUR=0.00
-DEFAULT_STREAMING_LIVE_BURN_OUTPUT_TOKEN_MARGIN=0
-STREAMING_LIVE_BURN_ESTIMATE_SAFETY_MULTIPLIER=1.15
-STREAMING_LIVE_BURN_REDIS_TTL_SECONDS=3600
-```
-
-Optional rollout controls:
-
-```env
-STREAMING_LIVE_BURN_GLOBAL_ENFORCEMENT_ENABLED=true
-STREAMING_LIVE_BURN_GLOBAL_OBSERVE_ONLY=false
-```
-
-If observe-only mode exists:
-
-```text
-observe-only computes estimates/metrics but does not interrupt streams
+CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER=1.15
+CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR=1000000
+CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN=1000000000
 ```
 
 The milestone default remains:
 
 ```text
-per-key monitoring enabled by default
+per-key Chat Completions monitoring enabled by default
 zero money margin
-zero output-token margin
+zero token margin
 ```
 
 ---
@@ -695,13 +699,12 @@ Final provider usage remains authoritative.
 
 ### 12.2 CLI shape
 
-Exact commands should follow current CLI style, but likely operations include:
+Implemented CLI operations include:
 
 ```text
 create key with live-burn policy
 update key live-burn policy
 disable live-burn monitoring for a key
-clear key override back to defaults
 show effective live-burn policy in key detail/list output
 ```
 
@@ -709,7 +712,9 @@ CLI output must remain secret-safe.
 
 ### 12.3 Templates
 
-Key templates may carry safe live-burn policy summaries. Creating a key from a template may copy those safe values into the new key according to the selected persistence model.
+Current key-template workflows do not carry a template-specific live-burn
+policy. Template-created keys receive the per-key default policy unless a future
+template-policy PR adds safe snapshot support.
 
 Existing keys must not be silently mutated.
 
@@ -731,6 +736,8 @@ Supported live-burn estimate:
 
 ```text
 choices[].delta.content
+choices[].delta.tool_calls[].function.name
+choices[].delta.tool_calls[].function.arguments
 ```
 
 Potentially included if current stream parser already handles them safely:
@@ -768,7 +775,9 @@ For accepted Chat Completions streaming requests:
    - if cost or token threshold is crossed, stop upstream stream and emit safe SSE error;
    - suppress normal successful `[DONE]` unless usage-backed finalization succeeds.
 4. If provider final usage arrives, provider usage wins.
-5. If usage is missing, use existing incomplete/reconciliation behavior plus safe live-burn metadata.
+5. If usage is missing because the gateway intentionally interrupted the
+   stream, finalize an estimated interrupted accounting event with safe
+   live-burn metadata instead of zero-cost success.
 
 ### 13.3 Required tests
 
@@ -1056,4 +1065,7 @@ It must not add:
 
 ## 20. Milestone status note
 
-This document defines a planned milestone. It does not by itself claim that streaming live-burn margin behavior is implemented. Implementation must happen through scoped future PRs, with Chat Completions first and Responses second.
+This document now records both the implemented Chat Completions streaming
+live-burn slice and the remaining Responses future milestone. Runtime support
+is strictly limited to `POST /v1/chat/completions` with `stream=true`;
+Responses live-burn monitoring must happen through a separate scoped PR.

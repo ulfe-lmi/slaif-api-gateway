@@ -53,10 +53,11 @@ but are not a production certification.
   finalization. A successful call can finalize above its reservation; the
   ledger records safe overrun/cost-source metadata and subsequent calls are
   blocked when finalized counters exceed key limits.
-- Streaming live-burn margin is planned future work only. It is documented in
-  [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) as a
-  gateway-side provisional interruption milestone, Chat Completions first and
-  Responses second; it is not active RC-beta behavior.
+- Chat Completions streaming live-burn monitoring is implemented for
+  `POST /v1/chat/completions` with `stream=true`. It is a per-key,
+  gateway-side provisional interruption brake with enabled/zero-margin defaults;
+  final provider usage/cost remains authoritative. Responses live-burn
+  monitoring remains future work.
 - Optional Redis operational rate limiting for request, estimated-token, and
   concurrency throttles.
 - Admin dashboard for keys, records, providers, routes, pricing, FX, usage,
@@ -120,9 +121,10 @@ migrations automatically.
 ## Known Limitations
 
 - Bulk synchronous `send-now` key import execution is not implemented.
-- Streaming live-burn margin is not implemented. Its future implementation must
-  preserve final provider usage/cost authority, PostgreSQL hard quota truth,
-  Redis temporary-state-only boundaries, and no streamed-content storage.
+- Responses streaming live-burn margin is not implemented. Chat Completions
+  streaming live-burn is implemented and must preserve final provider
+  usage/cost authority, PostgreSQL hard quota truth, Redis temporary-state-only
+  boundaries, and no streamed-content storage.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
 - Responses API support is limited to stateless text-output

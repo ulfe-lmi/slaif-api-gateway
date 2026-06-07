@@ -50,6 +50,13 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "None - show key once in browser" in html
     assert "Email delivery mode" in html
     assert "Send-now and enqueue suppress browser plaintext display" in html
+    assert "Chat Completions streaming live-burn monitoring" in html
+    assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
+    assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
+    assert "Positive margin stops streams early" in html
+    assert "create-chat-streaming-live-burn-fields" in html
+    assert "input.disabled = !enabled" in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html

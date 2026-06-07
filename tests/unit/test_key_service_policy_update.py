@@ -4,7 +4,10 @@ import uuid
 
 import pytest
 
-from slaif_gateway.schemas.keys import UpdateGatewayKeyPolicyInput
+from slaif_gateway.schemas.keys import (
+    UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyPolicyInput,
+)
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
@@ -72,4 +75,90 @@ async def test_update_gateway_key_policy_requires_reason() -> None:
         )
 
     assert keys_repo.policy_calls == []
+    assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_chat_streaming_live_burn_policy_updates_metadata_only_and_audits() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "allowed_providers": ["openai"],
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "0.000000000",
+                "token_margin": 0,
+            },
+        }
+    )
+    old_cost_limit = row.cost_limit_eur
+    old_tokens_used = row.tokens_used_total
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+    actor_id = uuid.uuid4()
+
+    result = await service.update_gateway_key_chat_streaming_live_burn(
+        UpdateGatewayKeyChatStreamingLiveBurnInput(
+            gateway_key_id=row.id,
+            chat_streaming_live_burn_policy={
+                "version": 1,
+                "enabled": False,
+                "cost_margin_eur": "-0.250000000",
+                "token_margin": -250,
+            },
+            actor_admin_id=actor_id,
+            reason="adjust stream brake",
+        )
+    )
+
+    assert keys_repo.metadata_calls == [
+        {
+            "gateway_key_id": row.id,
+            "metadata_json": {
+                "allowed_providers": ["openai"],
+                "chat_streaming_live_burn": {
+                    "version": 1,
+                    "enabled": False,
+                    "cost_margin_eur": "-0.250000000",
+                    "token_margin": -250,
+                },
+            },
+        }
+    ]
+    assert row.cost_limit_eur == old_cost_limit
+    assert row.tokens_used_total == old_tokens_used
+    assert result.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
+
+    audit = audit_repo.calls[-1]
+    assert audit["action"] == "update_chat_streaming_live_burn_policy"
+    assert audit["admin_user_id"] == actor_id
+    assert audit["old_values"]["chat_streaming_live_burn_policy"]["enabled"] is True
+    assert audit["new_values"]["chat_streaming_live_burn_policy"]["enabled"] is False
+    assert "token_hash" not in str(audit)
+
+
+@pytest.mark.asyncio
+async def test_update_chat_streaming_live_burn_policy_requires_reason() -> None:
+    row = FakeGatewayKeyRow()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="audit reason"):
+        await service.update_gateway_key_chat_streaming_live_burn(
+            UpdateGatewayKeyChatStreamingLiveBurnInput(
+                gateway_key_id=row.id,
+                chat_streaming_live_burn_policy={
+                    "version": 1,
+                    "enabled": True,
+                    "cost_margin_eur": "0",
+                    "token_margin": 0,
+                },
+                reason="",
+            )
+        )
+
+    assert keys_repo.metadata_calls == []
     assert audit_repo.calls == []

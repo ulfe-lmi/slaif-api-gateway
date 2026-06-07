@@ -73,6 +73,13 @@ def _safe_key() -> AdminKeyDetail:
         rate_limit_policy_summary="Default",
         responses_policy=None,
         responses_policy_summary="None",
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
+        chat_streaming_live_burn_policy_summary="Enabled, cost margin EUR 0.000000000, token margin 0",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )

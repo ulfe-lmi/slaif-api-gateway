@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from slaif_gateway.providers.errors import ProviderTimeoutError
 from slaif_gateway.services.accounting_errors import ReservationFinalizationError
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
+from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 
@@ -38,6 +40,12 @@ def _auth() -> AuthenticatedGatewayKey:
         token_limit_total=None,
         request_limit_total=None,
         rate_limit_policy={},
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
     )
 
 
@@ -67,7 +75,27 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
-def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=None):
+def _cost_estimate() -> ChatCostEstimate:
+    return ChatCostEstimate(
+        provider="openai",
+        requested_model="classroom-cheap",
+        resolved_model="gpt-4.1-mini",
+        native_currency="EUR",
+        estimated_input_tokens=10,
+        estimated_output_tokens=70,
+        estimated_input_cost_native=Decimal("0.000010000"),
+        estimated_output_cost_native=Decimal("0.000070000"),
+        estimated_total_cost_native=Decimal("0.000080000"),
+        estimated_total_cost_eur=Decimal("0.000080000"),
+        pricing_rule_id=None,
+        fx_rate_id=None,
+        input_price_per_1m=Decimal("1.000000000"),
+        output_price_per_1m=Decimal("1.000000000"),
+        fx_rate=Decimal("1"),
+    )
+
+
+def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=None, auth=None):
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as gateway_module
 
@@ -80,8 +108,9 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
         "finalize_calls": [],
         "recovery_failure_calls": [],
         "failure_calls": [],
+        "live_burn_estimate_calls": [],
     }
-    auth = _auth()
+    auth = auth or _auth()
 
     class _Session:
         async def commit(self) -> None:
@@ -101,7 +130,7 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
     async def _fake_estimate(self, *, route, policy, endpoint="chat.completions", at=None):
         _ = (self, route, policy, endpoint, at)
         state["pricing_calls"].append("priced")
-        return object()
+        return _cost_estimate()
 
     async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
         _ = (self, authenticated_key, route, policy, cost_estimate, now)
@@ -145,6 +174,11 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
         state["failure_calls"].append(kwargs)
         return object()
 
+    async def _fake_live_burn_estimate(self, *args, **kwargs):
+        _ = (self, args)
+        state["live_burn_estimate_calls"].append(kwargs)
+        return SimpleNamespace(accounting_status="estimated")
+
     class _FakeAdapter:
         async def stream_chat_completion(self, request):
             state["stream_calls"].append(request)
@@ -171,6 +205,11 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
         _fake_mark_finalization_failed,
     )
     monkeypatch.setattr(gateway_module.AccountingService, "record_provider_failure_and_release", _fake_failure)
+    monkeypatch.setattr(
+        gateway_module.AccountingService,
+        "record_streaming_live_burn_interrupted_estimate",
+        _fake_live_burn_estimate,
+    )
     monkeypatch.setattr(gateway_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
     return state
 
@@ -376,6 +415,107 @@ def test_streaming_missing_final_usage_records_failure(monkeypatch) -> None:
     assert state["failure_calls"]
     assert state["failure_calls"][0]["error_code"] == "stream_usage_missing"
     assert state["finalize_calls"] == []
+
+
+def test_streaming_live_burn_token_threshold_aborts_without_done(monkeypatch) -> None:
+    auth = _auth()
+    auth = replace(
+        auth,
+        token_limit_total=15,
+        tokens_used_total=0,
+        tokens_reserved_total=0,
+    )
+    payload = {"id": "chunk-1", "choices": [{"delta": {"content": "long streamed text"}}]}
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data=json.dumps(payload, separators=(",", ":")),
+            raw_sse_event=_sse(payload),
+            json_body=payload,
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data="[DONE]",
+            raw_sse_event="data: [DONE]\n\n",
+            is_done=True,
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(monkeypatch, app, chunks=chunks, auth=auth)
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "streaming_live_burn_limit_exceeded" in body
+    assert "data: [DONE]" not in body
+    assert state["live_burn_estimate_calls"]
+    call = state["live_burn_estimate_calls"][0]
+    assert call["estimated_input_tokens"] == 10
+    assert call["estimated_total_tokens"] >= 15
+    assert call["response_metadata"]["streaming_live_burn_triggered"] is True
+    assert call["response_metadata"]["streaming_live_burn_stop_reason"] == "tokens"
+    assert call["response_metadata"]["estimate_is_invoice_grade"] is False
+    assert state["failure_calls"] == []
+    assert state["finalize_calls"] == []
+
+
+def test_streaming_live_burn_disabled_does_not_abort(monkeypatch) -> None:
+    auth = _auth()
+    auth = replace(
+        auth,
+        token_limit_total=15,
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": False,
+            "cost_margin_eur": "100",
+            "token_margin": 100,
+        },
+    )
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data='{"id":"chunk-1","choices":[{"delta":{"content":"long streamed text"}}]}',
+            raw_sse_event='data: {"id":"chunk-1","choices":[{"delta":{"content":"long streamed text"}}]}\n\n',
+            json_body={"id": "chunk-1", "choices": [{"delta": {"content": "long streamed text"}}]},
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data='{"id":"chunk-2","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}',
+            raw_sse_event=(
+                'data: {"id":"chunk-2","choices":[],"usage":'
+                '{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}\n\n'
+            ),
+            json_body={
+                "id": "chunk-2",
+                "choices": [],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            },
+            usage=ProviderUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data="[DONE]",
+            raw_sse_event="data: [DONE]\n\n",
+            is_done=True,
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(monkeypatch, app, chunks=chunks, auth=auth)
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert "streaming_live_burn_limit_exceeded" not in body
+    assert "data: [DONE]" in body
+    assert state["live_burn_estimate_calls"] == []
+    assert state["provider_completed_calls"]
+    assert state["finalize_calls"]
 
 
 def test_streaming_missing_final_usage_error_event_is_safe(monkeypatch) -> None:

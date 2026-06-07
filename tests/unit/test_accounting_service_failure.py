@@ -67,6 +67,33 @@ class FakeGatewayKeysRepository:
         gateway_key.requests_reserved_total -= requests_reserved_total
         return gateway_key
 
+    async def finalize_reserved_counters(
+        self,
+        gateway_key,
+        *,
+        reserved_cost_eur,
+        reserved_tokens_total,
+        reserved_requests_total,
+        actual_cost_eur,
+        actual_tokens_total,
+        actual_requests_total,
+        last_used_at,
+    ):
+        if gateway_key.cost_reserved_eur < reserved_cost_eur:
+            raise QuotaCounterInvariantError(param="cost_reserved_eur")
+        if gateway_key.tokens_reserved_total < reserved_tokens_total:
+            raise QuotaCounterInvariantError(param="tokens_reserved_total")
+        if gateway_key.requests_reserved_total < reserved_requests_total:
+            raise QuotaCounterInvariantError(param="requests_reserved_total")
+        gateway_key.cost_reserved_eur -= reserved_cost_eur
+        gateway_key.tokens_reserved_total -= reserved_tokens_total
+        gateway_key.requests_reserved_total -= reserved_requests_total
+        gateway_key.cost_used_eur += actual_cost_eur
+        gateway_key.tokens_used_total += actual_tokens_total
+        gateway_key.requests_used_total += actual_requests_total
+        gateway_key.last_used_at = last_used_at
+        return gateway_key
+
 
 class FakeQuotaReservationsRepository:
     def __init__(self, row: FakeReservationRow) -> None:
@@ -81,15 +108,25 @@ class FakeQuotaReservationsRepository:
         reservation.released_at = released_at
         return reservation
 
+    async def mark_pending_reservation_finalized(self, reservation, *, finalized_at):
+        reservation.status = "finalized"
+        reservation.finalized_at = finalized_at
+        return reservation
+
 
 class FakeUsageLedgerRepository:
     def __init__(self) -> None:
         self.failure_calls: list[dict[str, object]] = []
+        self.usage_calls: list[dict[str, object]] = []
         self.commits = 0
 
     async def create_failure_record(self, **kwargs):
         self.failure_calls.append(kwargs)
         return SimpleNamespace(id=uuid.uuid4(), accounting_status="failed", **kwargs)
+
+    async def create_usage_record(self, **kwargs):
+        self.usage_calls.append(kwargs)
+        return SimpleNamespace(id=uuid.uuid4(), **kwargs)
 
 
 def _auth(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:
@@ -199,6 +236,53 @@ async def test_provider_failure_releases_reservation_and_writes_failure_ledger()
     assert usage_repo.failure_calls[0]["error_message"] == "upstream_500"
     assert usage_repo.failure_calls[0]["usage_raw"] == {}
     assert "raw provider body with secret" not in str(usage_repo.failure_calls[0])
+
+
+@pytest.mark.asyncio
+async def test_streaming_live_burn_abort_finalizes_estimated_interrupted_usage() -> None:
+    service, key, reservation, usage_repo = _service()
+
+    result = await service.record_streaming_live_burn_interrupted_estimate(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _estimate(),
+        request_id="req_live_burn",
+        estimated_input_tokens=100,
+        estimated_output_tokens=42,
+        estimated_total_tokens=142,
+        estimated_cost_eur=Decimal("0.220000000"),
+        response_metadata={
+            "streaming_live_burn_enabled": True,
+            "streaming_live_burn_triggered": True,
+            "streaming_live_burn_stop_reason": "tokens",
+            "estimated_tokens_at_stop": 142,
+            "estimated_cost_eur_at_stop": "0.220000000",
+            "final_provider_usage_available": False,
+            "estimate_is_invoice_grade": False,
+            "completion": "must be dropped",
+        },
+    )
+
+    assert result.accounting_status == "estimated"
+    assert result.actual_cost_eur == Decimal("0.220000000")
+    assert reservation.status == "finalized"
+    assert key.cost_reserved_eur == Decimal("0")
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert key.cost_used_eur == Decimal("0.220000000")
+    assert key.tokens_used_total == 142
+    assert key.requests_used_total == 1
+    ledger = usage_repo.usage_calls[0]
+    assert ledger["success"] is False
+    assert ledger["accounting_status"] == "estimated"
+    assert ledger["error_type"] == "streaming_live_burn_limit_exceeded"
+    assert ledger["actual_cost_eur"] == Decimal("0.220000000")
+    assert ledger["total_tokens"] == 142
+    metadata_text = str(ledger["response_metadata"])
+    assert "must be dropped" not in metadata_text
+    assert ledger["response_metadata"]["estimate_is_invoice_grade"] is False
+    assert ledger["response_metadata"]["final_provider_usage_available"] is False
 
 
 @pytest.mark.asyncio

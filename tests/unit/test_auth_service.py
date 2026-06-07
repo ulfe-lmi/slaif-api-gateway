@@ -45,6 +45,10 @@ class _FakeGatewayKey:
     cost_limit_eur: Decimal | None = None
     token_limit_total: int | None = None
     request_limit_total: int | None = None
+    cost_used_eur: Decimal = Decimal("0")
+    tokens_used_total: int = 0
+    cost_reserved_eur: Decimal = Decimal("0")
+    tokens_reserved_total: int = 0
     rate_limit_requests_per_minute: int | None = None
     rate_limit_tokens_per_minute: int | None = None
     max_concurrent_requests: int | None = None
@@ -93,6 +97,13 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
     assert result.public_key_id == row.public_key_id
     assert result.allowed_providers == ("openai",)
     assert result.rate_limit_policy["requests_per_minute"] == 60
+    assert result.cost_used_eur == Decimal("0")
+    assert result.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert not hasattr(result, "plaintext_key")
     assert not hasattr(result, "token_hash")
 

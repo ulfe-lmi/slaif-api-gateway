@@ -31,27 +31,43 @@ Core invariants:
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,
   session tokens, and email bodies must not be stored for accounting.
 
-## Planned Streaming Live-Burn Margin
+## Chat Completions Streaming Live-Burn Margin
 
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) records a
-planned future milestone for per-key streaming live-burn margins. It is not
-implemented in the current repository state.
+per-key streaming live-burn margin policy. The implemented runtime slice is
+strictly limited to `POST /v1/chat/completions` with `stream=true`. Responses
+live-burn monitoring remains future work.
 
-The planned feature is an operational stream interruption control, not billing
-truth:
+The feature is an operational stream interruption control, not billing truth:
 
-- Chat Completions is the first intended implementation target.
-- Responses typed SSE is the second intended implementation target.
+- Chat Completions streaming is implemented.
+- Responses typed SSE remains the second implementation target.
+- The per-key default is enabled with zero cost and token margins.
+- Positive margins stop before the quota boundary, zero margins stop near the
+  estimated boundary, and negative margins allow bounded estimated overrun.
+- Cost and token thresholds are enforced independently; whichever threshold is
+  crossed first stops the stream.
 - Live estimates are provisional and must not become invoice-grade billing
   truth.
 - Provider final usage/cost remains authoritative when available.
 - PostgreSQL remains the hard quota/accounting source of truth.
-- Redis may hold only temporary live-burn counters or metrics.
+- Redis or in-memory state may hold only temporary live-burn counters or
+  metrics.
 - No streamed content, prompts, completions, tool payloads, media payloads, raw
   request bodies, or raw response bodies may be stored.
-- Missing provider usage after an interruption remains incomplete or
-  reconciliable according to accounting policy; it is not normal success.
+- Missing provider usage after an intentional Chat streaming live-burn
+  interruption is recorded as estimated interrupted accounting; it is not normal
+  zero-cost success.
 
-Any implementation PR for live-burn margins must update the active accounting,
-compatibility, security, configuration, schema, admin/CLI, and test contracts in
-the same PR.
+The persisted safe key metadata shape is:
+
+```json
+{
+  "chat_streaming_live_burn": {
+    "version": 1,
+    "enabled": true,
+    "cost_margin_eur": "0.000000000",
+    "token_margin": 0
+  }
+}
+```
