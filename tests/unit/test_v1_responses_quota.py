@@ -2149,11 +2149,11 @@ def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None
 
     response = TestClient(app).post(
         "/v1/responses",
-        json={**_responses_request(), "store": True},
+        json={**_responses_request(), "background": True},
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "responses_store_not_supported"
+    assert response.json()["error"]["code"] == "responses_background_not_supported"
     assert route_calls == []
     assert pricing_calls == []
     assert quota_calls == []
