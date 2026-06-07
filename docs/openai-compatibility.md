@@ -20,6 +20,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
 | `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming for stateless requests; stored create and `previous_response_id` are non-streaming only | Text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, user-message `input_file` URL/data URL parts behind explicit Responses file capability, non-streaming structured `text.format` JSON mode/schema support, local/client-side function/custom tools, non-streaming `store=true` create behind explicit stored-response route capability, and non-streaming `previous_response_id` only for owned locally recorded provider response references. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, streaming `previous_response_id`, hosted tools, background, conversations, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
 | `GET /v1/responses/{response_id}` / `DELETE /v1/responses/{response_id}` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for provider-stored Responses created through SLAIF. The gateway looks up a safe local response reference for the authenticated key before proxying; missing, non-owned, or deleted references return OpenAI-shaped 404. Response content is not stored locally |
+| `GET /v1/responses/{response_id}/input_items` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for input items from provider-stored Responses created through SLAIF. Requires explicit endpoint permission, an owned active local response reference, compatible provider/route metadata, and `capabilities.responses.list_input_items=true`. Input-item content is not stored locally |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -70,8 +71,9 @@ Current support is intentionally narrow:
 - no `input_image.file_id`, `input_file.file_id`, `input_audio`, audio output,
   image generation, `/v1/files`, file search/retrieval tools, or multimodal
   output;
-- owned response retrieve/delete only for locally referenced stored Responses;
-- no response cancel/list/input-item listing endpoints.
+- owned response retrieve/delete/input-item listing only for locally referenced
+  stored Responses;
+- no response cancel/list endpoints.
 
 `/v1/responses/input_tokens` returns the provider's official
 `{"object":"response.input_tokens","input_tokens":...}` shape. It does not
@@ -86,12 +88,15 @@ After a successful provider response with an ID, SLAIF stores only safe
 reference metadata needed for ownership and provider routing. `GET` and
 `DELETE /v1/responses/{response_id}` require explicit key endpoint permission
 and an active local reference owned by the same gateway key before any upstream
-proxy call occurs. SLAIF does not store prompts, completions, raw bodies, tool
-payloads, image/file URLs, media payloads, or provider secrets for this
-lifecycle. Non-streaming `previous_response_id` requires an active local
-reference owned by the same gateway key and a compatible provider route before
-SLAIF forwards it upstream. Conversations, cancel, list, compact, streaming
-`previous_response_id`, and input-item listing remain unsupported.
+proxy call occurs. `GET /v1/responses/{response_id}/input_items` follows the
+same ownership check and additionally requires
+`capabilities.responses.list_input_items=true` on the stored route. SLAIF does
+not store prompts, completions, input-item content, raw bodies, tool payloads,
+image/file URLs, media payloads, or provider secrets for this lifecycle.
+Non-streaming `previous_response_id` requires an active local reference owned
+by the same gateway key and a compatible provider route before SLAIF forwards
+it upstream. Conversations, cancel, response list, compact, and streaming
+`previous_response_id` remain unsupported.
 
 Responses streaming preserves typed provider events such as `response.created`,
 `response.output_text.delta`, `response.completed`, and safe `error` events. It
@@ -571,7 +576,7 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
   search/retrieval tools, and MCP/connectors. The implemented text-output
   Responses foundation includes URL/data URL image input, URL/data URL file
   input, non-streaming JSON, typed SSE streaming for stateless requests, and
-  non-streaming stored create plus owned retrieve/delete; see
+  non-streaming stored create plus owned retrieve/delete/input-item listing; see
   `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration

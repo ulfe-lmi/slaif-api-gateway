@@ -954,7 +954,8 @@ Rules:
 
 Safe ownership metadata for provider-stored Responses. Rows exist only so the
 gateway can prove that a gateway key owns a provider response ID before
-proxying retrieve/delete control calls. They are not response-content storage.
+proxying retrieve/delete/input-item-list control calls. They are not response
+or input-item content storage.
 
 Columns:
 
@@ -1005,10 +1006,10 @@ Rules:
 
 - Store only provider response reference metadata needed for ownership,
   provider routing, lifecycle status, and auditability.
-- Retrieve/delete must first find an `active` row for both the requested
-  provider response ID and the authenticated gateway key. Missing, non-owned,
-  or locally deleted references return an OpenAI-shaped 404 and are not proxied
-  upstream.
+- Retrieve/delete/input-item listing must first find an `active` row for both
+  the requested provider response ID and the authenticated gateway key. Missing,
+  non-owned, or locally deleted references return an OpenAI-shaped 404 and are
+  not proxied upstream.
 - Mark rows `deleted` after successful provider delete. Do not remove rows just
   to hide ownership history unless a future retention/anonymization policy says
   so.

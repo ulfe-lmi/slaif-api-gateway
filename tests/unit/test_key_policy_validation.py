@@ -134,6 +134,7 @@ async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_
             allowed_endpoints=[
                 "GET /v1/responses/{response_id}",
                 "DELETE /v1/responses/{response_id}",
+                "GET /v1/responses/{response_id}/input_items",
             ],
         ),
         model_routes_repository=_RoutesRepo([]),
@@ -143,6 +144,7 @@ async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_
     assert policy.allowed_endpoints == [
         "GET /v1/responses/{response_id}",
         "DELETE /v1/responses/{response_id}",
+        "GET /v1/responses/{response_id}/input_items",
     ]
 
 

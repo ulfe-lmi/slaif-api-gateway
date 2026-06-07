@@ -426,8 +426,9 @@ non-streaming local custom tools, non-streaming stored-response create, and
 non-streaming owned `previous_response_id`.
 `POST /v1/responses/input_tokens` is a separate provider-reported count
 endpoint for the same local input subset. `GET` and
-`DELETE /v1/responses/{response_id}` are ownership-checked proxy calls for
-provider-stored Responses references. It is default-off and policy-first:
+`DELETE /v1/responses/{response_id}` plus
+`GET /v1/responses/{response_id}/input_items` are ownership-checked proxy calls
+for provider-stored Responses references. It is default-off and policy-first:
 
 - Responses generation must be explicitly enabled per key through the
   `/v1/responses` endpoint allowlist. Input-token counting must be explicitly
@@ -463,6 +464,12 @@ provider-stored Responses references. It is default-off and policy-first:
   require explicit key endpoint permission and an active local reference owned
   by the authenticated gateway key; missing, non-owned, or locally deleted
   response IDs return OpenAI-shaped 404 and are not proxied upstream.
+- Input-item listing requires explicit key endpoint permission,
+  `capabilities.responses.list_input_items=true` on the stored route, and an
+  active local reference owned by the authenticated gateway key. Only validated
+  query parameters are forwarded, returned input-item content is not stored or
+  inspected, and missing, non-owned, deleted, or route-incompatible response IDs
+  are not proxied upstream.
 - `previous_response_id` requires explicit
   `capabilities.responses.previous_response_id=true`, must be non-streaming, and
   is proxied only when the referenced provider response ID is an active local
@@ -475,7 +482,7 @@ provider-stored Responses references. It is default-off and policy-first:
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
 - `background`, conversation/provider-side state beyond owned
-  `previous_response_id`, cancel, compact, and input-item listing are excluded
+  `previous_response_id`, cancel, compact, and response listing are excluded
   until ownership mapping, quota, accounting, and audit behavior are
   implemented.
 - `store=false` is injected before forwarding when omitted.
@@ -796,9 +803,10 @@ never recover or send old plaintext keys.
 - Responses API support is limited to text-output `POST /v1/responses` with
   URL/data URL image input, URL/data URL file input, typed SSE streaming for
   stateless requests, non-streaming local function/custom tools, non-streaming
-  stored create, owned previous-response chaining, and owned retrieve/delete
-  through safe response-reference metadata; hosted Responses tools, conversation
-  lifecycle, background mode, cancel/list/input-item routes, file IDs, `/v1/files`, file
+  stored create, owned previous-response chaining, owned retrieve/delete, and
+  owned input-item listing through safe response-reference metadata; hosted
+  Responses tools, conversation lifecycle, background mode, cancel/list routes,
+  file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.
   Embeddings API is not implemented.

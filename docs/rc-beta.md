@@ -133,8 +133,8 @@ migrations automatically.
   user-message URL/data URL file input, non-streaming JSON, typed SSE
   streaming, non-streaming structured `text.format` JSON object/schema output,
   plus non-streaming local function and custom tools, non-streaming stored
-  create with ownership-checked retrieve/delete, non-streaming owned
-  `previous_response_id`, explicit key endpoint
+  create with ownership-checked retrieve/delete/input-item listing,
+  non-streaming owned `previous_response_id`, explicit key endpoint
   permission, route capability, provider route, and pricing metadata.
   `/v1/responses/input_tokens` is implemented separately for provider-reported
   input-token counts over the same stateless local input subset; it requires

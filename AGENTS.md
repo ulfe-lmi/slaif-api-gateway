@@ -472,12 +472,14 @@ Current implemented `/v1` endpoints:
   enabled
 - `GET /v1/responses/{response_id}` and `DELETE /v1/responses/{response_id}`
   for ownership-checked provider-stored Responses references
+- `GET /v1/responses/{response_id}/input_items` for ownership-checked
+  provider-stored Responses input-item listing without local content storage
 
 Future endpoints:
 
 - `POST /v1/embeddings` only if a later implementation adds endpoint
   forwarding, pricing/accounting, and tests
-- Responses cancel/list/input-item endpoints only if a later implementation
+- Responses cancel/list endpoints only if a later implementation
   adds ownership, forwarding, pricing/accounting, and tests
 
 Rules:
@@ -512,8 +514,9 @@ Implemented foundation:
   through the existing output cap settings.
 - Reject background mode, conversations, hosted tools, unsupported multimodal
   surfaces, MCP/connectors, streaming previous-response chaining, and
-  cancel/list/input-item routes. Stored Responses and `previous_response_id` are
-  non-streaming only in the implemented lifecycle slice.
+  cancel/list routes. Stored Responses, `previous_response_id`, and
+  input-item listing are ownership-checked only in the implemented lifecycle
+  slice.
 
 Future RC2 goal:
 
@@ -537,9 +540,10 @@ Stateful/background exclusions for RC2:
   reference owned by the same gateway key and compatible with the resolved
   provider route.
 - Conversation/provider-side state is not supported.
-- Response retrieve/delete are supported only after local ownership checks
-  against safe provider response reference metadata. Cancel, compact, and
-  input-item listing are not supported unless explicitly implemented later.
+- Response retrieve/delete/input-item listing are supported only after local
+  ownership checks against safe provider response reference metadata. Cancel,
+  compact, and response listing are not supported unless explicitly implemented
+  later.
 - MCP/connectors are not supported.
 
 Tool policy:
@@ -2419,8 +2423,8 @@ foundation for the current RC-beta:
 
 1. Responses API expansion beyond the current local/stored foundation,
    including hosted tool controls, bounded-overrun cost estimates,
-   previous-response/conversation/background ownership policy,
-   cancel/list/input-item routes, and provider/accounting/dashboard tests.
+   previous-response/conversation/background ownership policy, cancel/list
+   routes, and provider/accounting/dashboard tests.
 2. Versioned key templates and template-derived bulk key workflows.
 3. Usage-derived quota or template recommendations built from trusted
    calibration keys and the existing safe usage-profile rows.

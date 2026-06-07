@@ -75,6 +75,13 @@ RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS: tuple[str, ...] = (
     "truncation",
 )
 
+RESPONSES_INPUT_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
+    "after",
+    "include",
+    "limit",
+    "order",
+)
+
 
 def build_chat_completion_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest,
@@ -110,6 +117,18 @@ def build_responses_input_tokens_upstream_body(
         allowed_fields=frozenset(RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS),
         endpoint_label="Responses input-token count",
     )
+
+
+def build_responses_input_items_query_params(
+    query_params: dict[str, object],
+) -> dict[str, object]:
+    """Build fresh Responses input-items provider query params from approved fields only."""
+
+    approved = frozenset(RESPONSES_INPUT_ITEMS_QUERY_FIELDS)
+    unknown_fields = set(query_params) - approved
+    if unknown_fields:
+        raise ValueError("Responses input-items query contains unsupported fields.")
+    return {field: copy.deepcopy(query_params[field]) for field in RESPONSES_INPUT_ITEMS_QUERY_FIELDS if field in query_params}
 
 
 def _build_upstream_body(

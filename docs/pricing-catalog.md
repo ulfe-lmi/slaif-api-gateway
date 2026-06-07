@@ -362,8 +362,9 @@ Streaming finalization uses usage from the provider's completed response event;
 missing final usage is not treated as zero cost. `store=true` and
 `previous_response_id` are non-streaming create requests and use the same
 generation reservation/finalization path as other successful Responses create
-requests. Retrieve/delete are ownership-checked control-plane proxy calls and do
-not reserve output quota or create normal generation usage ledger rows.
+requests. Retrieve/delete/input-item listing are ownership-checked
+control-plane proxy calls and do not reserve output quota or create normal
+generation usage ledger rows.
 Responses hosted tools, conversations, background mode, `input_image.file_id`,
 `input_file.file_id`, file search/retrieval tools, audio inputs, image
 generation, audio output, and multimodal output are not priced or enabled in

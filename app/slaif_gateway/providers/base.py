@@ -47,6 +47,16 @@ class ProviderAdapter(ABC):
         _ = (request, response_id)
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def list_response_input_items(
+        self,
+        request: ProviderRequest,
+        *,
+        response_id: str,
+    ) -> ProviderResponse:
+        """List input items for a provider-stored Response by provider response ID."""
+        _ = (request, response_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def stream_chat_completion(
         self,
         request: ProviderRequest,

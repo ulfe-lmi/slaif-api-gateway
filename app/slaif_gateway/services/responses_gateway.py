@@ -89,6 +89,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_responses_upstream_request,
 )
 from slaif_gateway.services.upstream_payloads import (
+    build_responses_input_items_query_params,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
 )
@@ -99,8 +100,12 @@ RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_INPUT_TOKENS_PROVIDER_ENDPOINT = "responses.input_tokens"
 RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
 RESPONSES_DELETE_ENDPOINT = "DELETE /v1/responses/{response_id}"
+RESPONSES_INPUT_ITEMS_ENDPOINT = "GET /v1/responses/{response_id}/input_items"
 RESPONSES_RETRIEVE_PROVIDER_ENDPOINT = "responses.retrieve"
 RESPONSES_DELETE_PROVIDER_ENDPOINT = "responses.delete"
+RESPONSES_INPUT_ITEMS_PROVIDER_ENDPOINT = "responses.input_items"
+_RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS = frozenset({"after", "include", "include[]", "limit", "order"})
+_RESPONSES_INPUT_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -469,6 +474,55 @@ async def handle_response_delete(
         raise openai_error_from_provider_error(exc) from exc
 
     await _mark_response_reference_deleted(reference_id=reference.id, request=request)
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_response_input_items_list(
+    *,
+    response_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    safe_response_id = _validate_response_id(response_id)
+    query_params = _validate_response_input_items_query(request)
+    reference = await _get_owned_active_response_reference(
+        response_id=safe_response_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _response_not_found_error()
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_reference(
+            reference,
+            request=request,
+            list_input_items_requested=True,
+        )
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model=reference.upstream_model or "",
+            endpoint=RESPONSES_INPUT_ITEMS_PROVIDER_ENDPOINT,
+            body=build_responses_input_items_query_params(query_params),
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=RESPONSES_INPUT_ITEMS_PROVIDER_ENDPOINT,
+            call=lambda: adapter.list_response_input_items(
+                provider_request,
+                response_id=safe_response_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
     return JSONResponse(
         status_code=provider_response.status_code,
         content=dict(provider_response.json_body),
@@ -1167,7 +1221,12 @@ def _response_reference_matches_route(
     return True
 
 
-async def _provider_route_for_reference(reference, *, request: Request | None):
+async def _provider_route_for_reference(
+    reference,
+    *,
+    request: Request | None,
+    list_input_items_requested: bool = False,
+):
     session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
@@ -1175,6 +1234,26 @@ async def _provider_route_for_reference(reference, *, request: Request | None):
         raise _database_session_unavailable_error() from exc
 
     try:
+        if list_input_items_requested:
+            if reference.route_id is None:
+                raise _response_not_found_error()
+            model_route = await ModelRoutesRepository(session).get_model_route_by_id(reference.route_id)
+            if (
+                model_route is None
+                or model_route.enabled is not True
+                or model_route.provider != reference.provider
+                or model_route.upstream_model != reference.upstream_model
+                or model_route.endpoint != RESPONSES_ENDPOINT
+            ):
+                raise _response_not_found_error()
+            try:
+                enforce_responses_route_capabilities(
+                    route_capabilities=model_route.capabilities,
+                    list_input_items_requested=True,
+                )
+            except RequestPolicyError as exc:
+                raise openai_error_from_request_policy_error(exc) from exc
+
         provider_config = await ProviderConfigsRepository(session).get_provider_config_by_provider(
             reference.provider
         )
@@ -1193,6 +1272,61 @@ async def _provider_route_for_reference(reference, *, request: Request | None):
         )
     finally:
         await session_iterator.aclose()
+
+
+def _validate_response_input_items_query(request: Request | None) -> dict[str, object]:
+    if request is None:
+        return {}
+    params = request.query_params
+    unknown_keys = set(params.keys()) - _RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS
+    if unknown_keys:
+        raise _input_items_query_error("Unsupported input-items query parameter.", param="query")
+
+    query: dict[str, object] = {}
+    after = params.get("after")
+    if after is not None:
+        if not after or len(after.encode("utf-8")) > 256 or any(ord(char) < 32 for char in after):
+            raise _input_items_query_error("Invalid input-items cursor.", param="after")
+        query["after"] = after
+
+    limit = params.get("limit")
+    if limit is not None:
+        try:
+            limit_value = int(limit)
+        except ValueError as exc:
+            raise _input_items_query_error("Invalid input-items limit.", param="limit") from exc
+        if str(limit_value) != limit or limit_value < 1 or limit_value > 100:
+            raise _input_items_query_error("Invalid input-items limit.", param="limit")
+        query["limit"] = limit_value
+
+    order = params.get("order")
+    if order is not None:
+        if order not in {"asc", "desc"}:
+            raise _input_items_query_error("Invalid input-items order.", param="order")
+        query["order"] = order
+
+    include_values = [*params.getlist("include"), *params.getlist("include[]")]
+    if include_values:
+        cleaned_include: list[str] = []
+        for include in include_values:
+            if include not in _RESPONSES_INPUT_ITEMS_ALLOWED_INCLUDE_VALUES:
+                raise _input_items_query_error(
+                    "Unsupported input-items include value.",
+                    param="include",
+                )
+            cleaned_include.append(include)
+        query["include"] = cleaned_include
+    return query
+
+
+def _input_items_query_error(message: str, *, param: str) -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        message,
+        status_code=400,
+        error_type="invalid_request_error",
+        code="invalid_response_input_items_query",
+        param=param,
+    )
 
 
 async def _mark_response_reference_deleted(
