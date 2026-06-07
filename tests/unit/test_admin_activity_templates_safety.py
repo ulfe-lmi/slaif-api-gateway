@@ -19,6 +19,7 @@ from slaif_gateway.schemas.admin_activity import (
     AdminUsageListRow,
 )
 from slaif_gateway.services.admin_session_service import AdminSessionContext
+from slaif_gateway.services.chat_live_burn_telemetry import ChatLiveBurnUsageDetail
 
 
 class _FakeSession:
@@ -115,6 +116,17 @@ def _usage() -> AdminUsageDetail:
         latency_ms=20,
         created_at=datetime.now(UTC),
         completed_at=datetime.now(UTC),
+        chat_live_burn=ChatLiveBurnUsageDetail(
+            monitoring_enabled=True,
+            triggered=True,
+            stop_reason="tokens",
+            estimated_tokens_at_stop=142,
+            estimated_cost_eur_at_stop=Decimal("0.220000000"),
+            cost_margin_eur=Decimal("0.010000000"),
+            token_margin=50,
+            final_provider_usage_available=False,
+            estimate_is_invoice_grade=False,
+        ),
     )
     return AdminUsageDetail(
         **asdict(row),
@@ -238,6 +250,9 @@ def test_admin_activity_pages_render_only_safe_metadata(monkeypatch) -> None:
     html = "\n".join(pages)
 
     assert "req_safe_usage" in html
+    assert "Chat streaming live-burn" in html
+    assert "Live-burn: stopped (tokens)" in html
+    assert "0.220000000" in html
     assert "key.created" in html
     assert "Gateway key delivery" in html
     assert "pub_safe_email" in html

@@ -316,6 +316,12 @@ accounting instead of normal zero-cost success. PostgreSQL remains the hard
 quota/accounting source of truth; any Redis or in-memory live counters are
 temporary operational state only.
 
+Admin usage reporting and `slaif-gateway usage live-burn-summary` expose safe
+Chat live-burn telemetry from usage ledger metadata for operators. This does
+not change OpenAI client response shapes or Chat streaming enforcement
+semantics, and it does not render streamed chunks, prompts, completions, tool
+arguments, raw bodies, or raw live-burn metadata JSON.
+
 Trusted calibration keys are the discovery exception. A trusted organizer/admin
 key in `trusted_calibration_discovery` mode may pass routed Chat Completions
 hosted-capability markers only when the local route metadata explicitly allows

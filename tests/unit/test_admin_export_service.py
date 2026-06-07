@@ -117,12 +117,35 @@ def test_sanitize_csv_cell_neutralizes_formula_prefixes() -> None:
 
 
 def test_usage_csv_contains_safe_columns_and_excludes_content_and_secrets() -> None:
-    content = build_usage_csv([_usage_row()])
+    content = build_usage_csv(
+        [
+            _usage_row(
+                streaming=True,
+                response_metadata={
+                    "streaming_live_burn_enabled": True,
+                    "streaming_live_burn_triggered": True,
+                    "streaming_live_burn_stop_reason": "cost",
+                    "estimated_tokens_at_stop": 99,
+                    "estimated_cost_eur_at_stop": "0.050000000",
+                    "cost_margin_eur": "0.010000000",
+                    "token_margin": 10,
+                    "final_provider_usage_available": True,
+                    "estimate_is_invoice_grade": False,
+                    "response_body": "secret completion",
+                },
+            )
+        ]
+    )
     rows = _csv_rows(content)
 
     assert rows[0]["request_id"] == "'=req_formula"
     assert rows[0]["key_public_id"] == "pub_safe"
     assert rows[0]["actual_cost_eur"] == "0.002000000"
+    assert rows[0]["chat_live_burn_triggered"] == "true"
+    assert rows[0]["chat_live_burn_stop_reason"] == "cost"
+    assert rows[0]["chat_live_burn_estimated_tokens_at_stop"] == "99"
+    assert rows[0]["chat_live_burn_estimated_cost_eur_at_stop"] == "0.050000000"
+    assert rows[0]["chat_live_burn_final_provider_usage_available"] == "true"
     assert "usage_raw" not in rows[0]
     assert "response_metadata" not in rows[0]
     for forbidden in ("prompt text", "secret prompt", "secret completion", "token_hash", "encrypted_payload"):

@@ -433,6 +433,10 @@ output only. It is not invoice-grade billing truth and does not replace
 PostgreSQL reservation/finalization or provider final usage/cost. Responses
 live-burn monitoring remains future work.
 
+Chat live-burn reporting is post-hoc operator visibility over safe usage
+ledger metadata. It does not alter provider forwarding, streaming
+finalization, Redis concurrency state, or provider-completed reconciliation.
+
 ### Streaming Accounting
 
 Streaming has an extra finalization rule because content may already have reached the client:

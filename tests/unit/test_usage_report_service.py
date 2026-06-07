@@ -107,6 +107,19 @@ def _rows() -> list[FakeUsageRow]:
             estimated_cost_eur=Decimal("0.002000000"),
             actual_cost_eur=None,
             accounting_status="failed",
+            streaming=True,
+            response_metadata={
+                "streaming_live_burn_enabled": True,
+                "streaming_live_burn_triggered": True,
+                "streaming_live_burn_stop_reason": "tokens",
+                "estimated_tokens_at_stop": 142,
+                "estimated_cost_eur_at_stop": "0.220000000",
+                "cost_margin_eur": "0.010000000",
+                "token_margin": 50,
+                "final_provider_usage_available": False,
+                "estimate_is_invoice_grade": False,
+                "response_body": "completion-content-must-not-export",
+            },
             created_at=BASE_TIME + timedelta(hours=1),
         ),
         FakeUsageRow(
@@ -205,6 +218,90 @@ def test_export_returns_safe_rows_sorted_ascending_and_respects_limit() -> None:
     assert not hasattr(exported[0], "token_hash")
     assert repo.calls[0]["limit"] == 2
     assert repo.calls[0]["ascending"] is True
+
+
+def test_export_projects_safe_chat_live_burn_columns() -> None:
+    service, _ = _service(_rows())
+
+    exported = service_run(service.export_usage(limit=2))
+    live_burn = exported[1]
+
+    assert live_burn.chat_live_burn_triggered is True
+    assert live_burn.chat_live_burn_stop_reason == "tokens"
+    assert live_burn.chat_live_burn_estimated_tokens_at_stop == 142
+    assert live_burn.chat_live_burn_estimated_cost_eur_at_stop == Decimal("0.220000000")
+    assert live_burn.chat_live_burn_cost_margin_eur == Decimal("0.010000000")
+    assert live_burn.chat_live_burn_token_margin == 50
+    assert live_burn.chat_live_burn_final_provider_usage_available is False
+
+
+def test_summarize_chat_live_burn_counts_safe_metadata_only() -> None:
+    rows = _rows()
+    rows.append(
+        FakeUsageRow(
+            request_id="req-4",
+            provider="openai",
+            requested_model="gpt-test-mini",
+            resolved_model="gpt-test-mini",
+            success=False,
+            streaming=True,
+            response_metadata={
+                "streaming_live_burn_triggered": True,
+                "streaming_live_burn_stop_reason": "both",
+                "estimated_tokens_at_stop": 8,
+                "estimated_cost_eur_at_stop": "0.030000000",
+                "final_provider_usage_available": True,
+                "estimate_is_invoice_grade": False,
+                "raw_response_body": "must-not-surface",
+            },
+            created_at=BASE_TIME + timedelta(hours=2),
+        )
+    )
+    service, _ = _service(rows)
+
+    summary = service_run(service.summarize_chat_live_burn())
+
+    assert summary.triggered_total == 2
+    assert summary.stop_reason_tokens == 1
+    assert summary.stop_reason_both == 1
+    assert summary.final_provider_usage_available == 1
+    assert summary.final_provider_usage_missing == 1
+    assert summary.estimated_tokens_at_stop_sum == 150
+    assert summary.estimated_cost_eur_at_stop_sum == Decimal("0.250000000")
+
+
+def test_malformed_live_burn_metadata_does_not_raise_or_expose_raw_values() -> None:
+    rows = [
+        FakeUsageRow(
+            request_id="req-bad",
+            provider="openai",
+            requested_model="gpt-test-mini",
+            resolved_model="gpt-test-mini",
+            success=False,
+            streaming=True,
+            response_metadata={
+                "streaming_live_burn_triggered": True,
+                "streaming_live_burn_stop_reason": "unexpected-secret-ish-value",
+                "estimated_tokens_at_stop": -10,
+                "estimated_cost_eur_at_stop": "NaN",
+                "cost_margin_eur": "not-a-decimal",
+                "token_margin": "1.5",
+                "final_provider_usage_available": "no",
+                "estimate_is_invoice_grade": True,
+            },
+            created_at=BASE_TIME,
+        )
+    ]
+    service, _ = _service(rows)
+
+    exported = service_run(service.export_usage())
+    summary = service_run(service.summarize_chat_live_burn())
+
+    assert exported[0].chat_live_burn_triggered is True
+    assert exported[0].chat_live_burn_stop_reason == "unknown"
+    assert exported[0].chat_live_burn_estimated_tokens_at_stop is None
+    assert exported[0].chat_live_burn_estimated_cost_eur_at_stop is None
+    assert summary.stop_reason_unknown == 1
 
 
 def service_run(coro):

@@ -125,6 +125,7 @@ def _usage() -> AdminUsageDetail:
         latency_ms=123,
         created_at=datetime.now(UTC),
         completed_at=datetime.now(UTC),
+        chat_live_burn=None,
     )
     return AdminUsageDetail(
         **asdict(row),

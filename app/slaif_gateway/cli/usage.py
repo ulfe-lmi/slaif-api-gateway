@@ -23,6 +23,7 @@ from slaif_gateway.cli.common import (
 )
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.schemas.usage import UsageExportRow, UsageReportFilters, UsageSummaryRow
+from slaif_gateway.services.chat_live_burn_telemetry import ChatLiveBurnAggregate
 from slaif_gateway.services.usage_report_service import UsageReportService, validate_group_by
 
 app = typer.Typer(help="Inspect and export usage ledger reports")
@@ -49,6 +50,13 @@ _EXPORT_COLUMNS = [
     "actual_cost_eur",
     "native_currency",
     "upstream_request_id",
+    "chat_live_burn_triggered",
+    "chat_live_burn_stop_reason",
+    "chat_live_burn_estimated_tokens_at_stop",
+    "chat_live_burn_estimated_cost_eur_at_stop",
+    "chat_live_burn_cost_margin_eur",
+    "chat_live_burn_token_margin",
+    "chat_live_burn_final_provider_usage_available",
 ]
 
 
@@ -77,6 +85,14 @@ async def _export_usage(
 ) -> list[UsageExportRow]:
     async with cli_db_session() as (_, session):
         return await _service(session).export_usage(filters=filters, limit=limit)
+
+
+async def _summarize_chat_live_burn(
+    *,
+    filters: UsageReportFilters,
+) -> ChatLiveBurnAggregate:
+    async with cli_db_session() as (_, session):
+        return await _service(session).summarize_chat_live_burn(filters=filters)
 
 
 @app.callback()
@@ -155,6 +171,42 @@ def export(
         _write_or_echo(rendered, output=output, force=force)
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=False)
+
+
+@app.command("live-burn-summary")
+def live_burn_summary(
+    start_at: Annotated[str | None, typer.Option("--start-at", help="Inclusive ISO created_at lower bound")] = None,
+    end_at: Annotated[str | None, typer.Option("--end-at", help="Inclusive ISO created_at upper bound")] = None,
+    provider: Annotated[str | None, typer.Option("--provider", help="Provider filter")] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Requested or resolved model filter")] = None,
+    owner_id: Annotated[str | None, typer.Option("--owner-id", help="Owner UUID filter")] = None,
+    cohort_id: Annotated[str | None, typer.Option("--cohort-id", help="Cohort UUID filter")] = None,
+    key_id: Annotated[str | None, typer.Option("--key-id", help="Gateway key UUID filter")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Summarize safe Chat Completions streaming live-burn telemetry."""
+    try:
+        filters = _parse_filters(
+            start_at=start_at,
+            end_at=end_at,
+            provider=provider,
+            model=model,
+            owner_id=owner_id,
+            cohort_id=cohort_id,
+            key_id=key_id,
+        )
+        summary = run_async(_summarize_chat_live_burn(filters=filters))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+
+    payload = asdict(summary)
+    if json_output:
+        emit_json({"chat_streaming_live_burn_summary": payload})
+        return
+    typer.echo("Chat streaming live-burn summary")
+    for key, value in payload.items():
+        typer.echo(f"{key}: {_display_value(value)}")
 
 
 def _parse_filters(
@@ -236,7 +288,17 @@ def _render_export(rows: list[UsageExportRow], *, output_format: str) -> str:
 def _csv_value(value: object) -> object:
     if value is None:
         return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
     return json_default(value) if not isinstance(value, (str, int, bool)) else value
+
+
+def _display_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str | int | bool):
+        return str(value)
+    return str(json_default(value))
 
 
 def _write_or_echo(content: str, *, output: Path | None, force: bool) -> None:

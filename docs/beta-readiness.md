@@ -62,7 +62,9 @@ operational guidance, not a production certification.
   [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) documents
   the current Chat slice and the future Responses slice. The Chat feature is a
   per-key provisional interruption brake and does not change provider-final
-  usage/cost authority.
+  usage/cost authority. Admin usage pages, usage CSV export, and
+  `slaif-gateway usage live-burn-summary` report only safe Chat live-burn
+  metadata from PostgreSQL usage ledger rows.
 - Provider authorization is substituted server-side; client `Authorization`
   headers are not forwarded upstream.
 

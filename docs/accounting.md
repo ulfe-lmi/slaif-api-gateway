@@ -71,3 +71,14 @@ The persisted safe key metadata shape is:
   }
 }
 ```
+
+Usage reporting now projects existing safe Chat streaming live-burn ledger
+metadata into admin and CLI operator views. `/admin/usage` shows a compact
+stopped indicator for triggered Chat streaming rows, usage detail pages show
+individual sanitized live-burn fields, `slaif-gateway usage live-burn-summary`
+prints aggregate counts, and usage CSV exports include safe live-burn columns.
+The reporting source is PostgreSQL usage ledger metadata only. These reports
+must not store or render streamed chunks, prompts, completions, tool arguments,
+media payloads, raw request bodies, raw response bodies, secrets, or raw
+metadata JSON for the live-burn section. Prometheus live-burn counters remain
+future work.
