@@ -204,6 +204,44 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_response_posts_previous_response_id_body(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_next",
+                "object": "response",
+                "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+            },
+            headers={"OpenAI-Request-ID": "req-openai-response-previous"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "continue",
+        "store": False,
+        "max_output_tokens": 20,
+        "previous_response_id": "resp_previous",
+    }
+
+    response = await adapter.forward_response(_responses_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": "continue",
+        "store": False,
+        "max_output_tokens": 20,
+        "previous_response_id": "resp_previous",
+    }
+    assert response.upstream_request_id == "req-openai-response-previous"
+
+
+@pytest.mark.asyncio
 async def test_openai_response_input_tokens_posts_count_request(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/responses/input_tokens").mock(
         return_value=httpx.Response(

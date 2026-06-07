@@ -77,6 +77,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_function_tools_requested,
     responses_image_input_requested,
     responses_text_format_type,
+    previous_response_id_requested,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
@@ -193,6 +194,7 @@ async def handle_response_input_tokens_count(
         file_input_requested=responses_file_input_requested(policy_result.effective_body),
         input_token_count_requested=True,
         stored_responses_requested=False,
+        previous_response_id_requested=False,
         request=request,
     )
     upstream_body = _build_safe_responses_input_tokens_upstream_body(
@@ -250,8 +252,16 @@ async def handle_response_create(
         file_input_requested=responses_file_input_requested(policy_result.effective_body),
         input_token_count_requested=False,
         stored_responses_requested=policy_result.effective_body.get("store") is True,
+        previous_response_id_requested=previous_response_id_requested(policy_result.effective_body),
         request=request,
     )
+    if previous_response_id_requested(policy_result.effective_body):
+        await _verify_previous_response_reference(
+            previous_response_id=str(policy_result.effective_body["previous_response_id"]),
+            authenticated_key=authenticated_key,
+            route=route,
+            request=request,
+        )
     upstream_body = _build_safe_responses_upstream_body(
         policy_result=policy_result,
         upstream_model=route.resolved_model,
@@ -478,6 +488,7 @@ async def _resolve_responses_route(
     file_input_requested: bool,
     input_token_count_requested: bool,
     stored_responses_requested: bool,
+    previous_response_id_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -509,6 +520,7 @@ async def _resolve_responses_route(
                 file_input_requested=file_input_requested,
                 input_token_count_requested=input_token_count_requested,
                 stored_responses_requested=stored_responses_requested,
+                previous_response_id_requested=previous_response_id_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -1121,6 +1133,38 @@ async def _get_owned_active_response_reference(
         )
     finally:
         await session_iterator.aclose()
+
+
+async def _verify_previous_response_reference(
+    *,
+    previous_response_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    request: Request | None,
+) -> ResponseReference:
+    reference = await _get_owned_active_response_reference(
+        response_id=previous_response_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _response_not_found_error()
+    if not _response_reference_matches_route(reference, route):
+        raise _response_not_found_error()
+    return reference
+
+
+def _response_reference_matches_route(
+    reference: ResponseReference,
+    route: RouteResolutionResult,
+) -> bool:
+    if reference.provider != route.provider:
+        return False
+    if reference.upstream_model and reference.upstream_model != route.resolved_model:
+        return False
+    if reference.route_id is not None and reference.route_id != route.route_id:
+        return False
+    return True
 
 
 async def _provider_route_for_reference(reference, *, request: Request | None):

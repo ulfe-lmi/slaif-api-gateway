@@ -206,6 +206,11 @@ Responses-specific rules for the current foundation:
   `capabilities.responses.stored_responses=true` is verified. After a
   successful provider response with an ID, SLAIF persists only safe response
   reference metadata needed for ownership and future provider routing;
+- non-streaming `previous_response_id` is forwarded only after the ID resolves
+  to an active local response reference owned by the authenticated gateway key,
+  the route advertises `capabilities.responses.previous_response_id=true`, and
+  provider/route metadata is compatible. Unknown, non-owned, deleted,
+  provider-mismatched, or route-incompatible IDs are not proxied upstream;
 - `max_output_tokens` is defaulted or capped before forwarding;
 - `/v1/responses/input_tokens` is routed and forwarded separately. Its
   canonical upstream body may include `input`, `instructions`, `text`, local
@@ -234,8 +239,8 @@ Responses-specific rules for the current foundation:
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;
-- `background`, `previous_response_id`, and `conversation` are rejected before
-  provider forwarding;
+- `background`, `conversation`, and streaming `previous_response_id` are
+  rejected before provider forwarding;
 - response cancel, compact, list, and input-item listing require explicit
   provider response ownership mapping before they can be implemented;
 - provider response IDs and tool diagnostics must be treated as metadata and

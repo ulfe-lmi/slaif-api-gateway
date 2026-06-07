@@ -61,6 +61,52 @@ def test_store_true_stream_true_rejects_before_route_provider() -> None:
     assert exc_info.value.param == "stream"
 
 
+def test_previous_response_id_passes_for_non_streaming_create() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(previous_response_id="resp_previous_123"),
+        allow_store=True,
+    )
+
+    assert result.effective_body["previous_response_id"] == "resp_previous_123"
+    assert result.effective_body["store"] is False
+
+
+@pytest.mark.parametrize("value", ["", 123, None])
+def test_previous_response_id_rejects_invalid_shape(value: object) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(previous_response_id=value),
+            allow_store=True,
+        )
+
+    assert exc_info.value.error_code == "responses_previous_response_id_invalid"
+    assert exc_info.value.param == "previous_response_id"
+
+
+def test_previous_response_id_rejects_oversized_value() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(
+            Settings(RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=8)
+        ).apply(
+            _body(previous_response_id="resp_previous_123"),
+            allow_store=True,
+        )
+
+    assert exc_info.value.error_code == "responses_previous_response_id_too_large"
+    assert exc_info.value.param == "previous_response_id"
+
+
+def test_previous_response_id_stream_true_rejects_before_route_provider() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(previous_response_id="resp_previous_123", stream=True),
+            allow_store=True,
+        )
+
+    assert exc_info.value.error_code == "responses_previous_response_streaming_not_supported"
+    assert exc_info.value.param == "previous_response_id"
+
+
 def test_omitted_max_output_tokens_injects_default() -> None:
     result = ResponsesRequestPolicy(Settings(DEFAULT_MAX_OUTPUT_TOKENS=77)).apply(
         {"model": "gpt-test", "input": "hello"}
@@ -166,7 +212,6 @@ def test_input_token_count_rejects_invalid_parallel_tool_calls_and_truncation() 
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
-        ("previous_response_id", "resp_123", "responses_state_not_supported"),
         ("conversation", "conv_123", "responses_state_not_supported"),
         ("background", True, "responses_background_not_supported"),
         ("store", True, "responses_store_not_supported"),

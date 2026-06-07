@@ -13,10 +13,13 @@ non-streaming local/client-side custom tools. `store=false` remains the default
 for create. `store=true` is supported only for non-streaming stored-response
 create when the route explicitly enables stored Responses. Retrieve/delete are
 ownership-checked proxy calls backed by safe local response-reference metadata.
+Non-streaming `previous_response_id` is supported only for locally recorded,
+active, same-key provider response references after provider/route compatibility
+checks.
 `POST /v1/responses/input_tokens` is implemented as a separate
 provider-reported count endpoint for the same local input subset. It has no
-hosted tools, MCP/connectors, background mode, previous response or conversation
-state, `/v1/files` lifecycle, audio input, audio output, image generation, file
+hosted tools, MCP/connectors, background mode, conversation state, `/v1/files`
+lifecycle, audio input, audio output, image generation, file
 search, cancel/list/input-item routes, or multimodal output.
 
 ## Supported Endpoint
@@ -44,6 +47,8 @@ Implemented request fields for the first slice:
   advertises Responses streaming support
 - `store` omitted, `false`, or non-streaming `true` when the resolved route
   explicitly advertises stored Responses support
+- `previous_response_id` as a bounded string for non-streaming requests when it
+  references a locally known, active, owned, provider-compatible Response
 - `text.format` as plain text, JSON object mode, or bounded JSON schema
   structured output
 - `tools` with local function-tool or custom-tool entries only
@@ -192,6 +197,17 @@ The first stateful lifecycle slice is intentionally limited:
   gateway key owns an active local reference for that provider response ID;
 - missing, non-owned, or locally deleted references return an OpenAI-shaped
   404 and are not proxied upstream.
+- `previous_response_id` is accepted only for non-streaming create requests
+  after the referenced provider response ID resolves to an active local
+  reference owned by the authenticated gateway key;
+- `previous_response_id` requires
+  `capabilities.responses.previous_response_id=true`;
+- if `store=true` is combined with `previous_response_id`, the route must also
+  advertise `capabilities.responses.stored_responses=true`, and the new
+  provider response reference is persisted after a successful provider response;
+- unknown, non-owned, deleted, provider-mismatched, or route-incompatible
+  previous response IDs return an OpenAI-shaped 404 and are not proxied
+  upstream.
 
 The local response reference stores provider response ID, gateway key/owner
 metadata, provider, requested/upstream model, endpoint, route/status/timestamps,
@@ -209,17 +225,17 @@ instead of claiming retrievable state.
 Still unsupported:
 
 - `background=true`
-- `previous_response_id`
 - conversation/provider-side state
 - MCP/connectors
+- streaming `previous_response_id`
 - response cancel, compact, list, or input-item listing
 
 OpenAI documents Responses as supporting background mode, response storage,
 conversation state, previous response IDs, and hosted tools. OpenRouter documents
 its Responses beta as stateless. SLAIF enables only the owned retrieve/delete
-slice above and continues to fail closed on other stateful and background
-features until explicit ownership mapping, quota/accounting semantics, and tests
-exist.
+and owned previous-response slices above and continues to fail closed on other
+stateful and background features until explicit ownership mapping,
+quota/accounting semantics, and tests exist.
 
 ## Tool Support Policy
 
@@ -376,16 +392,17 @@ For `/v1/responses`, a template revision may carry
 `template_snapshot.responses_policy` with version 1, allowed local capabilities
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
-`input_token_count`, `stored_responses`), allowed local tool types (`function`,
-`custom`), an empty hosted-tool allowlist, and explicit false storage,
-background, and multimodal-output flags. `stored_responses` is only a safe
-capability summary for non-streaming create plus owned retrieve/delete; it does
-not permit raw response IDs from user traffic, prompts, completions, or response
-content in template metadata. Template-to-key creation copies that sanitized
-summary into gateway-key metadata. Hosted tools, MCP/connectors,
-previous-response/conversation state, background, raw image URLs/data, raw file
-URLs/names/data/base64, raw tool definitions, schemas, generated tool inputs,
-and tool outputs remain out of scope for template metadata and are rejected.
+`input_token_count`, `stored_responses`, `previous_response_id`), allowed local
+tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
+false storage, background, and multimodal-output flags. `stored_responses` and
+`previous_response_id` are only safe capability summaries for non-streaming
+stored create, owned retrieve/delete, and owned previous-response chaining; they
+do not permit raw response IDs from user traffic, prompts, completions, or
+response content in template metadata. Template-to-key creation copies that
+sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
+conversation state, background, raw image URLs/data, raw file URLs/names/data/base64,
+raw tool definitions, schemas, generated tool inputs, and tool outputs remain
+out of scope for template metadata and are rejected.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.
@@ -493,7 +510,7 @@ RC2 must reject these before provider forwarding unless a later contract updates
 the support matrix:
 
 - `background=true`
-- `previous_response_id`
+- streaming `previous_response_id`
 - `conversation`
 - MCP/connectors
 - response cancellation
@@ -504,7 +521,7 @@ the support matrix:
 
 ## Required Tests
 
-The stateless Responses foundation is implemented with:
+The local/stored Responses foundation is implemented with:
 
 - request policy unit tests;
 - route capability unit tests;
@@ -512,8 +529,8 @@ The stateless Responses foundation is implemented with:
 - endpoint allowlist and pipeline-ordering tests;
 - PostgreSQL-backed mocked official OpenAI Python client E2E coverage.
 
-Tool-enabled or stateful Responses support remains future work until these are
-present and green:
+Broader hosted-tool, background, conversation, and streaming stateful Responses
+support remains future work until these are present and green:
 
 - PostgreSQL quota/accounting integration tests;
 - bounded-overrun tests;

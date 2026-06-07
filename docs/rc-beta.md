@@ -133,14 +133,15 @@ migrations automatically.
   user-message URL/data URL file input, non-streaming JSON, typed SSE
   streaming, non-streaming structured `text.format` JSON object/schema output,
   plus non-streaming local function and custom tools, non-streaming stored
-  create with ownership-checked retrieve/delete, explicit key endpoint
+  create with ownership-checked retrieve/delete, non-streaming owned
+  `previous_response_id`, explicit key endpoint
   permission, route capability, provider route, and pricing metadata.
   `/v1/responses/input_tokens` is implemented separately for provider-reported
   input-token counts over the same stateless local input subset; it requires
   explicit endpoint permission and route capability and does not create a
   Response or reserve generation quota.
   Hosted/provider-side Responses tools,
-  previous-response/conversation state, background mode, cancel/list routes,
+  conversation state, streaming previous-response state, background mode, cancel/list routes,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
   search/retrieval tools, audio input, image generation, multimodal output, and
   MCP/connectors remain future work. Current Chat

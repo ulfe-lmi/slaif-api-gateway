@@ -45,6 +45,7 @@ async def _create_responses_test_data(
     file_input: bool = False,
     input_token_count: bool = False,
     stored_responses: bool = False,
+    previous_response_id: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -139,6 +140,7 @@ async def _create_responses_test_data(
             capabilities["file_input"] = file_input
             capabilities["input_token_count"] = input_token_count
             capabilities["stored_responses"] = stored_responses
+            capabilities["previous_response_id"] = previous_response_id
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -418,6 +420,119 @@ def test_openai_python_client_responses_store_retrieve_delete_e2e(
     assert state.gateway_key.requests_used_total == 1
     assert state.gateway_key.tokens_used_total == 18
     assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_previous_response_id_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            stored_responses=True,
+            previous_response_id=True,
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    previous_payload = {
+        "id": "resp_previous_e2e",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_previous_e2e",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+        "store": True,
+    }
+    next_payload = {
+        "id": "resp_next_e2e",
+        "object": "response",
+        "created_at": 124,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_next_e2e",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "continued", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 5, "output_tokens": 6, "total_tokens": 11},
+        "store": False,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                side_effect=[
+                    httpx.Response(
+                        200,
+                        json=previous_payload,
+                        headers={"x-request-id": "upstream-openai-responses-previous-seed"},
+                    ),
+                    httpx.Response(
+                        200,
+                        json=next_payload,
+                        headers={"x-request-id": "upstream-openai-responses-previous-next"},
+                    ),
+                ]
+            )
+
+            client = OpenAI()
+            previous_response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                store=True,
+            )
+            next_response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input="Continue.",
+                max_output_tokens=16,
+                previous_response_id="resp_previous_e2e",
+            )
+
+    assert previous_response.id == "resp_previous_e2e"
+    assert next_response.id == "resp_next_e2e"
+    assert upstream_route.called
+    assert len(upstream_route.calls) == 2
+    first_body = json.loads(upstream_route.calls[0].request.content)
+    second_body = json.loads(upstream_route.calls[1].request.content)
+    assert first_body["store"] is True
+    assert second_body == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": "Continue.",
+        "max_output_tokens": 16,
+        "previous_response_id": "resp_previous_e2e",
+        "store": False,
+    }
+    assert upstream_route.calls[1].request.headers["authorization"] == (
+        f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    )
+    assert created.plaintext_key not in upstream_route.calls[1].request.headers["authorization"]
 
 
 @pytest.mark.e2e

@@ -30,6 +30,7 @@ _SUPPORTED_FIELDS = frozenset(
         "service_tier",
         "tools",
         "tool_choice",
+        "previous_response_id",
     }
 )
 _SUPPORTED_INPUT_TOKEN_COUNT_FIELDS = frozenset(
@@ -164,6 +165,7 @@ class ResponsesRequestPolicy:
             max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
         )
         self._validate_storage_fields(effective_body, allow_store=allow_store)
+        self._validate_previous_response_id(effective_body)
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
         self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
@@ -182,6 +184,12 @@ class ResponsesRequestPolicy:
                 "tools",
                 "responses_custom_tool_streaming_not_supported",
                 "Streaming Responses custom tools are not enabled by this gateway.",
+            )
+        if effective_body.get("stream") is True and previous_response_id_requested(effective_body):
+            _raise(
+                "previous_response_id",
+                "responses_previous_response_streaming_not_supported",
+                "Streaming Responses with previous_response_id is not enabled by this gateway.",
             )
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
@@ -1081,6 +1089,29 @@ class ResponsesRequestPolicy:
                 "The 'truncation' field must be 'auto' or 'disabled' when provided.",
             )
 
+    def _validate_previous_response_id(self, body: Mapping[str, Any]) -> None:
+        if "previous_response_id" not in body:
+            return
+        value = body.get("previous_response_id")
+        if not isinstance(value, str) or not value:
+            _raise(
+                "previous_response_id",
+                "responses_previous_response_id_invalid",
+                "The 'previous_response_id' field must be a non-empty string.",
+            )
+        self._validate_string_bytes(
+            value,
+            param="previous_response_id",
+            max_bytes=self._settings.RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES,
+            code="responses_previous_response_id_too_large",
+        )
+        if any(ord(char) < 32 for char in value):
+            _raise(
+                "previous_response_id",
+                "responses_previous_response_id_invalid",
+                "The 'previous_response_id' field contains unsupported characters.",
+            )
+
     def _validate_number_range(
         self,
         value: Any,
@@ -1840,6 +1871,10 @@ def responses_image_input_requested(body: Mapping[str, Any]) -> bool:
 
 def responses_file_input_requested(body: Mapping[str, Any]) -> bool:
     return _input_contains_file_input(body.get("input"))
+
+
+def previous_response_id_requested(body: Mapping[str, Any]) -> bool:
+    return "previous_response_id" in body
 
 
 def _input_contains_function_call_output(value: Any) -> bool:

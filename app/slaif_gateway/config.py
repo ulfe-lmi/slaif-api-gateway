@@ -217,6 +217,7 @@ class Settings(BaseSettings):
     RESPONSES_MAX_FILE_DATA_URL_BYTES: int = 26214400
     RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES: int = 52428800
     RESPONSES_MAX_FILE_NAME_BYTES: int = 255
+    RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES: int = 256
     RESPONSES_ALLOWED_FILE_MIME_TYPES: str = (
         "application/pdf,text/plain,text/markdown,text/csv,application/json,"
         "text/html,text/xml,application/xml"
@@ -485,6 +486,7 @@ class Settings(BaseSettings):
             "RESPONSES_MAX_FILE_DATA_URL_BYTES",
             "RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES",
             "RESPONSES_MAX_FILE_NAME_BYTES",
+            "RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")

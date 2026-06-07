@@ -15,7 +15,7 @@ from slaif_gateway.db.repositories.response_references import ResponseReferences
 
 
 @pytest.mark.asyncio
-async def test_response_reference_repository_filters_by_gateway_key_and_deleted_status(
+async def test_response_reference_repository_previous_ownership_and_provider_metadata(
     async_test_session: AsyncSession,
 ) -> None:
     now = datetime.now(UTC)
@@ -78,6 +78,9 @@ async def test_response_reference_repository_filters_by_gateway_key_and_deleted_
     assert owned is not None
     assert owned.id == reference.id
     assert non_owned is None
+    assert owned.provider == "openai"
+    assert owned.requested_model == "classroom-responses"
+    assert owned.upstream_model == "gpt-5.2"
     assert owned.reference_metadata == {"safe": "value"}
 
     await references.mark_deleted(reference, deleted_at=now)
