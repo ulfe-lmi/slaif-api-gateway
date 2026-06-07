@@ -156,9 +156,15 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     RotateGatewayKeyInput,
     SuspendGatewayKeyInput,
+    UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.chat_streaming_live_burn import (
+    ChatStreamingLiveBurnPolicyError,
+    chat_streaming_live_burn_policy_from_metadata,
+    parse_chat_streaming_live_burn_form_policy,
 )
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
@@ -175,6 +181,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_policy_updated": ("success", "Gateway key request policy updated."),
+    "key_chat_streaming_live_burn_updated": (
+        "success",
+        "Chat Completions streaming live-burn policy updated.",
+    ),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
     "template_created": ("success", "Key template created from reviewed calibration proposal."),
     "key_created_from_template": ("success", "Gateway key created from selected template revision."),
@@ -185,6 +195,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
     "limits_reason_required": ("error", "Enter an audit reason before updating hard quota limits."),
     "key_policy_reason_required": ("error", "Enter an audit reason before updating request policy."),
+    "chat_streaming_live_burn_reason_required": (
+        "error",
+        "Enter an audit reason before updating Chat streaming live-burn policy.",
+    ),
     "usage_reset_confirmation_required": ("error", "Confirm usage-counter reset before continuing."),
     "usage_reset_reason_required": ("error", "Enter an audit reason before resetting usage counters."),
     "reserved_reset_confirmation_required": (
@@ -194,6 +208,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "invalid_gateway_key_validity": ("error", "Enter a valid key validity window."),
     "invalid_gateway_key_limits": ("error", "Enter valid positive hard quota limits."),
     "invalid_gateway_key_policy": ("error", "Enter a valid key request policy."),
+    "invalid_chat_streaming_live_burn_policy": (
+        "error",
+        "Enter a valid Chat Completions streaming live-burn policy.",
+    ),
     "gateway_key_no_validity_change": ("error", "Change at least one validity field before submitting."),
     "gateway_key_no_limit_change": ("error", "Change or clear at least one hard quota limit before submitting."),
     "gateway_key_already_active": ("error", "Gateway key is already active."),
@@ -531,6 +549,9 @@ async def create_admin_key(
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
     rate_limit_window_seconds: str = Form(""),
+    chat_streaming_live_burn_enabled: str = Form("true"),
+    chat_streaming_live_burn_cost_margin_eur: str = Form("0"),
+    chat_streaming_live_burn_token_margin: str = Form("0"),
     trusted_calibration: str = Form(""),
     confirm_trusted_calibration: str = Form(""),
     email_delivery_mode: str = Form("none"),
@@ -561,6 +582,9 @@ async def create_admin_key(
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
         "rate_limit_window_seconds": rate_limit_window_seconds,
+        "chat_streaming_live_burn_enabled": chat_streaming_live_burn_enabled,
+        "chat_streaming_live_burn_cost_margin_eur": chat_streaming_live_burn_cost_margin_eur,
+        "chat_streaming_live_burn_token_margin": chat_streaming_live_burn_token_margin,
         "trusted_calibration": trusted_calibration,
         "confirm_trusted_calibration": confirm_trusted_calibration,
         "email_delivery_mode": email_delivery_mode,
@@ -1567,6 +1591,80 @@ async def update_admin_key_policy(
         )
 
     return _redirect_to_admin_key(parsed_key_id, message="key_policy_updated")
+
+
+@router.post("/keys/{gateway_key_id}/chat-streaming-live-burn", response_class=HTMLResponse)
+async def update_admin_key_chat_streaming_live_burn(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    chat_streaming_live_burn_enabled: str = Form(""),
+    chat_streaming_live_burn_cost_margin_eur: str = Form(""),
+    chat_streaming_live_burn_token_margin: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return _redirect_to_admin_key(
+            parsed_key_id,
+            message="chat_streaming_live_burn_reason_required",
+        )
+
+    try:
+        async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
+            gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if gateway_key is None:
+                return HTMLResponse("Gateway key not found.", status_code=404)
+            existing_policy = chat_streaming_live_burn_policy_from_metadata(
+                gateway_key.metadata_json,
+                max_abs_cost_margin_eur=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
+                max_abs_token_margin=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+            policy = parse_chat_streaming_live_burn_form_policy(
+                enabled=_is_checked(chat_streaming_live_burn_enabled),
+                cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
+                token_margin=chat_streaming_live_burn_token_margin,
+                existing_policy=existing_policy,
+                max_abs_cost_margin_eur=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
+                max_abs_token_margin=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+            await service.update_gateway_key_chat_streaming_live_burn(
+                UpdateGatewayKeyChatStreamingLiveBurnInput(
+                    gateway_key_id=parsed_key_id,
+                    chat_streaming_live_burn_policy=policy.to_metadata(),
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except (ChatStreamingLiveBurnPolicyError, KeyManagementError, ValueError) as exc:
+        logger.warning(
+            "admin.key_chat_streaming_live_burn_update.failed",
+            admin_id=str(action_context.admin_user.id),
+            gateway_key_id=str(parsed_key_id),
+            error=exc.__class__.__name__,
+            diagnostic_id=_admin_diagnostic_id(request),
+        )
+        return _redirect_to_admin_key(
+            parsed_key_id,
+            message="invalid_chat_streaming_live_burn_policy",
+        )
+
+    return _redirect_to_admin_key(
+        parsed_key_id,
+        message="key_chat_streaming_live_burn_updated",
+    )
 
 
 @router.post("/keys/{gateway_key_id}/suspend", response_class=HTMLResponse)
@@ -6640,6 +6738,9 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_tokens_per_minute": "",
         "rate_limit_concurrent_requests": "",
         "rate_limit_window_seconds": "",
+        "chat_streaming_live_burn_enabled": "true",
+        "chat_streaming_live_burn_cost_margin_eur": "0",
+        "chat_streaming_live_burn_token_margin": "0",
         "trusted_calibration": "",
         "confirm_trusted_calibration": "",
         "email_delivery_mode": "none",
@@ -8179,6 +8280,21 @@ def _parse_key_create_form(
         _, token_limit_total = _parse_optional_admin_int(form.get("token_limit_total"))
         _, request_limit_total = _parse_optional_admin_int(form.get("request_limit_total"))
         rate_limit_policy = _parse_admin_rate_limit_policy(form)
+        chat_streaming_live_burn_policy = parse_chat_streaming_live_burn_form_policy(
+            enabled=_is_checked(form.get("chat_streaming_live_burn_enabled", "true")),
+            cost_margin_eur=form.get("chat_streaming_live_burn_cost_margin_eur"),
+            token_margin=form.get("chat_streaming_live_burn_token_margin"),
+            max_abs_cost_margin_eur=(
+                settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                if settings is not None
+                else Decimal("1000000")
+            ),
+            max_abs_token_margin=(
+                settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
+                if settings is not None
+                else 1000000000
+            ),
+        )
     except ValueError as exc:
         raise ValueError("Enter valid positive quota and rate-limit values.") from exc
 
@@ -8237,6 +8353,7 @@ def _parse_key_create_form(
         calibration_metadata=calibration_metadata,
         confirm_trusted_calibration=_is_checked(form.get("confirm_trusted_calibration")),
         rate_limit_policy=rate_limit_policy,
+        chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
         note=cleaned_reason,
     )
 

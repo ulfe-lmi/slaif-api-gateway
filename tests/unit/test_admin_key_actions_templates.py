@@ -99,6 +99,15 @@ def _detail(
         rate_limit_policy_summary="Default",
         responses_policy=None,
         responses_policy_summary="None",
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
+        chat_streaming_live_burn_policy_summary=(
+            "Chat Completions streaming enabled; cost margin EUR 0.000000000; token margin 0"
+        ),
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -197,6 +206,24 @@ def test_key_detail_renders_validity_and_limit_forms(monkeypatch) -> None:
     assert "PostgreSQL-backed key policy" in html
     assert "Redis operational rate limits are configured separately" in html
     assert "Used and reserved counters are not reset" in html
+
+
+def test_key_detail_renders_chat_streaming_live_burn_form(monkeypatch) -> None:
+    key = _detail()
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert f'action="/admin/keys/{key.id}/chat-streaming-live-burn"' in html
+    assert "Chat Completions streaming live-burn monitoring" in html
+    assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0.000000000"' in html
+    assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
+    assert "PostgreSQL hard quota limits remain independent and authoritative" in html
+    assert "Margins are ignored while monitoring is off" in html
+    assert "detail-chat-streaming-live-burn-fields" in html
+    assert "input.disabled = !enabled" in html
 
 
 def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:

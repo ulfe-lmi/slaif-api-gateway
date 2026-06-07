@@ -55,6 +55,8 @@ class AdminKeyListRow:
     rate_limit_policy_summary: str
     responses_policy: dict[str, object] | None
     responses_policy_summary: str
+    chat_streaming_live_burn_policy: dict[str, object]
+    chat_streaming_live_burn_policy_summary: str
     created_at: datetime
     updated_at: datetime
 

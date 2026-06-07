@@ -1005,13 +1005,16 @@ Streaming requirements:
 - If a stream is interrupted before final usage arrives, record an incomplete/interrupted accounting event and handle according to policy.
 - The gateway may inject provider-specific options needed to request streaming usage, if that does not break client compatibility.
 - Never silently ignore usage failures for cost-bearing requests. Mark them clearly in the ledger.
-- Planned streaming live-burn margin work is documented in
-  `docs/streaming-live-burn-margin.md`. Treat it as a future governance
-  milestone only until runtime support, schema/config changes, admin/CLI
-  surfaces, and tests are explicitly implemented. It must preserve provider
-  final usage/cost as authoritative, PostgreSQL as hard quota truth, Redis as
-  temporary operational state only, and no storage of prompts, completions, raw
-  bodies, streamed chunks, tool payloads, or media payloads.
+- Chat Completions streaming live-burn monitoring is implemented for
+  `POST /v1/chat/completions` with `stream=true` and documented in
+  `docs/streaming-live-burn-margin.md`. It is per-key, defaults to enabled with
+  zero cost/token margins, enforces money and token cutoffs independently, and
+  remains a provisional operational brake rather than invoice-grade billing
+  truth. Responses live-burn monitoring remains future work. Preserve provider
+  final usage/cost as authoritative, PostgreSQL as hard quota truth, Redis or
+  in-memory live counters as temporary operational state only, and no storage of
+  prompts, completions, raw bodies, streamed chunks, tool payloads, or media
+  payloads.
 
 Quota period semantics for v1:
 
@@ -1345,8 +1348,8 @@ code changes:
 - `docs/openai-compatibility.md`
 - `docs/provider-forwarding-contract.md`
 - `docs/compatibility-matrix.md`
-- `docs/streaming-live-burn-margin.md`, for the planned streaming live-burn
-  margin milestone
+- `docs/streaming-live-burn-margin.md`, for Chat Completions streaming
+  live-burn behavior and the future Responses live-burn milestone
 - `docs/provider-routing.md`, if present
 - `README.md`, for top-level current status, quickstart, and operator-facing
   truth
@@ -2365,34 +2368,39 @@ The implemented core includes:
    and OpenRouter adapters, including provider-secret substitution, provider
    header/body policy, final streaming usage handling, and mocked official
    OpenAI-client E2E coverage.
-4. Chat Completions hosted-tool request policy that permits client-side
+4. Per-key Chat Completions streaming live-burn monitoring for
+   `stream=true`, with enabled/zero-margin defaults, safe provisional
+   cost/token estimates, safe SSE interruption, and estimated interrupted
+   accounting when final provider usage is unavailable after an intentional
+   live-burn stop.
+5. Chat Completions hosted-tool request policy that permits client-side
    function tools but denies provider-side hosted tools, MCP/connectors,
    web-search fields, background execution, and search-specific models before
    rate limiting, routing, pricing, quota reservation, or provider forwarding.
-5. Gateway key generation/authentication with HMAC-only storage, configurable
+6. Gateway key generation/authentication with HMAC-only storage, configurable
    key prefixes, endpoint/model/provider policy checks, editable key request
    policy, and no plaintext key persistence after creation/rotation flows.
-6. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
+7. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
    advisory safe usage profiles for current Chat Completions, pricing/FX lookup,
    route resolution, audit records, reconciliation helpers, and integration-test
    coverage. `docs/database-schema.md` remains the schema source of truth; do
    not duplicate table, column, index, or constraint details here.
-7. Redis-backed operational rate limiting when enabled, including request,
+8. Redis-backed operational rate limiting when enabled, including request,
    estimated-token, and active-concurrency throttles. Redis is operational
    state only; PostgreSQL remains authoritative for hard quota/accounting.
-8. Admin dashboard pages/actions for the current scope: login/logout, keys and
+9. Admin dashboard pages/actions for the current scope: login/logout, keys and
    key lifecycle actions, bulk key import preview/execution, owner,
    institution, and cohort metadata, provider/route/pricing/FX metadata,
    usage/audit CSV exports, and one-time-secret-backed email-delivery actions,
    with CSRF protection on state-changing forms.
-9. CLI administration commands for the implemented admin bootstrap, owner,
+10. CLI administration commands for the implemented admin bootstrap, owner,
    institution, cohort, key lifecycle, provider/route/pricing/FX, usage export,
    reconciliation, email, and database migration workflows.
-10. Email delivery for newly generated or rotated keys through encrypted
+11. Email delivery for newly generated or rotated keys through encrypted
    one-time secrets, SMTP via `aiosmtplib`, Celery workers, ID-only Celery
    payloads, Mailpit for local development, and fail-closed ambiguous delivery
    handling.
-11. Metrics, structured logging, request IDs, redaction, sanitized provider
+12. Metrics, structured logging, request IDs, redaction, sanitized provider
     diagnostics, and controlled `/metrics` exposure foundation.
 12. Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis,
     Mailpit, and optional Nginx; migrations remain explicit operator actions.

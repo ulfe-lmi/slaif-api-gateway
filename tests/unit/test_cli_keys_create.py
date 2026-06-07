@@ -132,6 +132,49 @@ def test_keys_create_prints_plaintext_key_once(monkeypatch) -> None:
     assert payload.allow_all_endpoints is True
     assert payload.created_by_admin_id == ADMIN_ID
     assert payload.note == "classroom key"
+    assert payload.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+
+
+def test_keys_create_parses_chat_streaming_live_burn_flags(monkeypatch) -> None:
+    seen: dict[str, CreateGatewayKeyInput] = {}
+
+    async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        seen["payload"] = payload
+        return _created_result()
+
+    monkeypatch.setattr(keys_cli, "_create_gateway_key", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "31",
+            "--no-chat-streaming-live-burn",
+            "--chat-streaming-live-burn-cost-margin-eur",
+            "-0.25",
+            "--chat-streaming-live-burn-token-margin",
+            "-250",
+            "--reason",
+            "classroom key",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["payload"].chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
 
 
 def test_keys_create_from_template_outputs_safe_standard_key(monkeypatch) -> None:

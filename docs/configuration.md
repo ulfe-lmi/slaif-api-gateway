@@ -205,21 +205,43 @@ PY
 Choose `RATE_LIMIT_FAIL_CLOSED` deliberately in production. Redis rate limits
 are operational throttles; PostgreSQL quota and accounting remain authoritative.
 
-## Planned Streaming Live-Burn Settings
+## Chat Completions Streaming Live-Burn Settings
 
-Streaming live-burn margin settings are documented as planned future work in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). They are not
-active environment variables in the current runtime, and `.env.example` should
-not list them until code implements parsing, validation, persistence/effective
-policy, admin/CLI surfaces, and tests.
+Streaming live-burn margin settings apply only to
+`POST /v1/chat/completions` with `stream=true`. Responses live-burn monitoring
+remains future work.
 
-The milestone proposes per-key defaults with monitoring enabled and zero cost
-and output-token margins. Positive margins would stop streams early, zero
-margins would stop near the estimated quota boundary, and negative margins
-would allow bounded estimated overrun. Those estimates are provisional only:
-PostgreSQL remains authoritative for hard quota/accounting, Redis remains
-temporary operational state, and final provider usage/cost remains authoritative
-when available.
+Per-key metadata defaults to enabled monitoring with zero margins:
+
+```json
+{
+  "chat_streaming_live_burn": {
+    "version": 1,
+    "enabled": true,
+    "cost_margin_eur": "0.000000000",
+    "token_margin": 0
+  }
+}
+```
+
+Positive margins stop streams early before the quota boundary, zero margins
+stop near the estimated boundary, and negative margins allow bounded estimated
+overrun. If monitoring is disabled for a key, stored margins are preserved but
+ignored at runtime. Cost and token thresholds are enforced independently.
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER` | `1.15` | Multiplier applied to provisional visible-output token estimates. |
+| `CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR` | `1000000` | Absolute bound for per-key positive or negative cost margins. |
+| `CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN` | `1000000000` | Absolute bound for per-key positive or negative token margins. |
+
+Live estimates are provisional only and are not invoice-grade billing truth.
+PostgreSQL remains authoritative for hard quota/accounting, Redis or in-memory
+live state remains temporary operational state, and final provider usage/cost
+remains authoritative when available. The estimator counts streamed generated
+Chat Completions text deltas and discards them; prompts, completions, streamed
+chunks, tool arguments, media payloads, raw request bodies, and raw response
+bodies must not be stored or logged.
 
 ## Provider Configuration
 

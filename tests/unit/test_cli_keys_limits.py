@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -11,6 +12,7 @@ from slaif_gateway.cli.main import app
 from slaif_gateway.schemas.keys import (
     GatewayKeyManagementResult,
     ResetGatewayKeyUsageInput,
+    UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyValidityInput,
 )
 
@@ -122,6 +124,64 @@ def test_set_limits_rejects_negative_values() -> None:
     )
 
     assert result.exit_code != 0
+
+
+def test_set_chat_streaming_live_burn_persists_policy(monkeypatch) -> None:
+    seen: dict[str, UpdateGatewayKeyChatStreamingLiveBurnInput] = {}
+    gateway_key = SimpleNamespace(
+        id=GATEWAY_KEY_ID,
+        metadata_json={
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "0.000000000",
+                "token_margin": 0,
+            }
+        },
+    )
+
+    async def fake_show(gateway_key_id):
+        assert gateway_key_id == GATEWAY_KEY_ID
+        return gateway_key
+
+    async def fake_update(payload: UpdateGatewayKeyChatStreamingLiveBurnInput):
+        seen["payload"] = payload
+        return _management_result()
+
+    monkeypatch.setattr(keys_cli, "_show_gateway_key", fake_show)
+    monkeypatch.setattr(keys_cli, "_update_chat_streaming_live_burn", fake_update)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "set-chat-streaming-live-burn",
+            str(GATEWAY_KEY_ID),
+            "--disabled",
+            "--cost-margin-eur",
+            "-0.25",
+            "--token-margin",
+            "-250",
+            "--actor-admin-id",
+            str(ADMIN_ID),
+            "--reason",
+            "adjust live burn",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = seen["payload"]
+    assert payload.gateway_key_id == GATEWAY_KEY_ID
+    assert payload.actor_admin_id == ADMIN_ID
+    assert payload.reason == "adjust live burn"
+    assert payload.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
+    assert "token_hash" not in result.stdout
 
 
 def test_reset_usage_requires_confirmation_for_reserved_admin_repair(monkeypatch) -> None:

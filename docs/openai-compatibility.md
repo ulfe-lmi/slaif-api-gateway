@@ -97,13 +97,12 @@ streaming accounting uses provider usage from the completed response event;
 also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization. Missing final usage is not treated as zero cost.
 
-Streaming live-burn margin is planned future work, not current behavior. The
-milestone is documented in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md): Chat
-Completions is intended first and Responses second. Until it is implemented,
+Responses live-burn monitoring is future work. The implemented live-burn slice
+applies only to Chat Completions streaming, as documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). Responses
 streaming accounting remains final-usage driven, missing usage is not normal
-success, and the gateway does not interrupt active streams based on provisional
-live-burn estimates.
+success, and the gateway does not interrupt Responses streams based on
+provisional live-burn estimates.
 
 Responses structured text output is not a tool and does not add a separate
 billing category. JSON schemas are capped, forwarded only under
@@ -260,6 +259,53 @@ unknown tool types, `background=true`, `external_web_access`, and
 search-specific Chat Completions models such as `gpt-5-search-api` are rejected
 before Redis rate limiting, route resolution, pricing lookup, quota
 reservation, or provider forwarding.
+
+## Chat Completions Streaming Live-Burn Monitoring
+
+`POST /v1/chat/completions` with `stream=true` supports per-key Streaming
+Live-Burn Margin monitoring. Missing key metadata defaults to enabled
+monitoring with zero margins:
+
+```json
+{
+  "chat_streaming_live_burn": {
+    "version": 1,
+    "enabled": true,
+    "cost_margin_eur": "0.000000000",
+    "token_margin": 0
+  }
+}
+```
+
+Positive margins stop streams early before the quota boundary, zero margins
+stop near the estimated boundary, and negative margins allow bounded estimated
+overrun so the key may finish negative. If monitoring is disabled, stored
+margins are ignored at runtime. Cost and token cutoffs are enforced
+independently; the first crossed threshold stops the stream.
+
+The live estimate uses the admission-time input token/cost estimate plus
+visible generated Chat Completions stream deltas:
+
+```text
+choices[].delta.content
+choices[].delta.tool_calls[].function.name
+choices[].delta.tool_calls[].function.arguments
+```
+
+The gateway counts streamed text and discards it. It does not store or log
+streamed chunks, prompts, completions, tool arguments, media payloads, raw
+request bodies, or raw response bodies. Live estimates are provisional and not
+invoice-grade billing truth. Final provider usage/cost remains authoritative
+when available.
+
+If a live-burn threshold is crossed, the gateway closes the upstream stream
+when possible, emits an OpenAI-shaped SSE error with code
+`streaming_live_burn_limit_exceeded`, and suppresses the normal successful
+`[DONE]`. If provider final usage is unavailable because SLAIF intentionally
+interrupted the stream, the request is recorded as estimated interrupted
+accounting instead of normal zero-cost success. PostgreSQL remains the hard
+quota/accounting source of truth; any Redis or in-memory live counters are
+temporary operational state only.
 
 Trusted calibration keys are the discovery exception. A trusted organizer/admin
 key in `trusted_calibration_discovery` mode may pass routed Chat Completions

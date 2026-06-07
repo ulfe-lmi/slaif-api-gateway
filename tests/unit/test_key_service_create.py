@@ -128,7 +128,21 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
     assert "plaintext_key" not in key_call
     assert key_call["rate_limit_requests_per_minute"] == 60
     assert key_call["rate_limit_tokens_per_minute"] == 12000
-    assert key_call["metadata_json"] == {"rate_limit_policy": {"window_seconds": 30}}
+    assert key_call["metadata_json"] == {
+        "chat_streaming_live_burn": {
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
+        "rate_limit_policy": {"window_seconds": 30},
+    }
+    assert result.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert result.rate_limit_policy == {
         "requests_per_minute": 60,
         "tokens_per_minute": 12000,

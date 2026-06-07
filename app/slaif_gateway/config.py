@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+from decimal import Decimal
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -177,6 +178,9 @@ class Settings(BaseSettings):
     CHAT_MAX_CUSTOM_TOOL_NAME_BYTES: int = 128
     CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES: int = 4096
     CHAT_MAX_METADATA_KEY_BYTES: int = 128
+    CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER: Decimal = Decimal("1.15")
+    CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR: Decimal = Decimal("1000000")
+    CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN: int = 1000000000
     RESPONSES_MAX_INPUT_TEXT_BYTES: int = 262144
     RESPONSES_MAX_INPUT_ITEMS: int = 128
     RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES: int = 262144
@@ -445,6 +449,7 @@ class Settings(BaseSettings):
             "CHAT_MAX_CUSTOM_TOOL_NAME_BYTES",
             "CHAT_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES",
             "CHAT_MAX_METADATA_KEY_BYTES",
+            "CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN",
             "RESPONSES_MAX_INPUT_TEXT_BYTES",
             "RESPONSES_MAX_INPUT_ITEMS",
             "RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES",
@@ -485,6 +490,10 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
+        if self.CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER <= 0:
+            raise ValueError("CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
+        if self.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:
+            raise ValueError("CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR must be non-negative")
 
     def _validate_calibration_settings(self) -> None:
         if self.TRUSTED_CALIBRATION_MAX_REQUESTS <= 0:

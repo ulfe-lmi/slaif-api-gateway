@@ -10,6 +10,11 @@ from typing import Protocol
 
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
+from slaif_gateway.services.chat_streaming_live_burn import (
+    ChatStreamingLiveBurnPolicyError,
+    chat_streaming_live_burn_policy_from_metadata,
+    default_chat_streaming_live_burn_policy,
+)
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
@@ -144,6 +149,10 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         rate_limit_policy_summary=_rate_limit_policy_summary(row),
         responses_policy=_responses_policy(row.metadata_json),
         responses_policy_summary=_responses_policy_summary(row.metadata_json),
+        chat_streaming_live_burn_policy=_chat_streaming_live_burn_policy(row.metadata_json),
+        chat_streaming_live_burn_policy_summary=_chat_streaming_live_burn_policy_summary(
+            row.metadata_json
+        ),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -236,6 +245,27 @@ def _responses_policy_summary(metadata_json: dict[str, object] | None) -> str:
     capability_text = ", ".join(str(item) for item in capabilities) if isinstance(capabilities, list) else "None"
     tool_text = ", ".join(str(item) for item in tools) if isinstance(tools, list) and tools else "None"
     return f"Capabilities: {capability_text}; local tools: {tool_text}; hosted/stateful/multimodal: denied"
+
+
+def _chat_streaming_live_burn_policy(metadata_json: dict[str, object] | None) -> dict[str, object]:
+    try:
+        return chat_streaming_live_burn_policy_from_metadata(
+            metadata_json,
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        ).to_metadata()
+    except ChatStreamingLiveBurnPolicyError:
+        return default_chat_streaming_live_burn_policy().to_metadata()
+
+
+def _chat_streaming_live_burn_policy_summary(metadata_json: dict[str, object] | None) -> str:
+    policy = _chat_streaming_live_burn_policy(metadata_json)
+    enabled = "enabled" if policy.get("enabled") is True else "disabled"
+    return (
+        f"Chat Completions streaming {enabled}; "
+        f"cost margin EUR {policy['cost_margin_eur']}; "
+        f"token margin {policy['token_margin']}"
+    )
 
 
 def _clean_filter(value: str | None) -> str | None:
