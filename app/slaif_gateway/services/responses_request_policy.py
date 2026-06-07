@@ -1,11 +1,14 @@
-"""Request policy for the stateless text-only /v1/responses foundation."""
+"""Request policy for the stateless text-output /v1/responses foundation."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import re
 from collections.abc import Mapping
 from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
@@ -44,6 +47,7 @@ _TEXT_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SUPPORTED_INPUT_MESSAGE_ROLES = frozenset({"user", "assistant", "system", "developer"})
 _SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
 _SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
+_SUPPORTED_INPUT_IMAGE_PART_FIELDS = frozenset({"type", "image_url", "detail"})
 _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
@@ -105,6 +109,10 @@ _HOSTED_TOOL_TYPES = frozenset(
 )
 _CUSTOM_TOOL_FORMAT_TYPES = frozenset({"text", "grammar"})
 _CUSTOM_TOOL_GRAMMAR_SYNTAXES = frozenset({"lark", "regex"})
+_IMAGE_DETAIL_VALUES = frozenset({"auto", "low", "high", "original"})
+_IMAGE_DATA_URL_PREFIX = "data:"
+_IMAGE_DATA_URL_BASE64_SUFFIX = ";base64"
+_BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -133,7 +141,7 @@ class ResponsesRequestPolicy:
                 "The 'model' field must be a non-empty string.",
             )
 
-        canonical_input, input_text_bytes = self._validate_input(effective_body.get("input"))
+        canonical_input, input_material_bytes = self._validate_input(effective_body.get("input"))
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
             effective_body.get("instructions"),
@@ -163,7 +171,7 @@ class ResponsesRequestPolicy:
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
         estimated_input_tokens = self._estimate_input_tokens(
-            input_text_bytes=input_text_bytes,
+            input_material_bytes=input_material_bytes,
             instructions=instructions,
             body=effective_body,
             tools_schema_bytes=tools_schema_bytes,
@@ -239,19 +247,43 @@ class ResponsesRequestPolicy:
 
         canonical_items: list[dict[str, Any]] = []
         total_text_bytes = 0
+        total_material_bytes = 0
+        total_image_parts = 0
+        total_image_data_url_bytes = 0
         for index, item in enumerate(value):
-            canonical_item, item_text_bytes = self._validate_input_item(item, index=index)
+            (
+                canonical_item,
+                item_text_bytes,
+                item_material_bytes,
+                item_image_parts,
+                item_image_data_url_bytes,
+            ) = self._validate_input_item(item, index=index)
             total_text_bytes += item_text_bytes
+            total_material_bytes += item_material_bytes
+            total_image_parts += item_image_parts
+            total_image_data_url_bytes += item_image_data_url_bytes
             if total_text_bytes > self._settings.RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES:
                 _raise(
                     "input",
                     "responses_input_item_too_large",
                     "The Responses input item text exceeds the gateway size limit.",
                 )
+            if total_image_parts > self._settings.RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST:
+                _raise(
+                    "input",
+                    "responses_input_image_count_exceeded",
+                    "The Responses input item array has too many image content parts.",
+                )
+            if total_image_data_url_bytes > self._settings.RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES:
+                _raise(
+                    "input",
+                    "responses_input_image_data_url_too_large",
+                    "The Responses input image data URLs exceed the gateway size limit.",
+                )
             canonical_items.append(canonical_item)
-        return canonical_items, total_text_bytes
+        return canonical_items, total_material_bytes
 
-    def _validate_input_item(self, item: Any, *, index: int) -> tuple[dict[str, Any], int]:
+    def _validate_input_item(self, item: Any, *, index: int) -> tuple[dict[str, Any], int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
             _raise(
@@ -301,21 +333,28 @@ class ResponsesRequestPolicy:
                 "Responses input message items require text content.",
             )
 
-        canonical_content, text_bytes = self._validate_input_item_content(
+        (
+            canonical_content,
+            text_bytes,
+            material_bytes,
+            image_parts,
+            image_data_url_bytes,
+        ) = self._validate_input_item_content(
             item["content"],
             param=f"{param}.content",
+            role=role,
         )
         canonical_item: dict[str, Any] = {"role": role, "content": canonical_content}
         if item_type == "message":
             canonical_item["type"] = "message"
-        return canonical_item, text_bytes
+        return canonical_item, text_bytes, material_bytes, image_parts, image_data_url_bytes
 
     def _validate_function_call_output_item(
         self,
         item: Mapping[str, Any],
         *,
         param: str,
-    ) -> tuple[dict[str, Any], int]:
+    ) -> tuple[dict[str, Any], int, int, int, int]:
         unknown = set(item) - _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS
         if unknown:
             _raise(
@@ -349,18 +388,19 @@ class ResponsesRequestPolicy:
             max_bytes=self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES,
             code="responses_function_call_output_too_large",
         )
+        output_bytes = len(output.encode("utf-8"))
         return {
             "type": "function_call_output",
             "call_id": call_id,
             "output": output,
-        }, len(output.encode("utf-8"))
+        }, output_bytes, output_bytes, 0, 0
 
     def _validate_custom_tool_call_output_item(
         self,
         item: Mapping[str, Any],
         *,
         param: str,
-    ) -> tuple[dict[str, Any], int]:
+    ) -> tuple[dict[str, Any], int, int, int, int]:
         unknown = set(item) - _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
         if unknown:
             _raise(
@@ -394,13 +434,20 @@ class ResponsesRequestPolicy:
             max_bytes=self._settings.RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES,
             code="responses_custom_tool_call_output_too_large",
         )
+        output_bytes = len(output.encode("utf-8"))
         return {
             "type": "custom_tool_call_output",
             "call_id": call_id,
             "output": output,
-        }, len(output.encode("utf-8"))
+        }, output_bytes, output_bytes, 0, 0
 
-    def _validate_input_item_content(self, content: Any, *, param: str) -> tuple[str | list[dict[str, str]], int]:
+    def _validate_input_item_content(
+        self,
+        content: Any,
+        *,
+        param: str,
+        role: str,
+    ) -> tuple[str | list[dict[str, Any]], int, int, int, int]:
         if isinstance(content, str):
             if not content:
                 _raise(
@@ -410,7 +457,7 @@ class ResponsesRequestPolicy:
                 )
             text_bytes = len(content.encode("utf-8"))
             self._validate_input_item_text_bytes(text_bytes, param=param)
-            return content, text_bytes
+            return content, text_bytes, text_bytes, 0, 0
 
         if isinstance(content, list):
             if not content:
@@ -419,28 +466,49 @@ class ResponsesRequestPolicy:
                     "responses_input_invalid",
                     "Responses input message content arrays must contain at least one text part.",
                 )
-            if len(content) > self._settings.RESPONSES_MAX_TEXT_CONTENT_PARTS_PER_ITEM:
+            canonical_parts: list[dict[str, Any]] = []
+            total_text_bytes = 0
+            total_material_bytes = 0
+            image_parts = 0
+            image_data_url_bytes = 0
+            text_parts = 0
+            for part_index, part in enumerate(content):
+                if isinstance(part, Mapping) and part.get("type") == "input_image":
+                    canonical_part, part_bytes, part_data_bytes = self._validate_input_image_part(
+                        part,
+                        param=f"{param}[{part_index}]",
+                        role=role,
+                    )
+                    image_parts += 1
+                    image_data_url_bytes += part_data_bytes
+                else:
+                    canonical_part, part_bytes = self._validate_input_text_part(
+                        part,
+                        param=f"{param}[{part_index}]",
+                    )
+                    text_parts += 1
+                    total_text_bytes += part_bytes
+                total_material_bytes += part_bytes
+                canonical_parts.append(canonical_part)
+            if text_parts > self._settings.RESPONSES_MAX_TEXT_CONTENT_PARTS_PER_ITEM:
                 _raise(
                     param,
                     "responses_input_item_count_exceeded",
                     "Responses input message content has too many text parts.",
                 )
-            canonical_parts: list[dict[str, str]] = []
-            total_bytes = 0
-            for part_index, part in enumerate(content):
-                canonical_part, part_bytes = self._validate_input_text_part(
-                    part,
-                    param=f"{param}[{part_index}]",
-                )
-                total_bytes += part_bytes
-                canonical_parts.append(canonical_part)
-            self._validate_input_item_text_bytes(total_bytes, param=param)
-            return canonical_parts, total_bytes
+            self._validate_input_item_text_bytes(total_text_bytes, param=param)
+            return (
+                canonical_parts,
+                total_text_bytes,
+                total_material_bytes,
+                image_parts,
+                image_data_url_bytes,
+            )
 
-        _raise(
-            param,
-            "responses_input_invalid",
+        raise ResponsesRequestPolicyError(
             "Responses input message content must be text or a text content-part array.",
+            param=param,
+            error_code="responses_input_invalid",
         )
 
     def _validate_input_text_part(self, part: Any, *, param: str) -> tuple[dict[str, str], int]:
@@ -482,6 +550,133 @@ class ResponsesRequestPolicy:
         text_bytes = len(text.encode("utf-8"))
         self._validate_input_item_text_bytes(text_bytes, param=f"{param}.text")
         return {"type": "input_text", "text": text}, text_bytes
+
+    def _validate_input_image_part(
+        self,
+        part: Mapping[str, Any],
+        *,
+        param: str,
+        role: str,
+    ) -> tuple[dict[str, str], int, int]:
+        if role != "user":
+            _raise(
+                f"{param}.type",
+                "responses_input_image_part_invalid",
+                "Responses image input content parts are supported only on user messages.",
+            )
+        unknown = set(part) - _SUPPORTED_INPUT_IMAGE_PART_FIELDS - {"file_id"}
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_input_image_part_invalid",
+                "This Responses image input field is not enabled by this gateway.",
+            )
+        if "file_id" in part:
+            _raise(
+                f"{param}.file_id",
+                "responses_input_image_file_id_not_supported",
+                "Responses image file IDs are not enabled by this gateway.",
+            )
+        image_url = part.get("image_url")
+        if not isinstance(image_url, str) or not image_url:
+            _raise(
+                f"{param}.image_url",
+                "responses_input_image_url_invalid",
+                "Responses image input requires a non-empty image_url string.",
+            )
+        detail = part.get("detail")
+        if detail is not None and (
+            not isinstance(detail, str) or detail not in _IMAGE_DETAIL_VALUES
+        ):
+            _raise(
+                f"{param}.detail",
+                "responses_input_image_detail_invalid",
+                "Responses image detail must be auto, low, high, or original.",
+            )
+        url_bytes, data_url_bytes = self._validate_input_image_url(
+            image_url,
+            param=f"{param}.image_url",
+        )
+        canonical_part = {"type": "input_image", "image_url": image_url}
+        if detail is not None:
+            canonical_part["detail"] = detail
+        return canonical_part, url_bytes, data_url_bytes
+
+    def _validate_input_image_url(self, value: str, *, param: str) -> tuple[int, int]:
+        if value.startswith(_IMAGE_DATA_URL_PREFIX):
+            data_url_bytes = self._validate_input_image_data_url(value, param=param)
+            return data_url_bytes, data_url_bytes
+        url_bytes = len(value.encode("utf-8"))
+        self._validate_string_bytes(
+            value,
+            param=param,
+            max_bytes=self._settings.RESPONSES_MAX_IMAGE_URL_BYTES,
+            code="responses_input_image_url_too_large",
+        )
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image URLs must use fully qualified http or https URLs.",
+            )
+        if parsed.username is not None or parsed.password is not None:
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image URLs must not include embedded credentials.",
+            )
+        if parsed.fragment:
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image URLs must not include fragments.",
+            )
+        return url_bytes, 0
+
+    def _validate_input_image_data_url(self, value: str, *, param: str) -> int:
+        self._validate_string_bytes(
+            value,
+            param=param,
+            max_bytes=self._settings.RESPONSES_MAX_IMAGE_DATA_URL_BYTES,
+            code="responses_input_image_data_url_too_large",
+        )
+        header, separator, encoded = value.partition(",")
+        if not separator:
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image data URLs must be base64 data URLs.",
+            )
+        if not header.endswith(_IMAGE_DATA_URL_BASE64_SUFFIX):
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image data URLs must use base64 encoding.",
+            )
+        mime_type = header[len(_IMAGE_DATA_URL_PREFIX) : -len(_IMAGE_DATA_URL_BASE64_SUFFIX)].lower()
+        if mime_type not in _allowed_responses_image_mime_types(self._settings):
+            _raise(
+                param,
+                "responses_input_image_mime_not_supported",
+                "The Responses image data URL MIME type is not supported by this gateway.",
+            )
+        normalized = "".join(encoded.split())
+        if not normalized or len(normalized) % 4 != 0 or not _BASE64_CHARS_RE.fullmatch(normalized):
+            _raise(
+                param,
+                "responses_input_image_url_invalid",
+                "Responses image data URLs must include valid base64 data.",
+            )
+        try:
+            base64.b64decode(normalized, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ResponsesRequestPolicyError(
+                "Responses image data URLs must include valid base64 data.",
+                param=param,
+                error_code="responses_input_image_url_invalid",
+            ) from exc
+        return len(value.encode("utf-8"))
 
     def _validate_input_item_text_bytes(self, text_bytes: int, *, param: str) -> None:
         if text_bytes > self._settings.RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES:
@@ -1225,13 +1420,13 @@ class ResponsesRequestPolicy:
     def _estimate_input_tokens(
         self,
         *,
-        input_text_bytes: int,
+        input_material_bytes: int,
         instructions: str | None,
         body: Mapping[str, Any],
         tools_schema_bytes: int = 0,
         tool_choice_bytes: int = 0,
     ) -> int:
-        total_bytes = input_text_bytes
+        total_bytes = input_material_bytes
         if instructions is not None:
             total_bytes += len(instructions.encode("utf-8"))
         total_bytes += tools_schema_bytes + tool_choice_bytes
@@ -1291,6 +1486,10 @@ def responses_custom_tools_requested(body: Mapping[str, Any]) -> bool:
     return _input_contains_custom_tool_call_output(body.get("input"))
 
 
+def responses_image_input_requested(body: Mapping[str, Any]) -> bool:
+    return _input_contains_image_input(body.get("input"))
+
+
 def _input_contains_function_call_output(value: Any) -> bool:
     if not isinstance(value, list):
         return False
@@ -1306,6 +1505,21 @@ def _input_contains_custom_tool_call_output(value: Any) -> bool:
     for item in value:
         if isinstance(item, Mapping) and item.get("type") == "custom_tool_call_output":
             return True
+    return False
+
+
+def _input_contains_image_input(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "input_image":
+                return True
     return False
 
 
@@ -1334,6 +1548,14 @@ def _unsupported_code_for_field(field_name: str) -> str:
     if field_name in {"prompt", "prompt_cache_key", "prompt_cache_retention"}:
         return "responses_state_not_supported"
     return "responses_field_not_supported"
+
+
+def _allowed_responses_image_mime_types(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.RESPONSES_ALLOWED_IMAGE_MIME_TYPES.split(",")
+        if item.strip()
+    )
 
 
 def _raise(param: str, code: str, message: str) -> NoReturn:

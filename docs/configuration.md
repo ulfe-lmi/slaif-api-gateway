@@ -128,8 +128,8 @@ Gateway-key request policy separates models from endpoints:
 - allowed models are route-backed model IDs such as `gpt-4o-mini`;
 - allowed endpoints are implemented `/v1` paths such as `/v1/models` and
   `/v1/chat/completions`;
-- `/v1/responses` is implemented only for the stateless text-only foundation and
-  still requires explicit route capability and pricing metadata;
+- `/v1/responses` is implemented only for the stateless text-output foundation
+  and still requires explicit route capability and pricing metadata;
 - legacy `/v1/completions` is rejected until implemented.
 
 Admins can edit this policy from a key detail page with **Update Request
@@ -459,9 +459,10 @@ template-based participant key creation remains future work.
 
 ## Responses API Configuration
 
-The current Responses API foundation is stateless and text-only. It supports
-string input or bounded text-only input item arrays, non-streaming JSON, typed
-SSE text streaming, and non-streaming structured `text.format` JSON
+The current Responses API foundation is stateless and text-output only. It supports
+string input or bounded input item arrays, route-enabled user-message
+`input_image` URL/data URL parts for image input to text output, non-streaming
+JSON, typed SSE text streaming, and non-streaming structured `text.format` JSON
 object/schema output when route capability metadata allows it. It also supports
 non-streaming local/client-side function tools when route capability metadata
 allows them, and non-streaming local/client-side custom tools when route
@@ -495,6 +496,11 @@ capability metadata allows them. It reuses
 - `RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=65536`
 - `RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=262144`
 - `RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=262144`
+- `RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=16`
+- `RESPONSES_MAX_IMAGE_URL_BYTES=4096`
+- `RESPONSES_MAX_IMAGE_DATA_URL_BYTES=20971520`
+- `RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=41943040`
+- `RESPONSES_ALLOWED_IMAGE_MIME_TYPES=image/png,image/jpeg,image/webp,image/gif`
 
 These are validation caps, not feature toggles. Responses still requires a key
 with `/v1/responses` in its endpoint policy, a resolved route with explicit
@@ -506,6 +512,13 @@ descriptions, grammar definitions, total custom format bytes, and string-only
 `custom_tool_call_output` follow-up input. They do not enable hosted tools,
 MCP/connectors, provider-side storage, tool execution, multimodal tool
 outputs, or streaming custom tools.
+
+Responses image settings cap user-message `input_image.image_url` values.
+Remote `http`/`https` URLs are forwarded only after shape/credential/fragment
+validation; image data URLs are MIME/base64 checked and capped. They do not
+enable `input_image.file_id`, `/v1/files`, file input, audio input/output,
+image generation, hosted tools, stateful Responses, or server-side URL
+fetching.
 
 ## Planned Responses Tool Configuration
 

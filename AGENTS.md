@@ -2447,6 +2447,12 @@ At every stage, keep OpenAI-compatible client usage working.
 - Do not change CLI secret-output behavior without updating operator-facing docs.
 - Do not let README or compatibility docs claim support that code and tests do not implement.
 - Do not leave documentation drift unreported in the final task report.
+- For functions with a declared non-`None` return type, do not end a
+  non-success path with a helper call that raises, such as `_raise(...)`,
+  because CodeQL/code-quality analysis may treat that as an implicit fallthrough
+  `None` return. At the tail of those functions, use an explicit
+  `raise SomeRequestPolicyError(...)` or another syntactically explicit
+  exception path with the same safe message, parameter, and error code.
 - Do not run apt-based PostgreSQL installation unless the maintainer explicitly requests the Codex container PostgreSQL test harness.
 - Do not run destructive test setup against DATABASE_URL.
 - Use TEST_DATABASE_URL for integration-test database setup and seeding.

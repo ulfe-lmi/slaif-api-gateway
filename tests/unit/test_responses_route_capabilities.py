@@ -67,6 +67,32 @@ def test_custom_tools_capability_passes_when_explicit() -> None:
     )
 
 
+def test_image_input_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["image_input"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        image_input_requested=True,
+    )
+
+
+def test_streaming_image_input_requires_streaming_capability_too() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["image_input"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            streaming_requested=True,
+            route_supports_streaming=True,
+            image_input_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_route_capability_not_supported"
+    assert exc_info.value.param == "stream"
+
+
 def test_streaming_request_fails_when_capability_absent() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(
@@ -121,6 +147,17 @@ def test_custom_tools_request_fails_when_capability_absent() -> None:
 
     assert exc_info.value.error_code == "responses_custom_tool_capability_not_supported"
     assert exc_info.value.param == "tools"
+
+
+def test_image_input_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            image_input_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_image_input_capability_not_supported"
+    assert exc_info.value.param == "input"
 
 
 def test_function_tools_capability_does_not_imply_custom_tools() -> None:
@@ -188,3 +225,22 @@ def test_default_responses_capabilities_keep_custom_tools_disabled() -> None:
     capabilities = default_responses_capabilities()
 
     assert capabilities["custom_tools"] is False
+
+
+def test_default_responses_capabilities_keep_image_input_disabled() -> None:
+    capabilities = default_responses_capabilities()
+
+    assert capabilities["image_input"] is False
+
+
+def test_chat_image_capability_does_not_imply_responses_image_input() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["chat_image_inputs"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            image_input_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_route_capability_invalid"

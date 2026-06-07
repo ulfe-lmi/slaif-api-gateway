@@ -58,6 +58,7 @@ def _route_result(
     responses_structured_outputs: bool = False,
     responses_function_tools: bool = False,
     responses_custom_tools: bool = False,
+    responses_image_input: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
@@ -65,6 +66,7 @@ def _route_result(
     capabilities["structured_outputs"] = responses_structured_outputs
     capabilities["function_tools"] = responses_function_tools
     capabilities["custom_tools"] = responses_custom_tools
+    capabilities["image_input"] = responses_image_input
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -133,6 +135,25 @@ def _responses_custom_tool_request(model: str = "classroom-responses") -> dict[s
             }
         ],
         "tool_choice": {"type": "custom", "name": "emit_regex"},
+    }
+
+
+def _responses_image_input_request(model: str = "classroom-responses") -> dict[str, object]:
+    return {
+        **_responses_request(model),
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe the image"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.test/image.png",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ],
     }
 
 
@@ -467,6 +488,61 @@ def test_responses_custom_tools_require_capability_before_rate_pricing_quota_pro
     assert provider_calls == []
 
 
+def test_responses_image_input_requires_capability_before_rate_pricing_quota_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model)
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_responses_image_input_request(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_image_input_capability_not_supported"
+    assert rate_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert provider_calls == []
+
+
 def test_responses_function_tool_path_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 
@@ -699,6 +775,119 @@ def test_responses_custom_tool_path_forwards_canonical_body_and_finalizes(monkey
                 }
             ],
             "tool_choice": {"type": "custom", "name": "emit_regex"},
+        }
+    ]
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+    assert finalize_calls == ["classroom-responses"]
+
+
+def test_responses_image_input_path_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls: list[str] = []
+    seen_bodies: list[dict[str, object]] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model, responses_image_input=True)
+
+    class _FakeAdapter:
+        async def forward_response(self, request):
+            seen_bodies.append(dict(request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={
+                    "id": "resp_image_test",
+                    "object": "response",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "A chart."}]}],
+                },
+                usage=ProviderUsage(prompt_tokens=15, completion_tokens=6, total_tokens=21),
+            )
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+        provider_completed_usage_ledger_id=None,
+        streaming=False,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            started_at,
+            finished_at,
+            provider_completed_usage_ledger_id,
+            streaming,
+        )
+        assert endpoint == "responses"
+        finalize_calls.append(route.requested_model)
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.003"),
+            actual_cost_native=Decimal("0.003"),
+            native_currency="EUR",
+            prompt_tokens=15,
+            completion_tokens=6,
+            total_tokens=21,
+            accounting_status="finalized",
+        )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_responses_image_input_request(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "resp_image_test"
+    assert seen_bodies == [
+        {
+            "model": "gpt-5.2",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "describe the image"},
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.test/image.png",
+                            "detail": "low",
+                        },
+                    ],
+                }
+            ],
+            "max_output_tokens": 20,
+            "store": False,
         }
     ]
     assert reserve_calls == ["classroom-responses"]
@@ -1331,7 +1520,12 @@ def test_invalid_input_item_array_happens_before_rate_pricing_quota_provider(mon
         "/v1/responses",
         json={
             **_responses_request(),
-            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": "secret"}]}],
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_file", "file_data": "secret"}],
+                }
+            ],
         },
     )
 

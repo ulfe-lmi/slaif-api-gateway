@@ -67,14 +67,19 @@ and counted for input estimation, and must not be stored or logged alongside
 Responses input text, output text, raw request bodies, raw response bodies, or
 provider event bodies.
 
-Responses text input item arrays follow the same boundary. They are accepted
-only as stateless text message input with supported roles and string or
-`input_text` content parts. String-only `function_call_output` and
-`custom_tool_call_output` items are accepted as ordinary stateless input for
-local-tool follow-up requests. Function-call/custom-tool-call items,
-reasoning/stateful items, hosted-tool items, and image/file/audio content parts
-are rejected before provider forwarding. Input item text and string tool
-outputs are counted for admission estimates but are not stored or logged.
+Responses input item arrays follow the same boundary. They are accepted as
+stateless message input with supported roles and string or `input_text` content
+parts. User-message `input_image` URL/data URL parts require explicit
+route/model `capabilities.responses.image_input=true` metadata, are capped, and
+are counted for conservative admission estimates. SLAIF does not fetch image
+URLs, decode image pixels, rewrite data URLs, store/log raw image URLs, image
+data URLs, or base64 payloads, or treat image bytes as invoice-grade billing
+truth. String-only `function_call_output` and `custom_tool_call_output` items
+are accepted as ordinary stateless input for local-tool follow-up requests.
+Function-call/custom-tool-call items, reasoning/stateful items, hosted-tool
+items, `input_image.file_id`, file content parts, and audio content parts are
+rejected before provider forwarding. Input item text and string tool outputs
+are counted for admission estimates but are not stored or logged.
 
 Responses local function tools follow the same boundary. They require explicit
 route/model `capabilities.responses.function_tools=true` metadata and are
@@ -394,10 +399,10 @@ Completions hardening only; it does not implement Responses API behavior.
 
 ## Responses API Security Model
 
-Responses API support is limited to stateless, text-only `POST /v1/responses`
-with string input or bounded text-only input item arrays, non-streaming JSON,
-typed SSE streaming, non-streaming local function tools, and non-streaming
-local custom tools. It is default-off and
+Responses API support is limited to stateless text-output `POST /v1/responses`
+with string input or bounded input item arrays, route-enabled user-message
+image URL/data URL input, non-streaming JSON, typed SSE streaming,
+non-streaming local function tools, and non-streaming local custom tools. It is default-off and
 policy-first:
 
 - Responses must be explicitly enabled per key through the `/v1/responses`
@@ -413,6 +418,9 @@ policy-first:
   succeeds. Missing final usage is not treated as zero cost.
 - Local function and custom tools require explicit route capability metadata;
   tool JSON is not blind passthrough and SLAIF does not execute tools.
+- Image input requires explicit Responses image-input route capability; it does
+  not enable `/v1/files`, file IDs, image generation, audio input/output,
+  hosted tools, or stateful Responses.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented stateless local subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
@@ -735,10 +743,11 @@ never recover or send old plaintext keys.
   migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
   or allowlisted.
 - Native Anthropic API support is not implemented.
-- Responses API support is limited to stateless, text-only
-  `POST /v1/responses` with typed SSE streaming, non-streaming local function
-  tools, and non-streaming local custom tools; hosted Responses tools, stateful
-  lifecycle routes, and multimodal Responses remain future work under
+- Responses API support is limited to stateless text-output
+  `POST /v1/responses` with URL/data URL image input, typed SSE streaming,
+  non-streaming local function tools, and non-streaming local custom tools;
+  hosted Responses tools, stateful lifecycle routes, file/audio input,
+  image generation, and multimodal Responses output remain future work under
   `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or

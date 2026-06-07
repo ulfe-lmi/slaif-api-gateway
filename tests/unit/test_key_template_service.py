@@ -319,6 +319,7 @@ def test_create_key_from_template_allows_safe_responses_policy_metadata() -> Non
             "structured_outputs",
             "function_tools",
             "custom_tools",
+            "image_input",
         ],
         "allowed_local_tool_types": ["function", "custom"],
         "hosted_tools_allowed": [],
@@ -366,6 +367,19 @@ def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> No
         )
 
     revision.template_snapshot = {"responses_policy": _responses_policy(extra_field="raw_tool_schema")}
+    with pytest.raises(KeyTemplateError, match="unsupported Responses policy fields"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed",
+                confirm_create_key_from_template=True,
+            )
+        )
+
+    revision.template_snapshot = {
+        "responses_policy": _responses_policy(raw_image_url="https://example.test/secret.png")
+    }
     with pytest.raises(KeyTemplateError, match="unsupported Responses policy fields"):
         asyncio.run(
             service.create_key_from_revision(
@@ -587,6 +601,7 @@ def _responses_policy(**overrides: object) -> dict[str, object]:
             "structured_outputs",
             "function_tools",
             "custom_tools",
+            "image_input",
         ],
         "allowed_local_tool_types": ["function", "custom"],
         "hosted_tools_allowed": [],
