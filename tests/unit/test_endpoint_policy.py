@@ -9,6 +9,7 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
     MODELS_LIST,
+    RESPONSES_INPUT_TOKENS,
     EndpointPolicyService,
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointNotAllowedError
@@ -46,6 +47,7 @@ def test_allow_all_endpoints_allows_known_endpoints() -> None:
 
     service.ensure_endpoint_allowed(auth, MODELS_LIST)
     service.ensure_endpoint_allowed(auth, CHAT_COMPLETIONS)
+    service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_TOKENS)
 
 
 def test_stable_endpoint_identifiers_are_enforced() -> None:
@@ -56,12 +58,19 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
         _auth(allowed_endpoints=("chat.completions",)),
         CHAT_COMPLETIONS,
     )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("responses.input_tokens",)),
+        RESPONSES_INPUT_TOKENS,
+    )
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("models.list",)), CHAT_COMPLETIONS)
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("chat.completions",)), MODELS_LIST)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), RESPONSES_INPUT_TOKENS)
 
 
 def test_empty_endpoint_allow_list_rejects_when_allow_all_false() -> None:
@@ -84,4 +93,14 @@ def test_literal_method_paths_and_bare_paths_are_supported() -> None:
         _auth(allowed_endpoints=("/v1/chat/completions",)),
         CHAT_COMPLETIONS,
     )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("POST /v1/responses/input_tokens",)),
+        RESPONSES_INPUT_TOKENS,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("/v1/responses/input_tokens",)),
+        RESPONSES_INPUT_TOKENS,
+    )
 
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("/v1/responses",)), RESPONSES_INPUT_TOKENS)

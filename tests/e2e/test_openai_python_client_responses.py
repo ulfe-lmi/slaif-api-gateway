@@ -24,6 +24,7 @@ from tests.integration.db_test_utils import run_alembic_upgrade_head
 
 TEST_RESPONSES_MODEL = "gpt-responses-text-test"
 RESPONSES_ENDPOINT = "/v1/responses"
+RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 INPUT_TEXT = "Hello from SLAIF Responses test"
 OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
@@ -42,6 +43,8 @@ async def _create_responses_test_data(
     custom_tools: bool = False,
     image_input: bool = False,
     file_input: bool = False,
+    input_token_count: bool = False,
+    endpoint: str = RESPONSES_ENDPOINT,
 ):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -75,7 +78,7 @@ async def _create_responses_test_data(
                 delete(PricingRule).where(
                     PricingRule.provider == "openai",
                     PricingRule.upstream_model == TEST_RESPONSES_MODEL,
-                    PricingRule.endpoint == RESPONSES_ENDPOINT,
+                    PricingRule.endpoint == endpoint,
                 )
             )
 
@@ -132,13 +135,14 @@ async def _create_responses_test_data(
             capabilities["custom_tools"] = custom_tools
             capabilities["image_input"] = image_input
             capabilities["file_input"] = file_input
+            capabilities["input_token_count"] = input_token_count
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
                 provider="openai",
                 upstream_model=TEST_RESPONSES_MODEL,
                 match_type="exact",
-                endpoint=RESPONSES_ENDPOINT,
+                endpoint=endpoint,
                 priority=1,
                 visible_in_models=True,
                 supports_streaming=streaming,
@@ -148,7 +152,7 @@ async def _create_responses_test_data(
             await pricing.create_pricing_rule(
                 provider="openai",
                 upstream_model=TEST_RESPONSES_MODEL,
-                endpoint=RESPONSES_ENDPOINT,
+                endpoint=endpoint,
                 valid_from=now - timedelta(days=1),
                 currency="EUR",
                 input_price_per_1m=Decimal("1.000000000"),
@@ -173,7 +177,7 @@ async def _create_responses_test_data(
                     token_limit_total=100_000,
                     request_limit_total=100,
                     allowed_models=[TEST_RESPONSES_MODEL],
-                    allowed_endpoints=[RESPONSES_ENDPOINT],
+                    allowed_endpoints=[endpoint],
                     note="Responses E2E key",
                 )
             )
@@ -1321,3 +1325,68 @@ def test_openai_python_client_responses_file_input_e2e(
         FAKE_OPENAI_UPSTREAM_KEY,
     ):
         assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_input_token_count_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            input_token_count=True,
+            image_input=True,
+            file_input=True,
+            endpoint=RESPONSES_INPUT_TOKENS_ENDPOINT,
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": INPUT_TEXT},
+                {"type": "input_image", "image_url": "https://example.org/count-image.png"},
+                {"type": "input_file", "file_url": "https://example.org/count-file.pdf"},
+            ],
+        }
+    ]
+    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        router.route(host="127.0.0.1").pass_through()
+        upstream_route = router.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(
+                200,
+                json={"object": "response.input_tokens", "input_tokens": 321},
+                headers={"OpenAI-Request-ID": "req-responses-count-e2e"},
+            )
+        )
+        with _run_uvicorn_server(app, port):
+            client = OpenAI()
+            response = client.responses.input_tokens.count(
+                model=TEST_RESPONSES_MODEL,
+                input=input_items,
+                truncation="disabled",
+            )
+
+    assert response.input_tokens == 321
+    assert upstream_route.called
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    assert json.loads(upstream_request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": input_items,
+        "truncation": "disabled",
+    }

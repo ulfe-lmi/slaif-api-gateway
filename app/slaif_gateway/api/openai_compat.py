@@ -16,11 +16,15 @@ from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
     MODELS_LIST,
     RESPONSES,
+    RESPONSES_INPUT_TOKENS,
     EndpointPolicyService,
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
-from slaif_gateway.services.responses_gateway import handle_response_create
+from slaif_gateway.services.responses_gateway import (
+    handle_response_create,
+    handle_response_input_tokens_count,
+)
 
 router = APIRouter()
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
@@ -78,6 +82,23 @@ async def create_response(
     if "request" in inspect.signature(handle_response_create).parameters:
         kwargs["request"] = request
     return await handle_response_create(**kwargs)
+
+
+@router.post("/v1/responses/input_tokens")
+async def count_response_input_tokens(
+    request: Request,
+    payload: ResponsesCreateRequest,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES_INPUT_TOKENS)
+    kwargs = {
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_input_tokens_count).parameters:
+        kwargs["request"] = request
+    return await handle_response_input_tokens_count(**kwargs)
 
 
 def _ensure_endpoint_allowed(authenticated_key: AuthenticatedGatewayKey, endpoint: str) -> None:

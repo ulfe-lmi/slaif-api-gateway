@@ -414,10 +414,14 @@ Responses API support is limited to stateless text-output `POST /v1/responses`
 with string input or bounded input item arrays, route-enabled user-message
 image URL/data URL input, route-enabled user-message file URL/data URL input,
 non-streaming JSON, typed SSE streaming, non-streaming local function tools,
-and non-streaming local custom tools. It is default-off and policy-first:
+and non-streaming local custom tools. `POST /v1/responses/input_tokens` is a
+separate provider-reported count endpoint for the same stateless local input
+subset. It is default-off and policy-first:
 
-- Responses must be explicitly enabled per key through the `/v1/responses`
-  endpoint allowlist.
+- Responses generation must be explicitly enabled per key through the
+  `/v1/responses` endpoint allowlist. Input-token counting must be explicitly
+  enabled through `/v1/responses/input_tokens`; `/v1/responses` alone does not
+  imply it.
 - Endpoint, model, provider, and tool allowlists all apply.
 - Route/model metadata must explicitly advertise Responses text/stateless
   capability; Chat Completions capabilities do not imply Responses capability.
@@ -437,6 +441,11 @@ and non-streaming local custom tools. It is default-off and policy-first:
   retrieval tools, Office/spreadsheet formats outside the configured allowlist,
   audio input/output, hosted tools, or stateful Responses. SLAIF does not fetch
   file URLs, parse, OCR, index, extract text from, store, or log file payloads.
+- Input-token counting requires explicit
+  `capabilities.responses.input_token_count=true`. It does not create a
+  Response, does not inject output-token defaults, does not reserve generation
+  quota, and does not create a normal generation usage ledger row. Payload
+  storage and logging prohibitions are the same as generation requests.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented stateless local subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,

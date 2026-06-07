@@ -52,6 +52,99 @@ def test_omitted_max_output_tokens_injects_default() -> None:
     assert result.injected_default_output_tokens is True
 
 
+def test_input_token_count_accepts_supported_stateless_subset_without_output_defaults() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply_input_token_count(
+        {
+            "model": "gpt-5.2",
+            "input": "Count these tokens.",
+            "instructions": "Be concise.",
+            "text": {"format": {"type": "text"}},
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                {
+                    "type": "custom",
+                    "name": "emit_text",
+                    "format": {"type": "text"},
+                },
+            ],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "truncation": "auto",
+        }
+    )
+
+    assert result.effective_body == {
+        "model": "gpt-5.2",
+        "input": "Count these tokens.",
+        "instructions": "Be concise.",
+        "text": {"format": {"type": "text"}},
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "custom",
+                "name": "emit_text",
+                "format": {"type": "text"},
+            },
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+        "truncation": "auto",
+    }
+    assert result.effective_output_tokens == 0
+    assert result.requested_output_tokens == 0
+    assert result.injected_default_output_tokens is False
+    assert "store" not in result.effective_body
+    assert "max_output_tokens" not in result.effective_body
+    assert result.estimated_input_tokens > 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("stream", True),
+        ("store", False),
+        ("max_output_tokens", 10),
+        ("previous_response_id", "resp_123"),
+        ("conversation", "conv_123"),
+        ("background", True),
+        ("reasoning", {"effort": "low"}),
+    ],
+)
+def test_input_token_count_rejects_create_or_stateful_fields(field: str, value: object) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+            {
+                "model": "gpt-5.2",
+                "input": "hello",
+                field: value,
+            }
+        )
+
+    assert exc_info.value.param == field
+
+
+def test_input_token_count_rejects_invalid_parallel_tool_calls_and_truncation() -> None:
+    with pytest.raises(RequestPolicyError) as parallel_exc:
+        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+            {"model": "gpt-5.2", "input": "hello", "parallel_tool_calls": "yes"}
+        )
+    assert parallel_exc.value.error_code == "responses_field_invalid_type"
+
+    with pytest.raises(RequestPolicyError) as truncation_exc:
+        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+            {"model": "gpt-5.2", "input": "hello", "truncation": "unsupported"}
+        )
+    assert truncation_exc.value.error_code == "responses_field_value_not_supported"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [

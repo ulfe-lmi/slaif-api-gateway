@@ -51,6 +51,9 @@ Current support is intentionally narrow:
   explicitly enables Responses function-tool capability;
 - non-streaming local/client-side custom tools when route/model metadata
   explicitly enables Responses custom-tool capability;
+- provider-reported `POST /v1/responses/input_tokens` counts for the same
+  stateless local input subset when the key and route explicitly allow that
+  endpoint and `capabilities.responses.input_token_count=true`;
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
@@ -63,6 +66,13 @@ Current support is intentionally narrow:
   image generation, `/v1/files`, file search/retrieval tools, or multimodal
   output;
 - no response delete/cancel/retrieve/list/input-item listing endpoints.
+
+`/v1/responses/input_tokens` returns the provider's official
+`{"object":"response.input_tokens","input_tokens":...}` shape. It does not
+create a Response, inject output-token defaults, reserve generation quota, or
+write a normal generation usage ledger row. It rejects `stream`, `store`,
+`max_output_tokens`, stateful fields, hosted tools, audio, file IDs, and the
+other unsupported Responses surfaces listed above.
 
 Responses streaming preserves typed provider events such as `response.created`,
 `response.output_text.delta`, `response.completed`, and safe `error` events. It

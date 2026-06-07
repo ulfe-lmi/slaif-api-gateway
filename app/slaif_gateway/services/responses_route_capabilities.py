@@ -16,6 +16,7 @@ RESPONSES_CAPABILITY_FUNCTION_TOOLS = "function_tools"
 RESPONSES_CAPABILITY_CUSTOM_TOOLS = "custom_tools"
 RESPONSES_CAPABILITY_IMAGE_INPUT = "image_input"
 RESPONSES_CAPABILITY_FILE_INPUT = "file_input"
+RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT = "input_token_count"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -32,6 +33,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CUSTOM_TOOLS,
         RESPONSES_CAPABILITY_IMAGE_INPUT,
         RESPONSES_CAPABILITY_FILE_INPUT,
+        RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -53,6 +55,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_CUSTOM_TOOLS: False,
         RESPONSES_CAPABILITY_IMAGE_INPUT: False,
         RESPONSES_CAPABILITY_FILE_INPUT: False,
+        RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -69,7 +72,9 @@ def ensure_default_responses_capabilities(
     """Add explicit Responses metadata only when creating Responses routes."""
 
     normalized = dict(capabilities or {})
-    if endpoint == "/v1/responses" and RESPONSES_CAPABILITIES_KEY not in normalized:
+    if endpoint in {"/v1/responses", "/v1/responses/input_tokens"} and (
+        RESPONSES_CAPABILITIES_KEY not in normalized
+    ):
         normalized[RESPONSES_CAPABILITIES_KEY] = default_responses_capabilities()
     return normalized
 
@@ -101,6 +106,7 @@ def enforce_responses_route_capabilities(
     custom_tools_requested: bool = False,
     image_input_requested: bool = False,
     file_input_requested: bool = False,
+    input_token_count_requested: bool = False,
 ) -> None:
     """Require explicit text+stateless Responses metadata and fail closed."""
 
@@ -197,6 +203,18 @@ def enforce_responses_route_capabilities(
                 field="input",
                 error_code="responses_file_input_capability_not_supported",
                 safe_message="This model route does not support Responses file input.",
+            )
+        )
+    if (
+        input_token_count_requested
+        and capabilities.get(RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT,
+                field="model",
+                error_code="responses_input_token_count_capability_not_supported",
+                safe_message="This model route does not support Responses input-token counting.",
             )
         )
 

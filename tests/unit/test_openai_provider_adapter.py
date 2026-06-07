@@ -42,6 +42,21 @@ def _responses_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_input_tokens_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        endpoint="/v1/responses/input_tokens",
+        body=body,
+        request_id="gw-count-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "Cookie": "cookie",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openai_api_key_raises() -> None:
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY=None))
@@ -170,6 +185,43 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
     assert response.usage.total_tokens == 13
     assert response.usage.cached_tokens == 2
     assert response.usage.reasoning_tokens == 1
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_response_input_tokens_posts_count_request(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses/input_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={"object": "response.input_tokens", "input_tokens": 123},
+            headers={"OpenAI-Request-ID": "req-openai-count"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "tools": [{"type": "custom", "name": "emit_text"}],
+    }
+
+    response = await adapter.forward_response_input_tokens(
+        _responses_input_tokens_request(caller_body)
+    )
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "tools": [{"type": "custom", "name": "emit_text"}],
+    }
+    assert caller_body["model"] == "client-model"
+    assert response.json_body == {"object": "response.input_tokens", "input_tokens": 123}
+    assert response.upstream_request_id == "req-openai-count"
     assert route.called
 
 

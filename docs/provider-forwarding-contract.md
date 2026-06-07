@@ -115,7 +115,9 @@ Known limitations:
 ## Responses Forwarding
 
 Current Chat Completions forwarding remains unchanged. `POST /v1/responses` has
-a limited stateless text-output forwarding path.
+a limited stateless text-output forwarding path, and
+`POST /v1/responses/input_tokens` has a separate provider-reported count
+forwarding path for the same stateless local input subset.
 
 Responses forwarding follows the same provider-secret boundary:
 
@@ -197,6 +199,13 @@ Responses-specific rules for the current foundation:
   `capabilities.responses.structured_outputs=true`;
 - `store=false` is injected when omitted;
 - `max_output_tokens` is defaulted or capped before forwarding;
+- `/v1/responses/input_tokens` is routed and forwarded separately. Its
+  canonical upstream body may include `input`, `instructions`, `text`, local
+  `tools`, `tool_choice`, `parallel_tool_calls`, and `truncation`, but not
+  create-only fields such as `stream`, `store`, or `max_output_tokens`. SLAIF
+  forwards the provider's official `response.input_tokens` shape only after
+  validating the object and non-negative integer count. It does not create a
+  Response or reserve/finalize generation quota;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe `error` events;
   it is not converted into Chat Completions chunks;

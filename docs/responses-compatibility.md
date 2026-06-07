@@ -9,16 +9,19 @@ text output, string input or bounded input item arrays, optional user-message
 user-message `input_file` content parts for file input to text output,
 non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
 output through `text.format`, local/client-side function tools, and
-non-streaming local/client-side custom tools. It has no hosted tools,
-MCP/connectors, provider-side storage, background mode, previous response or
-conversation state, `/v1/files` lifecycle, audio input, audio output, image
-generation, file search, or multimodal output.
+non-streaming local/client-side custom tools. `POST /v1/responses/input_tokens`
+is implemented as a separate provider-reported count endpoint for the same
+stateless local input subset. It has no hosted tools, MCP/connectors,
+provider-side storage, background mode, previous response or conversation
+state, `/v1/files` lifecycle, audio input, audio output, image generation, file
+search, or multimodal output.
 
 ## Supported Endpoint
 
 The first implemented endpoint is:
 
 - `POST /v1/responses`
+- `POST /v1/responses/input_tokens`
 
 Unsupported Responses routes remain unsupported until separate implementation
 and tests add them.
@@ -49,6 +52,24 @@ output cap. Streaming uses typed Responses SSE events such as
 `response.created`, `response.output_text.delta`, `response.completed`, and
 `error`; SLAIF does not translate Responses streams into Chat Completions
 chunks.
+
+`POST /v1/responses/input_tokens` accepts the supported stateless local input
+subset for counting only: `model`, `input`, `instructions`, `text`, local
+function/custom `tools`, `tool_choice`, `parallel_tool_calls`, and `truncation`
+(`auto` or `disabled`). It rejects create-only and stateful fields including
+`stream`, `store`, `max_output_tokens`, `background`, `previous_response_id`,
+`conversation`, and `reasoning`. The endpoint requires explicit key permission
+for `/v1/responses/input_tokens`, a model route for `/v1/responses/input_tokens`,
+and `capabilities.responses.input_token_count=true` in addition to
+`responses.text=true` and `responses.stateless=true`. Image, file, function
+tool, and custom tool inputs still require their existing explicit route
+capabilities. The provider response is forwarded only when it has the official
+shape `{"object":"response.input_tokens","input_tokens":...}`.
+
+The input-token count endpoint does not create a Response, does not inject
+`store=false`, does not inject or require `max_output_tokens`, does not reserve
+generation quota, and does not create a normal generation usage ledger row. It
+is a provider-reported metadata call for admission/planning compatibility.
 
 Structured text output is a text-output constraint, not a tool or hosted
 provider-side authority. JSON object mode uses

@@ -29,6 +29,7 @@ from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, P
 
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _RESPONSES_PATH = "/responses"
+_RESPONSES_INPUT_TOKENS_PATH = "/responses/input_tokens"
 _UPSTREAM_REQUEST_ID_HEADERS = ("x-request-id", "x-openrouter-request-id")
 
 
@@ -118,6 +119,26 @@ class OpenRouterProviderAdapter(ProviderAdapter):
             accept="application/json",
         )
         response = await self._post_json(_RESPONSES_PATH, json=body, headers=headers)
+        return self._provider_response(request, response)
+
+    async def forward_response_input_tokens(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/responses/input_tokens", "responses.input_tokens"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENROUTER_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        body = dict(request.body)
+        body["model"] = request.upstream_model
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._post_json(_RESPONSES_INPUT_TOKENS_PATH, json=body, headers=headers)
         return self._provider_response(request, response)
 
     async def stream_response(
