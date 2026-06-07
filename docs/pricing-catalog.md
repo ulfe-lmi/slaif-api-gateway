@@ -341,8 +341,8 @@ input, bounded input item arrays, route-enabled user-message
 `input_image` URL/data URL parts and `input_file` URL/data URL parts, plus
 non-streaming JSON, typed SSE streaming, non-streaming structured
 `text.format` JSON object/schema output, non-streaming local function/custom
-tools, and non-streaming stored-response create when route capability metadata
-allows them. It requires an active
+tools, non-streaming stored-response create, and non-streaming
+`previous_response_id` when route capability metadata allows them. It requires an active
 pricing row whose endpoint is `/v1/responses`; Chat Completions pricing rows
 are not silently reused. Admission-time reservation uses the estimated text
 input, input item text/wrappers, image URL/data URL material, file URL/data URL
@@ -359,14 +359,15 @@ ordinary Responses token/cost accounting. Image/file bytes are not
 invoice-grade token truth.
 
 Streaming finalization uses usage from the provider's completed response event;
-missing final usage is not treated as zero cost. `store=true` is non-streaming
-only and uses the same generation reservation/finalization path as other
-successful Responses create requests. Retrieve/delete are ownership-checked
-control-plane proxy calls and do not reserve output quota or create normal
-generation usage ledger rows. Responses hosted tools, `previous_response_id`,
-conversations, background mode, `input_image.file_id`, `input_file.file_id`,
-file search/retrieval tools, audio inputs, image generation, audio output, and
-multimodal output are not priced or enabled in this foundation.
+missing final usage is not treated as zero cost. `store=true` and
+`previous_response_id` are non-streaming create requests and use the same
+generation reservation/finalization path as other successful Responses create
+requests. Retrieve/delete are ownership-checked control-plane proxy calls and do
+not reserve output quota or create normal generation usage ledger rows.
+Responses hosted tools, conversations, background mode, `input_image.file_id`,
+`input_file.file_id`, file search/retrieval tools, audio inputs, image
+generation, audio output, and multimodal output are not priced or enabled in
+this foundation.
 
 `POST /v1/responses/input_tokens` is not a generation endpoint. It requires an
 explicit model route and `capabilities.responses.input_token_count=true`, but

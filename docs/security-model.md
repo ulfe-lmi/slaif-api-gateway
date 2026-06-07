@@ -419,7 +419,8 @@ Responses API support is limited to text-output `POST /v1/responses`
 with string input or bounded input item arrays, route-enabled user-message
 image URL/data URL input, route-enabled user-message file URL/data URL input,
 non-streaming JSON, typed SSE streaming, non-streaming local function tools,
-non-streaming local custom tools, and non-streaming stored-response create.
+non-streaming local custom tools, non-streaming stored-response create, and
+non-streaming owned `previous_response_id`.
 `POST /v1/responses/input_tokens` is a separate provider-reported count
 endpoint for the same local input subset. `GET` and
 `DELETE /v1/responses/{response_id}` are ownership-checked proxy calls for
@@ -459,14 +460,21 @@ provider-stored Responses references. It is default-off and policy-first:
   require explicit key endpoint permission and an active local reference owned
   by the authenticated gateway key; missing, non-owned, or locally deleted
   response IDs return OpenAI-shaped 404 and are not proxied upstream.
+- `previous_response_id` requires explicit
+  `capabilities.responses.previous_response_id=true`, must be non-streaming, and
+  is proxied only when the referenced provider response ID is an active local
+  reference owned by the same gateway key and compatible with the resolved
+  provider route. Unknown, non-owned, deleted, provider-mismatched, or
+  route-incompatible IDs return OpenAI-shaped 404 and are not proxied upstream.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented local/stored subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
-- `background`, `previous_response_id`, conversation/provider-side state,
-  cancel, compact, and input-item listing are excluded until ownership mapping,
-  quota, accounting, and audit behavior are implemented.
+- `background`, conversation/provider-side state beyond owned
+  `previous_response_id`, cancel, compact, and input-item listing are excluded
+  until ownership mapping, quota, accounting, and audit behavior are
+  implemented.
 - `store=false` is injected before forwarding when omitted.
 - Tool-enabled policies, when implemented later, require bounded-overrun cost
   calculations that admins can inspect before enabling the policy.
@@ -491,9 +499,9 @@ when a provider exposes them.
 
 Recommendations are never automatic mutations. An admin must review assumptions
 and explicitly confirm any generated template or single-key creation. The
-implemented template policy surface covers only safe stateless local Responses
-capability summaries; hosted/stateful/multimodal policy and bulk key creation
-from templates remain future work.
+implemented template policy surface covers only safe local/stored Responses
+capability summaries; hosted/background/conversation/multimodal policy and bulk
+key creation from templates remain future work.
 
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
@@ -784,9 +792,9 @@ never recover or send old plaintext keys.
 - Responses API support is limited to text-output `POST /v1/responses` with
   URL/data URL image input, URL/data URL file input, typed SSE streaming for
   stateless requests, non-streaming local function/custom tools, non-streaming
-  stored create, and owned retrieve/delete through safe response-reference
-  metadata; hosted Responses tools, previous-response/conversation lifecycle,
-  background mode, cancel/list/input-item routes, file IDs, `/v1/files`, file
+  stored create, owned previous-response chaining, and owned retrieve/delete
+  through safe response-reference metadata; hosted Responses tools, conversation
+  lifecycle, background mode, cancel/list/input-item routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.
   Embeddings API is not implemented.

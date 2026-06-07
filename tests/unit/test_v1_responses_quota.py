@@ -62,6 +62,7 @@ def _route_result(
     responses_file_input: bool = False,
     responses_input_token_count: bool = False,
     responses_stored_responses: bool = False,
+    responses_previous_response_id: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
@@ -73,6 +74,7 @@ def _route_result(
     capabilities["file_input"] = responses_file_input
     capabilities["input_token_count"] = responses_input_token_count
     capabilities["stored_responses"] = responses_stored_responses
+    capabilities["previous_response_id"] = responses_previous_response_id
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -553,6 +555,292 @@ def test_stored_response_create_rejects_missing_capability_before_rate_pricing_q
     assert pricing_calls == []
     assert quota_calls == []
     assert provider_calls == []
+
+
+def test_previous_response_id_owned_reference_forwards_canonical_body(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key()
+    _wire_auth_and_db(monkeypatch, app, auth)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls = _wire_successful_forwarding(monkeypatch)
+    route = _route_result("classroom-responses", responses_previous_response_id=True)
+    lookup_calls: list[str] = []
+    forwarded_bodies: list[dict[str, object]] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        assert requested_model == "classroom-responses"
+        return route
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = request
+        assert authenticated_key.gateway_key_id == auth.gateway_key_id
+        lookup_calls.append(response_id)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_response_id=response_id,
+            upstream_model="gpt-5.2",
+            route_id=route.route_id,
+        )
+
+    class _FakeAdapter:
+        async def forward_response(self, request):
+            assert request.endpoint == "responses"
+            forwarded_bodies.append(dict(request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "resp_next", "object": "response"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "previous_response_id": "resp_previous"},
+    )
+
+    assert response.status_code == 200
+    assert lookup_calls == ["resp_previous"]
+    assert forwarded_bodies == [
+        {
+            "model": "gpt-5.2",
+            "input": "hello",
+            "max_output_tokens": 20,
+            "store": False,
+            "previous_response_id": "resp_previous",
+        }
+    ]
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+    assert finalize_calls == ["classroom-responses"]
+
+
+def test_previous_response_id_unknown_reference_returns_404_before_rate_pricing_quota_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    route = _route_result("classroom-responses", responses_previous_response_id=True)
+    rate_calls: list[str] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, requested_model, authenticated_key, endpoint)
+        return route
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = (response_id, authenticated_key, request)
+        return None
+
+    async def _fake_reserve_rate_limit(**kwargs):
+        rate_calls.append(str(kwargs))
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "previous_response_id": "resp_missing"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "response_not_found"
+    assert rate_calls == []
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert provider_calls == []
+
+
+def test_previous_response_id_provider_mismatch_returns_404_before_provider(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    route = _route_result("classroom-responses", responses_previous_response_id=True)
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, requested_model, authenticated_key, endpoint)
+        return route
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = (response_id, authenticated_key, request)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openrouter",
+            provider_response_id=response_id,
+            upstream_model="gpt-5.2",
+            route_id=route.route_id,
+        )
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "previous_response_id": "resp_openrouter"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "response_not_found"
+    assert provider_calls == []
+
+
+def test_store_true_with_previous_response_id_persists_new_response_reference(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key()
+    _wire_auth_and_db(monkeypatch, app, auth)
+    reserve_calls, release_calls = _wire_successful_route_pricing_quota(monkeypatch)
+    finalize_calls: list[str] = []
+    persist_calls: list[str] = []
+    route = _route_result(
+        "classroom-responses",
+        responses_stored_responses=True,
+        responses_previous_response_id=True,
+    )
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, requested_model, authenticated_key, endpoint)
+        return route
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = (authenticated_key, request)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_response_id=response_id,
+            upstream_model="gpt-5.2",
+            route_id=route.route_id,
+        )
+
+    class _FakeAdapter:
+        async def forward_response(self, request):
+            assert request.body["store"] is True
+            assert request.body["previous_response_id"] == "resp_previous"
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "resp_next_stored", "object": "response"},
+                upstream_request_id="upstream-req-next-stored",
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            )
+
+    async def _fake_finalize_successful_response(
+        self,
+        reservation_id,
+        authenticated_key,
+        route,
+        policy,
+        pricing_estimate,
+        provider_response,
+        request_id,
+        endpoint="chat.completions",
+        started_at=None,
+        finished_at=None,
+        provider_completed_usage_ledger_id=None,
+        streaming=False,
+    ):
+        _ = (
+            self,
+            reservation_id,
+            authenticated_key,
+            policy,
+            pricing_estimate,
+            provider_response,
+            request_id,
+            endpoint,
+            started_at,
+            finished_at,
+            provider_completed_usage_ledger_id,
+            streaming,
+        )
+        finalize_calls.append(route.requested_model)
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=reservation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.003"),
+            actual_cost_native=Decimal("0.003"),
+            native_currency="EUR",
+            prompt_tokens=1,
+            completion_tokens=2,
+            total_tokens=3,
+            accounting_status="finalized",
+        )
+
+    async def _fake_persist_reference(*, authenticated_key, route, provider_response, request):
+        _ = (authenticated_key, route, request)
+        persist_calls.append(provider_response.json_body["id"])
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+    monkeypatch.setattr(main_module, "_persist_stored_response_reference", _fake_persist_reference)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={
+            **_responses_request(),
+            "store": True,
+            "previous_response_id": "resp_previous",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "resp_next_stored"
+    assert reserve_calls == ["classroom-responses"]
+    assert release_calls == []
+    assert finalize_calls == ["classroom-responses"]
+    assert persist_calls == ["resp_next_stored"]
 
 
 def test_response_retrieve_requires_explicit_endpoint_permission(monkeypatch) -> None:

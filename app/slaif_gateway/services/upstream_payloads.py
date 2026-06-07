@@ -61,6 +61,7 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
     "service_tier",
     "tools",
     "tool_choice",
+    "previous_response_id",
 )
 
 RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS: tuple[str, ...] = (

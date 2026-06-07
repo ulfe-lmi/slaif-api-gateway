@@ -62,6 +62,7 @@ RESPONSES_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "service_tier",
         "tools",
         "tool_choice",
+        "previous_response_id",
     }
 )
 
@@ -185,6 +186,7 @@ class NormalizedResponsesUpstreamRequest:
     service_tier: object = _UNSET
     tools: object = _UNSET
     tool_choice: object = _UNSET
+    previous_response_id: object = _UNSET
 
     def as_upstream_fields(self) -> dict[str, Any]:
         input_value: Any
@@ -326,6 +328,7 @@ def normalize_responses_upstream_request(
         service_tier=_select_field(body.get("service_tier", _UNSET)),
         tools=_select_field(body.get("tools", _UNSET)),
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
+        previous_response_id=_select_field(body.get("previous_response_id", _UNSET)),
     )
 
 

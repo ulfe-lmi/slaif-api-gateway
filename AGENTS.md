@@ -499,7 +499,7 @@ Rules:
 
 The next release-candidate beta feature family is Responses API support. The
 current foundation implements a bounded local Responses subset plus the first
-non-streaming stored-response lifecycle foundation.
+non-streaming stored-response lifecycle and owned previous-response foundation.
 
 Implemented foundation:
 
@@ -510,10 +510,10 @@ Implemented foundation:
   provider route, and `/v1/responses` pricing for create requests.
 - Inject `store=false` when omitted and inject/default `max_output_tokens`
   through the existing output cap settings.
-- Reject background mode, previous response IDs, conversations, hosted tools,
-  unsupported multimodal surfaces, MCP/connectors, and cancel/list/input-item
-  routes. Stored Responses are non-streaming only in the implemented lifecycle
-  slice.
+- Reject background mode, conversations, hosted tools, unsupported multimodal
+  surfaces, MCP/connectors, streaming previous-response chaining, and
+  cancel/list/input-item routes. Stored Responses and `previous_response_id` are
+  non-streaming only in the implemented lifecycle slice.
 
 Future RC2 goal:
 
@@ -532,7 +532,10 @@ Stateful/background exclusions for RC2:
 - `background=true` is not supported.
 - `store=true` is supported only for non-streaming `POST /v1/responses` when
   the route explicitly enables `capabilities.responses.stored_responses=true`.
-- `previous_response_id` is not supported.
+- `previous_response_id` is supported only for non-streaming
+  `POST /v1/responses` after the ID resolves to an active local response
+  reference owned by the same gateway key and compatible with the resolved
+  provider route.
 - Conversation/provider-side state is not supported.
 - Response retrieve/delete are supported only after local ownership checks
   against safe provider response reference metadata. Cancel, compact, and
@@ -656,7 +659,7 @@ Rules:
 - Recommended templates should include request limits, input/output/reasoning
   token limits, tool-call limits, per-request caps, and allowed
   endpoints/models/providers. Safe Responses template metadata covers only the
-  implemented local/stored summary vocabulary; bulk template workflows and
+  implemented local/stored/previous-response summary vocabulary; bulk template workflows and
   hosted/stateful tool policies remain future work.
 - Admins must see assumptions and may edit recommended values before creating a
   template or keys.

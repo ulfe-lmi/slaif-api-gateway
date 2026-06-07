@@ -108,10 +108,22 @@ def test_stored_response_capability_passes_when_explicit_without_stateless() -> 
     )
 
 
+def test_previous_response_id_capability_passes_when_explicit_without_stateless() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stateless"] = False
+    capabilities["previous_response_id"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        previous_response_id_requested=True,
+    )
+
+
 def test_default_responses_capabilities_keep_stored_responses_disabled() -> None:
     capabilities = default_responses_capabilities()
 
     assert capabilities["stored_responses"] is False
+    assert capabilities["previous_response_id"] is False
 
 
 def test_streaming_image_input_requires_streaming_capability_too() -> None:
@@ -244,6 +256,31 @@ def test_store_true_request_fails_when_stored_response_capability_absent() -> No
 
     assert exc_info.value.error_code == "responses_stored_response_capability_not_supported"
     assert exc_info.value.param == "store"
+
+
+def test_previous_response_id_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            previous_response_id_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_previous_response_capability_not_supported"
+    assert exc_info.value.param == "previous_response_id"
+
+
+def test_stored_response_capability_alone_does_not_allow_previous_response_id() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stateless"] = False
+    capabilities["stored_responses"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            previous_response_id_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_previous_response_capability_not_supported"
 
 
 def test_store_false_still_requires_stateless_capability() -> None:

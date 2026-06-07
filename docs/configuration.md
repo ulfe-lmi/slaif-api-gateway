@@ -506,7 +506,7 @@ template-based participant key creation remains future work.
 
 ## Responses API Configuration
 
-The current Responses API foundation is stateless and text-output only. It supports
+The current Responses API foundation is text-output only. It supports
 string input or bounded input item arrays, route-enabled user-message
 `input_image` URL/data URL parts for image input to text output,
 route-enabled user-message `input_file` URL/data URL parts for file input to
@@ -514,7 +514,10 @@ text output, non-streaming JSON, typed SSE text streaming, and non-streaming
 structured `text.format` JSON object/schema output when route capability
 metadata allows it. It also supports non-streaming local/client-side function
 tools when route capability metadata allows them, and non-streaming
-local/client-side custom tools when route capability metadata allows them. It reuses
+local/client-side custom tools when route capability metadata allows them.
+Non-streaming stored create and non-streaming `previous_response_id` are
+available only when route capability metadata allows them and local ownership
+checks pass. It reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 
@@ -554,6 +557,7 @@ local/client-side custom tools when route capability metadata allows them. It re
 - `RESPONSES_MAX_FILE_DATA_URL_BYTES=26214400`
 - `RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=52428800`
 - `RESPONSES_MAX_FILE_NAME_BYTES=255`
+- `RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=256`
 - `RESPONSES_ALLOWED_FILE_MIME_TYPES=application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,text/xml,application/xml`
 - `RESPONSES_ALLOWED_FILE_EXTENSIONS=.pdf,.txt,.md,.csv,.json,.html,.xml`
 

@@ -1300,12 +1300,37 @@ def test_responses_store_true_reconstructs_exact_upstream_body() -> None:
     }
 
 
+def test_responses_previous_response_id_reconstructs_exact_upstream_body() -> None:
+    policy_result = _responses_policy_result(
+        {
+            "model": "classroom-responses",
+            "input": "continue",
+            "max_output_tokens": 12,
+            "previous_response_id": "resp_previous_123",
+        }
+    )
+
+    normalized_request = normalize_responses_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model="gpt-5.2",
+    )
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "continue",
+        "max_output_tokens": 12,
+        "store": False,
+        "previous_response_id": "resp_previous_123",
+    }
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
         ("unknown_top_level", "SHOULD_NOT_REACH_PROVIDER_TOP_LEVEL", "responses_field_not_supported"),
         ("parallel_tool_calls", True, "responses_tools_not_supported"),
-        ("previous_response_id", "resp_SHOULD_NOT_APPEAR_IN_ERROR", "responses_state_not_supported"),
         ("conversation", "conv_SHOULD_NOT_APPEAR_IN_ERROR", "responses_state_not_supported"),
         ("background", True, "responses_background_not_supported"),
         ("include", ["output_text"], "responses_multimodal_not_supported"),

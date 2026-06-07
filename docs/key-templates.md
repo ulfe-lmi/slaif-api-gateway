@@ -121,7 +121,7 @@ Current revision 1 stores:
 - allowed endpoints, models, and providers from the reviewed proposal;
 - hosted capabilities requiring review;
 - an empty participant hosted-capability allowlist by default;
-- optional safe `responses_policy` metadata for the implemented stateless local
+- optional safe `responses_policy` metadata for the implemented local/stored
   Responses subset;
 - no template-specific streaming live-burn policy fields; Chat Completions
   streaming live-burn is implemented as per-key metadata, and keys created from
@@ -157,12 +157,12 @@ Rules:
 - hosted capabilities requiring review are rejected rather than silently enabled
   for participant keys;
 - `/v1/responses` is allowed only when the immutable revision includes a safe
-  `template_snapshot.responses_policy` summary for implemented stateless local
+  `template_snapshot.responses_policy` summary for implemented local/stored
   capabilities;
 - `/v1/completions` and other unimplemented endpoints remain rejected.
 
 The supported Responses template policy surface is intentionally small. A
-revision may summarize only these implemented stateless local capabilities:
+revision may summarize only these implemented local/stored capabilities:
 
 - `text`
 - `stateless`
@@ -175,6 +175,7 @@ revision may summarize only these implemented stateless local capabilities:
 - `file_input`
 - `input_token_count`
 - `stored_responses`
+- `previous_response_id`
 
 Allowed local tool types are limited to `function` and `custom`. The policy
 summary must keep `hosted_tools_allowed` empty and must set `stateful`,
@@ -182,10 +183,11 @@ summary must keep `hosted_tools_allowed` empty and must set `stateful`,
 web/file search, code interpreter, shell, `apply_patch`, local environments,
 skills, MCP or connectors, computer use, image generation, tool search,
 provider-side storage beyond safe response references, background mode,
-previous-response/conversation lifecycle, `/v1/files`, file search/retrieval
-tools, audio input, audio output, and multimodal Responses output remain future
-work and are
-rejected for template-created keys. The summary is operator provenance metadata
+conversation lifecycle, `/v1/files`, file search/retrieval tools, audio input,
+audio output, and multimodal Responses output remain future work and are
+rejected for template-created keys. `previous_response_id` is only a safe
+capability summary for owned local response references and does not permit live
+response IDs in template metadata. The summary is operator provenance metadata
 only; it must not contain raw image URLs, image data URLs, file URLs,
 filenames, file data URLs, base64 payloads, provider response IDs from user
 traffic, tool definitions, JSON schemas, grammar definitions, model-generated
