@@ -110,6 +110,84 @@ def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
     ]
 
 
+def test_list_input_with_user_image_url_part_passes_and_preserves_detail() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "What is in this image?"},
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.test/image.png",
+                            "detail": "low",
+                        },
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result.effective_body["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.test/image.png",
+                    "detail": "low",
+                },
+            ],
+        }
+    ]
+    assert result.estimated_input_tokens > 0
+
+
+def test_list_input_with_image_data_url_part_passes_and_omits_detail_when_omitted() -> None:
+    data_url = "data:image/png;base64,aGVsbG8="
+
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Describe this."},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                }
+            ]
+        )
+    )
+
+    image_part = result.effective_body["input"][0]["content"][1]
+    assert image_part == {"type": "input_image", "image_url": data_url}
+
+
+@pytest.mark.parametrize("detail", ["auto", "low", "high", "original"])
+def test_list_input_with_supported_image_detail_values_passes(detail: str) -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.test/image.png",
+                            "detail": detail,
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result.effective_body["input"][0]["content"][0]["detail"] == detail
+
+
 def test_function_call_output_input_item_passes_as_string_only_tool_result() -> None:
     result = ResponsesRequestPolicy(Settings()).apply(
         _body(
@@ -176,7 +254,8 @@ def test_custom_tool_call_output_input_item_passes_as_string_only_tool_result() 
         ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": [{"type": "input_text", "text": "secret"}]}], "input[0].output", "responses_custom_tool_call_output_invalid"),
         ([{"type": "custom_tool_call_output", "output": "secret"}], "input[0].call_id", "responses_custom_tool_call_output_invalid"),
         ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": "secret", "id": "item_123"}], "input[0].id", "responses_custom_tool_call_output_invalid"),
-        ([{"role": "user", "content": [{"type": "input_image", "image_url": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
+        ([{"role": "user", "content": [{"type": "input_file", "file_id": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
+        ([{"role": "user", "content": [{"type": "input_audio", "data": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
         ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
         ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
     ],
@@ -241,6 +320,163 @@ def test_list_input_caps_reject_without_raw_text() -> None:
     assert "secret text" not in item_exc.value.safe_message
     assert total_exc.value.error_code == "responses_input_item_too_large"
     assert parts_exc.value.error_code == "responses_input_item_count_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("part", "param", "code"),
+    [
+        (
+            {"type": "input_image", "image_url": "https://example.test/image.png", "detail": "medium"},
+            "input[0].content[0].detail",
+            "responses_input_image_detail_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.test/image.png", "detail": 3},
+            "input[0].content[0].detail",
+            "responses_input_image_detail_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "ftp://example.test/image.png"},
+            "input[0].content[0].image_url",
+            "responses_input_image_url_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "https://user:pass@example.test/image.png"},
+            "input[0].content[0].image_url",
+            "responses_input_image_url_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.test/image.png#secret"},
+            "input[0].content[0].image_url",
+            "responses_input_image_url_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "data:image/png,not-base64"},
+            "input[0].content[0].image_url",
+            "responses_input_image_url_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "data:image/png;base64,not valid base64"},
+            "input[0].content[0].image_url",
+            "responses_input_image_url_invalid",
+        ),
+        (
+            {"type": "input_image", "image_url": "data:image/tiff;base64,aGVsbG8="},
+            "input[0].content[0].image_url",
+            "responses_input_image_mime_not_supported",
+        ),
+        (
+            {"type": "input_image", "file_id": "file_secret"},
+            "input[0].content[0].file_id",
+            "responses_input_image_file_id_not_supported",
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.test/image.png", "alt": "secret"},
+            "input[0].content[0].alt",
+            "responses_input_image_part_invalid",
+        ),
+    ],
+)
+def test_image_input_rejects_unsupported_shapes_without_raw_values(
+    part: dict[str, object],
+    param: str,
+    code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(input=[{"role": "user", "content": [part]}])
+        )
+
+    assert exc_info.value.param == param
+    assert exc_info.value.error_code == code
+    assert "secret" not in exc_info.value.safe_message
+    assert "example.test" not in exc_info.value.safe_message
+
+
+def test_image_input_rejects_non_user_role_without_raw_url() -> None:
+    raw_url = "https://example.test/private.png?token=secret"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(input=[{"role": "assistant", "content": [{"type": "input_image", "image_url": raw_url}]}])
+        )
+
+    assert exc_info.value.error_code == "responses_input_image_part_invalid"
+    assert exc_info.value.param == "input[0].content[0].type"
+    assert raw_url not in exc_info.value.safe_message
+
+
+def test_image_input_caps_reject_without_raw_values() -> None:
+    raw_url = "https://example.test/" + ("a" * 64)
+    raw_data_url = "data:image/png;base64," + ("a" * 64)
+
+    with pytest.raises(RequestPolicyError) as url_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_URL_BYTES=16)).apply(
+            _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_url}]}])
+        )
+    with pytest.raises(RequestPolicyError) as data_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_DATA_URL_BYTES=16)).apply(
+            _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_data_url}]}])
+        )
+    with pytest.raises(RequestPolicyError) as total_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=32)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_image", "image_url": raw_data_url},
+                            {"type": "input_image", "image_url": raw_data_url},
+                        ],
+                    }
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as count_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=1)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_image", "image_url": "https://example.test/1.png"},
+                            {"type": "input_image", "image_url": "https://example.test/2.png"},
+                        ],
+                    }
+                ]
+            )
+        )
+
+    assert url_exc.value.error_code == "responses_input_image_url_too_large"
+    assert data_exc.value.error_code == "responses_input_image_data_url_too_large"
+    assert total_exc.value.error_code == "responses_input_image_data_url_too_large"
+    assert count_exc.value.error_code == "responses_input_image_count_exceeded"
+    assert raw_url not in url_exc.value.safe_message
+    assert raw_data_url not in data_exc.value.safe_message
+
+
+def test_image_input_material_contributes_to_admission_estimate() -> None:
+    text_only = ResponsesRequestPolicy(Settings()).apply(
+        _body(input=[{"role": "user", "content": [{"type": "input_text", "text": "describe"}]}])
+    )
+    with_image = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "describe"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64," + ("QUFB" * 8),
+                        },
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert with_image.estimated_input_tokens > text_only.estimated_input_tokens
 
 
 def test_function_call_output_cap_rejects_without_raw_output() -> None:

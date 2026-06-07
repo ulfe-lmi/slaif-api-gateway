@@ -115,7 +115,7 @@ Known limitations:
 ## Responses Forwarding
 
 Current Chat Completions forwarding remains unchanged. `POST /v1/responses` has
-a limited stateless text-only forwarding path.
+a limited stateless text-output forwarding path.
 
 Responses forwarding follows the same provider-secret boundary:
 
@@ -151,16 +151,23 @@ dictionary is not forwarded as-is.
 
 Responses-specific rules for the current foundation:
 
-- only stateless text input/text output is supported;
-- `input` may be a string or a bounded text-only message/input item array.
+- only stateless text output is supported;
+- `input` may be a string or a bounded message/input item array.
   Supported arrays are reconstructed from message roles plus string content or
   `input_text` content parts; string-only `function_call_output` items are
   reconstructed as ordinary stateless input for local function-tool follow-up
   requests, and string-only `custom_tool_call_output` items are reconstructed
   as ordinary stateless input for caller-managed custom-tool follow-up
   requests. Function-call/custom-tool-call items, reasoning/stateful items,
-  hosted-tool items, and image/file/audio parts are rejected before provider
-  forwarding;
+  hosted-tool items, `input_image.file_id`, file parts, and audio parts are
+  rejected before provider forwarding;
+- user-message `input_image` content parts are reconstructed only from
+  `type`, `image_url`, and optional `detail` when route/model metadata
+  explicitly enables `capabilities.responses.image_input=true`. Supported
+  sources are fully-qualified `http`/`https` URLs without embedded credentials
+  or fragments and configured base64 image data URLs. SLAIF does not fetch,
+  decode, rewrite, store, or log image URLs/data URLs, and image bytes are used
+  only for conservative admission estimates;
 - local Responses function tools are reconstructed only from
   `tools[].type=function`, `name`, optional `description`, `parameters`, and
   optional `strict` after count/name/description/schema caps. Named
@@ -193,7 +200,7 @@ Responses-specific rules for the current foundation:
 - structured `stream=true` requests are rejected in this slice; JSON schemas are
   accepted only as bounded opaque payloads inside `text.format`, counted for
   input estimation, and not stored or logged;
-- tool fields are rejected and are not blind passthrough;
+- unsupported tool/media fields are rejected and are not blind passthrough;
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;

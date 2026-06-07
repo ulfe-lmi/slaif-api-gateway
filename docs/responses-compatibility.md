@@ -3,13 +3,15 @@
 Status: limited foundation implemented on current `main`.
 
 This document defines the RC2-beta support boundary for Responses API work.
-Current support is deliberately narrow: stateless, text-only
-`POST /v1/responses` with string input or bounded text-only input item arrays,
-non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
-output through `text.format`, local/client-side function tools, and
-non-streaming local/client-side custom tools. It has no hosted tools,
+Current support is deliberately narrow: stateless `POST /v1/responses` with
+text output, string input or bounded input item arrays, optional user-message
+`input_image` content parts for image input to text output, non-streaming JSON,
+typed SSE streaming, bounded non-streaming structured text output through
+`text.format`, local/client-side function tools, and non-streaming
+local/client-side custom tools. It has no hosted tools,
 MCP/connectors, provider-side storage, background mode, previous response or
-conversation state, or multimodal input/output.
+conversation state, file/audio input, audio output, image generation, or
+multimodal output.
 
 ## Supported Endpoint
 
@@ -23,7 +25,7 @@ and tests add them.
 Implemented request fields for the first slice:
 
 - `model`
-- `input` as a text string or bounded text-only message/input item array
+- `input` as a text string or bounded message/input item array
 - `instructions` as optional text
 - `max_output_tokens`
 - `temperature`
@@ -59,19 +61,33 @@ admission-time input estimate, and are not stored or logged. Structured
 `stream=true` requests are intentionally rejected in this slice; plain text
 Responses streaming remains supported when the route advertises streaming.
 
-Responses input item arrays are accepted only for stateless text message input.
+Responses input item arrays are accepted only for stateless message input.
 Supported item shapes are simple message objects such as
 `{"role":"user","content":"..."}` and explicit message items such as
 `{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`.
 Supported roles are `user`, `assistant`, `system`, and `developer`; content may
 be a non-empty text string or a bounded list of `input_text` content parts.
+User-message content arrays may also include bounded `input_image` parts shaped
+as `{"type":"input_image","image_url":"...","detail"?:...}` when the resolved
+route sets `capabilities.responses.image_input=true`. Supported image sources
+are fully-qualified `http`/`https` URLs without embedded credentials or
+fragments, and `data:image/png|jpeg|webp|gif;base64,...` data URLs. Supported
+detail values are `auto`, `low`, `high`, and SDK-supported `original`; omitted
+detail is omitted upstream so the provider default applies. SLAIF does not
+fetch remote URLs, decode image pixels, rewrite image data URLs, store/log image
+URLs or base64 payloads, or infer final billing from bytes. Image URL/data URL
+material is included in conservative admission estimates, while final
+accounting uses provider usage/cost once.
 Function-call items, reasoning/stateful items, hosted-tool items, and
-image/file/audio content parts are rejected before Redis rate limiting, pricing
-lookup, quota reservation, or provider forwarding. String-only
+file/audio content parts are rejected before Redis rate limiting, pricing
+lookup, quota reservation, or provider forwarding. `input_image.file_id` remains
+unsupported until `/v1/files` ownership and provider-file lifecycle are
+implemented. String-only
 `function_call_output` items are supported as ordinary stateless input for local
 function-tool follow-up requests; image/file outputs in tool-result items remain
 rejected. Input item arrays use the same Responses text/stateless route
-capability as string input. They compose with plain text streaming,
+capability as string input; image input additionally requires
+`capabilities.responses.image_input=true`. They compose with plain text streaming,
 non-streaming structured `text.format`, and local function tools; structured
 streaming and function-tool streaming remain rejected.
 
@@ -147,6 +163,9 @@ Rules:
   `capabilities.responses.custom_tools=true` metadata. Function-tool
   capability and Chat Completions custom-tool capability do not enable
   Responses custom tools.
+- Image input requires explicit route/model
+  `capabilities.responses.image_input=true` metadata. Chat Completions image
+  capability does not enable Responses image input.
 - Function tools are supported only as caller-side intent because execution
   remains in the caller's application instead of inside the provider.
 - Custom tools are also caller-side intent; SLAIF forwards definitions and
@@ -273,13 +292,13 @@ Template requirements:
 For `/v1/responses`, a template revision may carry
 `template_snapshot.responses_policy` with version 1, allowed local capabilities
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
-`function_tools`, `custom_tools`), allowed local tool types (`function`,
+`function_tools`, `custom_tools`, `image_input`), allowed local tool types (`function`,
 `custom`), an empty hosted-tool allowlist, and explicit false
-state/storage/background/multimodal flags. Template-to-key creation copies that
-sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
-stateful/background/storage, multimodal Responses, raw tool definitions,
-schemas, generated tool inputs, and tool outputs remain out of scope for
-template metadata and are rejected.
+state/storage/background/multimodal-output flags. Template-to-key creation
+copies that sanitized summary into gateway-key metadata. Hosted tools,
+MCP/connectors, stateful/background/storage, raw image URLs/data, raw tool
+definitions, schemas, generated tool inputs, and tool outputs remain out of
+scope for template metadata and are rejected.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.
@@ -401,7 +420,7 @@ the support matrix:
 
 ## Required Tests
 
-The stateless text-only foundation is implemented with:
+The stateless Responses foundation is implemented with:
 
 - request policy unit tests;
 - route capability unit tests;

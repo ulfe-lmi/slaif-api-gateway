@@ -559,6 +559,82 @@ def test_responses_input_array_structured_request_reconstructs_exact_upstream_bo
     }
 
 
+def test_responses_image_url_input_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe this"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.test/image.png",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe this"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.test/image.png",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+
+
+def test_responses_image_data_url_input_reconstructs_exact_upstream_body_with_omitted_detail() -> None:
+    data_url = "data:image/png;base64,aGVsbG8="
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe this"},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe this"},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+    assert "detail" not in outbound["input"][0]["content"][1]
+
+
 def test_responses_function_tools_request_reconstructs_exact_upstream_body() -> None:
     schema = {
         "type": "object",
@@ -882,6 +958,37 @@ def test_responses_input_item_array_deep_copy_isolation() -> None:
     outbound["input"][0]["content"][0]["text"] = "outbound"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["input"][0]["content"][0]["text"] == "original"
+
+
+def test_responses_image_input_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "original"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,b3JpZw==",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["input"][0]["content"][1]["image_url"] = "data:image/png;base64,Q0hBTkdFRA=="
+    inbound["input"][0]["content"][1]["detail"] = "high"
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["input"][0]["content"][1]["image_url"] == "data:image/png;base64,b3JpZw=="
+    assert outbound["input"][0]["content"][1]["detail"] == "low"
+
+    outbound["input"][0]["content"][1]["image_url"] = "https://example.test/outbound.png"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["input"][0]["content"][1]["image_url"] == "data:image/png;base64,b3JpZw=="
 
 
 def test_responses_function_tool_schema_deep_copy_isolation() -> None:

@@ -797,7 +797,7 @@ check(cost_source in ('provider_reported', 'slaif_calculated', 'mixed', 'unknown
 
 Rules:
 
-- Current population is Chat Completions first; stateless text-only Responses
+- Current population is Chat Completions first; stateless text-output Responses
   requests may use the existing usage ledger, but Responses-specific profiling
   and template recommendation rows remain future work.
 - Store gateway endpoint paths and provider host/path only. Strip query strings,

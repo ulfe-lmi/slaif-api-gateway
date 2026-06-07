@@ -1,4 +1,4 @@
-"""Orchestration for stateless text-only OpenAI-compatible Responses."""
+"""Orchestration for stateless text-output OpenAI-compatible Responses."""
 
 from __future__ import annotations
 
@@ -69,6 +69,7 @@ from slaif_gateway.services.responses_request_policy import (
     TEXT_FORMAT_JSON_SCHEMA,
     responses_custom_tools_requested,
     responses_function_tools_requested,
+    responses_image_input_requested,
     responses_text_format_type,
 )
 from slaif_gateway.services.responses_route_capabilities import (
@@ -129,6 +130,7 @@ async def handle_response_create(
         text_format_type=responses_text_format_type(policy_result.effective_body),
         function_tools_requested=responses_function_tools_requested(policy_result.effective_body),
         custom_tools_requested=responses_custom_tools_requested(policy_result.effective_body),
+        image_input_requested=responses_image_input_requested(policy_result.effective_body),
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -256,6 +258,7 @@ async def _resolve_responses_route(
     text_format_type: str | None,
     function_tools_requested: bool,
     custom_tools_requested: bool,
+    image_input_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -283,6 +286,7 @@ async def _resolve_responses_route(
                 structured_output_requested=text_format_type == TEXT_FORMAT_JSON_SCHEMA,
                 function_tools_requested=function_tools_requested,
                 custom_tools_requested=custom_tools_requested,
+                image_input_requested=image_input_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

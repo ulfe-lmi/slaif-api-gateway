@@ -24,7 +24,7 @@ class ChatCompletionPolicyResult(BaseModel):
 
 
 class ResponsesPolicyResult(BaseModel):
-    """Result of applying stateless text-only Responses request policy checks."""
+    """Result of applying stateless text-output Responses request policy checks."""
 
     effective_body: dict[str, Any]
     requested_output_tokens: int
