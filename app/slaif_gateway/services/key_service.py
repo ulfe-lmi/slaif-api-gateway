@@ -149,7 +149,10 @@ class KeyService:
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
             metadata_json=self._metadata_with_rate_limit_window(
-                self._metadata_with_provider_policy({}, payload.allowed_providers),
+                self._metadata_with_responses_policy(
+                    self._metadata_with_provider_policy({}, payload.allowed_providers),
+                    payload.responses_policy,
+                ),
                 rate_limit_policy,
             ),
             created_by_admin_user_id=payload.created_by_admin_id,
@@ -218,6 +221,7 @@ class KeyService:
                 "allowed_providers": list(payload.allowed_providers)
                 if payload.allowed_providers is not None
                 else None,
+                "responses_policy": self._safe_responses_policy(payload.responses_policy),
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
@@ -865,6 +869,13 @@ class KeyService:
     def _safe_calibration_metadata(metadata: dict[str, object] | None) -> dict[str, object]:
         return sanitize_metadata_mapping(metadata or {}, drop_content_keys=True)
 
+    @staticmethod
+    def _safe_responses_policy(policy: dict[str, object] | None) -> dict[str, object] | None:
+        if policy is None:
+            return None
+        sanitized = sanitize_metadata_mapping(policy, drop_content_keys=True)
+        return sanitized if isinstance(sanitized, dict) else None
+
     async def _validate_request_policy(
         self,
         *,
@@ -915,6 +926,20 @@ class KeyService:
         metadata["allowed_providers"] = [
             str(provider).strip() for provider in allowed_providers if str(provider).strip()
         ]
+        return metadata
+
+    @classmethod
+    def _metadata_with_responses_policy(
+        cls,
+        metadata_json: dict[str, object] | None,
+        responses_policy: dict[str, object] | None,
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        safe_policy = cls._safe_responses_policy(responses_policy)
+        if safe_policy is None:
+            metadata.pop("responses_policy", None)
+            return metadata
+        metadata["responses_policy"] = safe_policy
         return metadata
 
     async def _audit_gateway_key_change(

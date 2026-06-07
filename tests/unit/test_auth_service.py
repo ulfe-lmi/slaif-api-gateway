@@ -98,6 +98,44 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
 
 
 @pytest.mark.asyncio
+async def test_authenticate_exposes_only_safe_responses_policy_metadata() -> None:
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
+    now = datetime.now(UTC)
+    responses_policy = {
+        "version": 1,
+        "allowed_capabilities": ["text", "stateless", "function_tools"],
+        "allowed_local_tool_types": ["function"],
+        "hosted_tools_allowed": [],
+        "stateful": False,
+        "storage": False,
+        "background": False,
+        "multimodal": False,
+    }
+    row = _FakeGatewayKey(
+        id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        public_key_id="public1234abcd",
+        token_hash=hmac_sha256_token(token, "h" * 48),
+        hmac_key_version=1,
+        status="active",
+        valid_from=now - timedelta(minutes=5),
+        valid_until=now + timedelta(minutes=30),
+        metadata_json={"responses_policy": responses_policy},
+    )
+    service = GatewayAuthService(
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
+        gateway_keys_repository=_FakeGatewayKeysRepository(row),
+    )
+
+    result = await service.authenticate_authorization_header(f"Bearer {token}", now=now)
+
+    assert result.responses_policy == responses_policy
+    serialized = str(result.responses_policy)
+    assert "tool schema" not in serialized
+    assert "tool argument" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_missing_header_raises_missing_authorization_error() -> None:
     service = GatewayAuthService(
         settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),

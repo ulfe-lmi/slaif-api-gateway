@@ -125,6 +125,10 @@
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
         <dd>{{ key.rate_limit_policy_summary }}</dd>
+        {% if key.responses_policy %}
+        <dt>Responses policy</dt>
+        <dd>{{ key.responses_policy_summary }}</dd>
+        {% endif %}
         {% if key.calibration_metadata %}
         <dt>Calibration metadata</dt>
         <dd>

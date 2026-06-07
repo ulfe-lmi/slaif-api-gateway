@@ -120,6 +120,8 @@ def _row() -> AdminKeyListRow:
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="openai",
         rate_limit_policy_summary="30 req/min",
+        responses_policy=None,
+        responses_policy_summary="None",
         created_at=datetime.now(UTC) - timedelta(days=2),
         updated_at=datetime.now(UTC) - timedelta(days=1),
     )

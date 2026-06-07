@@ -97,6 +97,8 @@ def _detail(
         allowed_endpoints_summary="/v1/chat/completions",
         allowed_providers_summary="All",
         rate_limit_policy_summary="Default",
+        responses_policy=None,
+        responses_policy_summary="None",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )

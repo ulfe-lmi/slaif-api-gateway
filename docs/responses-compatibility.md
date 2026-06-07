@@ -254,21 +254,35 @@ resolution, pricing, quota reservation, or provider forwarding.
 
 Usable Responses policies require key templates. Durable template records and
 immutable revisions now exist for reviewed calibration-derived Chat Completions
-policy snapshots; Responses-specific template policy remains future work.
+policy snapshots and for a safe stateless local Responses policy summary. The
+Responses template policy surface is provenance metadata for implemented local
+capabilities only; it is not a raw request/tool-schema store and it does not
+bypass route/model capability enforcement.
 
 Template requirements:
 
 - templates are versioned/snapshotted;
-- a future key created from a template records template and revision metadata;
+- a key created from a template records template and revision metadata;
 - editing a template never silently mutates existing keys;
 - applying a template update to existing keys is a separate audited workflow;
-- future workflows should let organizers create a test key from a template
-  before issuing workshop keys;
+- organizers can create exactly one normal key from a selected immutable
+  revision before issuing workshop keys;
 - future bulk key creation can reference a template revision instead of
   duplicating every policy field per row.
 
-See `docs/key-templates.md` for the current template contract and future
-template-to-key workflow.
+For `/v1/responses`, a template revision may carry
+`template_snapshot.responses_policy` with version 1, allowed local capabilities
+(`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
+`function_tools`, `custom_tools`), allowed local tool types (`function`,
+`custom`), an empty hosted-tool allowlist, and explicit false
+state/storage/background/multimodal flags. Template-to-key creation copies that
+sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
+stateful/background/storage, multimodal Responses, raw tool definitions,
+schemas, generated tool inputs, and tool outputs remain out of scope for
+template metadata and are rejected.
+
+See `docs/key-templates.md` for the current template contract and remaining
+future bulk/template update workflows.
 
 ## Usage Tracking And Calibration Keys
 
@@ -276,8 +290,9 @@ Calibration keys let operators turn real organizer Chat Completions usage into
 safer participant limits. A semi-trusted organizer, teacher, workshop lead, or
 foreman can receive a relatively lenient calibration key, run the planned
 seminar or workflow, and let an admin derive a stricter key template from the
-observed usage window. Responses-specific calibration/template policy remains
-future work.
+observed usage window. Responses-specific detailed usage profiling remains
+future work, while template revisions can already carry the safe stateless local
+Responses policy summary described above.
 
 The workflow is advisory until an admin confirms a template or key creation:
 
@@ -306,8 +321,10 @@ multiplier. After review, admins can create a durable template revision from the
 proposal. That template creation does not create participant keys, mutate
 existing key policy, or update routes/pricing. Admins can create one normal key
 from a selected immutable revision, but bulk participant-key generation remains
-future work. Future Responses work must extend the same safe metadata boundary
-rather than storing request or response content.
+future work. Current Responses template metadata is limited to the safe
+stateless local policy summary; future Responses usage-derived recommendations
+must extend the same safe metadata boundary rather than storing request or
+response content.
 
 Recommendation workflows need safe operational metadata such as:
 

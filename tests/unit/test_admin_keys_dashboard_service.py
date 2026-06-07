@@ -130,6 +130,8 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert row.allowed_endpoints_summary == "/v1/chat/completions"
     assert row.allowed_providers_summary == "openai"
     assert "30 req/min" in row.rate_limit_policy_summary
+    assert row.responses_policy is None
+    assert row.responses_policy_summary == "None"
     assert row.can_suspend is True
     assert row.can_activate is False
     assert row.can_revoke is True
@@ -150,6 +152,29 @@ async def test_list_keys_returns_safe_rows_and_passes_filters() -> None:
     assert repo.list_calls[0]["cohort_id"] == cohort_id
     assert repo.list_calls[0]["limit"] == 25
     assert repo.list_calls[0]["offset"] == 5
+
+
+@pytest.mark.asyncio
+async def test_detail_exposes_safe_responses_policy_summary() -> None:
+    key = _row()
+    key.metadata_json["responses_policy"] = {
+        "version": 1,
+        "allowed_capabilities": ["text", "stateless", "custom_tools"],
+        "allowed_local_tool_types": ["custom"],
+        "hosted_tools_allowed": [],
+        "stateful": False,
+        "storage": False,
+        "background": False,
+        "multimodal": False,
+    }
+    service = AdminKeyDashboardService(gateway_keys_repository=_Repo(key))
+
+    detail = await service.get_key_detail(key.id)
+
+    assert detail.responses_policy is not None
+    assert detail.responses_policy["allowed_capabilities"] == ["text", "stateless", "custom_tools"]
+    assert "custom_tools" in detail.responses_policy_summary
+    assert "hosted/stateful/multimodal: denied" in detail.responses_policy_summary
 
 
 @pytest.mark.asyncio
