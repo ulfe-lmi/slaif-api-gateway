@@ -517,7 +517,10 @@ tools when route capability metadata allows them, and non-streaming
 local/client-side custom tools when route capability metadata allows them.
 Non-streaming stored create, non-streaming `previous_response_id`, and
 input-item listing are available only when route capability metadata allows
-them and local ownership checks pass. It reuses
+them and local ownership checks pass. `POST /v1/responses/compact` is a
+separate bounded non-streaming text-focused endpoint with explicit
+`/v1/responses/compact` endpoint permission, route capability, pricing, and
+provider usage finalization. Ordinary create reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 
@@ -560,11 +563,19 @@ them and local ownership checks pass. It reuses
 - `RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=256`
 - `RESPONSES_ALLOWED_FILE_MIME_TYPES=application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,text/xml,application/xml`
 - `RESPONSES_ALLOWED_FILE_EXTENSIONS=.pdf,.txt,.md,.csv,.json,.html,.xml`
+- `RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=12000`
+- `RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS=24000`
 
 These are validation caps, not feature toggles. Responses still requires a key
 with `/v1/responses` in its endpoint policy, a resolved route with explicit
 Responses text/stateless capability metadata, and an active `/v1/responses`
 pricing row.
+
+Responses compact settings control admission-time output reservation for
+`POST /v1/responses/compact`. They are not feature toggles and do not enable
+compact without explicit key permission, a `/v1/responses/compact` route and
+pricing row, and `capabilities.responses.compact=true`. Compact input/output
+and encrypted compaction content remain outside logs and durable metadata.
 
 Responses custom-tool settings cap local/client-side custom tool names,
 descriptions, grammar definitions, total custom format bytes, and string-only

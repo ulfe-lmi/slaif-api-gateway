@@ -79,6 +79,14 @@ RESPONSES_INPUT_TOKENS_UPSTREAM_ALLOWED_FIELDS = frozenset(
     }
 )
 
+RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+    }
+)
+
 
 def _is_set(value: object) -> bool:
     """Return true when a contract field carries a real value."""
@@ -235,6 +243,26 @@ class NormalizedResponsesInputTokensUpstreamRequest:
         return fields
 
 
+@dataclass(frozen=True, slots=True)
+class NormalizedResponsesCompactUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+    input: str | tuple[Mapping[str, Any], ...]
+
+    instructions: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        input_value: Any
+        if isinstance(self.input, tuple):
+            input_value = [copy.deepcopy(item) for item in self.input]
+        else:
+            input_value = self.input
+        fields: dict[str, Any] = {"input": input_value}
+        if _is_set(self.instructions):
+            fields["instructions"] = _select_field(self.instructions)
+        return fields
+
+
 def normalize_chat_completion_upstream_request(
     effective_body: Mapping[str, Any],
     *,
@@ -367,4 +395,37 @@ def normalize_responses_input_tokens_upstream_request(
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
         parallel_tool_calls=_select_field(body.get("parallel_tool_calls", _UNSET)),
         truncation=_select_field(body.get("truncation", _UNSET)),
+    )
+
+
+def normalize_responses_compact_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedResponsesCompactUpstreamRequest:
+    """Build a normalized Responses compact contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Responses compact",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(
+        body,
+        allowed_fields=RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS,
+    )
+
+    return NormalizedResponsesCompactUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        input=(
+            tuple(copy.deepcopy(item) for item in body["input"])
+            if isinstance(body["input"], list)
+            else copy.deepcopy(body["input"])
+        ),
+        instructions=_select_field(body.get("instructions", _UNSET)),
     )

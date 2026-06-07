@@ -45,6 +45,13 @@ _SUPPORTED_INPUT_TOKEN_COUNT_FIELDS = frozenset(
         "truncation",
     }
 )
+_SUPPORTED_COMPACT_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+    }
+)
 TEXT_FORMAT_TEXT = "text"
 TEXT_FORMAT_JSON_OBJECT = "json_object"
 TEXT_FORMAT_JSON_SCHEMA = "json_schema"
@@ -60,6 +67,10 @@ _TEXT_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SUPPORTED_INPUT_MESSAGE_ROLES = frozenset({"user", "assistant", "system", "developer"})
 _SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
 _SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
+_SUPPORTED_COMPACT_MESSAGE_FIELDS = frozenset({"id", "type", "status", "role", "content"})
+_SUPPORTED_COMPACT_TEXT_PART_FIELDS = frozenset({"type", "text"})
+_SUPPORTED_COMPACT_PART_TYPES = frozenset({"input_text", "output_text"})
+_SUPPORTED_COMPACT_MESSAGE_STATUSES = frozenset({"completed", "in_progress", "incomplete"})
 _SUPPORTED_INPUT_IMAGE_PART_FIELDS = frozenset({"type", "image_url", "detail"})
 _SUPPORTED_INPUT_FILE_PART_FIELDS = frozenset({"type", "file_url", "filename", "file_data"})
 _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
@@ -274,6 +285,69 @@ class ResponsesRequestPolicy:
             injected_default_output_tokens=False,
         )
 
+    def apply_compact(self, body: Mapping[str, Any]) -> ResponsesPolicyResult:
+        """Validate a bounded text-focused Responses compaction request."""
+
+        effective_body = copy.deepcopy(dict(body))
+        self._reject_unknown_fields(
+            effective_body,
+            allowed_fields=_SUPPORTED_COMPACT_FIELDS,
+        )
+
+        model = effective_body.get("model")
+        if not isinstance(model, str) or not model.strip():
+            _raise(
+                "model",
+                "responses_field_invalid_type",
+                "The 'model' field must be a non-empty string.",
+            )
+
+        if "input" not in effective_body:
+            _raise(
+                "input",
+                "responses_compact_input_required",
+                "Responses compaction requires an explicit input field in this gateway.",
+            )
+        canonical_input, input_material_bytes = self._validate_compact_input(
+            effective_body.get("input")
+        )
+        effective_body["input"] = canonical_input
+        instructions = self._validate_optional_string(
+            effective_body.get("instructions"),
+            param="instructions",
+            max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
+        )
+        estimated_input_tokens = self._estimate_input_tokens(
+            input_material_bytes=input_material_bytes,
+            instructions=instructions,
+            body=effective_body,
+        )
+        if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
+            _raise(
+                "input",
+                "input_token_limit_exceeded",
+                "Estimated Responses compact input size exceeds the configured hard maximum.",
+            )
+        output_tokens = self._settings.RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
+        if output_tokens > self._settings.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS:
+            _raise(
+                "max_output_tokens",
+                "output_token_limit_exceeded",
+                "Responses compact output reservation exceeds the configured hard maximum.",
+            )
+
+        return ResponsesPolicyResult(
+            effective_body=effective_body,
+            requested_output_tokens=output_tokens,
+            effective_output_tokens=output_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_message_input_tokens=estimated_input_tokens,
+            estimated_non_message_input_tokens=0,
+            estimated_non_message_input_bytes=0,
+            estimated_non_message_input_fields=(),
+            injected_default_output_tokens=True,
+        )
+
     def _reject_unknown_fields(
         self,
         body: Mapping[str, Any],
@@ -313,6 +387,205 @@ class ResponsesRequestPolicy:
             "responses_field_invalid_type",
             "The 'input' field must be a non-empty text string or text input item array.",
         )
+
+    def _validate_compact_input(self, value: Any) -> tuple[str | list[dict[str, Any]], int]:
+        if isinstance(value, str):
+            if not value:
+                _raise(
+                    "input",
+                    "responses_compact_input_invalid",
+                    "Responses compaction input must be a non-empty string or message item array.",
+                )
+            self._validate_string_bytes(
+                value,
+                param="input",
+                max_bytes=self._settings.RESPONSES_MAX_INPUT_TEXT_BYTES,
+            )
+            return value, len(value.encode("utf-8"))
+
+        if isinstance(value, list):
+            return self._validate_compact_input_item_array(value)
+
+        _raise(
+            "input",
+            "responses_compact_input_invalid",
+            "Responses compaction input must be a non-empty string or message item array.",
+        )
+        raise AssertionError("unreachable")
+
+    def _validate_compact_input_item_array(self, value: list[Any]) -> tuple[list[dict[str, Any]], int]:
+        if not value:
+            _raise(
+                "input",
+                "responses_compact_input_invalid",
+                "Responses compaction input item arrays must contain at least one item.",
+            )
+        if len(value) > self._settings.RESPONSES_MAX_INPUT_ITEMS:
+            _raise(
+                "input",
+                "responses_input_item_count_exceeded",
+                "The Responses compact input item array has too many items.",
+            )
+
+        canonical_items: list[dict[str, Any]] = []
+        total_text_bytes = 0
+        for index, item in enumerate(value):
+            canonical_item, item_text_bytes = self._validate_compact_input_item(
+                item,
+                index=index,
+            )
+            total_text_bytes += item_text_bytes
+            if total_text_bytes > self._settings.RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES:
+                _raise(
+                    "input",
+                    "responses_input_item_too_large",
+                    "The Responses compact input text exceeds the gateway size limit.",
+                )
+            canonical_items.append(canonical_item)
+        return canonical_items, total_text_bytes
+
+    def _validate_compact_input_item(self, item: Any, *, index: int) -> tuple[dict[str, Any], int]:
+        param = f"input[{index}]"
+        if not isinstance(item, Mapping):
+            _raise(
+                param,
+                "responses_compact_input_invalid",
+                "Each Responses compact input item must be an object.",
+            )
+        unknown = set(item) - _SUPPORTED_COMPACT_MESSAGE_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_compact_input_invalid",
+                "This Responses compact input item field is not enabled by this gateway.",
+            )
+        item_type = item.get("type")
+        if item_type is not None and item_type != "message":
+            _raise(
+                f"{param}.type",
+                "responses_compact_input_item_type_not_supported",
+                "Only Responses message items are enabled for compaction by this gateway.",
+            )
+        role = item.get("role")
+        if role not in _SUPPORTED_INPUT_MESSAGE_ROLES:
+            _raise(
+                f"{param}.role",
+                "responses_input_item_role_not_supported",
+                "This Responses compact input message role is not enabled by this gateway.",
+            )
+        if "content" not in item:
+            _raise(
+                f"{param}.content",
+                "responses_compact_input_invalid",
+                "Responses compact input message items require text content.",
+            )
+        canonical_content, text_bytes = self._validate_compact_input_item_content(
+            item["content"],
+            param=f"{param}.content",
+        )
+        canonical_item: dict[str, Any] = {"role": role, "content": canonical_content}
+        if item_type == "message":
+            canonical_item["type"] = "message"
+        item_id = item.get("id")
+        if item_id is not None:
+            if not isinstance(item_id, str) or not item_id:
+                _raise(
+                    f"{param}.id",
+                    "responses_compact_input_invalid",
+                    "Responses compact input item IDs must be non-empty strings.",
+                )
+            self._validate_string_bytes(
+                item_id,
+                param=f"{param}.id",
+                max_bytes=self._settings.RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES,
+                code="responses_compact_input_invalid",
+            )
+            canonical_item["id"] = item_id
+        status = item.get("status")
+        if status is not None:
+            if status not in _SUPPORTED_COMPACT_MESSAGE_STATUSES:
+                _raise(
+                    f"{param}.status",
+                    "responses_compact_input_invalid",
+                    "Responses compact input item status is not supported.",
+                )
+            canonical_item["status"] = status
+        return canonical_item, text_bytes
+
+    def _validate_compact_input_item_content(
+        self,
+        content: Any,
+        *,
+        param: str,
+    ) -> tuple[str | list[dict[str, str]], int]:
+        if isinstance(content, str):
+            if not content:
+                _raise(
+                    param,
+                    "responses_compact_input_invalid",
+                    "Responses compact input message text content must be non-empty.",
+                )
+            text_bytes = len(content.encode("utf-8"))
+            self._validate_input_item_text_bytes(text_bytes, param=param)
+            return content, text_bytes
+
+        if isinstance(content, list):
+            if not content:
+                _raise(
+                    param,
+                    "responses_compact_input_invalid",
+                    "Responses compact input content arrays must contain at least one text part.",
+                )
+            canonical_parts: list[dict[str, str]] = []
+            total_text_bytes = 0
+            for part_index, part in enumerate(content):
+                canonical_part, part_bytes = self._validate_compact_text_part(
+                    part,
+                    param=f"{param}[{part_index}]",
+                )
+                total_text_bytes += part_bytes
+                canonical_parts.append(canonical_part)
+            self._validate_input_item_text_bytes(total_text_bytes, param=param)
+            return canonical_parts, total_text_bytes
+
+        _raise(
+            param,
+            "responses_compact_input_invalid",
+            "Responses compact input message content must be text or text content parts.",
+        )
+        raise AssertionError("unreachable")
+
+    def _validate_compact_text_part(self, part: Any, *, param: str) -> tuple[dict[str, str], int]:
+        if not isinstance(part, Mapping):
+            _raise(
+                param,
+                "responses_compact_input_content_part_not_supported",
+                "Responses compact input content parts must be text objects.",
+            )
+        part_type = part.get("type")
+        if part_type not in _SUPPORTED_COMPACT_PART_TYPES:
+            _raise(
+                f"{param}.type",
+                "responses_compact_input_content_part_not_supported",
+                "Only input_text and output_text content parts are enabled for compaction.",
+            )
+        unknown = set(part) - _SUPPORTED_COMPACT_TEXT_PART_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_compact_input_content_part_not_supported",
+                "This Responses compact content part field is not enabled by this gateway.",
+            )
+        text = part.get("text")
+        if not isinstance(text, str) or not text:
+            _raise(
+                f"{param}.text",
+                "responses_compact_input_invalid",
+                "Responses compact text parts require non-empty text.",
+            )
+        text_bytes = len(text.encode("utf-8"))
+        self._validate_input_item_text_bytes(text_bytes, param=f"{param}.text")
+        return {"type": part_type, "text": text}, text_bytes
 
     def _validate_input_item_array(self, value: list[Any]) -> tuple[list[dict[str, Any]], int]:
         if not value:

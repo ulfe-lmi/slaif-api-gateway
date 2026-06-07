@@ -140,8 +140,14 @@ migrations automatically.
   input-token counts over the same stateless local input subset; it requires
   explicit endpoint permission and route capability and does not create a
   Response or reserve generation quota.
+  `POST /v1/responses/compact` is implemented separately as a bounded
+  non-streaming text-focused endpoint with explicit endpoint permission,
+  `capabilities.responses.compact=true`, endpoint-specific pricing, quota
+  reservation, provider usage finalization, and no compact input/output
+  storage.
   Hosted/provider-side Responses tools,
-  conversation state, streaming previous-response state, background mode, cancel/list routes,
+  conversation state, streaming previous-response state, compact
+  `previous_response_id`, background mode, cancel/list routes,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
   search/retrieval tools, audio input, image generation, multimodal output, and
   MCP/connectors remain future work. Current Chat

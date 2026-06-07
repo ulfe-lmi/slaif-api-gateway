@@ -365,6 +365,7 @@ generation reservation/finalization path as other successful Responses create
 requests. Retrieve/delete/input-item listing are ownership-checked
 control-plane proxy calls and do not reserve output quota or create normal
 generation usage ledger rows.
+
 Responses hosted tools, conversations, background mode, `input_image.file_id`,
 `input_file.file_id`, file search/retrieval tools, audio inputs, image
 generation, audio output, and multimodal output are not priced or enabled in
@@ -377,6 +378,18 @@ row, and does not reuse `/v1/responses` pricing as invoice truth. It forwards
 the provider-reported `response.input_tokens` count for planning/admission
 compatibility. If a future provider charges separately for this metadata call,
 SLAIF must add an explicit safe accounting path before treating it as billable.
+
+`POST /v1/responses/compact` is a generation-style model operation and is
+priced separately from `/v1/responses`. It requires an active pricing row whose
+endpoint is `/v1/responses/compact`; Chat Completions and ordinary Responses
+pricing rows are not silently reused. Admission-time reservation uses the
+validated compact input/instructions estimate plus
+`RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS`, bounded by
+`RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS`. Finalization uses provider usage
+exactly once. If a provider compact response lacks usage, SLAIF fails the
+request safely and releases the reservation rather than finalizing a zero-cost
+success. Compact input, output, encrypted compaction content, and raw bodies
+are not stored in usage metadata.
 
 ## Worst-Case Single-Request Cost
 

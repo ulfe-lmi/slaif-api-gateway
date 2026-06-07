@@ -6,10 +6,12 @@ from pathlib import Path
 
 ALLOWED_UPSTREAM_BUILDERS = {
     "build_chat_completion_upstream_body",
+    "build_responses_compact_upstream_body",
     "build_responses_input_tokens_upstream_body",
     "build_responses_input_items_query_params",
     "build_responses_upstream_body",
     "_build_safe_chat_completion_upstream_body",
+    "_build_safe_responses_compact_upstream_body",
     "_build_safe_responses_input_tokens_upstream_body",
     "_build_safe_responses_upstream_body",
 }
@@ -176,6 +178,12 @@ def test_normalized_body_is_built_before_rate_limit_and_quota_side_effects() -> 
     assert responses_build_lines, "Responses handler must build the normalized upstream body"
     assert responses_build_lines[0] < _call_lines(responses_handler, "_reserve_redis_rate_limit")[0]
     assert responses_build_lines[0] < _call_lines(responses_handler, "_reserve_responses_quota")[0]
+
+    compact_handler = _find_function(responses_tree, "handle_response_compact")
+    compact_build_lines = _call_lines(compact_handler, "_build_safe_responses_compact_upstream_body")
+    assert compact_build_lines, "Responses compact handler must build the normalized upstream body"
+    assert compact_build_lines[0] < _call_lines(compact_handler, "_reserve_redis_rate_limit")[0]
+    assert compact_build_lines[0] < _call_lines(compact_handler, "_reserve_responses_quota")[0]
 
 
 def test_no_direct_forwarding_passthrough_names_in_provider_paths() -> None:

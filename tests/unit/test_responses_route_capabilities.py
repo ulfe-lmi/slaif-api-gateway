@@ -130,12 +130,24 @@ def test_list_input_items_capability_passes_when_explicit_without_stateless() ->
     )
 
 
+def test_compact_capability_passes_when_explicit_without_stateless() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stateless"] = False
+    capabilities["compact"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        compact_requested=True,
+    )
+
+
 def test_default_responses_capabilities_keep_stored_responses_disabled() -> None:
     capabilities = default_responses_capabilities()
 
     assert capabilities["stored_responses"] is False
     assert capabilities["previous_response_id"] is False
     assert capabilities["list_input_items"] is False
+    assert capabilities["compact"] is False
 
 
 def test_streaming_image_input_requires_streaming_capability_too() -> None:
@@ -274,6 +286,34 @@ def test_input_token_count_request_fails_when_capability_absent() -> None:
     assert exc_info.value.param == "model"
 
 
+def test_compact_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            compact_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_compact_capability_not_supported"
+    assert exc_info.value.param == "model"
+
+
+def test_stateful_response_capabilities_do_not_imply_compact() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stored_responses"] = True
+    capabilities["previous_response_id"] = True
+    capabilities["list_input_items"] = True
+    capabilities["input_token_count"] = True
+    capabilities["stateless"] = False
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            compact_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_compact_capability_not_supported"
+
+
 def test_store_true_request_fails_when_stored_response_capability_absent() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         enforce_responses_route_capabilities(
@@ -400,6 +440,10 @@ def test_defaults_are_added_only_for_responses_routes() -> None:
     assert "responses" in ensure_default_responses_capabilities(
         None,
         endpoint="/v1/responses/input_tokens",
+    )
+    assert "responses" in ensure_default_responses_capabilities(
+        None,
+        endpoint="/v1/responses/compact",
     )
     assert ensure_default_responses_capabilities(None, endpoint="/v1/chat/completions") == {}
 

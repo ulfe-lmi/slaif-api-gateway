@@ -8,6 +8,7 @@ import copy
 
 from slaif_gateway.services.upstream_request_contracts import (
     NormalizedChatCompletionUpstreamRequest,
+    NormalizedResponsesCompactUpstreamRequest,
     NormalizedResponsesInputTokensUpstreamRequest,
     NormalizedResponsesUpstreamRequest,
 )
@@ -82,6 +83,12 @@ RESPONSES_INPUT_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
     "order",
 )
 
+RESPONSES_COMPACT_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "input",
+    "instructions",
+)
+
 
 def build_chat_completion_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest,
@@ -119,6 +126,18 @@ def build_responses_input_tokens_upstream_body(
     )
 
 
+def build_responses_compact_upstream_body(
+    normalized_request: NormalizedResponsesCompactUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Responses compact provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(RESPONSES_COMPACT_UPSTREAM_FIELDS),
+        endpoint_label="Responses compact",
+    )
+
+
 def build_responses_input_items_query_params(
     query_params: dict[str, object],
 ) -> dict[str, object]:
@@ -134,7 +153,8 @@ def build_responses_input_items_query_params(
 def _build_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest
     | NormalizedResponsesUpstreamRequest
-    | NormalizedResponsesInputTokensUpstreamRequest,
+    | NormalizedResponsesInputTokensUpstreamRequest
+    | NormalizedResponsesCompactUpstreamRequest,
     *,
     allowed_fields: frozenset[str],
     endpoint_label: str,
@@ -145,6 +165,7 @@ def _build_upstream_body(
             NormalizedChatCompletionUpstreamRequest,
             NormalizedResponsesUpstreamRequest,
             NormalizedResponsesInputTokensUpstreamRequest,
+            NormalizedResponsesCompactUpstreamRequest,
         ),
     ):
         raise TypeError(

@@ -16,6 +16,7 @@ from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
     MODELS_LIST,
     RESPONSES,
+    RESPONSES_COMPACT,
     RESPONSES_DELETE,
     RESPONSES_INPUT_ITEMS,
     RESPONSES_INPUT_TOKENS,
@@ -25,6 +26,7 @@ from slaif_gateway.services.endpoint_policy import (
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
 from slaif_gateway.services.responses_gateway import (
+    handle_response_compact,
     handle_response_create,
     handle_response_delete,
     handle_response_input_tokens_count,
@@ -105,6 +107,23 @@ async def count_response_input_tokens(
     if "request" in inspect.signature(handle_response_input_tokens_count).parameters:
         kwargs["request"] = request
     return await handle_response_input_tokens_count(**kwargs)
+
+
+@router.post("/v1/responses/compact")
+async def compact_response(
+    request: Request,
+    payload: ResponsesCreateRequest,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES_COMPACT)
+    kwargs = {
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_compact).parameters:
+        kwargs["request"] = request
+    return await handle_response_compact(**kwargs)
 
 
 @router.get("/v1/responses/{response_id}")

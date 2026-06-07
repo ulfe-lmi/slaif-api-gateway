@@ -85,10 +85,12 @@ from slaif_gateway.services.responses_route_capabilities import (
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 from slaif_gateway.services.upstream_request_contracts import (
+    normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
 )
 from slaif_gateway.services.upstream_payloads import (
+    build_responses_compact_upstream_body,
     build_responses_input_items_query_params,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
@@ -98,6 +100,8 @@ RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_INPUT_TOKENS_PROVIDER_ENDPOINT = "responses.input_tokens"
+RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
+RESPONSES_COMPACT_PROVIDER_ENDPOINT = "responses.compact"
 RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
 RESPONSES_DELETE_ENDPOINT = "DELETE /v1/responses/{response_id}"
 RESPONSES_INPUT_ITEMS_ENDPOINT = "GET /v1/responses/{response_id}/input_items"
@@ -153,6 +157,27 @@ def _build_safe_responses_input_tokens_upstream_body(
         ) from exc
 
 
+def _build_safe_responses_compact_upstream_body(
+    *,
+    policy_result: ResponsesPolicyResult,
+    upstream_model: str,
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_responses_compact_upstream_request(
+            policy_result.effective_body,
+            requested_model=policy_result.effective_body["model"],
+            upstream_model=upstream_model,
+        )
+        return build_responses_compact_upstream_body(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Request contains fields that are not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
+
+
 def _validate_input_token_count_response(provider_response: ProviderResponse) -> None:
     payload = provider_response.json_body
     if payload.get("object") != "response.input_tokens":
@@ -169,6 +194,24 @@ def _validate_input_token_count_response(provider_response: ProviderResponse) ->
             status_code=502,
             error_type="server_error",
             code="provider_response_invalid",
+        )
+
+
+def _validate_compact_response(provider_response: ProviderResponse) -> None:
+    payload = provider_response.json_body
+    if payload.get("object") != "response.compaction":
+        raise ProviderError(
+            "Provider returned an invalid Responses compact response.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="provider_response_invalid",
+        )
+    if provider_response.usage is None:
+        raise ProviderError(
+            "Provider Responses compact response did not include usage metadata.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="responses_compact_usage_missing",
         )
 
 
@@ -200,6 +243,7 @@ async def handle_response_input_tokens_count(
         input_token_count_requested=True,
         stored_responses_requested=False,
         previous_response_id_requested=False,
+        compact_requested=False,
         request=request,
     )
     upstream_body = _build_safe_responses_input_tokens_upstream_body(
@@ -230,6 +274,124 @@ async def handle_response_input_tokens_count(
     )
 
 
+async def handle_response_compact(
+    *,
+    payload: ResponsesCreateRequest,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+    policy = ResponsesRequestPolicy(settings=settings)
+    try:
+        policy_result = policy.apply_compact(body)
+    except RequestPolicyError as exc:
+        raise openai_error_from_request_policy_error(exc) from exc
+
+    request_id = _request_id_from_request(request)
+    route = await _resolve_responses_route(
+        authenticated_key=authenticated_key,
+        effective_model=policy_result.effective_body["model"],
+        endpoint=RESPONSES_COMPACT_ENDPOINT,
+        streaming_requested=False,
+        text_format_type=None,
+        function_tools_requested=False,
+        custom_tools_requested=False,
+        image_input_requested=False,
+        file_input_requested=False,
+        input_token_count_requested=False,
+        stored_responses_requested=False,
+        previous_response_id_requested=False,
+        compact_requested=True,
+        request=request,
+    )
+    upstream_body = _build_safe_responses_compact_upstream_body(
+        policy_result=policy_result,
+        upstream_model=route.resolved_model,
+    )
+    rate_limit_reservation = await _reserve_redis_rate_limit(
+        authenticated_key=authenticated_key,
+        policy_result=policy_result,
+        request_id=request_id,
+        settings=settings,
+        request=request,
+    )
+    try:
+        cost_estimate, reservation = await _reserve_responses_quota(
+            authenticated_key=authenticated_key,
+            route=route,
+            policy_result=policy_result,
+            request_id=request_id,
+            request=request,
+            endpoint=RESPONSES_COMPACT_ENDPOINT,
+        )
+        provider_request = ProviderRequest(
+            provider=route.provider,
+            upstream_model=route.resolved_model,
+            endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+            body=upstream_body,
+            request_id=request_id,
+        )
+        try:
+            adapter = get_provider_adapter(route, settings)
+            provider_response = await observe_provider_call(
+                provider=route.provider,
+                endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+                call=lambda: adapter.compact_response(provider_request),
+            )
+            _validate_compact_response(provider_response)
+        except ProviderError as exc:
+            await _record_provider_failure_and_release(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                provider_error=exc,
+                request=request,
+                provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+            )
+            raise openai_error_from_provider_error(exc) from exc
+
+        try:
+            accounting_result = await _finalize_successful_response(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                provider_response=provider_response,
+                request_id=request_id,
+                request=request,
+                provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+            )
+            _record_success_metrics(
+                route=route,
+                provider_response=provider_response,
+                accounting_result=accounting_result,
+                provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+            )
+        except AccountingError as exc:
+            increment_accounting_failure(exc.error_code)
+            raise openai_error_from_accounting_error(exc) from exc
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            raise openai_error_from_quota_error(exc) from exc
+
+        response = JSONResponse(
+            status_code=provider_response.status_code,
+            content=dict(provider_response.json_body),
+        )
+    except Exception:
+        if rate_limit_reservation is not None:
+            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+        raise
+
+    await _release_rate_limit_concurrency(rate_limit_reservation, suppress=False)
+    return response
+
+
 async def handle_response_create(
     *,
     payload: ResponsesCreateRequest,
@@ -258,6 +420,7 @@ async def handle_response_create(
         input_token_count_requested=False,
         stored_responses_requested=policy_result.effective_body.get("store") is True,
         previous_response_id_requested=previous_response_id_requested(policy_result.effective_body),
+        compact_requested=False,
         request=request,
     )
     if previous_response_id_requested(policy_result.effective_body):
@@ -543,6 +706,7 @@ async def _resolve_responses_route(
     input_token_count_requested: bool,
     stored_responses_requested: bool,
     previous_response_id_requested: bool,
+    compact_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -575,6 +739,7 @@ async def _resolve_responses_route(
                 input_token_count_requested=input_token_count_requested,
                 stored_responses_requested=stored_responses_requested,
                 previous_response_id_requested=previous_response_id_requested,
+                compact_requested=compact_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -592,6 +757,7 @@ async def _reserve_responses_quota(
     policy_result: ResponsesPolicyResult,
     request_id: str,
     request: Request | None,
+    endpoint: str = RESPONSES_ENDPOINT,
 ) -> tuple[ChatCostEstimate, QuotaReservationResult]:
     session_iterator = _db_session_iterator(request)
     try:
@@ -608,7 +774,7 @@ async def _reserve_responses_quota(
             cost_estimate = await pricing_service.estimate_chat_completion_cost(
                 route=route,
                 policy=policy_result,
-                endpoint=RESPONSES_ENDPOINT,
+                endpoint=endpoint,
             )
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
@@ -624,7 +790,7 @@ async def _reserve_responses_quota(
                 policy=policy_result,
                 cost_estimate=cost_estimate,
                 request_id=request_id,
-                endpoint=RESPONSES_ENDPOINT,
+                endpoint=endpoint,
             )
         except QuotaError as exc:
             increment_quota_rejection(quota_exc_code(exc))
@@ -939,6 +1105,7 @@ async def _record_provider_failure_and_release(
     provider_error: ProviderError,
     request: Request | None,
     streaming: bool = False,
+    provider_endpoint: str = RESPONSES_PROVIDER_ENDPOINT,
 ) -> None:
     session_iterator = _db_session_iterator(request)
     try:
@@ -954,7 +1121,7 @@ async def _record_provider_failure_and_release(
         )
         kwargs = {
             "request_id": request_id,
-            "endpoint": RESPONSES_PROVIDER_ENDPOINT,
+            "endpoint": provider_endpoint,
             "error_type": provider_error.error_code,
             "error_code": provider_error.error_code,
             "status_code": provider_error.upstream_status_code,
@@ -1026,6 +1193,7 @@ async def _finalize_successful_response(
     request: Request | None,
     streaming: bool = False,
     provider_completed_usage_ledger_id: uuid.UUID | None = None,
+    provider_endpoint: str = RESPONSES_PROVIDER_ENDPOINT,
 ) -> FinalizedAccountingResult:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1041,7 +1209,7 @@ async def _finalize_successful_response(
         )
         kwargs = {
             "request_id": request_id,
-            "endpoint": RESPONSES_PROVIDER_ENDPOINT,
+            "endpoint": provider_endpoint,
         }
         if streaming:
             kwargs["streaming"] = True
@@ -1398,6 +1566,7 @@ def _record_success_metrics(
     route: RouteResolutionResult,
     provider_response: ProviderResponse,
     accounting_result: FinalizedAccountingResult,
+    provider_endpoint: str = RESPONSES_PROVIDER_ENDPOINT,
 ) -> None:
     add_tokens(
         provider=route.provider,
@@ -1425,7 +1594,7 @@ def _record_success_metrics(
     if provider_response.status_code >= 400:
         increment_provider_http_error(
             provider=route.provider,
-            endpoint=RESPONSES_PROVIDER_ENDPOINT,
+            endpoint=provider_endpoint,
             upstream_status_code=provider_response.status_code,
         )
 

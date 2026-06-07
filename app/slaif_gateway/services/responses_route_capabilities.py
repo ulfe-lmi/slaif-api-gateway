@@ -20,6 +20,7 @@ RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT = "input_token_count"
 RESPONSES_CAPABILITY_STORED_RESPONSES = "stored_responses"
 RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID = "previous_response_id"
 RESPONSES_CAPABILITY_LIST_INPUT_ITEMS = "list_input_items"
+RESPONSES_CAPABILITY_COMPACT = "compact"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -40,6 +41,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_STORED_RESPONSES,
         RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID,
         RESPONSES_CAPABILITY_LIST_INPUT_ITEMS,
+        RESPONSES_CAPABILITY_COMPACT,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -65,6 +67,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_STORED_RESPONSES: False,
         RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID: False,
         RESPONSES_CAPABILITY_LIST_INPUT_ITEMS: False,
+        RESPONSES_CAPABILITY_COMPACT: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -81,7 +84,7 @@ def ensure_default_responses_capabilities(
     """Add explicit Responses metadata only when creating Responses routes."""
 
     normalized = dict(capabilities or {})
-    if endpoint in {"/v1/responses", "/v1/responses/input_tokens"} and (
+    if endpoint in {"/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"} and (
         RESPONSES_CAPABILITIES_KEY not in normalized
     ):
         normalized[RESPONSES_CAPABILITIES_KEY] = default_responses_capabilities()
@@ -119,6 +122,7 @@ def enforce_responses_route_capabilities(
     stored_responses_requested: bool = False,
     previous_response_id_requested: bool = False,
     list_input_items_requested: bool = False,
+    compact_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -161,6 +165,17 @@ def enforce_responses_route_capabilities(
                 )
             )
 
+    if compact_requested:
+        if capabilities.get(RESPONSES_CAPABILITY_COMPACT) is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_COMPACT,
+                    field="model",
+                    error_code="responses_compact_capability_not_supported",
+                    safe_message="This model route does not support Responses compaction.",
+                )
+            )
+
     if stored_responses_requested:
         if capabilities.get(RESPONSES_CAPABILITY_STORED_RESPONSES) is not True:
             raise ResponsesRouteCapabilityError(
@@ -174,6 +189,7 @@ def enforce_responses_route_capabilities(
     elif (
         not previous_response_id_requested
         and not list_input_items_requested
+        and not compact_requested
         and capabilities.get(RESPONSES_CAPABILITY_STATELESS) is not True
     ):
         raise ResponsesRouteCapabilityError(

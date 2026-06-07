@@ -19,10 +19,15 @@ checks. Input-item listing is supported only for owned locally recorded
 provider response references and is proxied without local input-item content
 storage.
 `POST /v1/responses/input_tokens` is implemented as a separate
-provider-reported count endpoint for the same local input subset. It has no
-hosted tools, MCP/connectors, background mode, conversation state, `/v1/files`
-lifecycle, audio input, audio output, image generation, file
-search, cancel/response-list routes, or multimodal output.
+provider-reported count endpoint for the same local input subset.
+`POST /v1/responses/compact` is implemented as a bounded non-streaming
+text-focused compaction endpoint with explicit endpoint permission, route
+capability, endpoint-specific pricing, quota reservation, and provider-usage
+finalization. These slices have no hosted tools, MCP/connectors, background
+mode, conversation state, `/v1/files` lifecycle, audio input, audio output,
+image generation, file search, cancel/response-list routes, or multimodal
+output. SLAIF does not store compact input, output, or encrypted compaction
+content.
 
 ## Supported Endpoint
 
@@ -30,6 +35,7 @@ The first implemented endpoint is:
 
 - `POST /v1/responses`
 - `POST /v1/responses/input_tokens`
+- `POST /v1/responses/compact`
 - `GET /v1/responses/{response_id}`
 - `DELETE /v1/responses/{response_id}`
 - `GET /v1/responses/{response_id}/input_items`
@@ -87,6 +93,19 @@ The input-token count endpoint does not create a Response, does not inject
 `store=false`, does not inject or require `max_output_tokens`, does not reserve
 generation quota, and does not create a normal generation usage ledger row. It
 is a provider-reported metadata call for admission/planning compatibility.
+
+`POST /v1/responses/compact` accepts a deliberately narrower text-focused
+subset: `model`, required `input`, and optional `instructions`. The compact
+input may be a non-empty string or a message item array with string content or
+`input_text`/`output_text` content parts. Message `id`, `type=message`, and
+bounded status metadata are preserved as inert provider payload fields when
+supplied. Compact rejects `stream`, `store`, `background`, `conversation`,
+`previous_response_id`, tools, hosted-tool fields, media/file/audio inputs,
+file IDs, and unknown fields. It routes through `/v1/responses/compact`,
+requires `capabilities.responses.compact=true`, uses endpoint-specific pricing,
+reserves quota with `RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS`, and
+finalizes from provider usage. Provider compact responses without usage fail
+safely and are not finalized as zero-cost success.
 
 Structured text output is a text-output constraint, not a tool or hosted
 provider-side authority. JSON object mode uses
@@ -239,7 +258,8 @@ Still unsupported:
 - conversation/provider-side state
 - MCP/connectors
 - streaming `previous_response_id`
-- response cancel, compact, or response listing
+- `previous_response_id` on compact
+- response cancel or response listing
 
 OpenAI documents Responses as supporting background mode, response storage,
 conversation state, previous response IDs, and hosted tools. OpenRouter documents
@@ -404,14 +424,16 @@ For `/v1/responses`, a template revision may carry
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
 `input_token_count`, `stored_responses`, `previous_response_id`,
-`list_input_items`), allowed local
+`list_input_items`, `compact`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
-`previous_response_id`, and `list_input_items` are only safe capability
+`previous_response_id`, `list_input_items`, and `compact` are only safe
+capability
 summaries for non-streaming stored create, owned retrieve/delete/input-item
-listing, and owned previous-response chaining; they do not permit raw response
-IDs from user traffic, prompts, completions, input items, or response content in
-template metadata. Template-to-key creation copies that
+listing, owned previous-response chaining, and bounded text-focused compact;
+they do not permit raw response IDs from user traffic, prompts, completions,
+input items, compact input/output, encrypted compaction content, or response
+content in template metadata. Template-to-key creation copies that
 sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
 conversation state, background, raw image URLs/data, raw file URLs/names/data/base64,
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain

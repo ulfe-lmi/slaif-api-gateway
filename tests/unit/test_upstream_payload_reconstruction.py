@@ -7,6 +7,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.services.upstream_request_contracts import (
     normalize_chat_completion_upstream_request,
+    normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
 )
@@ -16,6 +17,7 @@ from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.upstream_payloads import (
     build_chat_completion_upstream_body,
+    build_responses_compact_upstream_body,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
 )
@@ -81,6 +83,19 @@ def _normalize_responses_input_tokens_body(
 ):
     policy_result = ResponsesRequestPolicy(_settings()).apply_input_token_count(body)
     return normalize_responses_input_tokens_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model=resolved_model,
+    )
+
+
+def _normalize_responses_compact_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "gpt-5.2",
+):
+    policy_result = ResponsesRequestPolicy(_settings()).apply_compact(body)
+    return normalize_responses_compact_upstream_request(
         policy_result.effective_body,
         requested_model=policy_result.effective_body["model"],
         upstream_model=resolved_model,
@@ -492,6 +507,63 @@ def test_responses_input_token_count_text_request_reconstructs_exact_upstream_bo
     assert inbound == original
     assert "store" not in outbound
     assert "max_output_tokens" not in outbound
+
+
+def test_responses_compact_string_input_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-alias",
+        "input": "Compact this transcript.",
+        "instructions": "Preserve decisions.",
+    }
+
+    normalized_request = _normalize_responses_compact_body(inbound)
+    outbound = build_responses_compact_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "Compact this transcript.",
+        "instructions": "Preserve decisions.",
+    }
+    assert "max_output_tokens" not in outbound
+    assert "stream" not in outbound
+
+
+def test_responses_compact_item_array_reconstructs_exact_upstream_body_and_deep_copies() -> None:
+    inbound = {
+        "model": "classroom-alias",
+        "input": [
+            {"role": "user", "content": "Create a simple landing page."},
+            {
+                "id": "msg_001",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Previous output."}],
+            },
+        ],
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_responses_compact_body(inbound)
+    inbound["input"][1]["content"][0]["text"] = "mutated"  # type: ignore[index]
+    outbound = build_responses_compact_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {"role": "user", "content": "Create a simple landing page."},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Previous output."}],
+                "type": "message",
+                "id": "msg_001",
+                "status": "completed",
+            },
+        ],
+    }
+    rebuilt = build_responses_compact_upstream_body(normalized_request)
+    assert rebuilt == outbound
+    assert inbound != original
 
 
 def test_responses_input_token_count_item_array_and_tools_reconstruct_exact_body() -> None:

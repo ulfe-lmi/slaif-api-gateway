@@ -425,7 +425,10 @@ non-streaming JSON, typed SSE streaming, non-streaming local function tools,
 non-streaming local custom tools, non-streaming stored-response create, and
 non-streaming owned `previous_response_id`.
 `POST /v1/responses/input_tokens` is a separate provider-reported count
-endpoint for the same local input subset. `GET` and
+endpoint for the same local input subset. `POST /v1/responses/compact` is a
+bounded non-streaming text-focused compaction endpoint with endpoint-specific
+permission, route capability, pricing, quota reservation, and provider usage
+finalization. `GET` and
 `DELETE /v1/responses/{response_id}` plus
 `GET /v1/responses/{response_id}/input_items` are ownership-checked proxy calls
 for provider-stored Responses references. It is default-off and policy-first:
@@ -458,6 +461,15 @@ for provider-stored Responses references. It is default-off and policy-first:
   Response, does not inject output-token defaults, does not reserve generation
   quota, and does not create a normal generation usage ledger row. Payload
   storage and logging prohibitions are the same as generation requests.
+- Compact requires explicit `/v1/responses/compact` endpoint permission,
+  endpoint-specific routing/pricing, and
+  `capabilities.responses.compact=true`. It is non-streaming and
+  text-focused in this slice, rejects storage/background/conversation,
+  `previous_response_id`, tools, hosted markers, media/file/audio inputs, file
+  IDs, and unknown fields, reserves quota with compact output caps, and
+  finalizes from provider usage. Provider compact responses without usage fail
+  safely instead of becoming zero-cost successes. SLAIF does not store or log
+  compact input, compact output, encrypted compaction content, or raw bodies.
 - Stored create requires explicit `capabilities.responses.stored_responses=true`
   and must be non-streaming. SLAIF stores only safe provider response reference
   metadata after successful provider create responses with IDs. Retrieve/delete
@@ -482,9 +494,9 @@ for provider-stored Responses references. It is default-off and policy-first:
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
 - `background`, conversation/provider-side state beyond owned
-  `previous_response_id`, cancel, compact, and response listing are excluded
-  until ownership mapping, quota, accounting, and audit behavior are
-  implemented.
+  `previous_response_id`, cancel, response listing, and compact
+  `previous_response_id` are excluded until ownership mapping, quota,
+  accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
 - Tool-enabled policies, when implemented later, require bounded-overrun cost
   calculations that admins can inspect before enabling the policy.
@@ -804,7 +816,8 @@ never recover or send old plaintext keys.
   URL/data URL image input, URL/data URL file input, typed SSE streaming for
   stateless requests, non-streaming local function/custom tools, non-streaming
   stored create, owned previous-response chaining, owned retrieve/delete, and
-  owned input-item listing through safe response-reference metadata; hosted
+  owned input-item listing through safe response-reference metadata, plus
+  bounded non-streaming text-focused compact; hosted
   Responses tools, conversation lifecycle, background mode, cancel/list routes,
   file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal

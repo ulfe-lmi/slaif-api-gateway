@@ -209,6 +209,125 @@ def test_input_token_count_rejects_invalid_parallel_tool_calls_and_truncation() 
     assert truncation_exc.value.error_code == "responses_field_value_not_supported"
 
 
+def test_compact_accepts_string_input_with_bounded_output_reservation() -> None:
+    result = ResponsesRequestPolicy(
+        Settings(RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=111)
+    ).apply_compact(
+        {
+            "model": "gpt-5.2",
+            "input": "Compact this transcript.",
+            "instructions": "Preserve decisions.",
+        }
+    )
+
+    assert result.effective_body == {
+        "model": "gpt-5.2",
+        "input": "Compact this transcript.",
+        "instructions": "Preserve decisions.",
+    }
+    assert result.effective_output_tokens == 111
+    assert result.requested_output_tokens == 111
+    assert result.injected_default_output_tokens is True
+    assert result.estimated_input_tokens > 0
+
+
+def test_compact_accepts_text_focused_item_array() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        {
+            "model": "gpt-5.2",
+            "input": [
+                {"role": "user", "content": "Create a landing page."},
+                {
+                    "id": "msg_001",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Previous output."},
+                        {"type": "input_text", "text": "Additional instruction."},
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert result.effective_body["input"] == [
+        {"role": "user", "content": "Create a landing page."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "Previous output."},
+                {"type": "input_text", "text": "Additional instruction."},
+            ],
+            "type": "message",
+            "id": "msg_001",
+            "status": "completed",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("stream", True),
+        ("store", False),
+        ("background", True),
+        ("conversation", "conv_123"),
+        ("previous_response_id", "resp_123"),
+        ("max_output_tokens", 10),
+        ("tools", [{"type": "function", "name": "lookup", "parameters": {}}]),
+        ("tool_choice", "auto"),
+        ("file_id", "file_123"),
+    ],
+)
+def test_compact_rejects_create_stateful_tools_and_file_fields(field: str, value: object) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            {
+                "model": "gpt-5.2",
+                "input": "hello",
+                field: value,
+            }
+        )
+
+    assert exc_info.value.param == field
+
+
+def test_compact_requires_model_and_input() -> None:
+    with pytest.raises(RequestPolicyError) as model_exc:
+        ResponsesRequestPolicy(Settings()).apply_compact({"input": "hello"})
+    assert model_exc.value.param == "model"
+
+    with pytest.raises(RequestPolicyError) as input_exc:
+        ResponsesRequestPolicy(Settings()).apply_compact({"model": "gpt-5.2"})
+    assert input_exc.value.error_code == "responses_compact_input_required"
+    assert input_exc.value.param == "input"
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "input_image", "image_url": "https://example.test/image.png"},
+        {"type": "input_file", "file_url": "https://example.test/file.pdf"},
+        {"type": "tool_call", "text": "no"},
+        {"type": "output_text", "text": "hello", "annotations": []},
+    ],
+)
+def test_compact_rejects_non_text_or_extra_content_parts(part: dict[str, object]) -> None:
+    with pytest.raises(RequestPolicyError):
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            {
+                "model": "gpt-5.2",
+                "input": [
+                    {
+                        "role": "assistant",
+                        "content": [part],
+                    }
+                ],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [

@@ -218,6 +218,8 @@ class Settings(BaseSettings):
     RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES: int = 52428800
     RESPONSES_MAX_FILE_NAME_BYTES: int = 255
     RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES: int = 256
+    RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS: int = 12000
+    RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS: int = 24000
     RESPONSES_ALLOWED_FILE_MIME_TYPES: str = (
         "application/pdf,text/plain,text/markdown,text/csv,application/json,"
         "text/html,text/xml,application/xml"
@@ -487,11 +489,18 @@ class Settings(BaseSettings):
             "RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES",
             "RESPONSES_MAX_FILE_NAME_BYTES",
             "RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES",
+            "RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS",
+            "RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
+        if self.RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS > self.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS:
+            raise ValueError(
+                "RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS must be <= "
+                "RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS"
+            )
         if self.CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER <= 0:
             raise ValueError("CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
         if self.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:
