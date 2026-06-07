@@ -217,8 +217,8 @@
     </div>
   </section>
 
-  <section class="action-panel" aria-labelledby="key-chat-streaming-live-burn-heading">
-    <h2 id="key-chat-streaming-live-burn-heading">Chat Completions streaming live-burn monitoring</h2>
+  <section class="action-panel" aria-labelledby="key-chat-streaming-live-burn-heading" data-streaming-live-burn-surface>
+    <h2 id="key-chat-streaming-live-burn-heading">{{ chat_live_burn_surface.display_title }}</h2>
     <p class="muted">This updates only the per-key Chat Completions streaming live-burn policy. PostgreSQL hard quota limits remain independent and authoritative.</p>
     <div class="management-grid">
       <div class="action-card">
@@ -235,27 +235,30 @@
       </div>
       <div class="action-card">
         <h3>Update Policy</h3>
-        <form method="post" action="/admin/keys/{{ key.id }}/chat-streaming-live-burn">
+        <form method="post" action="/admin/keys/{{ key.id }}{{ chat_live_burn_surface.update_route_path }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="checkbox-row">
-            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="chat_streaming_live_burn_enabled" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %}>
+            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %} data-streaming-live-burn-enabled>
             Enable live-burn monitoring for Chat Completions streaming
           </label>
-          <div id="detail-chat-streaming-live-burn-fields" class="form-grid">
+          <div id="detail-chat-streaming-live-burn-fields" class="form-grid{% if not key.chat_streaming_live_burn_policy.enabled %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
             <label>
               Cost margin (EUR)
-              <input name="chat_streaming_live_burn_cost_margin_eur" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}" inputmode="decimal" autocomplete="off">
+              <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
             <label>
               Output token margin
-              <input name="chat_streaming_live_burn_token_margin" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off">
+              <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
           </div>
           <label>
             Audit reason
             <input name="reason" required autocomplete="off" placeholder="Required reason">
           </label>
-          <p id="detail-chat-streaming-live-burn-hint" class="muted small">Applies only to <code>/v1/chat/completions</code> with <code>stream=true</code>. Margins are ignored while monitoring is off.</p>
+          <p id="detail-chat-streaming-live-burn-hint" class="muted small">
+            {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
+            Margins are ignored while monitoring is off.
+          </p>
           <button type="submit">Update Chat streaming live-burn policy</button>
         </form>
       </div>
@@ -506,19 +509,5 @@
     </div>
   </section>
 </section>
-<script>
-  (() => {
-    const checkbox = document.getElementById("detail-chat-streaming-live-burn-enabled");
-    const fields = document.getElementById("detail-chat-streaming-live-burn-fields");
-    if (!checkbox || !fields) return;
-    const inputs = Array.from(fields.querySelectorAll("input"));
-    const sync = () => {
-      const enabled = checkbox.checked;
-      fields.style.opacity = enabled ? "1" : "0.55";
-      for (const input of inputs) input.disabled = !enabled;
-    };
-    checkbox.addEventListener("change", sync);
-    sync();
-  })();
-</script>
+<script src="/admin/static/js/streaming-live-burn.js"></script>
 {% endblock %}

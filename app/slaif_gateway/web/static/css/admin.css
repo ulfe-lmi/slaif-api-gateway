@@ -440,6 +440,16 @@ td a {
   align-items: start;
 }
 
+.live-burn-fields-disabled {
+  opacity: 0.55;
+}
+
+.live-burn-fields-disabled input {
+  cursor: not-allowed;
+  background: #f2f4f7;
+  color: var(--muted);
+}
+
 .action-card {
   border: 1px solid var(--border);
   border-radius: 8px;

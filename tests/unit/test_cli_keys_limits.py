@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,6 +18,7 @@ from slaif_gateway.schemas.keys import (
 )
 
 runner = CliRunner()
+HELP_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
 
 GATEWAY_KEY_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 ADMIN_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
@@ -124,6 +126,24 @@ def test_set_limits_rejects_negative_values() -> None:
     )
 
     assert result.exit_code != 0
+
+
+def test_set_chat_streaming_live_burn_help_is_chat_scoped() -> None:
+    result = runner.invoke(
+        app,
+        ["keys", "set-chat-streaming-live-burn", "--help"],
+        env=HELP_ENV,
+    )
+    source = inspect.getsource(keys_cli.set_chat_streaming_live_burn)
+
+    assert result.exit_code == 0
+    assert "--enabled/--disabled" in source
+    assert "--cost-margin-eur" in source
+    assert "--token-margin" in source
+    assert "--reason" in source
+    assert "/v1/chat/completions stream=true" in source
+    assert "negative margins allow" in source
+    assert "bounded estimated overrun" in source
 
 
 def test_set_chat_streaming_live_burn_persists_policy(monkeypatch) -> None:

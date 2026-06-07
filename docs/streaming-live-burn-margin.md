@@ -680,7 +680,8 @@ zero token margin
 
 ### 12.1 Admin key create/edit/detail
 
-Operator surfaces should show and edit:
+Implemented Chat operator surfaces show and edit the per-key policy on
+`/admin/keys/create` and `/admin/keys/{gateway_key_id}`:
 
 ```text
 Streaming live-burn monitoring: enabled/disabled
@@ -688,27 +689,60 @@ Cost margin, EUR: decimal, can be positive, zero, or negative
 Output token margin: integer, can be positive, zero, or negative
 ```
 
-Help text:
+The create-result page displays a safe summary of the created key's Chat
+live-burn policy. The dense key list does not add a separate live-burn column;
+operators use the key detail page for the editable policy.
+
+Help text must remain explicit:
 
 ```text
+Applies only to /v1/chat/completions with stream=true.
 Positive margin stops streams early before the key reaches quota.
 Zero margin stops near the estimated quota boundary.
 Negative margin allows bounded estimated overrun; the key may finish with a negative remaining balance.
 Final provider usage remains authoritative.
+Live estimates are provisional, not invoice-grade.
 ```
+
+When monitoring is disabled, the Admin form visibly greys and disables only the
+Chat live-burn margin fields. PostgreSQL hard quota fields and Redis
+rate-limit fields remain independent and editable through their own forms.
+Server-side parsing must treat absent disabled margin fields safely and must not
+depend on browser JavaScript.
 
 ### 12.2 CLI shape
 
 Implemented CLI operations include:
 
 ```text
-create key with live-burn policy
-update key live-burn policy
-disable live-burn monitoring for a key
-show effective live-burn policy in key detail/list output
+slaif-gateway keys create \
+  --chat-streaming-live-burn-enabled / --no-chat-streaming-live-burn \
+  --chat-streaming-live-burn-cost-margin-eur <decimal> \
+  --chat-streaming-live-burn-token-margin <integer>
+
+slaif-gateway keys set-chat-streaming-live-burn <key-id> \
+  --enabled / --disabled \
+  --cost-margin-eur <decimal> \
+  --token-margin <integer> \
+  --reason "..."
 ```
 
-CLI output must remain secret-safe.
+CLI output must remain secret-safe. The update command is audited and uses the
+same service-layer validation as the dashboard.
+
+### 12.2.1 Reusable surface pattern
+
+Admin and CLI labels, field names, route suffixes, and help text are described
+through a reusable streaming live-burn surface spec. The only active registered
+surface is Chat Completions streaming:
+
+```text
+metadata_key = chat_streaming_live_burn
+scope = /v1/chat/completions stream=true
+```
+
+Additional endpoint streaming live-burn surfaces can register another spec
+later, but this implementation exposes and persists only the Chat policy.
 
 ### 12.3 Templates
 

@@ -222,8 +222,38 @@ def test_key_detail_renders_chat_streaming_live_burn_form(monkeypatch) -> None:
     assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
     assert "PostgreSQL hard quota limits remain independent and authoritative" in html
     assert "Margins are ignored while monitoring is off" in html
+    assert "Live estimates are provisional, not invoice-grade" in html
     assert "detail-chat-streaming-live-burn-fields" in html
-    assert "input.disabled = !enabled" in html
+    assert "data-streaming-live-burn-surface" in html
+    assert 'src="/admin/static/js/streaming-live-burn.js"' in html
+    assert "https://cdn" not in html.lower()
+    assert "react" not in html.lower()
+    assert "vue" not in html.lower()
+
+
+def test_key_detail_renders_disabled_chat_live_burn_fields(monkeypatch) -> None:
+    key = replace(
+        _detail(),
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": False,
+            "cost_margin_eur": "-0.250000000",
+            "token_margin": -250,
+        },
+        chat_streaming_live_burn_policy_summary=(
+            "Chat live-burn: off (margins ignored), cost margin EUR -0.250000000, "
+            "token margin -250"
+        ),
+    )
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert 'name="chat_streaming_live_burn_enabled" value="true" checked' not in html
+    assert "live-burn-fields-disabled" in html
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="-0.250000000" inputmode="decimal" autocomplete="off" disabled' in html
+    assert 'name="chat_streaming_live_burn_token_margin" value="-250" inputmode="numeric" autocomplete="off" disabled' in html
 
 
 def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:

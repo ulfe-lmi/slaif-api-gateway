@@ -63,6 +63,10 @@ from slaif_gateway.services.key_template_service import (
     KeyTemplateError,
     KeyTemplateService,
 )
+from slaif_gateway.services.streaming_live_burn_surface import (
+    CHAT_STREAMING_LIVE_BURN_SURFACE,
+    streaming_live_burn_surface_policy_from_cli_options,
+)
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
@@ -292,15 +296,11 @@ def _chat_streaming_live_burn_policy_from_options(
     token_margin: int | None,
 ) -> dict[str, object]:
     try:
-        return normalize_chat_streaming_live_burn_policy(
-            {
-                "version": 1,
-                "enabled": enabled,
-                "cost_margin_eur": (
-                    "0.000000000" if cost_margin_eur is None else cost_margin_eur
-                ),
-                "token_margin": 0 if token_margin is None else token_margin,
-            },
+        return streaming_live_burn_surface_policy_from_cli_options(
+            CHAT_STREAMING_LIVE_BURN_SURFACE,
+            enabled=enabled,
+            cost_margin_eur=cost_margin_eur,
+            token_margin=token_margin,
             max_abs_cost_margin_eur=Decimal("1000000"),
             max_abs_token_margin=1000000000,
         ).to_metadata()
@@ -1179,21 +1179,30 @@ def create(
         bool,
         typer.Option(
             "--chat-streaming-live-burn-enabled/--no-chat-streaming-live-burn",
-            help="Enable Chat Completions streaming live-burn monitoring",
+            help=(
+                "Enable Chat Completions streaming live-burn monitoring for "
+                "/v1/chat/completions stream=true"
+            ),
         ),
     ] = True,
     chat_streaming_live_burn_cost_margin_eur: Annotated[
         str | None,
         typer.Option(
             "--chat-streaming-live-burn-cost-margin-eur",
-            help="Chat streaming live-burn cost margin in EUR; may be negative",
+            help=(
+                "Chat streaming live-burn cost margin in EUR; positive stops early, "
+                "zero stops near the boundary, negative allows bounded overrun"
+            ),
         ),
     ] = None,
     chat_streaming_live_burn_token_margin: Annotated[
         int | None,
         typer.Option(
             "--chat-streaming-live-burn-token-margin",
-            help="Chat streaming live-burn output token margin; may be negative",
+            help=(
+                "Chat streaming live-burn output token margin; positive stops early, "
+                "zero stops near the boundary, negative allows bounded overrun"
+            ),
         ),
     ] = None,
     actor_admin_id: Annotated[
@@ -1232,7 +1241,14 @@ def create(
         ),
     ] = False,
 ) -> None:
-    """Create a gateway key and print the plaintext key once."""
+    """Create a gateway key and print the plaintext key once.
+
+    Chat streaming live-burn applies only to /v1/chat/completions stream=true.
+    Chat streaming live-burn flags:
+    --chat-streaming-live-burn-enabled / --no-chat-streaming-live-burn,
+    --chat-streaming-live-burn-cost-margin-eur, and
+    --chat-streaming-live-burn-token-margin.
+    """
     try:
         _validate_secret_output_options(
             json_output=json_output,
@@ -1970,16 +1986,31 @@ def set_chat_streaming_live_burn(
         bool | None,
         typer.Option(
             "--enabled/--disabled",
-            help="Enable or disable Chat Completions streaming live-burn monitoring",
+            help=(
+                "Enable or disable Chat Completions streaming live-burn monitoring "
+                "for /v1/chat/completions stream=true"
+            ),
         ),
     ] = None,
     cost_margin_eur: Annotated[
         str | None,
-        typer.Option("--cost-margin-eur", help="Cost margin in EUR; may be negative"),
+        typer.Option(
+            "--cost-margin-eur",
+            help=(
+                "Cost margin in EUR; positive stops early, zero stops near the boundary, "
+                "negative allows bounded overrun"
+            ),
+        ),
     ] = None,
     token_margin: Annotated[
         int | None,
-        typer.Option("--token-margin", help="Output token margin; may be negative"),
+        typer.Option(
+            "--token-margin",
+            help=(
+                "Output token margin; positive stops early, zero stops near the boundary, "
+                "negative allows bounded overrun"
+            ),
+        ),
     ] = None,
     actor_admin_id: Annotated[
         str | None,
@@ -1988,7 +2019,12 @@ def set_chat_streaming_live_burn(
     reason: Annotated[str | None, typer.Option("--reason", help="Required audit reason")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Set Chat Completions streaming live-burn policy for a gateway key."""
+    """Set Chat Completions streaming live-burn policy for a gateway key.
+
+    Applies only to /v1/chat/completions stream=true. Positive margins stop
+    early, zero margins stop near the boundary, and negative margins allow
+    bounded estimated overrun.
+    """
     if enabled is None and cost_margin_eur is None and token_margin is None:
         raise typer.BadParameter("Provide --enabled/--disabled or at least one margin option")
     if not reason or not reason.strip():

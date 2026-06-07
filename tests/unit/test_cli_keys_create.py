@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import uuid
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from slaif_gateway.services.key_modes import (
 )
 
 runner = CliRunner()
+HELP_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
 
 OWNER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 COHORT_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -68,6 +70,19 @@ def test_keys_help_registers_commands() -> None:
         "rotate",
     ):
         assert command in result.stdout
+
+
+def test_keys_create_help_documents_chat_live_burn_flags() -> None:
+    result = runner.invoke(app, ["keys", "create", "--help"], env=HELP_ENV)
+    source = inspect.getsource(keys_cli.create)
+
+    assert result.exit_code == 0
+    assert "--chat-streaming-live-burn-enabled/--no-chat-streaming-live-burn" in source
+    assert "--chat-streaming-live-burn-cost-margin-eur" in source
+    assert "--chat-streaming-live-burn-token-margin" in source
+    assert "/v1/chat/completions stream=true" in source
+    assert "negative allows" in source
+    assert "bounded overrun" in source
 
 
 def test_keys_create_prints_plaintext_key_once(monkeypatch) -> None:
