@@ -168,18 +168,21 @@ revision may summarize only these implemented stateless local capabilities:
 - `function_tools`
 - `custom_tools`
 - `image_input`
+- `file_input`
 
 Allowed local tool types are limited to `function` and `custom`. The policy
 summary must keep `hosted_tools_allowed` empty and must set `stateful`,
 `storage`, `background`, and multimodal-output claims to `false`. Hosted
 web/file search, code interpreter, shell, `apply_patch`, local environments,
 skills, MCP or connectors, computer use, image generation, tool search,
-provider-side storage, background mode, stateful lifecycle, file/audio input,
-audio output, and multimodal Responses output remain future work and are
+provider-side storage, background mode, stateful lifecycle, `/v1/files`,
+file search/retrieval tools, audio input, audio output, and multimodal
+Responses output remain future work and are
 rejected for template-created keys. The summary is operator provenance metadata
-only; it must not contain raw image URLs, image data URLs, tool definitions,
-JSON schemas, grammar definitions, model-generated tool input, tool outputs,
-prompts, completions, raw request bodies, or raw response bodies.
+only; it must not contain raw image URLs, image data URLs, file URLs,
+filenames, file data URLs, base64 payloads, tool definitions, JSON schemas,
+grammar definitions, model-generated tool input, tool outputs, prompts,
+completions, raw request bodies, or raw response bodies.
 
 When a key is created from a safe Responses template revision, the created
 standard key stores the sanitized `responses_policy` summary in key metadata for

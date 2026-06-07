@@ -208,6 +208,16 @@ class Settings(BaseSettings):
     RESPONSES_MAX_IMAGE_DATA_URL_BYTES: int = 20971520
     RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES: int = 41943040
     RESPONSES_ALLOWED_IMAGE_MIME_TYPES: str = "image/png,image/jpeg,image/webp,image/gif"
+    RESPONSES_MAX_FILE_PARTS_PER_REQUEST: int = 8
+    RESPONSES_MAX_FILE_URL_BYTES: int = 4096
+    RESPONSES_MAX_FILE_DATA_URL_BYTES: int = 26214400
+    RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES: int = 52428800
+    RESPONSES_MAX_FILE_NAME_BYTES: int = 255
+    RESPONSES_ALLOWED_FILE_MIME_TYPES: str = (
+        "application/pdf,text/plain,text/markdown,text/csv,application/json,"
+        "text/html,text/xml,application/xml"
+    )
+    RESPONSES_ALLOWED_FILE_EXTENSIONS: str = ".pdf,.txt,.md,.csv,.json,.html,.xml"
     CALIBRATION_KEYS_ENABLED: bool = True
     TRUSTED_CALIBRATION_MAX_REQUESTS: int = 10
     TRUSTED_CALIBRATION_MAX_VALID_DAYS: int = 7
@@ -465,6 +475,11 @@ class Settings(BaseSettings):
             "RESPONSES_MAX_IMAGE_URL_BYTES",
             "RESPONSES_MAX_IMAGE_DATA_URL_BYTES",
             "RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES",
+            "RESPONSES_MAX_FILE_PARTS_PER_REQUEST",
+            "RESPONSES_MAX_FILE_URL_BYTES",
+            "RESPONSES_MAX_FILE_DATA_URL_BYTES",
+            "RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES",
+            "RESPONSES_MAX_FILE_NAME_BYTES",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")

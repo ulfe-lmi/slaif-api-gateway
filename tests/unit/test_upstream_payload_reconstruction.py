@@ -635,6 +635,87 @@ def test_responses_image_data_url_input_reconstructs_exact_upstream_body_with_om
     assert "detail" not in outbound["input"][0]["content"][1]
 
 
+def test_responses_file_url_input_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "summarize this"},
+                    {
+                        "type": "input_file",
+                        "file_url": "https://example.test/document.pdf",
+                    },
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "summarize this"},
+                    {
+                        "type": "input_file",
+                        "file_url": "https://example.test/document.pdf",
+                    },
+                ],
+            }
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+
+
+def test_responses_file_data_input_reconstructs_exact_upstream_body() -> None:
+    file_data = "data:application/pdf;base64,aGVsbG8="
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "summarize this"},
+                    {
+                        "type": "input_file",
+                        "filename": "document.pdf",
+                        "file_data": file_data,
+                    },
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "summarize this"},
+                    {
+                        "type": "input_file",
+                        "filename": "document.pdf",
+                        "file_data": file_data,
+                    },
+                ],
+            }
+        ],
+        "max_output_tokens": 12,
+        "store": False,
+    }
+
+
 def test_responses_function_tools_request_reconstructs_exact_upstream_body() -> None:
     schema = {
         "type": "object",
@@ -989,6 +1070,37 @@ def test_responses_image_input_deep_copy_isolation() -> None:
     outbound["input"][0]["content"][1]["image_url"] = "https://example.test/outbound.png"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["input"][0]["content"][1]["image_url"] == "data:image/png;base64,b3JpZw=="
+
+
+def test_responses_file_input_deep_copy_isolation() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "original"},
+                    {
+                        "type": "input_file",
+                        "filename": "document.pdf",
+                        "file_data": "data:application/pdf;base64,b3JpZw==",
+                    },
+                ],
+            }
+        ],
+    }
+
+    normalized_request = _normalize_responses_body(inbound)
+    inbound["input"][0]["content"][1]["filename"] = "changed.pdf"
+    inbound["input"][0]["content"][1]["file_data"] = "data:application/pdf;base64,Q0hBTkdFRA=="
+
+    outbound = build_responses_upstream_body(normalized_request)
+    assert outbound["input"][0]["content"][1]["filename"] == "document.pdf"
+    assert outbound["input"][0]["content"][1]["file_data"] == "data:application/pdf;base64,b3JpZw=="
+
+    outbound["input"][0]["content"][1]["file_data"] = "data:application/pdf;base64,T1VU"
+    rebuilt = build_responses_upstream_body(normalized_request)
+    assert rebuilt["input"][0]["content"][1]["file_data"] == "data:application/pdf;base64,b3JpZw=="
 
 
 def test_responses_function_tool_schema_deep_copy_isolation() -> None:

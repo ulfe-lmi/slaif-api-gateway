@@ -120,14 +120,16 @@ migrations automatically.
   through OpenRouter's OpenAI-compatible interface.
 - Responses API support is limited to stateless text-output
   `POST /v1/responses` with string input, bounded input item arrays,
-  route-enabled user-message URL/data URL image input, non-streaming JSON,
-  typed SSE streaming, non-streaming structured `text.format` JSON
-  object/schema output, plus non-streaming local function and custom tools,
-  explicit key endpoint permission, route capability, provider route, and
-  pricing metadata. Hosted/provider-side Responses tools,
+  route-enabled user-message URL/data URL image input, route-enabled
+  user-message URL/data URL file input, non-streaming JSON, typed SSE
+  streaming, non-streaming structured `text.format` JSON object/schema output,
+  plus non-streaming local function and custom tools, explicit key endpoint
+  permission, route capability, provider route, and pricing metadata.
+  Hosted/provider-side Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,
-  `input_image.file_id`, file/audio input, image generation, multimodal output,
-  and MCP/connectors remain future work. Current Chat
+  `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
+  search/retrieval tools, audio input, image generation, multimodal output, and
+  MCP/connectors remain future work. Current Chat
   Completions usage profiling and trusted calibration keys, available from CLI
   and admin web creation, provide safe calibration-foundation metadata. Admins
   can now preview calibration usage summaries and strict participant-policy

@@ -401,9 +401,9 @@ Completions hardening only; it does not implement Responses API behavior.
 
 Responses API support is limited to stateless text-output `POST /v1/responses`
 with string input or bounded input item arrays, route-enabled user-message
-image URL/data URL input, non-streaming JSON, typed SSE streaming,
-non-streaming local function tools, and non-streaming local custom tools. It is default-off and
-policy-first:
+image URL/data URL input, route-enabled user-message file URL/data URL input,
+non-streaming JSON, typed SSE streaming, non-streaming local function tools,
+and non-streaming local custom tools. It is default-off and policy-first:
 
 - Responses must be explicitly enabled per key through the `/v1/responses`
   endpoint allowlist.
@@ -421,6 +421,11 @@ policy-first:
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
+- File input requires explicit Responses file-input route capability; it does
+  not enable `/v1/files`, file IDs, provider-side uploads, file search,
+  retrieval tools, Office/spreadsheet formats outside the configured allowlist,
+  audio input/output, hosted tools, or stateful Responses. SLAIF does not fetch
+  file URLs, parse, OCR, index, extract text from, store, or log file payloads.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented stateless local subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
@@ -744,10 +749,11 @@ never recover or send old plaintext keys.
   or allowlisted.
 - Native Anthropic API support is not implemented.
 - Responses API support is limited to stateless text-output
-  `POST /v1/responses` with URL/data URL image input, typed SSE streaming,
-  non-streaming local function tools, and non-streaming local custom tools;
-  hosted Responses tools, stateful lifecycle routes, file/audio input,
-  image generation, and multimodal Responses output remain future work under
+  `POST /v1/responses` with URL/data URL image input, URL/data URL file input,
+  typed SSE streaming, non-streaming local function tools, and non-streaming
+  local custom tools; hosted Responses tools, stateful lifecycle routes, file
+  IDs, `/v1/files`, file search/retrieval tools, audio input/output, image
+  generation, and multimodal Responses output remain future work under
   `docs/responses-compatibility.md`. Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
