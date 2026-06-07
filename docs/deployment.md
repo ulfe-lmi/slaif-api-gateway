@@ -261,6 +261,13 @@ proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
+The planned Streaming Live-Burn Margin milestone in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) is not active
+deployment behavior. If implemented later, it remains a gateway-side
+provisional interruption control and must not require Nginx buffering, raw
+stream capture, prompt/completion logging, Redis-only quota accounting, or
+provider-final-usage bypasses.
+
 TLS certificates, real domains, request-size limits, access logs, and network
 allowlists are deployment-specific and must be reviewed by the operator.
 

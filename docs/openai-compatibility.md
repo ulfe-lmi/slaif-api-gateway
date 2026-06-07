@@ -72,6 +72,14 @@ streaming accounting uses provider usage from the completed response event;
 also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization. Missing final usage is not treated as zero cost.
 
+Streaming live-burn margin is planned future work, not current behavior. The
+milestone is documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md): Chat
+Completions is intended first and Responses second. Until it is implemented,
+streaming accounting remains final-usage driven, missing usage is not normal
+success, and the gateway does not interrupt active streams based on provisional
+live-burn estimates.
+
 Responses structured text output is not a tool and does not add a separate
 billing category. JSON schemas are capped, forwarded only under
 `text.format`, included in the admission-time input estimate, and not stored or

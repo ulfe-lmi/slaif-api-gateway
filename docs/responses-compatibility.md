@@ -247,6 +247,13 @@ finalization. Missing completed-event usage is not treated as zero cost; the
 reservation is released through the streaming failure path and the client
 receives a safe typed `error` event instead of a normal terminal success marker.
 
+Streaming live-burn margin for Responses typed SSE is planned future work after
+the Chat Completions slice. The governance milestone is
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). Until that
+separate implementation lands, Responses streaming is not interrupted based on
+provisional live output estimates; provider final usage remains authoritative,
+and missing usage remains a failure/incomplete path rather than normal success.
+
 Current Chat Completions already uses admission-time budget checks plus
 post-call spend accounting. Successful Chat Completions calls finalize actual
 usage even when actual tokens or cost exceed the reservation, record safe

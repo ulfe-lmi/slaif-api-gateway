@@ -392,6 +392,13 @@ not hard real-time spend interruption inside one upstream call. If finalization
 puts the key above local token or cost limits, subsequent calls are blocked by
 normal quota admission until limits are raised or usage is reset.
 
+The planned streaming live-burn margin milestone is documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). It would add a
+gateway-side, provisional stream interruption brake for visible streaming text,
+starting with Chat Completions and then Responses. It is not implemented in the
+current forwarding path, is not invoice-grade billing truth, and must not
+replace PostgreSQL reservation/finalization or provider final usage/cost.
+
 ### Streaming Accounting
 
 Streaming has an extra finalization rule because content may already have reached the client:
@@ -421,6 +428,11 @@ fields, and unknown top-level fields remain rejected before provider
 forwarding. Streaming `n > 1` is supported when route metadata explicitly
 enables multiple choices; SSE chunks, choice indexes, finish reasons, the final
 usage chunk, and `[DONE]` are preserved without buffering the full stream.
+
+Future live-burn interruption must remain gateway-side. Provider-bound request
+bodies and headers must not receive live-burn counters, margins, internal quota
+state, Redis keys, or gateway diagnostics, and the gateway must not store raw
+streamed content while estimating live burn.
 
 ### Reconciliation
 
