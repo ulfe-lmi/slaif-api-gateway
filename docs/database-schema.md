@@ -1066,6 +1066,9 @@ responses.streaming
 responses.json_mode
 responses.structured_outputs
 responses.function_tools
+responses.custom_tools
+responses.image_input
+responses.file_input
 ```
 
 Route/model capability metadata is separate from gateway-key endpoint/model

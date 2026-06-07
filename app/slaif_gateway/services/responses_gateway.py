@@ -68,6 +68,7 @@ from slaif_gateway.services.responses_request_policy import (
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA,
     responses_custom_tools_requested,
+    responses_file_input_requested,
     responses_function_tools_requested,
     responses_image_input_requested,
     responses_text_format_type,
@@ -131,6 +132,7 @@ async def handle_response_create(
         function_tools_requested=responses_function_tools_requested(policy_result.effective_body),
         custom_tools_requested=responses_custom_tools_requested(policy_result.effective_body),
         image_input_requested=responses_image_input_requested(policy_result.effective_body),
+        file_input_requested=responses_file_input_requested(policy_result.effective_body),
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -259,6 +261,7 @@ async def _resolve_responses_route(
     function_tools_requested: bool,
     custom_tools_requested: bool,
     image_input_requested: bool,
+    file_input_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -287,6 +290,7 @@ async def _resolve_responses_route(
                 function_tools_requested=function_tools_requested,
                 custom_tools_requested=custom_tools_requested,
                 image_input_requested=image_input_requested,
+                file_input_requested=file_input_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

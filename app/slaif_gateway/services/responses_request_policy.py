@@ -48,6 +48,7 @@ _SUPPORTED_INPUT_MESSAGE_ROLES = frozenset({"user", "assistant", "system", "deve
 _SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
 _SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
 _SUPPORTED_INPUT_IMAGE_PART_FIELDS = frozenset({"type", "image_url", "detail"})
+_SUPPORTED_INPUT_FILE_PART_FIELDS = frozenset({"type", "file_url", "filename", "file_data"})
 _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
@@ -112,6 +113,8 @@ _CUSTOM_TOOL_GRAMMAR_SYNTAXES = frozenset({"lark", "regex"})
 _IMAGE_DETAIL_VALUES = frozenset({"auto", "low", "high", "original"})
 _IMAGE_DATA_URL_PREFIX = "data:"
 _IMAGE_DATA_URL_BASE64_SUFFIX = ";base64"
+_FILE_DATA_URL_PREFIX = "data:"
+_FILE_DATA_URL_BASE64_SUFFIX = ";base64"
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
@@ -250,6 +253,8 @@ class ResponsesRequestPolicy:
         total_material_bytes = 0
         total_image_parts = 0
         total_image_data_url_bytes = 0
+        total_file_parts = 0
+        total_file_data_url_bytes = 0
         for index, item in enumerate(value):
             (
                 canonical_item,
@@ -257,11 +262,15 @@ class ResponsesRequestPolicy:
                 item_material_bytes,
                 item_image_parts,
                 item_image_data_url_bytes,
+                item_file_parts,
+                item_file_data_url_bytes,
             ) = self._validate_input_item(item, index=index)
             total_text_bytes += item_text_bytes
             total_material_bytes += item_material_bytes
             total_image_parts += item_image_parts
             total_image_data_url_bytes += item_image_data_url_bytes
+            total_file_parts += item_file_parts
+            total_file_data_url_bytes += item_file_data_url_bytes
             if total_text_bytes > self._settings.RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES:
                 _raise(
                     "input",
@@ -280,10 +289,27 @@ class ResponsesRequestPolicy:
                     "responses_input_image_data_url_too_large",
                     "The Responses input image data URLs exceed the gateway size limit.",
                 )
+            if total_file_parts > self._settings.RESPONSES_MAX_FILE_PARTS_PER_REQUEST:
+                _raise(
+                    "input",
+                    "responses_input_file_count_exceeded",
+                    "The Responses input item array has too many file content parts.",
+                )
+            if total_file_data_url_bytes > self._settings.RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES:
+                _raise(
+                    "input",
+                    "responses_input_file_data_url_too_large",
+                    "The Responses input file data URLs exceed the gateway size limit.",
+                )
             canonical_items.append(canonical_item)
         return canonical_items, total_material_bytes
 
-    def _validate_input_item(self, item: Any, *, index: int) -> tuple[dict[str, Any], int, int, int, int]:
+    def _validate_input_item(
+        self,
+        item: Any,
+        *,
+        index: int,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
             _raise(
@@ -339,6 +365,8 @@ class ResponsesRequestPolicy:
             material_bytes,
             image_parts,
             image_data_url_bytes,
+            file_parts,
+            file_data_url_bytes,
         ) = self._validate_input_item_content(
             item["content"],
             param=f"{param}.content",
@@ -347,14 +375,22 @@ class ResponsesRequestPolicy:
         canonical_item: dict[str, Any] = {"role": role, "content": canonical_content}
         if item_type == "message":
             canonical_item["type"] = "message"
-        return canonical_item, text_bytes, material_bytes, image_parts, image_data_url_bytes
+        return (
+            canonical_item,
+            text_bytes,
+            material_bytes,
+            image_parts,
+            image_data_url_bytes,
+            file_parts,
+            file_data_url_bytes,
+        )
 
     def _validate_function_call_output_item(
         self,
         item: Mapping[str, Any],
         *,
         param: str,
-    ) -> tuple[dict[str, Any], int, int, int, int]:
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         unknown = set(item) - _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS
         if unknown:
             _raise(
@@ -393,14 +429,14 @@ class ResponsesRequestPolicy:
             "type": "function_call_output",
             "call_id": call_id,
             "output": output,
-        }, output_bytes, output_bytes, 0, 0
+        }, output_bytes, output_bytes, 0, 0, 0, 0
 
     def _validate_custom_tool_call_output_item(
         self,
         item: Mapping[str, Any],
         *,
         param: str,
-    ) -> tuple[dict[str, Any], int, int, int, int]:
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         unknown = set(item) - _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
         if unknown:
             _raise(
@@ -439,7 +475,7 @@ class ResponsesRequestPolicy:
             "type": "custom_tool_call_output",
             "call_id": call_id,
             "output": output,
-        }, output_bytes, output_bytes, 0, 0
+        }, output_bytes, output_bytes, 0, 0, 0, 0
 
     def _validate_input_item_content(
         self,
@@ -447,7 +483,7 @@ class ResponsesRequestPolicy:
         *,
         param: str,
         role: str,
-    ) -> tuple[str | list[dict[str, Any]], int, int, int, int]:
+    ) -> tuple[str | list[dict[str, Any]], int, int, int, int, int, int]:
         if isinstance(content, str):
             if not content:
                 _raise(
@@ -457,7 +493,7 @@ class ResponsesRequestPolicy:
                 )
             text_bytes = len(content.encode("utf-8"))
             self._validate_input_item_text_bytes(text_bytes, param=param)
-            return content, text_bytes, text_bytes, 0, 0
+            return content, text_bytes, text_bytes, 0, 0, 0, 0
 
         if isinstance(content, list):
             if not content:
@@ -471,6 +507,8 @@ class ResponsesRequestPolicy:
             total_material_bytes = 0
             image_parts = 0
             image_data_url_bytes = 0
+            file_parts = 0
+            file_data_url_bytes = 0
             text_parts = 0
             for part_index, part in enumerate(content):
                 if isinstance(part, Mapping) and part.get("type") == "input_image":
@@ -481,6 +519,14 @@ class ResponsesRequestPolicy:
                     )
                     image_parts += 1
                     image_data_url_bytes += part_data_bytes
+                elif isinstance(part, Mapping) and part.get("type") == "input_file":
+                    canonical_part, part_bytes, part_data_bytes = self._validate_input_file_part(
+                        part,
+                        param=f"{param}[{part_index}]",
+                        role=role,
+                    )
+                    file_parts += 1
+                    file_data_url_bytes += part_data_bytes
                 else:
                     canonical_part, part_bytes = self._validate_input_text_part(
                         part,
@@ -503,6 +549,8 @@ class ResponsesRequestPolicy:
                 total_material_bytes,
                 image_parts,
                 image_data_url_bytes,
+                file_parts,
+                file_data_url_bytes,
             )
 
         raise ResponsesRequestPolicyError(
@@ -675,6 +723,211 @@ class ResponsesRequestPolicy:
                 "Responses image data URLs must include valid base64 data.",
                 param=param,
                 error_code="responses_input_image_url_invalid",
+            ) from exc
+        return len(value.encode("utf-8"))
+
+    def _validate_input_file_part(
+        self,
+        part: Mapping[str, Any],
+        *,
+        param: str,
+        role: str,
+    ) -> tuple[dict[str, str], int, int]:
+        if role != "user":
+            _raise(
+                f"{param}.type",
+                "responses_input_file_part_invalid",
+                "Responses file input content parts are supported only on user messages.",
+            )
+        unknown = set(part) - _SUPPORTED_INPUT_FILE_PART_FIELDS - {"file_id"}
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_input_file_part_invalid",
+                "This Responses file input field is not enabled by this gateway.",
+            )
+        if "file_id" in part:
+            _raise(
+                f"{param}.file_id",
+                "responses_input_file_id_not_supported",
+                "Responses file IDs are not enabled by this gateway.",
+            )
+
+        has_file_url = "file_url" in part
+        has_file_data = "file_data" in part
+        if has_file_url == has_file_data:
+            _raise(
+                param,
+                "responses_input_file_source_invalid",
+                "Responses file input requires exactly one supported file source.",
+            )
+
+        if has_file_url:
+            file_url = part.get("file_url")
+            if not isinstance(file_url, str) or not file_url:
+                _raise(
+                    f"{param}.file_url",
+                    "responses_input_file_url_invalid",
+                    "Responses file input requires a non-empty file_url string.",
+                )
+            if "filename" in part:
+                _raise(
+                    f"{param}.filename",
+                    "responses_input_file_source_invalid",
+                    "Responses file_url input must not include filename.",
+                )
+            url_bytes = self._validate_input_file_url(file_url, param=f"{param}.file_url")
+            return {"type": "input_file", "file_url": file_url}, url_bytes, 0
+
+        filename = part.get("filename")
+        if not isinstance(filename, str) or not filename:
+            _raise(
+                f"{param}.filename",
+                "responses_input_file_name_invalid",
+                "Responses inline file input requires a non-empty safe filename.",
+            )
+        canonical_filename = self._validate_input_file_name(
+            filename,
+            param=f"{param}.filename",
+        )
+
+        file_data = part.get("file_data")
+        if not isinstance(file_data, str) or not file_data:
+            _raise(
+                f"{param}.file_data",
+                "responses_input_file_data_invalid",
+                "Responses inline file input requires a non-empty file_data data URL.",
+            )
+        data_url_bytes = self._validate_input_file_data_url(
+            file_data,
+            param=f"{param}.file_data",
+        )
+        return {
+            "type": "input_file",
+            "filename": canonical_filename,
+            "file_data": file_data,
+        }, data_url_bytes + len(canonical_filename.encode("utf-8")), data_url_bytes
+
+    def _validate_input_file_url(self, value: str, *, param: str) -> int:
+        url_bytes = len(value.encode("utf-8"))
+        self._validate_string_bytes(
+            value,
+            param=param,
+            max_bytes=self._settings.RESPONSES_MAX_FILE_URL_BYTES,
+            code="responses_input_file_url_too_large",
+        )
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            _raise(
+                param,
+                "responses_input_file_url_invalid",
+                "Responses file URLs must use fully qualified https URLs.",
+            )
+        if parsed.username is not None or parsed.password is not None:
+            _raise(
+                param,
+                "responses_input_file_url_invalid",
+                "Responses file URLs must not include embedded credentials.",
+            )
+        if parsed.fragment:
+            _raise(
+                param,
+                "responses_input_file_url_invalid",
+                "Responses file URLs must not include fragments.",
+            )
+        path = parsed.path.lower()
+        allowed_extensions = _allowed_responses_file_extensions(self._settings)
+        if allowed_extensions and not any(path.endswith(extension) for extension in allowed_extensions):
+            _raise(
+                param,
+                "responses_input_file_extension_not_supported",
+                "The Responses file URL extension is not supported by this gateway.",
+            )
+        return url_bytes
+
+    def _validate_input_file_name(self, value: str, *, param: str) -> str:
+        self._validate_string_bytes(
+            value,
+            param=param,
+            max_bytes=self._settings.RESPONSES_MAX_FILE_NAME_BYTES,
+            code="responses_input_file_name_invalid",
+        )
+        if (
+            "/" in value
+            or "\\" in value
+            or "\x00" in value
+            or "?" in value
+            or "#" in value
+            or any(ord(ch) < 32 for ch in value)
+        ):
+            _raise(
+                param,
+                "responses_input_file_name_invalid",
+                "Responses inline file input requires a safe basename filename.",
+            )
+        lowered = value.lower()
+        if any(marker in lowered for marker in ("sk-", "bearer", "token", "secret", "password")):
+            _raise(
+                param,
+                "responses_input_file_name_invalid",
+                "Responses inline file input requires a safe basename filename.",
+            )
+        allowed_extensions = _allowed_responses_file_extensions(self._settings)
+        if allowed_extensions and not any(lowered.endswith(extension) for extension in allowed_extensions):
+            _raise(
+                param,
+                "responses_input_file_extension_not_supported",
+                "The Responses file extension is not supported by this gateway.",
+            )
+        return value
+
+    def _validate_input_file_data_url(self, value: str, *, param: str) -> int:
+        self._validate_string_bytes(
+            value,
+            param=param,
+            max_bytes=self._settings.RESPONSES_MAX_FILE_DATA_URL_BYTES,
+            code="responses_input_file_data_url_too_large",
+        )
+        header, separator, encoded = value.partition(",")
+        if not separator:
+            _raise(
+                param,
+                "responses_input_file_data_invalid",
+                "Responses file data URLs must be base64 data URLs.",
+            )
+        if not header.startswith(_FILE_DATA_URL_PREFIX):
+            _raise(
+                param,
+                "responses_input_file_data_invalid",
+                "Responses file data URLs must be base64 data URLs.",
+            )
+        if not header.endswith(_FILE_DATA_URL_BASE64_SUFFIX):
+            _raise(
+                param,
+                "responses_input_file_data_invalid",
+                "Responses file data URLs must use base64 encoding.",
+            )
+        mime_type = header[len(_FILE_DATA_URL_PREFIX) : -len(_FILE_DATA_URL_BASE64_SUFFIX)].lower()
+        if mime_type not in _allowed_responses_file_mime_types(self._settings):
+            _raise(
+                param,
+                "responses_input_file_mime_not_supported",
+                "The Responses file data URL MIME type is not supported by this gateway.",
+            )
+        normalized = "".join(encoded.split())
+        if not normalized or len(normalized) % 4 != 0 or not _BASE64_CHARS_RE.fullmatch(normalized):
+            _raise(
+                param,
+                "responses_input_file_data_invalid",
+                "Responses file data URLs must include valid base64 data.",
+            )
+        try:
+            base64.b64decode(normalized, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ResponsesRequestPolicyError(
+                "Responses file data URLs must include valid base64 data.",
+                param=param,
+                error_code="responses_input_file_data_invalid",
             ) from exc
         return len(value.encode("utf-8"))
 
@@ -1490,6 +1743,10 @@ def responses_image_input_requested(body: Mapping[str, Any]) -> bool:
     return _input_contains_image_input(body.get("input"))
 
 
+def responses_file_input_requested(body: Mapping[str, Any]) -> bool:
+    return _input_contains_file_input(body.get("input"))
+
+
 def _input_contains_function_call_output(value: Any) -> bool:
     if not isinstance(value, list):
         return False
@@ -1519,6 +1776,21 @@ def _input_contains_image_input(value: Any) -> bool:
             continue
         for part in content:
             if isinstance(part, Mapping) and part.get("type") == "input_image":
+                return True
+    return False
+
+
+def _input_contains_file_input(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, Mapping) and part.get("type") == "input_file":
                 return True
     return False
 
@@ -1554,6 +1826,22 @@ def _allowed_responses_image_mime_types(settings: Settings) -> frozenset[str]:
     return frozenset(
         item.strip().lower()
         for item in settings.RESPONSES_ALLOWED_IMAGE_MIME_TYPES.split(",")
+        if item.strip()
+    )
+
+
+def _allowed_responses_file_mime_types(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.RESPONSES_ALLOWED_FILE_MIME_TYPES.split(",")
+        if item.strip()
+    )
+
+
+def _allowed_responses_file_extensions(settings: Settings) -> frozenset[str]:
+    return frozenset(
+        item.strip().lower()
+        for item in settings.RESPONSES_ALLOWED_FILE_EXTENSIONS.split(",")
         if item.strip()
     )
 

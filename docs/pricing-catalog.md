@@ -338,28 +338,30 @@ are not provider invoice certification.
 
 The current `POST /v1/responses` foundation supports stateless text output for
 string input, bounded input item arrays, and route-enabled user-message
-`input_image` URL/data URL parts, plus non-streaming JSON, typed SSE streaming,
-non-streaming structured `text.format` JSON object/schema output, and
-non-streaming local function/custom tools when route capability metadata allows
-them. It requires an active
+`input_image` URL/data URL parts and `input_file` URL/data URL parts, plus
+non-streaming JSON, typed SSE streaming, non-streaming structured
+`text.format` JSON object/schema output, and non-streaming local
+function/custom tools when route capability metadata allows them. It requires an active
 pricing row whose endpoint is `/v1/responses`; Chat Completions pricing rows
 are not silently reused. Admission-time reservation uses the estimated text
-input, input item text/wrappers, image URL/data URL material, instructions,
-bounded structured text format/schema payload when present, and effective
-`max_output_tokens`. Local function/custom tool definitions and string
-tool-result inputs are ordinary input material for this estimate.
+input, input item text/wrappers, image URL/data URL material, file URL/data URL
+material, instructions, bounded structured text format/schema payload when
+present, and effective `max_output_tokens`. Local function/custom tool
+definitions and string tool-result inputs are ordinary input material for this
+estimate.
 Post-call finalization uses provider usage fields such as `input_tokens`,
 `output_tokens`, `total_tokens`, and cached/reasoning token details when
 exposed by the provider and supported by the existing accounting schema. Input
-item arrays, image input, structured text output, and local function/custom
-tools have no separate billing category in SLAIF; they use ordinary Responses
-token/cost accounting. Image bytes are not invoice-grade token truth.
+item arrays, image input, file input, structured text output, and local
+function/custom tools have no separate billing category in SLAIF; they use
+ordinary Responses token/cost accounting. Image/file bytes are not
+invoice-grade token truth.
 
 Streaming finalization uses usage from the provider's completed response event;
 missing final usage is not treated as zero cost. Responses hosted tools,
-provider-side storage/state, `input_image.file_id`, file/audio inputs, image
-generation, audio output, and multimodal output are not priced or enabled in
-this foundation.
+provider-side storage/state, `input_image.file_id`, `input_file.file_id`, file
+search/retrieval tools, audio inputs, image generation, audio output, and
+multimodal output are not priced or enabled in this foundation.
 
 ## Worst-Case Single-Request Cost
 

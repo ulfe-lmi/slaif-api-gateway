@@ -166,6 +166,75 @@ def test_list_input_with_image_data_url_part_passes_and_omits_detail_when_omitte
     assert image_part == {"type": "input_image", "image_url": data_url}
 
 
+def test_list_input_with_file_url_part_passes() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Summarize this PDF."},
+                        {
+                            "type": "input_file",
+                            "file_url": "https://example.test/document.pdf",
+                        },
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result.effective_body["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize this PDF."},
+                {
+                    "type": "input_file",
+                    "file_url": "https://example.test/document.pdf",
+                },
+            ],
+        }
+    ]
+    assert result.estimated_input_tokens > 0
+
+
+@pytest.mark.parametrize(
+    ("filename", "file_data"),
+    [
+        ("document.pdf", "data:application/pdf;base64,aGVsbG8="),
+        ("notes.txt", "data:text/plain;base64,aGVsbG8="),
+        ("readme.md", "data:text/markdown;base64,aGVsbG8="),
+        ("rows.csv", "data:text/csv;base64,aGVsbG8="),
+        ("payload.json", "data:application/json;base64,e30="),
+    ],
+)
+def test_list_input_with_file_data_part_passes(filename: str, file_data: str) -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Summarize this file."},
+                        {
+                            "type": "input_file",
+                            "filename": filename,
+                            "file_data": file_data,
+                        },
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result.effective_body["input"][0]["content"][1] == {
+        "type": "input_file",
+        "filename": filename,
+        "file_data": file_data,
+    }
+
+
 @pytest.mark.parametrize("detail", ["auto", "low", "high", "original"])
 def test_list_input_with_supported_image_detail_values_passes(detail: str) -> None:
     result = ResponsesRequestPolicy(Settings()).apply(
@@ -254,7 +323,7 @@ def test_custom_tool_call_output_input_item_passes_as_string_only_tool_result() 
         ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": [{"type": "input_text", "text": "secret"}]}], "input[0].output", "responses_custom_tool_call_output_invalid"),
         ([{"type": "custom_tool_call_output", "output": "secret"}], "input[0].call_id", "responses_custom_tool_call_output_invalid"),
         ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": "secret", "id": "item_123"}], "input[0].id", "responses_custom_tool_call_output_invalid"),
-        ([{"role": "user", "content": [{"type": "input_file", "file_id": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
+        ([{"role": "user", "content": [{"type": "input_file", "file_id": "secret"}]}], "input[0].content[0].file_id", "responses_input_file_id_not_supported"),
         ([{"role": "user", "content": [{"type": "input_audio", "data": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
         ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
         ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
@@ -477,6 +546,252 @@ def test_image_input_material_contributes_to_admission_estimate() -> None:
     )
 
     assert with_image.estimated_input_tokens > text_only.estimated_input_tokens
+
+
+@pytest.mark.parametrize(
+    ("part", "param", "code"),
+    [
+        (
+            {"type": "input_file", "file_url": "http://example.test/document.pdf"},
+            "input[0].content[0].file_url",
+            "responses_input_file_url_invalid",
+        ),
+        (
+            {"type": "input_file", "file_url": "https://user:pass@example.test/document.pdf"},
+            "input[0].content[0].file_url",
+            "responses_input_file_url_invalid",
+        ),
+        (
+            {"type": "input_file", "file_url": "https://example.test/document.pdf#secret"},
+            "input[0].content[0].file_url",
+            "responses_input_file_url_invalid",
+        ),
+        (
+            {"type": "input_file", "file_url": "https://example.test/document.docx"},
+            "input[0].content[0].file_url",
+            "responses_input_file_extension_not_supported",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf,not-base64",
+            },
+            "input[0].content[0].file_data",
+            "responses_input_file_data_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,not valid base64",
+            },
+            "input[0].content[0].file_data",
+            "responses_input_file_data_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/msword;base64,aGVsbG8=",
+            },
+            "input[0].content[0].file_data",
+            "responses_input_file_mime_not_supported",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "../document.pdf",
+                "file_data": "data:application/pdf;base64,aGVsbG8=",
+            },
+            "input[0].content[0].filename",
+            "responses_input_file_name_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "secret-token.pdf",
+                "file_data": "data:application/pdf;base64,aGVsbG8=",
+            },
+            "input[0].content[0].filename",
+            "responses_input_file_name_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "document.exe",
+                "file_data": "data:application/pdf;base64,aGVsbG8=",
+            },
+            "input[0].content[0].filename",
+            "responses_input_file_extension_not_supported",
+        ),
+        (
+            {"type": "input_file", "filename": "document.pdf"},
+            "input[0].content[0]",
+            "responses_input_file_source_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "file_url": "https://example.test/document.pdf",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,aGVsbG8=",
+            },
+            "input[0].content[0]",
+            "responses_input_file_source_invalid",
+        ),
+        (
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,aGVsbG8=",
+                "extra": "secret",
+            },
+            "input[0].content[0].extra",
+            "responses_input_file_part_invalid",
+        ),
+    ],
+)
+def test_file_input_rejects_unsupported_shapes_without_raw_values(
+    part: dict[str, object],
+    param: str,
+    code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(input=[{"role": "user", "content": [part]}])
+        )
+
+    assert exc_info.value.error_code == code
+    assert exc_info.value.param == param
+    assert "secret" not in exc_info.value.safe_message
+    assert "example.test" not in exc_info.value.safe_message
+
+
+def test_file_input_rejects_non_user_role_without_raw_url() -> None:
+    raw_url = "https://example.test/secret.pdf"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(input=[{"role": "assistant", "content": [{"type": "input_file", "file_url": raw_url}]}])
+        )
+
+    assert exc_info.value.error_code == "responses_input_file_part_invalid"
+    assert exc_info.value.param == "input[0].content[0].type"
+    assert raw_url not in exc_info.value.safe_message
+
+
+def test_file_input_caps_reject_without_raw_values() -> None:
+    raw_url = "https://example.test/secret-document.pdf"
+    raw_data_url = "data:application/pdf;base64,c2VjcmV0"
+
+    with pytest.raises(RequestPolicyError) as url_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_URL_BYTES=16)).apply(
+            _body(input=[{"role": "user", "content": [{"type": "input_file", "file_url": raw_url}]}])
+        )
+    with pytest.raises(RequestPolicyError) as data_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_DATA_URL_BYTES=16)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_file",
+                                "filename": "document.pdf",
+                                "file_data": raw_data_url,
+                            }
+                        ],
+                    }
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as total_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=32)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_file",
+                                "filename": "one.pdf",
+                                "file_data": raw_data_url,
+                            },
+                            {
+                                "type": "input_file",
+                                "filename": "two.pdf",
+                                "file_data": raw_data_url,
+                            },
+                        ],
+                    }
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as count_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_PARTS_PER_REQUEST=1)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_file", "file_url": "https://example.test/1.pdf"},
+                            {"type": "input_file", "file_url": "https://example.test/2.pdf"},
+                        ],
+                    }
+                ]
+            )
+        )
+    with pytest.raises(RequestPolicyError) as name_exc:
+        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_NAME_BYTES=4)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_file",
+                                "filename": "document.pdf",
+                                "file_data": raw_data_url,
+                            }
+                        ],
+                    }
+                ]
+            )
+        )
+
+    assert url_exc.value.error_code == "responses_input_file_url_too_large"
+    assert data_exc.value.error_code == "responses_input_file_data_url_too_large"
+    assert total_exc.value.error_code == "responses_input_file_data_url_too_large"
+    assert count_exc.value.error_code == "responses_input_file_count_exceeded"
+    assert name_exc.value.error_code == "responses_input_file_name_invalid"
+    assert raw_url not in url_exc.value.safe_message
+    assert raw_data_url not in data_exc.value.safe_message
+
+
+def test_file_input_material_contributes_to_admission_estimate() -> None:
+    text_only = ResponsesRequestPolicy(Settings()).apply(
+        _body(input=[{"role": "user", "content": [{"type": "input_text", "text": "summarize"}]}])
+    )
+    with_file = ResponsesRequestPolicy(Settings()).apply(
+        _body(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "summarize"},
+                        {
+                            "type": "input_file",
+                            "filename": "document.pdf",
+                            "file_data": "data:application/pdf;base64," + ("QUFB" * 8),
+                        },
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert with_file.estimated_input_tokens > text_only.estimated_input_tokens
 
 
 def test_function_call_output_cap_rejects_without_raw_output() -> None:

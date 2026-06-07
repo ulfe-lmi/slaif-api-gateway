@@ -18,7 +18,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function/custom tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, hosted tools, storage/state, background, file/audio input, image generation, and multimodal output are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, user-message `input_file` URL/data URL parts behind explicit Responses file capability, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function/custom tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, hosted tools, storage/state, background, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -39,6 +39,9 @@ Current support is intentionally narrow:
 - user-message `input_image` content parts with fully-qualified `http`/`https`
   URLs or configured base64 image data URLs when route/model metadata
   explicitly enables Responses image input;
+- user-message `input_file` content parts with fully-qualified HTTPS file URLs
+  or configured base64 file data URLs plus safe filenames when route/model
+  metadata explicitly enables Responses file input;
 - non-streaming JSON or typed SSE streaming when route/model metadata explicitly
   enables Responses streaming;
 - non-streaming structured text output through `text.format` JSON object mode
@@ -56,8 +59,9 @@ Current support is intentionally narrow:
 - no `conversation`/provider-side state;
 - no hosted/provider-side tools;
 - no MCP/connectors;
-- no `input_image.file_id`, `input_file`, `input_audio`, audio output, image
-  generation, `/v1/files`, or multimodal output;
+- no `input_image.file_id`, `input_file.file_id`, `input_audio`, audio output,
+  image generation, `/v1/files`, file search/retrieval tools, or multimodal
+  output;
 - no response delete/cancel/retrieve/list input items initially.
 
 Responses streaming preserves typed provider events such as `response.created`,
@@ -81,15 +85,20 @@ content arrays may include `input_image` parts with an `image_url` string and
 optional `detail` (`auto`, `low`, `high`, or SDK-supported `original`) only
 when the route explicitly sets `capabilities.responses.image_input=true`.
 SLAIF forwards validated image URLs/data URLs without fetching, decoding,
-rewriting, storing, or logging them. Function-call items, reasoning/stateful
-items, hosted-tool items, `input_image.file_id`, `input_file`, and
+rewriting, storing, or logging them. User-message content arrays may include
+`input_file` parts with an HTTPS `file_url` or inline `filename` plus
+`file_data` data URL only when the route explicitly sets
+`capabilities.responses.file_input=true`. SLAIF does not fetch file URLs,
+parse, OCR, index, extract text from, store, or log file URLs, filenames, data
+URLs, or base64 payloads. Function-call items, reasoning/stateful items,
+hosted-tool items, `input_image.file_id`, `input_file.file_id`, and
 `input_audio` remain rejected. String-only `function_call_output` input items
 are supported as ordinary stateless input for local function-tool follow-up
 requests; string-only `custom_tool_call_output` items are supported as ordinary
 stateless input for caller-managed custom-tool follow-up requests. Media tool
 outputs remain rejected. Input arrays use ordinary input-token estimation and
-provider usage finalization; no prompt/input text or image payload is stored or
-logged.
+provider usage finalization; no prompt/input text, image payload, or file
+payload is stored or logged.
 
 Responses local function tools are supported only as caller-side model intent:
 SLAIF forwards bounded `type=function` definitions and preserves provider
@@ -111,7 +120,7 @@ authority. The feature requires explicit
 Responses function-tool permission, and Chat Completions custom-tool permission
 do not imply it. Streaming custom tools are intentionally unsupported in this
 slice. Output arrays/lists for `custom_tool_call_output` remain rejected because
-Responses file/audio input and multimodal tool output remain unsupported.
+Responses audio input and multimodal tool output remain unsupported.
 
 Endpoint and model permission are separate from capability permission. A key
 that is allowed to call `/v1/chat/completions` with a model is not thereby
@@ -473,11 +482,12 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 ## What Is Not Implemented
 
 - Responses retrieval/delete/cancel/list endpoints, Responses hosted tools,
-  file/audio input, image generation, multimodal output, provider-side storage,
-  background mode, previous-response/conversation state, and MCP/connectors.
-  Only the stateless text-output `POST /v1/responses` foundation is
-  implemented, including URL/data URL image input, non-streaming JSON, and
-  typed SSE streaming; see
+  audio input/output, image generation, multimodal output, provider-side
+  storage, background mode, previous-response/conversation state,
+  `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
+  search/retrieval tools, and MCP/connectors. Only the stateless text-output
+  `POST /v1/responses` foundation is implemented, including URL/data URL image
+  input, URL/data URL file input, non-streaming JSON, and typed SSE streaming; see
   `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration

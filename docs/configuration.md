@@ -461,12 +461,13 @@ template-based participant key creation remains future work.
 
 The current Responses API foundation is stateless and text-output only. It supports
 string input or bounded input item arrays, route-enabled user-message
-`input_image` URL/data URL parts for image input to text output, non-streaming
-JSON, typed SSE text streaming, and non-streaming structured `text.format` JSON
-object/schema output when route capability metadata allows it. It also supports
-non-streaming local/client-side function tools when route capability metadata
-allows them, and non-streaming local/client-side custom tools when route
-capability metadata allows them. It reuses
+`input_image` URL/data URL parts for image input to text output,
+route-enabled user-message `input_file` URL/data URL parts for file input to
+text output, non-streaming JSON, typed SSE text streaming, and non-streaming
+structured `text.format` JSON object/schema output when route capability
+metadata allows it. It also supports non-streaming local/client-side function
+tools when route capability metadata allows them, and non-streaming
+local/client-side custom tools when route capability metadata allows them. It reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 
@@ -501,6 +502,13 @@ capability metadata allows them. It reuses
 - `RESPONSES_MAX_IMAGE_DATA_URL_BYTES=20971520`
 - `RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=41943040`
 - `RESPONSES_ALLOWED_IMAGE_MIME_TYPES=image/png,image/jpeg,image/webp,image/gif`
+- `RESPONSES_MAX_FILE_PARTS_PER_REQUEST=8`
+- `RESPONSES_MAX_FILE_URL_BYTES=4096`
+- `RESPONSES_MAX_FILE_DATA_URL_BYTES=26214400`
+- `RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=52428800`
+- `RESPONSES_MAX_FILE_NAME_BYTES=255`
+- `RESPONSES_ALLOWED_FILE_MIME_TYPES=application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,text/xml,application/xml`
+- `RESPONSES_ALLOWED_FILE_EXTENSIONS=.pdf,.txt,.md,.csv,.json,.html,.xml`
 
 These are validation caps, not feature toggles. Responses still requires a key
 with `/v1/responses` in its endpoint policy, a resolved route with explicit
@@ -516,9 +524,17 @@ outputs, or streaming custom tools.
 Responses image settings cap user-message `input_image.image_url` values.
 Remote `http`/`https` URLs are forwarded only after shape/credential/fragment
 validation; image data URLs are MIME/base64 checked and capped. They do not
-enable `input_image.file_id`, `/v1/files`, file input, audio input/output,
-image generation, hosted tools, stateful Responses, or server-side URL
-fetching.
+enable `input_image.file_id`, `/v1/files`, audio input/output, image
+generation, hosted tools, stateful Responses, or server-side URL fetching.
+
+Responses file settings cap user-message `input_file.file_url`,
+`filename`, and `file_data` values. File URLs must be fully qualified HTTPS
+URLs without embedded credentials or fragments and with allowed extensions.
+Inline file data must use configured base64 data URL MIME types and a safe
+basename filename. These settings do not enable `input_file.file_id`,
+provider-side file upload/lifecycle, file search/retrieval tools, server-side
+fetching, parsing, OCR, indexing, audio input/output, or Office/spreadsheet
+formats outside the configured allowlist.
 
 ## Planned Responses Tool Configuration
 

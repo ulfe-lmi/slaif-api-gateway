@@ -181,14 +181,16 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   only through OpenRouter's OpenAI-compatible interface when routed that way.
 - Responses API support is limited to stateless text-output
   `POST /v1/responses` with string input, bounded input item arrays,
-  route-enabled user-message URL/data URL image input, non-streaming JSON,
-  typed SSE streaming, non-streaming structured `text.format` JSON
-  object/schema output, plus non-streaming local function and custom tools,
-  explicit key endpoint permission, route capability, provider route, and
-  pricing metadata. Hosted/provider-side Responses tools,
+  route-enabled user-message URL/data URL image input, route-enabled
+  user-message URL/data URL file input, non-streaming JSON, typed SSE
+  streaming, non-streaming structured `text.format` JSON object/schema output,
+  plus non-streaming local function and custom tools, explicit key endpoint
+  permission, route capability, provider route, and pricing metadata.
+  Hosted/provider-side Responses tools,
   storage/state, background mode, retrieval/delete/cancel/list routes,
-  `input_image.file_id`, file/audio input, image generation, multimodal output,
-  and MCP/connectors remain future work. Safe Chat
+  `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
+  search/retrieval tools, audio input, image generation, multimodal output, and
+  MCP/connectors remain future work. Safe Chat
   Completions usage profiling, trusted calibration keys, calibration proposal
   previews, and durable key-template snapshots now provide the first persisted
   foundation for usage-derived participant policies. Single-key creation from a

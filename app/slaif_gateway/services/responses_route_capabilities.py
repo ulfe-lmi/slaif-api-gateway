@@ -15,6 +15,7 @@ RESPONSES_CAPABILITY_TOOLS = "tools"
 RESPONSES_CAPABILITY_FUNCTION_TOOLS = "function_tools"
 RESPONSES_CAPABILITY_CUSTOM_TOOLS = "custom_tools"
 RESPONSES_CAPABILITY_IMAGE_INPUT = "image_input"
+RESPONSES_CAPABILITY_FILE_INPUT = "file_input"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -30,6 +31,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_FUNCTION_TOOLS,
         RESPONSES_CAPABILITY_CUSTOM_TOOLS,
         RESPONSES_CAPABILITY_IMAGE_INPUT,
+        RESPONSES_CAPABILITY_FILE_INPUT,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -50,6 +52,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_FUNCTION_TOOLS: False,
         RESPONSES_CAPABILITY_CUSTOM_TOOLS: False,
         RESPONSES_CAPABILITY_IMAGE_INPUT: False,
+        RESPONSES_CAPABILITY_FILE_INPUT: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -97,6 +100,7 @@ def enforce_responses_route_capabilities(
     function_tools_requested: bool = False,
     custom_tools_requested: bool = False,
     image_input_requested: bool = False,
+    file_input_requested: bool = False,
 ) -> None:
     """Require explicit text+stateless Responses metadata and fail closed."""
 
@@ -184,6 +188,15 @@ def enforce_responses_route_capabilities(
                 field="input",
                 error_code="responses_image_input_capability_not_supported",
                 safe_message="This model route does not support Responses image input.",
+            )
+        )
+    if file_input_requested and capabilities.get(RESPONSES_CAPABILITY_FILE_INPUT) is not True:
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_FILE_INPUT,
+                field="input",
+                error_code="responses_file_input_capability_not_supported",
+                safe_message="This model route does not support Responses file input.",
             )
         )
 

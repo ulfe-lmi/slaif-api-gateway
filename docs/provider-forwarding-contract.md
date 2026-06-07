@@ -159,8 +159,8 @@ Responses-specific rules for the current foundation:
   requests, and string-only `custom_tool_call_output` items are reconstructed
   as ordinary stateless input for caller-managed custom-tool follow-up
   requests. Function-call/custom-tool-call items, reasoning/stateful items,
-  hosted-tool items, `input_image.file_id`, file parts, and audio parts are
-  rejected before provider forwarding;
+  hosted-tool items, `input_image.file_id`, `input_file.file_id`, and audio
+  parts are rejected before provider forwarding;
 - user-message `input_image` content parts are reconstructed only from
   `type`, `image_url`, and optional `detail` when route/model metadata
   explicitly enables `capabilities.responses.image_input=true`. Supported
@@ -168,6 +168,13 @@ Responses-specific rules for the current foundation:
   or fragments and configured base64 image data URLs. SLAIF does not fetch,
   decode, rewrite, store, or log image URLs/data URLs, and image bytes are used
   only for conservative admission estimates;
+- user-message `input_file` content parts are reconstructed only from
+  `type`, HTTPS `file_url`, or safe `filename` plus configured base64
+  `file_data` data URL when route/model metadata explicitly enables
+  `capabilities.responses.file_input=true`. SLAIF does not fetch file URLs,
+  upload provider files, parse, OCR, index, extract text from, store, or log
+  file URLs, filenames, data URLs, or base64 payloads. File IDs, file search,
+  retrieval tools, and `/v1/files` lifecycle remain unsupported;
 - local Responses function tools are reconstructed only from
   `tools[].type=function`, `name`, optional `description`, `parameters`, and
   optional `strict` after count/name/description/schema caps. Named

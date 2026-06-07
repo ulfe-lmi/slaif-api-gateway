@@ -5,13 +5,14 @@ Status: limited foundation implemented on current `main`.
 This document defines the RC2-beta support boundary for Responses API work.
 Current support is deliberately narrow: stateless `POST /v1/responses` with
 text output, string input or bounded input item arrays, optional user-message
-`input_image` content parts for image input to text output, non-streaming JSON,
-typed SSE streaming, bounded non-streaming structured text output through
-`text.format`, local/client-side function tools, and non-streaming
-local/client-side custom tools. It has no hosted tools,
+`input_image` content parts for image input to text output, optional
+user-message `input_file` content parts for file input to text output,
+non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
+output through `text.format`, local/client-side function tools, and
+non-streaming local/client-side custom tools. It has no hosted tools,
 MCP/connectors, provider-side storage, background mode, previous response or
-conversation state, file/audio input, audio output, image generation, or
-multimodal output.
+conversation state, `/v1/files` lifecycle, audio input, audio output, image
+generation, file search, or multimodal output.
 
 ## Supported Endpoint
 
@@ -78,16 +79,31 @@ fetch remote URLs, decode image pixels, rewrite image data URLs, store/log image
 URLs or base64 payloads, or infer final billing from bytes. Image URL/data URL
 material is included in conservative admission estimates, while final
 accounting uses provider usage/cost once.
+User-message content arrays may include bounded `input_file` parts shaped as
+`{"type":"input_file","file_url":"https://..."}` when the resolved route sets
+`capabilities.responses.file_input=true`. File URL input must be a fully
+qualified HTTPS URL without embedded credentials or fragments and with an
+allowed extension. User-message content arrays may also include inline file
+data shaped as
+`{"type":"input_file","filename":"document.pdf","file_data":"data:application/pdf;base64,..."}`.
+Inline file data requires a safe basename filename with an allowed extension
+and a configured base64 data URL MIME type. SLAIF does not fetch file URLs,
+parse, OCR, index, extract text from, or store/log file URLs, filenames, data
+URLs, or base64 payloads. File URL/data URL material is included in
+conservative admission estimates, while final accounting uses provider
+usage/cost once. `input_file.file_id` remains unsupported until `/v1/files`
+ownership and provider-file lifecycle are implemented.
 Function-call items, reasoning/stateful items, hosted-tool items, and
-file/audio content parts are rejected before Redis rate limiting, pricing
-lookup, quota reservation, or provider forwarding. `input_image.file_id` remains
+audio content parts are rejected before Redis rate limiting, pricing lookup,
+quota reservation, or provider forwarding. `input_image.file_id` remains
 unsupported until `/v1/files` ownership and provider-file lifecycle are
 implemented. String-only
 `function_call_output` items are supported as ordinary stateless input for local
 function-tool follow-up requests; image/file outputs in tool-result items remain
 rejected. Input item arrays use the same Responses text/stateless route
 capability as string input; image input additionally requires
-`capabilities.responses.image_input=true`. They compose with plain text streaming,
+`capabilities.responses.image_input=true`, and file input additionally requires
+`capabilities.responses.file_input=true`. They compose with plain text streaming,
 non-streaming structured `text.format`, and local function tools; structured
 streaming and function-tool streaming remain rejected.
 
@@ -166,6 +182,10 @@ Rules:
 - Image input requires explicit route/model
   `capabilities.responses.image_input=true` metadata. Chat Completions image
   capability does not enable Responses image input.
+- File input requires explicit route/model
+  `capabilities.responses.file_input=true` metadata. Chat Completions file
+  capability and Responses image-input capability do not enable Responses file
+  input.
 - Function tools are supported only as caller-side intent because execution
   remains in the caller's application instead of inside the provider.
 - Custom tools are also caller-side intent; SLAIF forwards definitions and
@@ -292,13 +312,13 @@ Template requirements:
 For `/v1/responses`, a template revision may carry
 `template_snapshot.responses_policy` with version 1, allowed local capabilities
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
-`function_tools`, `custom_tools`, `image_input`), allowed local tool types (`function`,
-`custom`), an empty hosted-tool allowlist, and explicit false
+`function_tools`, `custom_tools`, `image_input`, `file_input`), allowed local tool
+types (`function`, `custom`), an empty hosted-tool allowlist, and explicit false
 state/storage/background/multimodal-output flags. Template-to-key creation
 copies that sanitized summary into gateway-key metadata. Hosted tools,
-MCP/connectors, stateful/background/storage, raw image URLs/data, raw tool
-definitions, schemas, generated tool inputs, and tool outputs remain out of
-scope for template metadata and are rejected.
+MCP/connectors, stateful/background/storage, raw image URLs/data, raw file
+URLs/names/data/base64, raw tool definitions, schemas, generated tool inputs,
+and tool outputs remain out of scope for template metadata and are rejected.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.
