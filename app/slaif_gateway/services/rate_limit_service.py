@@ -24,7 +24,7 @@ local request_key = KEYS[1]
 local token_key = KEYS[2]
 local concurrency_key = KEYS[3]
 
-local now_ms = tonumber(ARGV[1])
+local caller_now_ms = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
 local request_limit = tonumber(ARGV[3])
 local token_limit = tonumber(ARGV[4])
@@ -33,20 +33,25 @@ local estimated_tokens = tonumber(ARGV[6])
 local request_id = ARGV[7]
 local concurrency_ttl_seconds = tonumber(ARGV[8])
 local concurrency_ttl_grace_seconds = tonumber(ARGV[9])
+local use_redis_time = tonumber(ARGV[10])
 
+local concurrency_now_ms = caller_now_ms
 local window_ms = window_seconds * 1000
-local reset_ms = now_ms + window_ms
-local concurrency_expiry_ms = now_ms + (concurrency_ttl_seconds * 1000)
+local reset_ms = caller_now_ms + window_ms
 
 if concurrency_limit > 0 then
-  redis.call("ZREMRANGEBYSCORE", concurrency_key, "-inf", now_ms)
+  if use_redis_time == 1 then
+    local redis_time = redis.call("TIME")
+    concurrency_now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+  end
+  redis.call("ZREMRANGEBYSCORE", concurrency_key, "-inf", concurrency_now_ms)
   local existing = redis.call("ZSCORE", concurrency_key, request_id)
   local current_concurrency = redis.call("ZCARD", concurrency_key)
   if not existing and current_concurrency >= concurrency_limit then
     local retry_after = concurrency_ttl_seconds
     local earliest = redis.call("ZRANGE", concurrency_key, 0, 0, "WITHSCORES")
     if earliest[2] then
-      retry_after = math.max(math.ceil((tonumber(earliest[2]) - now_ms) / 1000), 1)
+      retry_after = math.max(math.ceil((tonumber(earliest[2]) - concurrency_now_ms) / 1000), 1)
       reset_ms = tonumber(earliest[2])
     end
     return {0, "concurrency", 0, 0, current_concurrency, reset_ms, retry_after, 0}
@@ -76,6 +81,7 @@ end
 local concurrency_in_use = 0
 local concurrency_expiry_return_ms = 0
 if concurrency_limit > 0 then
+  local concurrency_expiry_ms = concurrency_now_ms + (concurrency_ttl_seconds * 1000)
   redis.call("ZADD", concurrency_key, concurrency_expiry_ms, request_id)
   redis.call("EXPIRE", concurrency_key, concurrency_ttl_seconds + concurrency_ttl_grace_seconds)
   concurrency_in_use = redis.call("ZCARD", concurrency_key)
@@ -97,10 +103,17 @@ return {1, "allowed", remaining_requests, remaining_tokens, concurrency_in_use, 
 
 _HEARTBEAT_SCRIPT = """
 local concurrency_key = KEYS[1]
-local now_ms = tonumber(ARGV[1])
+local caller_now_ms = tonumber(ARGV[1])
 local request_id = ARGV[2]
 local concurrency_ttl_seconds = tonumber(ARGV[3])
 local concurrency_ttl_grace_seconds = tonumber(ARGV[4])
+local use_redis_time = tonumber(ARGV[5])
+
+local now_ms = caller_now_ms
+if use_redis_time == 1 then
+  local redis_time = redis.call("TIME")
+  now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+end
 
 redis.call("ZREMRANGEBYSCORE", concurrency_key, "-inf", now_ms)
 local existing = redis.call("ZSCORE", concurrency_key, request_id)
@@ -112,6 +125,20 @@ local concurrency_expiry_ms = now_ms + (concurrency_ttl_seconds * 1000)
 redis.call("ZADD", concurrency_key, concurrency_expiry_ms, request_id)
 redis.call("EXPIRE", concurrency_key, concurrency_ttl_seconds + concurrency_ttl_grace_seconds)
 return {1, "refreshed", concurrency_expiry_ms}
+"""
+
+_CLEANUP_CONCURRENCY_SCRIPT = """
+local concurrency_key = KEYS[1]
+local caller_now_ms = tonumber(ARGV[1])
+local use_redis_time = tonumber(ARGV[2])
+
+local now_ms = caller_now_ms
+if use_redis_time == 1 then
+  local redis_time = redis.call("TIME")
+  now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+end
+
+return redis.call("ZREMRANGEBYSCORE", concurrency_key, "-inf", now_ms)
 """
 
 _DEFAULT_CONCURRENCY_TTL_SECONDS = 300
@@ -145,6 +172,7 @@ class RedisRateLimitService:
         window_start = int(now_dt.timestamp()) // policy.window_seconds
         keys = self._keys(gateway_key_id=gateway_key_id, window_start=window_start)
         concurrency_ttl_seconds = _policy_concurrency_ttl_seconds(policy)
+        use_redis_time_for_concurrency = 1 if now is None else 0
 
         try:
             raw = await self._redis.eval(
@@ -160,6 +188,7 @@ class RedisRateLimitService:
                 request_id,
                 concurrency_ttl_seconds,
                 _policy_concurrency_ttl_grace_seconds(policy),
+                use_redis_time_for_concurrency,
             )
         except RedisError as exc:
             return self._handle_unavailable(exc)
@@ -231,6 +260,7 @@ class RedisRateLimitService:
         now_dt = now or datetime.now(UTC)
         now_ms = int(now_dt.timestamp() * 1000)
         ttl_seconds = _policy_concurrency_ttl_seconds(policy)
+        use_redis_time = 1 if now is None else 0
         key = self._concurrency_key(gateway_key_id)
         try:
             raw = await self._redis.eval(
@@ -241,6 +271,7 @@ class RedisRateLimitService:
                 request_id,
                 ttl_seconds,
                 _policy_concurrency_ttl_grace_seconds(policy),
+                use_redis_time,
             )
         except RedisError as exc:
             raise RateLimitReleaseError("Rate limit concurrency heartbeat failed") from exc
@@ -267,9 +298,16 @@ class RedisRateLimitService:
             raise InvalidRateLimitPolicyError("window_seconds must be positive", param="window_seconds")
         now_dt = now or datetime.now(UTC)
         cutoff_ms = int(now_dt.timestamp() * 1000)
+        use_redis_time = 1 if now is None else 0
         key = self._concurrency_key(gateway_key_id)
         try:
-            removed = await self._redis.zremrangebyscore(key, "-inf", cutoff_ms)
+            removed = await self._redis.eval(
+                _CLEANUP_CONCURRENCY_SCRIPT,
+                1,
+                key,
+                cutoff_ms,
+                use_redis_time,
+            )
         except RedisError as exc:
             raise RateLimitReleaseError() from exc
         except Exception as exc:  # noqa: BLE001

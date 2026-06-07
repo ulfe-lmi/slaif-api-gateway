@@ -5,6 +5,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 import uuid
 from collections.abc import AsyncIterator
 
@@ -225,6 +226,15 @@ async def test_real_redis_active_concurrency_uses_separate_ttl(redis_client: Red
     assert result.allowed is True
 
 
+async def _concurrency_diagnostics(redis_client: Redis, key_id: uuid.UUID) -> str:
+    concurrency_key = RedisRateLimitService._concurrency_key(key_id)
+    members = await redis_client.zrange(concurrency_key, 0, -1, withscores=True)
+    pttl_ms = await redis_client.pttl(concurrency_key)
+    redis_time = await redis_client.time()
+    redis_now_ms = (int(redis_time[0]) * 1000) + (int(redis_time[1]) // 1000)
+    return f"key={concurrency_key} members={members!r} pttl_ms={pttl_ms} redis_now_ms={redis_now_ms}"
+
+
 @pytest.mark.asyncio
 async def test_real_redis_expired_concurrency_slot_is_cleaned(redis_client: Redis) -> None:
     service = RedisRateLimitService(redis_client)
@@ -241,13 +251,37 @@ async def test_real_redis_expired_concurrency_slot_is_cleaned(redis_client: Redi
         estimated_tokens=1,
         policy=policy,
     )
-    await asyncio.sleep(2.2)
-    result = await service.check_and_reserve(
-        gateway_key_id=key_id,
-        request_id="fresh-b",
-        estimated_tokens=1,
-        policy=policy,
-    )
+
+    with pytest.raises(ConcurrencyRateLimitExceededError):
+        await service.check_and_reserve(
+            gateway_key_id=key_id,
+            request_id="fresh-before-ttl",
+            estimated_tokens=1,
+            policy=policy,
+        )
+
+    result = None
+    last_error: ConcurrencyRateLimitExceededError | None = None
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        try:
+            result = await service.check_and_reserve(
+                gateway_key_id=key_id,
+                request_id="fresh-b",
+                estimated_tokens=1,
+                policy=policy,
+            )
+            break
+        except ConcurrencyRateLimitExceededError as exc:
+            last_error = exc
+
+    if result is None:
+        diagnostics = await _concurrency_diagnostics(redis_client, key_id)
+        pytest.fail(
+            "Expired Redis concurrency slot did not clear within 5 seconds; "
+            f"last_retry_after={getattr(last_error, 'retry_after_seconds', None)} {diagnostics}"
+        )
     assert result.allowed is True
 
 

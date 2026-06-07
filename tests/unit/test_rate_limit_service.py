@@ -35,6 +35,15 @@ class _FakeRedis:
         args = values[numkeys:]
         if numkeys == 1:
             concurrency_key = keys[0]
+            if len(args) == 2:
+                now_ms = int(args[0])
+                zset = self.zsets.setdefault(str(concurrency_key), {})
+                removed = 0
+                for member, score in list(zset.items()):
+                    if score <= now_ms:
+                        removed += 1
+                        del zset[member]
+                return removed
             now_ms = int(args[0])
             request_id = str(args[1])
             ttl_seconds = int(args[2])
@@ -65,7 +74,9 @@ class _FakeRedis:
                 del zset[member]
 
         if concurrency_limit > 0 and request_id not in zset and len(zset) >= concurrency_limit:
-            return [0, "concurrency", 0, 0, len(zset), reset_ms, concurrency_ttl_seconds, 0]
+            earliest_expiry = min(zset.values())
+            retry_after = max(((earliest_expiry - now_ms) + 999) // 1000, 1)
+            return [0, "concurrency", 0, 0, len(zset), earliest_expiry, retry_after, 0]
 
         current_requests = self.values.get(str(request_key), 0)
         if request_limit > 0 and current_requests + 1 > request_limit:
@@ -313,7 +324,8 @@ async def test_heartbeat_refreshes_existing_concurrency_slot() -> None:
 
 @pytest.mark.asyncio
 async def test_expired_concurrency_slot_is_cleaned_after_ttl() -> None:
-    service = RedisRateLimitService(_FakeRedis())
+    redis = _FakeRedis()
+    service = RedisRateLimitService(redis)
     key_id = _key_id()
     policy = RateLimitPolicy(
         concurrent_requests=1,
@@ -337,6 +349,131 @@ async def test_expired_concurrency_slot_is_cleaned_after_ttl() -> None:
     )
 
     assert result.allowed is True
+    concurrency_key = RedisRateLimitService._concurrency_key(key_id)
+    assert "req-stale" not in redis.zsets[concurrency_key]
+    assert "req-fresh" in redis.zsets[concurrency_key]
+
+
+@pytest.mark.asyncio
+async def test_real_time_concurrency_operations_request_redis_server_time() -> None:
+    redis = _FakeRedis()
+    service = RedisRateLimitService(redis)
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=5,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-server-time",
+        estimated_tokens=1,
+        policy=policy,
+    )
+    await service.heartbeat_concurrency(
+        gateway_key_id=key_id,
+        request_id="req-server-time",
+        policy=policy,
+    )
+    await service.cleanup_expired_concurrency(gateway_key_id=key_id)
+
+    assert redis.eval_calls[0][-1] == 1
+    assert redis.eval_calls[1][-1] == 1
+    assert redis.eval_calls[2][-1] == 1
+
+
+@pytest.mark.asyncio
+async def test_injected_time_keeps_concurrency_operations_deterministic() -> None:
+    redis = _FakeRedis()
+    service = RedisRateLimitService(redis)
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=5,
+        concurrency_heartbeat_seconds=1,
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-injected-time",
+        estimated_tokens=1,
+        policy=policy,
+        now=now,
+    )
+    await service.heartbeat_concurrency(
+        gateway_key_id=key_id,
+        request_id="req-injected-time",
+        policy=policy,
+        now=now,
+    )
+    await service.cleanup_expired_concurrency(gateway_key_id=key_id, now=now)
+
+    assert redis.eval_calls[0][-1] == 0
+    assert redis.eval_calls[1][-1] == 0
+    assert redis.eval_calls[2][-1] == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_expired_concurrency_before_cardinality_check() -> None:
+    redis = _FakeRedis()
+    service = RedisRateLimitService(redis)
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=2,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-stale",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    result = await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-fresh",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+    )
+
+    assert result.allowed is True
+    assert result.concurrent_in_use == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrency_limit_retry_after_and_reset_are_bounded() -> None:
+    service = RedisRateLimitService(_FakeRedis())
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=5,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-active",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    with pytest.raises(ConcurrencyRateLimitExceededError) as exc_info:
+        await service.check_and_reserve(
+            gateway_key_id=key_id,
+            request_id="req-blocked",
+            estimated_tokens=1,
+            policy=policy,
+            now=datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
+        )
+
+    assert 1 <= (exc_info.value.retry_after_seconds or 0) <= 2
 
 
 @pytest.mark.asyncio
@@ -353,6 +490,66 @@ async def test_heartbeat_missing_slot_raises_release_error() -> None:
                 concurrency_heartbeat_seconds=1,
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_does_not_resurrect_expired_concurrency_slot() -> None:
+    service = RedisRateLimitService(_FakeRedis())
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=1,
+        concurrency_ttl_seconds=2,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-expiring",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    with pytest.raises(RateLimitReleaseError):
+        await service.heartbeat_concurrency(
+            gateway_key_id=key_id,
+            request_id="req-expiring",
+            policy=policy,
+            now=datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_concurrency_uses_same_expiry_semantics() -> None:
+    service = RedisRateLimitService(_FakeRedis())
+    key_id = _key_id()
+    policy = RateLimitPolicy(
+        concurrent_requests=2,
+        concurrency_ttl_seconds=2,
+        concurrency_heartbeat_seconds=1,
+    )
+
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-expired",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    await service.check_and_reserve(
+        gateway_key_id=key_id,
+        request_id="req-live",
+        estimated_tokens=1,
+        policy=policy,
+        now=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+    )
+
+    removed = await service.cleanup_expired_concurrency(
+        gateway_key_id=key_id,
+        now=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+    )
+
+    assert removed == 1
 
 
 @pytest.mark.asyncio
