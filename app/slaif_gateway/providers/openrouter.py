@@ -178,6 +178,36 @@ class OpenRouterProviderAdapter(ProviderAdapter):
         response = await self._delete_json(_response_path(response_id), headers=headers)
         return self._provider_response(request, response)
 
+    async def list_response_input_items(
+        self,
+        request: ProviderRequest,
+        *,
+        response_id: str,
+    ) -> ProviderResponse:
+        if request.endpoint not in {
+            "/v1/responses/{response_id}/input_items",
+            "responses.input_items",
+        }:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENROUTER_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._get_json(
+            f"{_response_path(response_id)}/input_items",
+            headers=headers,
+            params=request.body,
+        )
+        return self._provider_response(request, response)
+
     async def stream_response(
         self,
         request: ProviderRequest,
@@ -233,15 +263,21 @@ class OpenRouterProviderAdapter(ProviderAdapter):
         path: str,
         *,
         headers: Mapping[str, str],
+        params: Mapping[str, Any] | None = None,
     ) -> httpx.Response:
         url = f"{self._base_url}{path}"
         timeout = self._timeout_seconds
         for attempt in range(self._max_retries + 1):
             try:
                 if self._http_client is not None:
-                    return await self._http_client.get(url, headers=headers, timeout=timeout)
+                    return await self._http_client.get(
+                        url,
+                        headers=headers,
+                        params=params,
+                        timeout=timeout,
+                    )
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    return await client.get(url, headers=headers)
+                    return await client.get(url, headers=headers, params=params)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
                     raise ProviderTimeoutError(provider=self.provider_name) from exc

@@ -46,6 +46,7 @@ async def _create_responses_test_data(
     input_token_count: bool = False,
     stored_responses: bool = False,
     previous_response_id: bool = False,
+    list_input_items: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -141,6 +142,7 @@ async def _create_responses_test_data(
             capabilities["input_token_count"] = input_token_count
             capabilities["stored_responses"] = stored_responses
             capabilities["previous_response_id"] = previous_response_id
+            capabilities["list_input_items"] = list_input_items
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -533,6 +535,114 @@ def test_openai_python_client_responses_previous_response_id_e2e(
         f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
     )
     assert created.plaintext_key not in upstream_route.calls[1].request.headers["authorization"]
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_input_items_list_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            stored_responses=True,
+            list_input_items=True,
+            allowed_endpoints=[
+                RESPONSES_ENDPOINT,
+                "GET /v1/responses/{response_id}/input_items",
+            ],
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    create_payload = {
+        "id": "resp_input_items_e2e",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_input_items_e2e",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+        "store": True,
+    }
+    input_items_payload = {
+        "object": "list",
+        "data": [
+            {
+                "id": "msg_input_item_1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": INPUT_TEXT}],
+            }
+        ],
+        "first_id": "msg_input_item_1",
+        "last_id": "msg_input_item_1",
+        "has_more": False,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            create_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=create_payload,
+                    headers={"x-request-id": "upstream-openai-responses-input-items-create"},
+                )
+            )
+            input_items_route = router.get(
+                "https://api.openai.com/v1/responses/resp_input_items_e2e/input_items"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=input_items_payload,
+                    headers={"x-request-id": "upstream-openai-responses-input-items-list"},
+                )
+            )
+
+            client = OpenAI()
+            created_response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                store=True,
+            )
+            input_items = client.responses.input_items.list(
+                "resp_input_items_e2e",
+                include=["message.input_image.image_url"],
+                limit=25,
+                order="asc",
+            )
+
+    assert created_response.id == "resp_input_items_e2e"
+    assert input_items.object == "list"
+    assert input_items.data[0].id == "msg_input_item_1"
+    assert create_route.called
+    assert input_items_route.called
+    list_request = input_items_route.calls[0].request
+    assert list_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert created.plaintext_key not in list_request.headers["authorization"]
+    assert list_request.url.params.get("include") == "message.input_image.image_url"
+    assert list_request.url.params.get("limit") == "25"
+    assert list_request.url.params.get("order") == "asc"
 
 
 @pytest.mark.e2e

@@ -333,6 +333,68 @@ async def test_openrouter_response_delete_uses_provider_auth_and_exact_path(resp
 
 
 @pytest.mark.asyncio
+async def test_openrouter_response_input_items_uses_provider_auth_exact_path_and_query(respx_mock) -> None:
+    route = respx_mock.get(
+        "https://openrouter.ai/api/v1/responses/resp_123/input_items",
+        params={
+            "after": "item_1",
+            "include": "message.input_image.image_url",
+            "limit": "25",
+            "order": "desc",
+        },
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [],
+                "first_id": None,
+                "last_id": None,
+                "has_more": False,
+            },
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-input-items"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+
+    response = await adapter.list_response_input_items(
+        ProviderRequest(
+            provider="openrouter",
+            upstream_model="openai/gpt-5.2",
+            endpoint="responses.input_items",
+            body={
+                "after": "item_1",
+                "include": ["message.input_image.image_url"],
+                "limit": 25,
+                "order": "desc",
+            },
+            request_id="gw-input-items-req",
+            extra_headers={
+                "Authorization": "Bearer client-key",
+                "X-CSRF-Token": "csrf",
+                "Accept": "application/json",
+            },
+        ),
+        response_id="resp_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert response.json_body == {
+        "object": "list",
+        "data": [],
+        "first_id": None,
+        "last_id": None,
+        "has_more": False,
+    }
+    assert response.upstream_request_id == "req-openrouter-input-items"
+    assert route.called
+
+
+@pytest.mark.asyncio
 async def test_openrouter_response_posts_function_tool_request(respx_mock) -> None:
     route = respx_mock.post("https://openrouter.ai/api/v1/responses").mock(
         return_value=httpx.Response(

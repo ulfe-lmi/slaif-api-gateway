@@ -15,12 +15,14 @@ create when the route explicitly enables stored Responses. Retrieve/delete are
 ownership-checked proxy calls backed by safe local response-reference metadata.
 Non-streaming `previous_response_id` is supported only for locally recorded,
 active, same-key provider response references after provider/route compatibility
-checks.
+checks. Input-item listing is supported only for owned locally recorded
+provider response references and is proxied without local input-item content
+storage.
 `POST /v1/responses/input_tokens` is implemented as a separate
 provider-reported count endpoint for the same local input subset. It has no
 hosted tools, MCP/connectors, background mode, conversation state, `/v1/files`
 lifecycle, audio input, audio output, image generation, file
-search, cancel/list/input-item routes, or multimodal output.
+search, cancel/response-list routes, or multimodal output.
 
 ## Supported Endpoint
 
@@ -30,6 +32,7 @@ The first implemented endpoint is:
 - `POST /v1/responses/input_tokens`
 - `GET /v1/responses/{response_id}`
 - `DELETE /v1/responses/{response_id}`
+- `GET /v1/responses/{response_id}/input_items`
 
 Unsupported Responses routes remain unsupported until separate implementation
 and tests add them.
@@ -197,6 +200,14 @@ The first stateful lifecycle slice is intentionally limited:
   gateway key owns an active local reference for that provider response ID;
 - missing, non-owned, or locally deleted references return an OpenAI-shaped
   404 and are not proxied upstream.
+- `GET /v1/responses/{response_id}/input_items` is proxied only after the same
+  local ownership check and only when the stored route advertises
+  `capabilities.responses.list_input_items=true`;
+- input-item listing supports only validated `after`, `limit`, `order`, and a
+  conservative `include` allowlist, and forwards only validated query
+  parameters to the owning provider;
+- SLAIF returns the provider list response without storing or inspecting
+  input-item content;
 - `previous_response_id` is accepted only for non-streaming create requests
   after the referenced provider response ID resolves to an active local
   reference owned by the authenticated gateway key;
@@ -216,11 +227,11 @@ completions, raw request bodies, raw response bodies, tool schemas, tool
 inputs/outputs, image/file URLs, media payloads, provider keys, plaintext
 gateway keys, token hashes, or one-time secret material.
 
-Retrieve/delete are control-plane proxy calls: they do not reserve output quota
-or create normal generation usage ledger rows. Stored create remains an ordinary
-generation request and uses the existing reservation/finalization accounting
-path. If a provider returns no response ID for `store=true`, SLAIF fails safely
-instead of claiming retrievable state.
+Retrieve/delete/input-item listing are control-plane proxy calls: they do not
+reserve output quota or create normal generation usage ledger rows. Stored
+create remains an ordinary generation request and uses the existing
+reservation/finalization accounting path. If a provider returns no response ID
+for `store=true`, SLAIF fails safely instead of claiming retrievable state.
 
 Still unsupported:
 
@@ -228,7 +239,7 @@ Still unsupported:
 - conversation/provider-side state
 - MCP/connectors
 - streaming `previous_response_id`
-- response cancel, compact, list, or input-item listing
+- response cancel, compact, or response listing
 
 OpenAI documents Responses as supporting background mode, response storage,
 conversation state, previous response IDs, and hosted tools. OpenRouter documents
@@ -392,13 +403,15 @@ For `/v1/responses`, a template revision may carry
 `template_snapshot.responses_policy` with version 1, allowed local capabilities
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
-`input_token_count`, `stored_responses`, `previous_response_id`), allowed local
+`input_token_count`, `stored_responses`, `previous_response_id`,
+`list_input_items`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
-`previous_response_id` are only safe capability summaries for non-streaming
-stored create, owned retrieve/delete, and owned previous-response chaining; they
-do not permit raw response IDs from user traffic, prompts, completions, or
-response content in template metadata. Template-to-key creation copies that
+`previous_response_id`, and `list_input_items` are only safe capability
+summaries for non-streaming stored create, owned retrieve/delete/input-item
+listing, and owned previous-response chaining; they do not permit raw response
+IDs from user traffic, prompts, completions, input items, or response content in
+template metadata. Template-to-key creation copies that
 sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
 conversation state, background, raw image URLs/data, raw file URLs/names/data/base64,
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
@@ -514,7 +527,7 @@ the support matrix:
 - `conversation`
 - MCP/connectors
 - response cancellation
-- response input-item listing
+- response listing
 - image generation
 - computer use
 - shell or hosted patch/application tools

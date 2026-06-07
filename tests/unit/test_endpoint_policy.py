@@ -11,6 +11,7 @@ from slaif_gateway.services.endpoint_policy import (
     MODELS_LIST,
     RESPONSES,
     RESPONSES_DELETE,
+    RESPONSES_INPUT_ITEMS,
     RESPONSES_INPUT_TOKENS,
     RESPONSES_RETRIEVE,
     EndpointPolicyService,
@@ -54,6 +55,7 @@ def test_allow_all_endpoints_allows_known_endpoints() -> None:
     service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_TOKENS)
     service.ensure_endpoint_allowed(auth, RESPONSES_RETRIEVE)
     service.ensure_endpoint_allowed(auth, RESPONSES_DELETE)
+    service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_ITEMS)
 
 
 def test_stable_endpoint_identifiers_are_enforced() -> None:
@@ -76,6 +78,10 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
         _auth(allowed_endpoints=("responses.delete",)),
         RESPONSES_DELETE,
     )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("responses.input_items",)),
+        RESPONSES_INPUT_ITEMS,
+    )
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("models.list",)), CHAT_COMPLETIONS)
@@ -91,6 +97,12 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses.retrieve",)), RESPONSES_DELETE)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), RESPONSES_INPUT_ITEMS)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses.retrieve",)), RESPONSES_INPUT_ITEMS)
 
 
 def test_empty_endpoint_allow_list_rejects_when_allow_all_false() -> None:
@@ -128,6 +140,10 @@ def test_literal_method_paths_and_bare_paths_are_supported() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("DELETE /v1/responses/{response_id}",)),
         RESPONSES_DELETE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("GET /v1/responses/{response_id}/input_items",)),
+        RESPONSES_INPUT_ITEMS,
     )
 
     with pytest.raises(EndpointNotAllowedError):

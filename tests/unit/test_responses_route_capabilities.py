@@ -119,11 +119,23 @@ def test_previous_response_id_capability_passes_when_explicit_without_stateless(
     )
 
 
+def test_list_input_items_capability_passes_when_explicit_without_stateless() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stateless"] = False
+    capabilities["list_input_items"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        list_input_items_requested=True,
+    )
+
+
 def test_default_responses_capabilities_keep_stored_responses_disabled() -> None:
     capabilities = default_responses_capabilities()
 
     assert capabilities["stored_responses"] is False
     assert capabilities["previous_response_id"] is False
+    assert capabilities["list_input_items"] is False
 
 
 def test_streaming_image_input_requires_streaming_capability_too() -> None:
@@ -223,6 +235,21 @@ def test_image_input_request_fails_when_capability_absent() -> None:
 
     assert exc_info.value.error_code == "responses_image_input_capability_not_supported"
     assert exc_info.value.param == "input"
+
+
+def test_list_input_items_request_requires_explicit_capability() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["stored_responses"] = True
+    capabilities["previous_response_id"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            list_input_items_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_list_input_items_capability_not_supported"
+    assert exc_info.value.param == "response_id"
 
 
 def test_file_input_request_fails_when_capability_absent() -> None:

@@ -175,6 +175,7 @@ revision may summarize only these implemented local/stored capabilities:
 - `input_token_count`
 - `stored_responses`
 - `previous_response_id`
+- `list_input_items`
 
 Allowed local tool types are limited to `function` and `custom`. The policy
 summary must keep `hosted_tools_allowed` empty and must set `stateful`,
@@ -184,10 +185,11 @@ skills, MCP or connectors, computer use, image generation, tool search,
 provider-side storage beyond safe response references, background mode,
 conversation lifecycle, `/v1/files`, file search/retrieval tools, audio input,
 audio output, and multimodal Responses output remain future work and are
-rejected for template-created keys. `previous_response_id` is only a safe
-capability summary for owned local response references and does not permit live
-response IDs in template metadata. The summary is operator provenance metadata
-only; it must not contain raw image URLs, image data URLs, file URLs,
+rejected for template-created keys. `previous_response_id` and
+`list_input_items` are only safe capability summaries for owned local response
+references and do not permit live response IDs or input items in template
+metadata. The summary is operator provenance metadata only; it must not contain
+raw image URLs, image data URLs, file URLs,
 filenames, file data URLs, base64 payloads, provider response IDs from user
 traffic, tool definitions, JSON schemas, grammar definitions, model-generated
 tool input, tool outputs, prompts, completions, raw request bodies, or raw

@@ -63,6 +63,7 @@ def _route_result(
     responses_input_token_count: bool = False,
     responses_stored_responses: bool = False,
     responses_previous_response_id: bool = False,
+    responses_list_input_items: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
@@ -75,6 +76,7 @@ def _route_result(
     capabilities["input_token_count"] = responses_input_token_count
     capabilities["stored_responses"] = responses_stored_responses
     capabilities["previous_response_id"] = responses_previous_response_id
+    capabilities["list_input_items"] = responses_list_input_items
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -945,6 +947,167 @@ def test_response_retrieve_missing_or_non_owned_reference_returns_404_before_pro
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
 
     response = TestClient(app).get("/v1/responses/resp_missing")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "response_not_found"
+    assert provider_calls == []
+
+
+def test_response_input_items_requires_explicit_endpoint_permission(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/responses",)),
+    )
+
+    response = TestClient(app).get("/v1/responses/resp_owned/input_items")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "endpoint_not_allowed"
+
+
+def test_response_input_items_validates_query_params(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=("GET /v1/responses/{response_id}/input_items",)
+        ),
+    )
+    client = TestClient(app)
+
+    for query in (
+        "?unknown=value",
+        "?limit=0",
+        "?limit=101",
+        "?limit=abc",
+        "?order=newest",
+        "?after=",
+        "?include=web_search_call.action.sources",
+    ):
+        response = client.get(f"/v1/responses/resp_owned/input_items{query}")
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_response_input_items_query"
+
+
+def test_response_input_items_owned_reference_proxies_without_generation_accounting(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key(
+        allowed_endpoints=("GET /v1/responses/{response_id}/input_items",)
+    )
+    _wire_auth_and_db(monkeypatch, app, auth)
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = request
+        assert authenticated_key.gateway_key_id == auth.gateway_key_id
+        assert response_id == "resp_owned"
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_response_id=response_id,
+            upstream_model="gpt-5.2",
+            route_id=uuid.uuid4(),
+        )
+
+    async def _fake_route_for_reference(reference, *, request, list_input_items_requested=False):
+        _ = (reference, request)
+        assert list_input_items_requested is True
+        return SimpleNamespace(provider="openai")
+
+    class _FakeAdapter:
+        async def list_response_input_items(self, request, *, response_id):
+            provider_calls.append(response_id)
+            assert request.endpoint == "responses.input_items"
+            assert request.body == {
+                "after": "item_1",
+                "include": ["message.input_image.image_url"],
+                "limit": 25,
+                "order": "asc",
+            }
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={
+                    "object": "list",
+                    "data": [],
+                    "first_id": None,
+                    "last_id": None,
+                    "has_more": False,
+                },
+            )
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "_provider_route_for_reference", _fake_route_for_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+
+    response = TestClient(app).get(
+        "/v1/responses/resp_owned/input_items"
+        "?after=item_1&include=message.input_image.image_url&limit=25&order=asc"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "object": "list",
+        "data": [],
+        "first_id": None,
+        "last_id": None,
+        "has_more": False,
+    }
+    assert provider_calls == ["resp_owned"]
+    assert pricing_calls == []
+    assert quota_calls == []
+
+
+def test_response_input_items_missing_or_non_owned_reference_returns_404_before_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=("GET /v1/responses/{response_id}/input_items",)
+        ),
+    )
+    provider_calls: list[str] = []
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = (response_id, authenticated_key, request)
+        return None
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).get("/v1/responses/resp_missing/input_items")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "response_not_found"

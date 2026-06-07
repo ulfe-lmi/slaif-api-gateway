@@ -225,6 +225,12 @@ Responses-specific rules for the current foundation:
   retrieve/delete request is proxied when the reference is missing, non-owned,
   or locally deleted. These control calls do not forward a raw request body and
   do not create normal generation usage ledger rows;
+- `GET /v1/responses/{response_id}/input_items` follows the same ownership
+  boundary and additionally requires `capabilities.responses.list_input_items=true`
+  on the stored route. The provider request uses the owned provider response ID
+  plus only validated `after`, `limit`, `order`, and conservative `include`
+  query parameters; SLAIF does not store, inspect, or log returned input-item
+  content and does not create a normal generation usage ledger row;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe `error` events;
   it is not converted into Chat Completions chunks;
@@ -241,8 +247,8 @@ Responses-specific rules for the current foundation:
 - MCP/connectors are excluded;
 - `background`, `conversation`, and streaming `previous_response_id` are
   rejected before provider forwarding;
-- response cancel, compact, list, and input-item listing require explicit
-  provider response ownership mapping before they can be implemented;
+- response cancel, compact, and response listing require explicit provider
+  response ownership mapping before they can be implemented;
 - provider response IDs and tool diagnostics must be treated as metadata and
   sanitized before storage or display.
 

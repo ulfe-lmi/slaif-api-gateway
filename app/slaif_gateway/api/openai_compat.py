@@ -17,6 +17,7 @@ from slaif_gateway.services.endpoint_policy import (
     MODELS_LIST,
     RESPONSES,
     RESPONSES_DELETE,
+    RESPONSES_INPUT_ITEMS,
     RESPONSES_INPUT_TOKENS,
     RESPONSES_RETRIEVE,
     EndpointPolicyService,
@@ -27,6 +28,7 @@ from slaif_gateway.services.responses_gateway import (
     handle_response_create,
     handle_response_delete,
     handle_response_input_tokens_count,
+    handle_response_input_items_list,
     handle_response_retrieve,
 )
 
@@ -120,6 +122,23 @@ async def retrieve_response(
     if "request" in inspect.signature(handle_response_retrieve).parameters:
         kwargs["request"] = request
     return await handle_response_retrieve(**kwargs)
+
+
+@router.get("/v1/responses/{response_id}/input_items")
+async def list_response_input_items(
+    response_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES_INPUT_ITEMS)
+    kwargs = {
+        "response_id": response_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_input_items_list).parameters:
+        kwargs["request"] = request
+    return await handle_response_input_items_list(**kwargs)
 
 
 @router.delete("/v1/responses/{response_id}")

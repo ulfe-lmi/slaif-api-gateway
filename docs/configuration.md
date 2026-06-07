@@ -515,9 +515,9 @@ structured `text.format` JSON object/schema output when route capability
 metadata allows it. It also supports non-streaming local/client-side function
 tools when route capability metadata allows them, and non-streaming
 local/client-side custom tools when route capability metadata allows them.
-Non-streaming stored create and non-streaming `previous_response_id` are
-available only when route capability metadata allows them and local ownership
-checks pass. It reuses
+Non-streaming stored create, non-streaming `previous_response_id`, and
+input-item listing are available only when route capability metadata allows
+them and local ownership checks pass. It reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
 `max_output_tokens`, and adds bounded request-shape caps:
 

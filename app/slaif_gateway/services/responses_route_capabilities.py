@@ -19,6 +19,7 @@ RESPONSES_CAPABILITY_FILE_INPUT = "file_input"
 RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT = "input_token_count"
 RESPONSES_CAPABILITY_STORED_RESPONSES = "stored_responses"
 RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID = "previous_response_id"
+RESPONSES_CAPABILITY_LIST_INPUT_ITEMS = "list_input_items"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -38,6 +39,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT,
         RESPONSES_CAPABILITY_STORED_RESPONSES,
         RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID,
+        RESPONSES_CAPABILITY_LIST_INPUT_ITEMS,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -62,6 +64,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT: False,
         RESPONSES_CAPABILITY_STORED_RESPONSES: False,
         RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID: False,
+        RESPONSES_CAPABILITY_LIST_INPUT_ITEMS: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -115,6 +118,7 @@ def enforce_responses_route_capabilities(
     input_token_count_requested: bool = False,
     stored_responses_requested: bool = False,
     previous_response_id_requested: bool = False,
+    list_input_items_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -144,6 +148,19 @@ def enforce_responses_route_capabilities(
                 )
             )
 
+    if list_input_items_requested:
+        if capabilities.get(RESPONSES_CAPABILITY_LIST_INPUT_ITEMS) is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_LIST_INPUT_ITEMS,
+                    field="response_id",
+                    error_code="responses_list_input_items_capability_not_supported",
+                    safe_message=(
+                        "This model route does not support Responses input-item listing."
+                    ),
+                )
+            )
+
     if stored_responses_requested:
         if capabilities.get(RESPONSES_CAPABILITY_STORED_RESPONSES) is not True:
             raise ResponsesRouteCapabilityError(
@@ -156,6 +173,7 @@ def enforce_responses_route_capabilities(
             )
     elif (
         not previous_response_id_requested
+        and not list_input_items_requested
         and capabilities.get(RESPONSES_CAPABILITY_STATELESS) is not True
     ):
         raise ResponsesRouteCapabilityError(

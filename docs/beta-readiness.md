@@ -195,8 +195,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   user-message URL/data URL file input, non-streaming JSON, typed SSE
   streaming, non-streaming structured `text.format` JSON object/schema output,
   plus non-streaming local function and custom tools, non-streaming stored
-  create with ownership-checked retrieve/delete, non-streaming owned
-  `previous_response_id`, explicit key endpoint
+  create with ownership-checked retrieve/delete/input-item listing,
+  non-streaming owned `previous_response_id`, explicit key endpoint
   permission, route capability, provider route, and pricing metadata.
   `/v1/responses/input_tokens` is implemented separately for provider-reported
   input-token counts over the same stateless local input subset; it requires
@@ -242,7 +242,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
 - No Responses hosted tools, conversation/background routes, streaming
-  previous-response state, cancel/list/input-item routes, embeddings, files endpoints, image generation
+  previous-response state, cancel/list routes, embeddings, files endpoints, image generation
   endpoints, or audio endpoints in RC1.
 - No MFA or full RBAC.
 - No production certification or compliance claim.
