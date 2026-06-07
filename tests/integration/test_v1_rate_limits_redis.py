@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 from collections.abc import Iterator
 from contextlib import closing
 from decimal import Decimal
@@ -58,6 +59,82 @@ async def _redis_keys(redis_url: str) -> list[str]:
         return list(await client.keys("rate:*"))
     finally:
         await client.aclose()
+
+
+def _wait_until_fixed_window_has_margin(
+    *,
+    window_seconds: int = 60,
+    minimum_remaining_seconds: float = 10.0,
+) -> None:
+    elapsed = time.time() % window_seconds
+    remaining = window_seconds - elapsed
+    if remaining >= minimum_remaining_seconds:
+        return
+
+    # Keep both immediate requests in the same fixed window; otherwise a
+    # boundary rollover can legitimately accept one request in each window.
+    time.sleep(min(remaining + 0.25, minimum_remaining_seconds + 1.0))
+
+
+async def _redis_rate_limit_diagnostics(redis_url: str) -> list[dict[str, object]]:
+    client = Redis.from_url(redis_url, decode_responses=True)
+    try:
+        diagnostics: list[dict[str, object]] = []
+        for key in sorted(await client.keys("rate:*")):
+            key_type = await client.type(key)
+            item: dict[str, object] = {
+                "key": key,
+                "type": key_type,
+                "pttl_ms": await client.pttl(key),
+            }
+            if key_type == "string":
+                item["value"] = await client.get(key)
+            elif key_type == "zset":
+                item["members"] = await client.zrange(key, 0, -1, withscores=True)
+            diagnostics.append(item)
+        return diagnostics
+    finally:
+        await client.aclose()
+
+
+def _redacted_response_debug_body(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return f"<non-json response body length={len(response.text)}>"
+    return json.dumps(_redact_response_payload(body), sort_keys=True)
+
+
+def _redact_response_payload(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, child in value.items():
+            if key in {"content", "prompt", "completion", "messages"}:
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = _redact_response_payload(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_response_payload(item) for item in value]
+    return value
+
+
+def _request_rate_limit_failure_diagnostics(
+    *,
+    redis_url: str,
+    first: httpx.Response,
+    second: httpx.Response,
+    upstream_call_count: int,
+) -> str:
+    redis_diagnostics = asyncio.run(_redis_rate_limit_diagnostics(redis_url))
+    return (
+        "expected second request to be rejected by the same Redis fixed window; "
+        f"first_status={first.status_code} "
+        f"second_status={second.status_code} "
+        f"second_body={_redacted_response_debug_body(second)} "
+        f"upstream_call_count={upstream_call_count} "
+        f"redis_rate_keys={redis_diagnostics!r}"
+    )
 
 
 @pytest.fixture
@@ -188,6 +265,7 @@ def test_v1_chat_request_rate_limit_rejects_before_provider(
     from slaif_gateway.main import create_app
 
     app = create_app(get_settings())
+    _wait_until_fixed_window_has_margin()
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
             return_value=_upstream_response()
@@ -205,7 +283,12 @@ def test_v1_chat_request_rate_limit_rejects_before_provider(
             )
 
     assert first.status_code == 200
-    assert second.status_code == 429
+    assert second.status_code == 429, _request_rate_limit_failure_diagnostics(
+        redis_url=redis_test_url,
+        first=first,
+        second=second,
+        upstream_call_count=len(upstream_route.calls),
+    )
     assert second.json()["error"]["code"] == "request_rate_limit_exceeded"
     assert len(upstream_route.calls) == 1
     upstream_request = upstream_route.calls[0].request
