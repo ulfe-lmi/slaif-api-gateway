@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any, Mapping
+from urllib.parse import quote
 
 import httpx
 
@@ -140,6 +141,42 @@ class OpenAIProviderAdapter(ProviderAdapter):
         response = await self._post_json(_RESPONSES_INPUT_TOKENS_PATH, json=body, headers=headers)
         return self._provider_response(request, response)
 
+    async def retrieve_response(self, request: ProviderRequest, *, response_id: str) -> ProviderResponse:
+        if request.endpoint not in {"/v1/responses/{response_id}", "responses.retrieve"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._get_json(_response_path(response_id), headers=headers)
+        return self._provider_response(request, response)
+
+    async def delete_response(self, request: ProviderRequest, *, response_id: str) -> ProviderResponse:
+        if request.endpoint not in {"/v1/responses/{response_id}", "responses.delete"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._delete_json(_response_path(response_id), headers=headers)
+        return self._provider_response(request, response)
+
     async def stream_response(
         self,
         request: ProviderRequest,
@@ -180,6 +217,54 @@ class OpenAIProviderAdapter(ProviderAdapter):
                     return await self._http_client.post(url, json=json, headers=headers, timeout=timeout)
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     return await client.post(url, json=json, headers=headers)
+            except httpx.TimeoutException as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderTimeoutError(provider=self.provider_name) from exc
+            except httpx.HTTPError as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderRequestError(provider=self.provider_name) from exc
+            await asyncio.sleep(0)
+
+        raise ProviderRequestError(provider=self.provider_name)
+
+    async def _get_json(
+        self,
+        path: str,
+        *,
+        headers: Mapping[str, str],
+    ) -> httpx.Response:
+        url = f"{self._base_url}{path}"
+        timeout = self._timeout_seconds
+        for attempt in range(self._max_retries + 1):
+            try:
+                if self._http_client is not None:
+                    return await self._http_client.get(url, headers=headers, timeout=timeout)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    return await client.get(url, headers=headers)
+            except httpx.TimeoutException as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderTimeoutError(provider=self.provider_name) from exc
+            except httpx.HTTPError as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderRequestError(provider=self.provider_name) from exc
+            await asyncio.sleep(0)
+
+        raise ProviderRequestError(provider=self.provider_name)
+
+    async def _delete_json(
+        self,
+        path: str,
+        *,
+        headers: Mapping[str, str],
+    ) -> httpx.Response:
+        url = f"{self._base_url}{path}"
+        timeout = self._timeout_seconds
+        for attempt in range(self._max_retries + 1):
+            try:
+                if self._http_client is not None:
+                    return await self._http_client.delete(url, headers=headers, timeout=timeout)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    return await client.delete(url, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
                     raise ProviderTimeoutError(provider=self.provider_name) from exc
@@ -359,3 +444,7 @@ def _responses_event_response_payload(payload: Mapping[str, Any] | None) -> Mapp
     if not isinstance(response_payload, Mapping):
         return None
     return response_payload
+
+
+def _response_path(response_id: str) -> str:
+    return f"{_RESPONSES_PATH}/{quote(response_id, safe='')}"

@@ -127,6 +127,38 @@ async def test_policy_validation_accepts_route_backed_responses_input_token_coun
 
 
 @pytest.mark.asyncio
+async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_without_model_routes() -> None:
+    policy = await validate_gateway_key_policy(
+        GatewayKeyPolicy(
+            allowed_models=[],
+            allowed_endpoints=[
+                "GET /v1/responses/{response_id}",
+                "DELETE /v1/responses/{response_id}",
+            ],
+        ),
+        model_routes_repository=_RoutesRepo([]),
+    )
+
+    assert policy.allowed_models == []
+    assert policy.allowed_endpoints == [
+        "GET /v1/responses/{response_id}",
+        "DELETE /v1/responses/{response_id}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_policy_validation_rejects_unimplemented_responses_lifecycle_paths() -> None:
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="not implemented"):
+        await validate_gateway_key_policy(
+            GatewayKeyPolicy(
+                allowed_models=[],
+                allowed_endpoints=["POST /v1/responses/{response_id}/cancel"],
+            ),
+            model_routes_repository=_RoutesRepo([]),
+        )
+
+
+@pytest.mark.asyncio
 async def test_policy_validation_rejects_responses_model_without_responses_route() -> None:
     with pytest.raises(InvalidGatewayKeyPolicyError, match="No enabled route exists for model gpt-5.2"):
         await validate_gateway_key_policy(

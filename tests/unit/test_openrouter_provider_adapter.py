@@ -58,6 +58,21 @@ def _responses_input_tokens_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_lifecycle_request(endpoint: str) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openrouter",
+        upstream_model="openai/gpt-5.2",
+        endpoint=endpoint,
+        body={},
+        request_id="gw-response-lifecycle-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "X-CSRF-Token": "csrf",
+            "Accept": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openrouter_api_key_raises() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY=None))
@@ -219,6 +234,58 @@ async def test_openrouter_response_input_tokens_posts_count_request(respx_mock) 
     assert caller_body["model"] == "client-model"
     assert response.json_body == {"object": "response.input_tokens", "input_tokens": 123}
     assert response.upstream_request_id == "req-openrouter-count"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_response_retrieve_uses_provider_auth_and_exact_path(respx_mock) -> None:
+    route = respx_mock.get("https://openrouter.ai/api/v1/responses/resp_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_123", "object": "response", "status": "completed"},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-retrieve"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+
+    response = await adapter.retrieve_response(
+        _responses_lifecycle_request("responses.retrieve"),
+        response_id="resp_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert response.json_body == {"id": "resp_123", "object": "response", "status": "completed"}
+    assert response.upstream_request_id == "req-openrouter-retrieve"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_response_delete_uses_provider_auth_and_exact_path(respx_mock) -> None:
+    route = respx_mock.delete("https://openrouter.ai/api/v1/responses/resp_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_123", "object": "response.deleted", "deleted": True},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-delete"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+
+    response = await adapter.delete_response(
+        _responses_lifecycle_request("responses.delete"),
+        response_id="resp_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert response.json_body == {"id": "resp_123", "object": "response.deleted", "deleted": True}
+    assert response.upstream_request_id == "req-openrouter-delete"
     assert route.called
 
 

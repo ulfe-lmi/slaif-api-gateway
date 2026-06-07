@@ -16,14 +16,18 @@ from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
     MODELS_LIST,
     RESPONSES,
+    RESPONSES_DELETE,
     RESPONSES_INPUT_TOKENS,
+    RESPONSES_RETRIEVE,
     EndpointPolicyService,
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
 from slaif_gateway.services.responses_gateway import (
     handle_response_create,
+    handle_response_delete,
     handle_response_input_tokens_count,
+    handle_response_retrieve,
 )
 
 router = APIRouter()
@@ -99,6 +103,40 @@ async def count_response_input_tokens(
     if "request" in inspect.signature(handle_response_input_tokens_count).parameters:
         kwargs["request"] = request
     return await handle_response_input_tokens_count(**kwargs)
+
+
+@router.get("/v1/responses/{response_id}")
+async def retrieve_response(
+    response_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES_RETRIEVE)
+    kwargs = {
+        "response_id": response_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_retrieve).parameters:
+        kwargs["request"] = request
+    return await handle_response_retrieve(**kwargs)
+
+
+@router.delete("/v1/responses/{response_id}")
+async def delete_response(
+    response_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, RESPONSES_DELETE)
+    kwargs = {
+        "response_id": response_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_response_delete).parameters:
+        kwargs["request"] = request
+    return await handle_response_delete(**kwargs)
 
 
 def _ensure_endpoint_allowed(authenticated_key: AuthenticatedGatewayKey, endpoint: str) -> None:

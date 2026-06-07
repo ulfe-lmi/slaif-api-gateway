@@ -27,6 +27,9 @@ EXPECTED_TABLES = {
     "email_deliveries",
     "audit_log",
     "background_jobs",
+    "key_templates",
+    "key_template_revisions",
+    "response_references",
 }
 
 

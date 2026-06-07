@@ -115,9 +115,12 @@ Known limitations:
 ## Responses Forwarding
 
 Current Chat Completions forwarding remains unchanged. `POST /v1/responses` has
-a limited stateless text-output forwarding path, and
+a limited text-output forwarding path, including stateless create and
+non-streaming stored create when explicitly enabled.
 `POST /v1/responses/input_tokens` has a separate provider-reported count
-forwarding path for the same stateless local input subset.
+forwarding path for the same local input subset. `GET` and
+`DELETE /v1/responses/{response_id}` are control-plane proxy calls after local
+ownership checks.
 
 Responses forwarding follows the same provider-secret boundary:
 
@@ -153,7 +156,8 @@ dictionary is not forwarded as-is.
 
 Responses-specific rules for the current foundation:
 
-- only stateless text output is supported;
+- text output is supported for stateless create and for non-streaming
+  `store=true` when the route explicitly enables stored Responses;
 - `input` may be a string or a bounded message/input item array.
   Supported arrays are reconstructed from message roles plus string content or
   `input_text` content parts; string-only `function_call_output` items are
@@ -198,6 +202,10 @@ Responses-specific rules for the current foundation:
   `capabilities.responses.json_mode=true` or
   `capabilities.responses.structured_outputs=true`;
 - `store=false` is injected when omitted;
+- explicit `store=true` is forwarded only for non-streaming create after
+  `capabilities.responses.stored_responses=true` is verified. After a
+  successful provider response with an ID, SLAIF persists only safe response
+  reference metadata needed for ownership and future provider routing;
 - `max_output_tokens` is defaulted or capped before forwarding;
 - `/v1/responses/input_tokens` is routed and forwarded separately. Its
   canonical upstream body may include `input`, `instructions`, `text`, local
@@ -206,6 +214,12 @@ Responses-specific rules for the current foundation:
   forwards the provider's official `response.input_tokens` shape only after
   validating the object and non-negative integer count. It does not create a
   Response or reserve/finalize generation quota;
+- `GET` and `DELETE /v1/responses/{response_id}` are built from the locally
+  owned response reference, provider route metadata, and provider adapter path
+  construction. Client-supplied response IDs are used only for local lookup; no
+  retrieve/delete request is proxied when the reference is missing, non-owned,
+  or locally deleted. These control calls do not forward a raw request body and
+  do not create normal generation usage ledger rows;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe `error` events;
   it is not converted into Chat Completions chunks;
@@ -220,9 +234,9 @@ Responses-specific rules for the current foundation:
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;
-- `background`, `store`, `previous_response_id`, and `conversation` are rejected
-  before provider forwarding;
-- response retrieval, cancel, delete, and input-item listing require explicit
+- `background`, `previous_response_id`, and `conversation` are rejected before
+  provider forwarding;
+- response cancel, compact, list, and input-item listing require explicit
   provider response ownership mapping before they can be implemented;
 - provider response IDs and tool diagnostics must be treated as metadata and
   sanitized before storage or display.

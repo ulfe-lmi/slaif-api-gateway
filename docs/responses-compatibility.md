@@ -3,18 +3,21 @@
 Status: limited foundation implemented on current `main`.
 
 This document defines the RC2-beta support boundary for Responses API work.
-Current support is deliberately narrow: stateless `POST /v1/responses` with
-text output, string input or bounded input item arrays, optional user-message
-`input_image` content parts for image input to text output, optional
-user-message `input_file` content parts for file input to text output,
-non-streaming JSON, typed SSE streaming, bounded non-streaming structured text
-output through `text.format`, local/client-side function tools, and
-non-streaming local/client-side custom tools. `POST /v1/responses/input_tokens`
-is implemented as a separate provider-reported count endpoint for the same
-stateless local input subset. It has no hosted tools, MCP/connectors,
-provider-side storage, background mode, previous response or conversation
+Current support is deliberately narrow: `POST /v1/responses` with text output,
+string input or bounded input item arrays, optional user-message `input_image`
+content parts for image input to text output, optional user-message
+`input_file` content parts for file input to text output, non-streaming JSON,
+typed SSE streaming for stateless requests, bounded non-streaming structured
+text output through `text.format`, local/client-side function tools, and
+non-streaming local/client-side custom tools. `store=false` remains the default
+for create. `store=true` is supported only for non-streaming stored-response
+create when the route explicitly enables stored Responses. Retrieve/delete are
+ownership-checked proxy calls backed by safe local response-reference metadata.
+`POST /v1/responses/input_tokens` is implemented as a separate
+provider-reported count endpoint for the same local input subset. It has no
+hosted tools, MCP/connectors, background mode, previous response or conversation
 state, `/v1/files` lifecycle, audio input, audio output, image generation, file
-search, or multimodal output.
+search, cancel/list/input-item routes, or multimodal output.
 
 ## Supported Endpoint
 
@@ -22,6 +25,8 @@ The first implemented endpoint is:
 
 - `POST /v1/responses`
 - `POST /v1/responses/input_tokens`
+- `GET /v1/responses/{response_id}`
+- `DELETE /v1/responses/{response_id}`
 
 Unsupported Responses routes remain unsupported until separate implementation
 and tests add them.
@@ -37,7 +42,8 @@ Implemented request fields for the first slice:
 - bounded `metadata`
 - `stream` omitted, `false`, or `true` when the resolved route explicitly
   advertises Responses streaming support
-- `store` omitted or `false`
+- `store` omitted, `false`, or non-streaming `true` when the resolved route
+  explicitly advertises stored Responses support
 - `text.format` as plain text, JSON object mode, or bounded JSON schema
   structured output
 - `tools` with local function-tool or custom-tool entries only
@@ -47,7 +53,10 @@ Implemented request fields for the first slice:
 
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
 the gateway remains stateless even when an upstream default would store
-responses. If `max_output_tokens` is omitted, SLAIF injects the existing default
+responses. Explicit `store=true` requires `stream=false` and
+`capabilities.responses.stored_responses=true`; it persists only safe provider
+response reference metadata after a successful provider create response with an
+ID. If `max_output_tokens` is omitted, SLAIF injects the existing default
 output cap. Streaming uses typed Responses SSE events such as
 `response.created`, `response.output_text.delta`, `response.completed`, and
 `error`; SLAIF does not translate Responses streams into Chat Completions
@@ -168,23 +177,49 @@ OpenRouter Responses forwarding, including streaming, is implemented only for
 explicitly configured `/v1/responses` OpenRouter routes; OpenRouter support
 remains beta/stateless and is not enabled by model allowlist alone.
 
-## First Supported Mode
+## Stored Response Lifecycle
 
-SLAIF starts with a stateless mode:
+The first stateful lifecycle slice is intentionally limited:
 
-- no `background=true`
-- no provider-side response storage or retrieval
-- no `store=true`
-- no `previous_response_id`
-- no conversation/provider-side state
-- no MCP/connectors
-- no response delete, cancel, retrieve, or input-item listing
+- `store=true` is accepted only for non-streaming `POST /v1/responses`;
+- the resolved route must advertise
+  `capabilities.responses.stored_responses=true`;
+- `stream=true` with `store=true` is rejected;
+- successful stored create persists only a safe local response reference after
+  the provider returns an `id`;
+- `GET /v1/responses/{response_id}` and
+  `DELETE /v1/responses/{response_id}` are proxied only after the authenticated
+  gateway key owns an active local reference for that provider response ID;
+- missing, non-owned, or locally deleted references return an OpenAI-shaped
+  404 and are not proxied upstream.
+
+The local response reference stores provider response ID, gateway key/owner
+metadata, provider, requested/upstream model, endpoint, route/status/timestamps,
+and safe provider request metadata only. SLAIF does not store prompts,
+completions, raw request bodies, raw response bodies, tool schemas, tool
+inputs/outputs, image/file URLs, media payloads, provider keys, plaintext
+gateway keys, token hashes, or one-time secret material.
+
+Retrieve/delete are control-plane proxy calls: they do not reserve output quota
+or create normal generation usage ledger rows. Stored create remains an ordinary
+generation request and uses the existing reservation/finalization accounting
+path. If a provider returns no response ID for `store=true`, SLAIF fails safely
+instead of claiming retrievable state.
+
+Still unsupported:
+
+- `background=true`
+- `previous_response_id`
+- conversation/provider-side state
+- MCP/connectors
+- response cancel, compact, list, or input-item listing
 
 OpenAI documents Responses as supporting background mode, response storage,
 conversation state, previous response IDs, and hosted tools. OpenRouter documents
-its Responses beta as stateless. SLAIF should therefore fail closed on stateful
-and background features until it has explicit ownership mapping, quota/accounting
-semantics, and tests.
+its Responses beta as stateless. SLAIF enables only the owned retrieve/delete
+slice above and continues to fail closed on other stateful and background
+features until explicit ownership mapping, quota/accounting semantics, and tests
+exist.
 
 ## Tool Support Policy
 
@@ -321,7 +356,7 @@ resolution, pricing, quota reservation, or provider forwarding.
 
 Usable Responses policies require key templates. Durable template records and
 immutable revisions now exist for reviewed calibration-derived Chat Completions
-policy snapshots and for a safe stateless local Responses policy summary. The
+policy snapshots and for a safe local/stored Responses policy summary. The
 Responses template policy surface is provenance metadata for implemented local
 capabilities only; it is not a raw request/tool-schema store and it does not
 bypass route/model capability enforcement.
@@ -340,11 +375,15 @@ Template requirements:
 For `/v1/responses`, a template revision may carry
 `template_snapshot.responses_policy` with version 1, allowed local capabilities
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
-`function_tools`, `custom_tools`, `image_input`, `file_input`), allowed local tool
-types (`function`, `custom`), an empty hosted-tool allowlist, and explicit false
-state/storage/background/multimodal-output flags. Template-to-key creation
-copies that sanitized summary into gateway-key metadata. Hosted tools,
-MCP/connectors, stateful/background/storage, raw image URLs/data, raw file
+`function_tools`, `custom_tools`, `image_input`, `file_input`,
+`input_token_count`, `stored_responses`), allowed local tool types (`function`,
+`custom`), an empty hosted-tool allowlist, and explicit false storage,
+background, and multimodal-output flags. `stored_responses` is only a safe
+capability summary for non-streaming create plus owned retrieve/delete; it does
+not permit raw response IDs from user traffic, prompts, completions, or response
+content in template metadata. Template-to-key creation copies that sanitized
+summary into gateway-key metadata. Hosted tools, MCP/connectors,
+previous-response/conversation state, background, raw image URLs/data, raw file
 URLs/names/data/base64, raw tool definitions, schemas, generated tool inputs,
 and tool outputs remain out of scope for template metadata and are rejected.
 
@@ -454,12 +493,9 @@ RC2 must reject these before provider forwarding unless a later contract updates
 the support matrix:
 
 - `background=true`
-- `store=true`
 - `previous_response_id`
 - `conversation`
 - MCP/connectors
-- response retrieval
-- response deletion
 - response cancellation
 - response input-item listing
 - image generation

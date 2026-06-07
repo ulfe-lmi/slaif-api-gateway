@@ -37,6 +37,16 @@ class ProviderAdapter(ABC):
         _ = request
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def retrieve_response(self, request: ProviderRequest, *, response_id: str) -> ProviderResponse:
+        """Retrieve a provider-stored Response by provider response ID."""
+        _ = (request, response_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def delete_response(self, request: ProviderRequest, *, response_id: str) -> ProviderResponse:
+        """Delete a provider-stored Response by provider response ID."""
+        _ = (request, response_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def stream_chat_completion(
         self,
         request: ProviderRequest,

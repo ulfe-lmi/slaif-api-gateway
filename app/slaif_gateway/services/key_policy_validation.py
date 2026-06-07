@@ -13,12 +13,16 @@ from slaif_gateway.services.route_resolution import matches_model_route
 MODELS_ENDPOINT = "/v1/models"
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
+RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
+RESPONSES_DELETE_ENDPOINT = "DELETE /v1/responses/{response_id}"
 IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
     {
         MODELS_ENDPOINT,
         CHAT_COMPLETIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
+        RESPONSES_RETRIEVE_ENDPOINT,
+        RESPONSES_DELETE_ENDPOINT,
     }
 )
 
@@ -100,9 +104,11 @@ def _validate_endpoints(policy: GatewayKeyPolicy) -> None:
         )
 
     for endpoint in policy.allowed_endpoints:
-        if not endpoint.startswith("/v1/"):
+        normalized_endpoint = _normalize_endpoint_value(endpoint)
+        if not normalized_endpoint.startswith("/v1/"):
             raise InvalidGatewayKeyPolicyError(
-                "Allowed endpoints must be API paths such as /v1/models or /v1/chat/completions.",
+                "Allowed endpoints must be API paths such as /v1/models or method paths such as "
+                "GET /v1/responses/{response_id}.",
                 param="allowed_endpoints",
             )
         if endpoint not in IMPLEMENTED_CLIENT_ENDPOINTS:
@@ -119,6 +125,13 @@ def _validate_model_value_shapes(allowed_models: list[str]) -> None:
                 "Allowed models must be model IDs such as gpt-5.2; endpoint paths belong in Allowed endpoints.",
                 param="allowed_models",
             )
+
+
+def _normalize_endpoint_value(endpoint: str) -> str:
+    parts = endpoint.strip().split(maxsplit=1)
+    if len(parts) == 2 and parts[0].isalpha():
+        return parts[1]
+    return endpoint.strip()
 
 
 async def _validate_models_have_routes(

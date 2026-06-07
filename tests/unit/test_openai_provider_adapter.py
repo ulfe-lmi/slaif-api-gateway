@@ -57,6 +57,21 @@ def _responses_input_tokens_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_lifecycle_request(endpoint: str) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        endpoint=endpoint,
+        body={},
+        request_id="gw-response-lifecycle-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "Cookie": "cookie",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openai_api_key_raises() -> None:
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY=None))
@@ -222,6 +237,58 @@ async def test_openai_response_input_tokens_posts_count_request(respx_mock) -> N
     assert caller_body["model"] == "client-model"
     assert response.json_body == {"object": "response.input_tokens", "input_tokens": 123}
     assert response.upstream_request_id == "req-openai-count"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_response_retrieve_uses_provider_auth_and_exact_path(respx_mock) -> None:
+    route = respx_mock.get("https://api.openai.com/v1/responses/resp_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_123", "object": "response", "status": "completed"},
+            headers={"OpenAI-Request-ID": "req-openai-retrieve"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+
+    response = await adapter.retrieve_response(
+        _responses_lifecycle_request("responses.retrieve"),
+        response_id="resp_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert response.json_body == {"id": "resp_123", "object": "response", "status": "completed"}
+    assert response.upstream_request_id == "req-openai-retrieve"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_response_delete_uses_provider_auth_and_exact_path(respx_mock) -> None:
+    route = respx_mock.delete("https://api.openai.com/v1/responses/resp_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp_123", "object": "response.deleted", "deleted": True},
+            headers={"OpenAI-Request-ID": "req-openai-delete"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+
+    response = await adapter.delete_response(
+        _responses_lifecycle_request("responses.delete"),
+        response_id="resp_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert response.json_body == {"id": "resp_123", "object": "response.deleted", "deleted": True}
+    assert response.upstream_request_id == "req-openai-delete"
     assert route.called
 
 

@@ -67,6 +67,10 @@ def _is_allowed_builder_call(expr: ast.AST) -> bool:
     return callee in ALLOWED_UPSTREAM_BUILDERS
 
 
+def _is_empty_literal_dict(expr: ast.AST) -> bool:
+    return isinstance(expr, ast.Dict) and not expr.keys and not expr.values
+
+
 def _call_lines(function_node: ast.FunctionDef | ast.AsyncFunctionDef, callee_name: str) -> list[int]:
     lines: list[int] = []
     for node in ast.walk(function_node):
@@ -125,6 +129,8 @@ def test_provider_request_body_uses_normalized_contract_builders() -> None:
         for function_node in _iter_function_nodes(tree):
             for lineno, body_keywords in _extract_provider_request_calls(function_node):
                 for _, value in body_keywords:
+                    if _is_empty_literal_dict(value):
+                        continue
                     if isinstance(value, ast.Call) and _is_allowed_builder_call(value):
                         continue
                     if isinstance(value, ast.Name):

@@ -189,19 +189,20 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   and no streamed-content storage.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
-- Responses API support is limited to stateless text-output
+- Responses API support is limited to text-output
   `POST /v1/responses` with string input, bounded input item arrays,
   route-enabled user-message URL/data URL image input, route-enabled
   user-message URL/data URL file input, non-streaming JSON, typed SSE
   streaming, non-streaming structured `text.format` JSON object/schema output,
-  plus non-streaming local function and custom tools, explicit key endpoint
+  plus non-streaming local function and custom tools, non-streaming stored
+  create with ownership-checked retrieve/delete, explicit key endpoint
   permission, route capability, provider route, and pricing metadata.
   `/v1/responses/input_tokens` is implemented separately for provider-reported
   input-token counts over the same stateless local input subset; it requires
   explicit endpoint permission and route capability and does not create a
   Response or reserve generation quota.
   Hosted/provider-side Responses tools,
-  storage/state, background mode, retrieval/delete/cancel/list routes,
+  previous-response/conversation state, background mode, cancel/list routes,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
   search/retrieval tools, audio input, image generation, multimodal output, and
   MCP/connectors remain future work. Safe Chat
@@ -209,8 +210,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   previews, and durable key-template snapshots now provide the first persisted
   foundation for usage-derived participant policies. Single-key creation from a
   selected template revision is implemented, including sanitized policy
-  metadata for the implemented stateless local Responses subset, but bulk
-  participant-key generation, policy mutation, and hosted/stateful/multimodal
+  metadata for the implemented local/stored Responses subset, but bulk
+  participant-key generation, policy mutation, and hosted/background/multimodal
   Responses template policy remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.
@@ -239,8 +240,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses hosted tools/stateful routes, embeddings, files endpoints, image
-  generation endpoints, or audio endpoints in RC1.
+- No Responses hosted tools, previous-response/conversation/background routes,
+  cancel/list/input-item routes, embeddings, files endpoints, image generation
+  endpoints, or audio endpoints in RC1.
 - No MFA or full RBAC.
 - No production certification or compliance claim.
 - No real provider calls or external email during verification.
@@ -251,8 +253,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Add formal security review or penetration testing before production claims.
 - Continue Responses API as scoped RC2 work under
   `responses-compatibility.md`; decide separately whether to implement
-  Responses hosted tools/stateful routes, bulk key send-now, embeddings, and
-  native provider adapters.
+  Responses hosted tools, previous-response/conversation/background routes,
+  bulk key send-now, embeddings, and native provider adapters.
 - Implement Responses streaming live-burn only as a separate scoped milestone
   under `streaming-live-burn-margin.md`, after the current Chat Completions
   streaming live-burn slice.

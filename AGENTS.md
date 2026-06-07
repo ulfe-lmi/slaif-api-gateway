@@ -467,14 +467,18 @@ Current implemented `/v1` endpoints:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- `POST /v1/responses` for stateless, non-streaming, text-only input/output
+- `POST /v1/responses` for the implemented Responses subset, including
+  stateless text output and non-streaming stored-response create when explicitly
+  enabled
+- `GET /v1/responses/{response_id}` and `DELETE /v1/responses/{response_id}`
+  for ownership-checked provider-stored Responses references
 
 Future endpoints:
 
 - `POST /v1/embeddings` only if a later implementation adds endpoint
   forwarding, pricing/accounting, and tests
-- Responses retrieval/delete/cancel/list/input-item endpoints only if a later
-  implementation adds ownership, forwarding, pricing/accounting, and tests
+- Responses cancel/list/input-item endpoints only if a later implementation
+  adds ownership, forwarding, pricing/accounting, and tests
 
 Rules:
 
@@ -494,21 +498,22 @@ Rules:
 ### 4.1.1 Responses API / RC2-beta direction
 
 The next release-candidate beta feature family is Responses API support. The
-current foundation implements only stateless, non-streaming, text-only
-`POST /v1/responses`.
+current foundation implements a bounded local Responses subset plus the first
+non-streaming stored-response lifecycle foundation.
 
 Implemented foundation:
 
 - Preserve SLAIF's core promise: gateway keys, provider-secret isolation,
   PostgreSQL hard quota/accounting, auditability, and no plaintext secret
   leakage.
-- Require explicit key endpoint permission, route/model Responses
-  text/stateless capability, provider route, and `/v1/responses` pricing.
+- Require explicit key endpoint permission, route/model Responses capability,
+  provider route, and `/v1/responses` pricing for create requests.
 - Inject `store=false` when omitted and inject/default `max_output_tokens`
   through the existing output cap settings.
-- Reject tools, streaming, background mode, provider-side storage/state,
-  previous response IDs, conversations, multimodal input/output,
-  MCP/connectors, and response retrieval/delete/cancel/list/input-item routes.
+- Reject background mode, previous response IDs, conversations, hosted tools,
+  unsupported multimodal surfaces, MCP/connectors, and cancel/list/input-item
+  routes. Stored Responses are non-streaming only in the implemented lifecycle
+  slice.
 
 Future RC2 goal:
 
@@ -525,11 +530,13 @@ Default policy:
 Stateful/background exclusions for RC2:
 
 - `background=true` is not supported.
-- `store=true` and stored response retrieval are not supported.
+- `store=true` is supported only for non-streaming `POST /v1/responses` when
+  the route explicitly enables `capabilities.responses.stored_responses=true`.
 - `previous_response_id` is not supported.
 - Conversation/provider-side state is not supported.
-- Response retrieval, delete, cancel, and input-item listing are not supported
-  unless explicitly implemented later with ownership checks.
+- Response retrieve/delete are supported only after local ownership checks
+  against safe provider response reference metadata. Cancel, compact, and
+  input-item listing are not supported unless explicitly implemented later.
 - MCP/connectors are not supported.
 
 Tool policy:
@@ -648,8 +655,9 @@ Rules:
   custom values.
 - Recommended templates should include request limits, input/output/reasoning
   token limits, tool-call limits, per-request caps, and allowed
-  endpoints/models/providers. Responses-specific template/tool policy remains
-  future work beyond the stateless text foundation.
+  endpoints/models/providers. Safe Responses template metadata covers only the
+  implemented local/stored summary vocabulary; bulk template workflows and
+  hosted/stateful tool policies remain future work.
 - Admins must see assumptions and may edit recommended values before creating a
   template or keys.
 - Calibration-derived templates should record source key, source time window,
@@ -2406,10 +2414,10 @@ The implemented core includes:
 Remaining work should be treated as future scoped projects, not as missing
 foundation for the current RC-beta:
 
-1. Responses API expansion beyond the stateless text foundation, including
-   explicit tool controls, bounded-overrun cost estimates, stateful/background
-   ownership policy, retrieval/delete/cancel/list routes, and
-   provider/accounting/dashboard tests.
+1. Responses API expansion beyond the current local/stored foundation,
+   including hosted tool controls, bounded-overrun cost estimates,
+   previous-response/conversation/background ownership policy,
+   cancel/list/input-item routes, and provider/accounting/dashboard tests.
 2. Versioned key templates and template-derived bulk key workflows.
 3. Usage-derived quota or template recommendations built from trusted
    calibration keys and the existing safe usage-profile rows.

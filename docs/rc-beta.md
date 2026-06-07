@@ -127,19 +127,20 @@ migrations automatically.
   boundaries, and no streamed-content storage.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
-- Responses API support is limited to stateless text-output
+- Responses API support is limited to text-output
   `POST /v1/responses` with string input, bounded input item arrays,
   route-enabled user-message URL/data URL image input, route-enabled
   user-message URL/data URL file input, non-streaming JSON, typed SSE
   streaming, non-streaming structured `text.format` JSON object/schema output,
-  plus non-streaming local function and custom tools, explicit key endpoint
+  plus non-streaming local function and custom tools, non-streaming stored
+  create with ownership-checked retrieve/delete, explicit key endpoint
   permission, route capability, provider route, and pricing metadata.
   `/v1/responses/input_tokens` is implemented separately for provider-reported
   input-token counts over the same stateless local input subset; it requires
   explicit endpoint permission and route capability and does not create a
   Response or reserve generation quota.
   Hosted/provider-side Responses tools,
-  storage/state, background mode, retrieval/delete/cancel/list routes,
+  previous-response/conversation state, background mode, cancel/list routes,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
   search/retrieval tools, audio input, image generation, multimodal output, and
   MCP/connectors remain future work. Current Chat
@@ -149,8 +150,8 @@ migrations automatically.
   proposals from CLI and admin web, then create durable key-template revisions
   from reviewed proposals. Single-key creation from a selected template revision
   is implemented for normal standard keys, including sanitized policy metadata
-  for the implemented stateless local Responses subset. Bulk participant-key
-  generation, policy mutation, and hosted/stateful/multimodal Responses
+  for the implemented local/stored Responses subset. Bulk participant-key
+  generation, policy mutation, and hosted/background/multimodal Responses
   template policy remain future work.
   See `responses-compatibility.md`.
 - Embeddings API is not implemented.

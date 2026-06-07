@@ -128,8 +128,9 @@ Gateway-key request policy separates models from endpoints:
 - allowed models are route-backed model IDs such as `gpt-4o-mini`;
 - allowed endpoints are implemented `/v1` paths such as `/v1/models` and
   `/v1/chat/completions`;
-- `/v1/responses` is implemented only for the stateless text-output foundation
-  and still requires explicit route capability and pricing metadata;
+- `/v1/responses` is implemented for the bounded Responses text-output subset,
+  including non-streaming stored create when explicitly enabled, and still
+  requires explicit route capability and pricing metadata;
 - legacy `/v1/completions` is rejected until implemented.
 
 Admins can edit this policy from a key detail page with **Update Request

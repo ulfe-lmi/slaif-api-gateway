@@ -44,7 +44,9 @@ async def _create_responses_test_data(
     image_input: bool = False,
     file_input: bool = False,
     input_token_count: bool = False,
+    stored_responses: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
+    allowed_endpoints: list[str] | None = None,
 ):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -136,6 +138,7 @@ async def _create_responses_test_data(
             capabilities["image_input"] = image_input
             capabilities["file_input"] = file_input
             capabilities["input_token_count"] = input_token_count
+            capabilities["stored_responses"] = stored_responses
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -177,7 +180,7 @@ async def _create_responses_test_data(
                     token_limit_total=100_000,
                     request_limit_total=100,
                     allowed_models=[TEST_RESPONSES_MODEL],
-                    allowed_endpoints=[endpoint],
+                    allowed_endpoints=allowed_endpoints or [endpoint],
                     note="Responses E2E key",
                 )
             )
@@ -301,6 +304,120 @@ def test_openai_python_client_responses_text_e2e(monkeypatch: pytest.MonkeyPatch
         FAKE_OPENAI_UPSTREAM_KEY,
     ):
         assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_store_retrieve_delete_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            stored_responses=True,
+            allowed_endpoints=[
+                RESPONSES_ENDPOINT,
+                "GET /v1/responses/{response_id}",
+                "DELETE /v1/responses/{response_id}",
+            ],
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    create_payload = {
+        "id": "resp_stored_e2e",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_stored_e2e",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+        "store": True,
+    }
+    retrieve_payload = {
+        "id": "resp_stored_e2e",
+        "object": "response",
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": create_payload["output"],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+    }
+    delete_payload = {"id": "resp_stored_e2e", "object": "response.deleted", "deleted": True}
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            create_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=create_payload,
+                    headers={"x-request-id": "upstream-openai-responses-store-e2e"},
+                )
+            )
+            retrieve_route = router.get("https://api.openai.com/v1/responses/resp_stored_e2e").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=retrieve_payload,
+                    headers={"x-request-id": "upstream-openai-responses-retrieve-e2e"},
+                )
+            )
+            delete_route = router.delete("https://api.openai.com/v1/responses/resp_stored_e2e").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=delete_payload,
+                    headers={"x-request-id": "upstream-openai-responses-delete-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            created_response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                store=True,
+            )
+            retrieved_response = client.responses.retrieve("resp_stored_e2e")
+            deleted_response = client.responses.delete("resp_stored_e2e")
+
+    assert created_response.id == "resp_stored_e2e"
+    assert retrieved_response.id == "resp_stored_e2e"
+    if deleted_response is not None:
+        assert deleted_response.id == "resp_stored_e2e"
+        assert getattr(deleted_response, "deleted") is True
+    assert create_route.called
+    assert retrieve_route.called
+    assert delete_route.called
+    create_request = create_route.calls[0].request
+    retrieve_request = retrieve_route.calls[0].request
+    delete_request = delete_route.calls[0].request
+    assert create_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert retrieve_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert delete_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert created.plaintext_key not in retrieve_request.headers["authorization"]
+    assert json.loads(create_request.content)["store"] is True
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 18
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
 
 
 @pytest.mark.e2e
@@ -744,7 +861,7 @@ def test_openai_python_client_responses_rejects_store_and_stream_without_upstrea
                     input=INPUT_TEXT,
                     store=True,
                 )
-            assert store_exc.value.code == "responses_store_not_supported"
+            assert store_exc.value.code == "responses_stored_response_capability_not_supported"
             assert INPUT_TEXT not in str(store_exc.value)
 
             with pytest.raises(BadRequestError) as stream_exc:
