@@ -147,6 +147,26 @@
       </div>
     </section>
 
+    <section class="action-panel" aria-labelledby="create-chat-streaming-live-burn-heading">
+      <h2 id="create-chat-streaming-live-burn-heading">Chat Completions streaming live-burn monitoring</h2>
+      <p class="muted">Applies only to <code>/v1/chat/completions</code> with <code>stream=true</code>. Final provider usage/cost remains authoritative.</p>
+      <label class="checkbox-row">
+        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="chat_streaming_live_burn_enabled" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %}>
+        Enable live-burn monitoring for Chat Completions streaming
+      </label>
+      <div id="create-chat-streaming-live-burn-fields" class="form-grid">
+        <label>
+          Cost margin (EUR)
+          <input name="chat_streaming_live_burn_cost_margin_eur" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off">
+        </label>
+        <label>
+          Output token margin
+          <input name="chat_streaming_live_burn_token_margin" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+      <p id="create-chat-streaming-live-burn-hint" class="muted small">Positive margin stops streams early before quota boundary. Zero margin stops near estimated quota boundary. Negative margin allows bounded estimated overrun; the key may finish with a negative balance. Margins are ignored while monitoring is off.</p>
+    </section>
+
     <section class="action-panel" aria-labelledby="create-calibration-heading">
       <h2 id="create-calibration-heading">Trusted Calibration Key</h2>
       <p class="warning-text">Trusted calibration keys use broad discovery policy for a small number of calls. Do not issue them to participants. They are for trusted organizers/admins only. Observed usage is used later to derive strict participant policies.</p>
@@ -194,4 +214,19 @@
     </section>
   </form>
 </section>
+<script>
+  (() => {
+    const checkbox = document.getElementById("create-chat-streaming-live-burn-enabled");
+    const fields = document.getElementById("create-chat-streaming-live-burn-fields");
+    if (!checkbox || !fields) return;
+    const inputs = Array.from(fields.querySelectorAll("input"));
+    const sync = () => {
+      const enabled = checkbox.checked;
+      fields.style.opacity = enabled ? "1" : "0.55";
+      for (const input of inputs) input.disabled = !enabled;
+    };
+    checkbox.addEventListener("change", sync);
+    sync();
+  })();
+</script>
 {% endblock %}

@@ -28,6 +28,11 @@ class AuthenticatedGatewayKey:
     token_limit_total: int | None
     request_limit_total: int | None
     rate_limit_policy: dict[str, int | None]
+    cost_used_eur: Decimal = Decimal("0")
+    tokens_used_total: int = 0
+    cost_reserved_eur: Decimal = Decimal("0")
+    tokens_reserved_total: int = 0
     responses_policy: dict[str, object] | None = None
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"

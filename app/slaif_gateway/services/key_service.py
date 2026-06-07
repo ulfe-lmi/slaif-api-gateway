@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import GatewayKey
@@ -22,10 +22,20 @@ from slaif_gateway.schemas.keys import (
     RotateGatewayKeyInput,
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
+    UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.chat_streaming_live_burn import (
+    CHAT_STREAMING_LIVE_BURN_METADATA_KEY,
+    ChatStreamingLiveBurnPolicy,
+    ChatStreamingLiveBurnPolicyError,
+    chat_streaming_live_burn_policy_from_metadata,
+    default_chat_streaming_live_burn_policy,
+    metadata_with_chat_streaming_live_burn_policy,
+    normalize_chat_streaming_live_burn_policy,
 )
 from slaif_gateway.services.key_errors import (
     GatewayKeyAlreadyActiveError,
@@ -104,6 +114,9 @@ class KeyService:
             reason=payload.note,
         )
         rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
+        chat_live_burn_policy = self._validate_chat_streaming_live_burn_policy(
+            payload.chat_streaming_live_burn_policy
+        )
         if is_trusted_calibration_key(
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
@@ -149,9 +162,12 @@ class KeyService:
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
             metadata_json=self._metadata_with_rate_limit_window(
-                self._metadata_with_responses_policy(
-                    self._metadata_with_provider_policy({}, payload.allowed_providers),
-                    payload.responses_policy,
+                self._metadata_with_chat_streaming_live_burn_policy(
+                    self._metadata_with_responses_policy(
+                        self._metadata_with_provider_policy({}, payload.allowed_providers),
+                        payload.responses_policy,
+                    ),
+                    chat_live_burn_policy,
                 ),
                 rate_limit_policy,
             ),
@@ -222,6 +238,7 @@ class KeyService:
                 if payload.allowed_providers is not None
                 else None,
                 "responses_policy": self._safe_responses_policy(payload.responses_policy),
+                "chat_streaming_live_burn_policy": chat_live_burn_policy.to_metadata(),
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             },
         )
@@ -236,6 +253,7 @@ class KeyService:
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
             rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
+            chat_streaming_live_burn_policy=chat_live_burn_policy.to_metadata(),
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
             template_id=payload.template_id,
@@ -503,6 +521,47 @@ class KeyService:
         )
         return self._management_result(gateway_key, updated_at=now)
 
+    async def update_gateway_key_chat_streaming_live_burn(
+        self,
+        payload: UpdateGatewayKeyChatStreamingLiveBurnInput,
+    ) -> GatewayKeyManagementResult:
+        """Update Chat Completions streaming live-burn policy without mutating quotas."""
+        cleaned_reason = payload.reason.strip() if payload.reason else ""
+        if not cleaned_reason:
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating Chat streaming live-burn policy.",
+                param="reason",
+            )
+
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        policy = self._validate_chat_streaming_live_burn_policy(
+            payload.chat_streaming_live_burn_policy
+        )
+        old_values = self._chat_streaming_live_burn_audit_values(gateway_key)
+        new_metadata = self._metadata_with_chat_streaming_live_burn_policy(
+            gateway_key.metadata_json,
+            policy,
+        )
+        now = self._now()
+        updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+            gateway_key.id,
+            metadata_json=new_metadata,
+        )
+        if not updated:
+            raise GatewayKeyNotFoundError()
+        gateway_key.metadata_json = new_metadata
+        self._set_updated_at(gateway_key, now)
+
+        await self._audit_gateway_key_change(
+            action="update_chat_streaming_live_burn_policy",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._chat_streaming_live_burn_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
     async def reset_gateway_key_usage(
         self,
         payload: ResetGatewayKeyUsageInput,
@@ -583,13 +642,16 @@ class KeyService:
             max_concurrent_requests=(
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
             ),
-            metadata_json=(
-                self._metadata_with_rate_limit_window(
-                    {},
-                    self._rate_limit_policy_from_key(old_key) or {},
-                )
-                if payload.preserve_rate_limit_policy
-                else {}
+            metadata_json=self._metadata_with_chat_streaming_live_burn_policy(
+                (
+                    self._metadata_with_rate_limit_window(
+                        {},
+                        self._rate_limit_policy_from_key(old_key) or {},
+                    )
+                    if payload.preserve_rate_limit_policy
+                    else {}
+                ),
+                self._chat_streaming_live_burn_policy_from_key(old_key),
             ),
             created_by_admin_user_id=payload.actor_admin_id,
             hmac_key_version=int(active_hmac_version),
@@ -784,6 +846,19 @@ class KeyService:
             normalized[key] = value
         return normalized
 
+    def _validate_chat_streaming_live_burn_policy(
+        self,
+        policy: dict[str, object] | ChatStreamingLiveBurnPolicy | None,
+    ) -> ChatStreamingLiveBurnPolicy:
+        try:
+            return normalize_chat_streaming_live_burn_policy(
+                policy,
+                max_abs_cost_margin_eur=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
+                max_abs_token_margin=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ChatStreamingLiveBurnPolicyError as exc:
+            raise InvalidGatewayKeyPolicyError(str(exc), param=exc.param) from exc
+
     def _validate_key_purpose_and_policy_mode(
         self,
         *,
@@ -914,6 +989,21 @@ class KeyService:
             metadata.pop("rate_limit_policy", None)
         return metadata
 
+    def _metadata_with_chat_streaming_live_burn_policy(
+        self,
+        metadata_json: dict[str, object] | None,
+        policy: dict[str, object] | ChatStreamingLiveBurnPolicy | None,
+    ) -> dict[str, object]:
+        try:
+            return metadata_with_chat_streaming_live_burn_policy(
+                metadata_json,
+                policy,
+                max_abs_cost_margin_eur=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
+                max_abs_token_margin=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ChatStreamingLiveBurnPolicyError as exc:
+            raise InvalidGatewayKeyPolicyError(str(exc), param=exc.param) from exc
+
     @staticmethod
     def _metadata_with_provider_policy(
         metadata_json: dict[str, object] | None,
@@ -1001,6 +1091,15 @@ class KeyService:
             "rate_limit_policy": cls._rate_limit_policy_from_key(gateway_key),
         }
 
+    def _chat_streaming_live_burn_audit_values(self, gateway_key: GatewayKey) -> dict[str, object]:
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "chat_streaming_live_burn_policy": self._chat_streaming_live_burn_policy_from_key(
+                gateway_key
+            ).to_metadata(),
+        }
+
     @staticmethod
     def _policy_audit_values(gateway_key: GatewayKey) -> dict[str, object]:
         return {
@@ -1063,6 +1162,9 @@ class KeyService:
             allow_all_endpoints=gateway_key.allow_all_endpoints,
             key_purpose=gateway_key.key_purpose,
             capability_policy_mode=gateway_key.capability_policy_mode,
+            chat_streaming_live_burn_policy=cls._chat_streaming_live_burn_policy_from_key_static(
+                gateway_key
+            ).to_metadata(),
         )
 
     @staticmethod
@@ -1088,3 +1190,37 @@ class KeyService:
                 policy["window_seconds"] = window_seconds
 
         return policy or None
+
+    def _chat_streaming_live_burn_policy_from_key(
+        self,
+        gateway_key: GatewayKey,
+    ) -> ChatStreamingLiveBurnPolicy:
+        try:
+            return chat_streaming_live_burn_policy_from_metadata(
+                gateway_key.metadata_json,
+                max_abs_cost_margin_eur=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
+                max_abs_token_margin=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ChatStreamingLiveBurnPolicyError:
+            return default_chat_streaming_live_burn_policy()
+
+    @staticmethod
+    def _chat_streaming_live_burn_policy_from_key_static(
+        gateway_key: GatewayKey,
+    ) -> ChatStreamingLiveBurnPolicy:
+        metadata_json = getattr(gateway_key, "metadata_json", None)
+        if isinstance(metadata_json, dict):
+            policy = metadata_json.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY)
+            if isinstance(policy, dict):
+                enabled = policy.get("enabled", True)
+                cost_margin = policy.get("cost_margin_eur", "0.000000000")
+                token_margin = policy.get("token_margin", 0)
+                try:
+                    return ChatStreamingLiveBurnPolicy(
+                        enabled=enabled if isinstance(enabled, bool) else True,
+                        cost_margin_eur=Decimal(str(cost_margin)),
+                        token_margin=token_margin if isinstance(token_margin, int) else int(str(token_margin)),
+                    )
+                except (InvalidOperation, ValueError, TypeError):
+                    return default_chat_streaming_live_burn_policy()
+        return default_chat_streaming_live_burn_policy()

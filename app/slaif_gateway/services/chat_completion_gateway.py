@@ -63,6 +63,19 @@ from slaif_gateway.services.accounting_errors import AccountingError
 from slaif_gateway.services.chat_completion_route_capabilities import (
     enforce_chat_completion_route_capabilities,
 )
+from slaif_gateway.services.chat_streaming_live_burn import (
+    CHAT_STREAMING_LIVE_BURN_ERROR_CODE,
+    CHAT_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+    ChatStreamingLiveBurnBudget,
+    ChatStreamingLiveBurnEstimate,
+    ChatStreamingLiveBurnMonitor,
+    ChatStreamingLiveBurnPolicy,
+    ChatStreamingLiveBurnPolicyError,
+    build_chat_streaming_live_burn_budget,
+    chat_streaming_live_burn_policy_from_metadata,
+    default_chat_streaming_live_burn_policy,
+    pre_provider_chat_streaming_live_burn_error,
+)
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
@@ -95,6 +108,13 @@ class _RateLimitReservation:
     gateway_key_id: uuid.UUID
     request_id: str
     concurrency_reserved: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ChatCompletionQuotaReservation:
+    cost_estimate: ChatCostEstimate
+    reservation: QuotaReservationResult
+    live_burn_budget: ChatStreamingLiveBurnBudget | None
 
 
 def _build_safe_chat_completion_upstream_body(
@@ -182,13 +202,44 @@ async def handle_chat_completion(
         request=request,
     )
     try:
-        cost_estimate, reservation = await _reserve_chat_completion_quota(
+        quota = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
             route=route,
             policy_result=policy_result,
             request_id=request_id,
             request=request,
+            settings=settings,
         )
+        cost_estimate = quota.cost_estimate
+        reservation = quota.reservation
+
+        pre_provider_live_burn = pre_provider_chat_streaming_live_burn_error(
+            quota.live_burn_budget
+        )
+        if policy_result.effective_body.get("stream") is True and pre_provider_live_burn is not None:
+            try:
+                await _record_streaming_live_burn_abort_estimate(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    estimate=pre_provider_live_burn,
+                    request=request,
+                )
+            except AccountingError as accounting_exc:
+                increment_accounting_failure(accounting_exc.error_code)
+                raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
+            except QuotaError as quota_exc:
+                increment_quota_rejection(quota_exc.error_code)
+                raise openai_error_from_quota_error(quota_exc) from quota_exc
+            increment_quota_rejection(CHAT_STREAMING_LIVE_BURN_ERROR_CODE)
+            raise OpenAICompatibleError(
+                CHAT_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+                status_code=429,
+                error_type="insufficient_quota",
+                code=CHAT_STREAMING_LIVE_BURN_ERROR_CODE,
+            )
 
         if policy_result.effective_body.get("stream") is True:
             try:
@@ -203,6 +254,7 @@ async def handle_chat_completion(
                     request=request,
                     rate_limit_reservation=rate_limit_reservation,
                     upstream_body=upstream_body,
+                    live_burn_budget=quota.live_burn_budget,
                 )
                 rate_limit_reservation = None
                 return response
@@ -291,6 +343,7 @@ def _streaming_chat_completion_response(
     request: Request | None,
     rate_limit_reservation: _RateLimitReservation | None,
     upstream_body: dict[str, object],
+    live_burn_budget: ChatStreamingLiveBurnBudget | None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -308,6 +361,11 @@ def _streaming_chat_completion_response(
         done_event: str | None = None
         completed = False
         provider_status = "error"
+        live_burn_monitor = (
+            ChatStreamingLiveBurnMonitor(live_burn_budget)
+            if live_burn_budget is not None
+            else None
+        )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = _start_rate_limit_heartbeat(
             rate_limit_reservation,
@@ -324,6 +382,29 @@ def _streaming_chat_completion_response(
                     done_event = chunk.raw_sse_event
                     continue
                 yield chunk.raw_sse_event
+                live_burn_estimate = (
+                    live_burn_monitor.observe_chunk(chunk.json_body)
+                    if live_burn_monitor is not None
+                    else None
+                )
+                if live_burn_estimate is not None:
+                    await _record_streaming_live_burn_abort_estimate(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        estimate=live_burn_estimate,
+                        request=request,
+                    )
+                    provider_status = "interrupted"
+                    yield format_openai_error_event(
+                        message=CHAT_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+                        error_type="insufficient_quota",
+                        code=CHAT_STREAMING_LIVE_BURN_ERROR_CODE,
+                        request_id=request_id,
+                    )
+                    return
 
             if completed and usage_chunk is not None:
                 provider_response = _provider_response_from_stream(
@@ -598,7 +679,8 @@ async def _reserve_chat_completion_quota(
     policy_result: ChatCompletionPolicyResult,
     request_id: str,
     request: Request | None,
-) -> tuple[ChatCostEstimate, QuotaReservationResult]:
+    settings: Settings,
+) -> _ChatCompletionQuotaReservation:
     session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
@@ -619,8 +701,9 @@ async def _reserve_chat_completion_quota(
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
 
+        gateway_keys_repository = GatewayKeysRepository(session)
         quota_service = QuotaService(
-            gateway_keys_repository=GatewayKeysRepository(session),
+            gateway_keys_repository=gateway_keys_repository,
             quota_reservations_repository=QuotaReservationsRepository(session),
         )
         try:
@@ -635,9 +718,28 @@ async def _reserve_chat_completion_quota(
             increment_quota_rejection(exc.error_code)
             raise openai_error_from_quota_error(exc) from exc
 
+        gateway_key = None
+        try:
+            gateway_key = await gateway_keys_repository.get_gateway_key_by_id(
+                authenticated_key.gateway_key_id
+            )
+        except Exception:  # noqa: BLE001
+            gateway_key = None
+        live_burn_budget = _build_chat_streaming_live_burn_budget(
+            authenticated_key=authenticated_key,
+            gateway_key=gateway_key,
+            reservation=reservation,
+            cost_estimate=cost_estimate,
+            settings=settings,
+        )
+
         if hasattr(session, "commit"):
             await session.commit()
-        return cost_estimate, reservation
+        return _ChatCompletionQuotaReservation(
+            cost_estimate=cost_estimate,
+            reservation=reservation,
+            live_burn_budget=live_burn_budget,
+        )
     finally:
         await session_iterator.aclose()
 
@@ -759,6 +861,48 @@ async def _release_streaming_reservation_after_error(
     except QuotaError as quota_exc:
         increment_quota_rejection(quota_exc.error_code)
         raise
+
+
+async def _record_streaming_live_burn_abort_estimate(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    cost_estimate: ChatCostEstimate,
+    request_id: str,
+    estimate: ChatStreamingLiveBurnEstimate,
+    request: Request | None,
+) -> FinalizedAccountingResult:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        result = await accounting_service.record_streaming_live_burn_interrupted_estimate(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            request_id,
+            estimated_input_tokens=cost_estimate.estimated_input_tokens,
+            estimated_output_tokens=estimate.estimated_output_tokens,
+            estimated_total_tokens=estimate.estimated_request_tokens,
+            estimated_cost_eur=estimate.estimated_cost_eur,
+            response_metadata=estimate.metadata,
+            endpoint="chat.completions",
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
 
 
 async def _finalize_successful_chat_completion(
@@ -966,6 +1110,81 @@ async def _mark_provider_completed_finalization_failed(
             await session.commit()
     finally:
         await session_iterator.aclose()
+
+
+def _build_chat_streaming_live_burn_budget(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    gateway_key: object | None,
+    reservation: QuotaReservationResult,
+    cost_estimate: ChatCostEstimate,
+    settings: Settings,
+) -> ChatStreamingLiveBurnBudget | None:
+    policy = _chat_streaming_live_burn_policy_from_key(
+        authenticated_key=authenticated_key,
+        gateway_key=gateway_key,
+        settings=settings,
+    )
+    cost_limit = getattr(gateway_key, "cost_limit_eur", authenticated_key.cost_limit_eur)
+    token_limit = getattr(gateway_key, "token_limit_total", authenticated_key.token_limit_total)
+    cost_used = getattr(gateway_key, "cost_used_eur", authenticated_key.cost_used_eur)
+    tokens_used = getattr(gateway_key, "tokens_used_total", authenticated_key.tokens_used_total)
+    cost_reserved = getattr(
+        gateway_key,
+        "cost_reserved_eur",
+        authenticated_key.cost_reserved_eur + reservation.reserved_cost_eur,
+    )
+    tokens_reserved = getattr(
+        gateway_key,
+        "tokens_reserved_total",
+        authenticated_key.tokens_reserved_total + reservation.reserved_tokens,
+    )
+    return build_chat_streaming_live_burn_budget(
+        policy=policy,
+        cost_limit_eur=cost_limit,
+        token_limit_total=token_limit,
+        cost_used_eur=cost_used,
+        tokens_used_total=tokens_used,
+        cost_reserved_eur=cost_reserved,
+        tokens_reserved_total=tokens_reserved,
+        current_reserved_cost_eur=reservation.reserved_cost_eur,
+        current_reserved_tokens=reservation.reserved_tokens,
+        cost_estimate=cost_estimate,
+        estimate_multiplier=settings.CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER,
+    )
+
+
+def _chat_streaming_live_burn_policy_from_key(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    gateway_key: object | None,
+    settings: Settings,
+) -> ChatStreamingLiveBurnPolicy:
+    metadata = getattr(gateway_key, "metadata_json", None)
+    if isinstance(metadata, Mapping):
+        try:
+            return chat_streaming_live_burn_policy_from_metadata(
+                metadata,
+                max_abs_cost_margin_eur=(
+                    settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                ),
+                max_abs_token_margin=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ChatStreamingLiveBurnPolicyError:
+            return default_chat_streaming_live_burn_policy()
+    policy = authenticated_key.chat_streaming_live_burn_policy
+    if isinstance(policy, Mapping):
+        try:
+            return chat_streaming_live_burn_policy_from_metadata(
+                {"chat_streaming_live_burn": dict(policy)},
+                max_abs_cost_margin_eur=(
+                    settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                ),
+                max_abs_token_margin=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ChatStreamingLiveBurnPolicyError:
+            return default_chat_streaming_live_burn_policy()
+    return default_chat_streaming_live_burn_policy()
 
 
 def _provider_response_from_stream(

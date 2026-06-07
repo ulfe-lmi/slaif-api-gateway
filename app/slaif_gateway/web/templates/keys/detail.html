@@ -125,6 +125,8 @@
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
         <dd>{{ key.rate_limit_policy_summary }}</dd>
+        <dt>Chat streaming live-burn</dt>
+        <dd>{{ key.chat_streaming_live_burn_policy_summary }}</dd>
         {% if key.responses_policy %}
         <dt>Responses policy</dt>
         <dd>{{ key.responses_policy_summary }}</dd>
@@ -211,6 +213,51 @@
         {% else %}
         <p class="muted">No enabled model routes are available. Run the OpenAI Completions catalog bootstrap or create routes before restricting a key to specific models.</p>
         {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-chat-streaming-live-burn-heading">
+    <h2 id="key-chat-streaming-live-burn-heading">Chat Completions streaming live-burn monitoring</h2>
+    <p class="muted">This updates only the per-key Chat Completions streaming live-burn policy. PostgreSQL hard quota limits remain independent and authoritative.</p>
+    <div class="management-grid">
+      <div class="action-card">
+        <h3>Current Policy</h3>
+        <dl class="compact-dl">
+          <dt>Enabled</dt>
+          <dd>{{ "Yes" if key.chat_streaming_live_burn_policy.enabled else "No" }}</dd>
+          <dt>Cost margin EUR</dt>
+          <dd>{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}</dd>
+          <dt>Output token margin</dt>
+          <dd>{{ key.chat_streaming_live_burn_policy.token_margin }}</dd>
+        </dl>
+        <p class="muted small">Positive margin stops streams early, zero margin stops near the estimated boundary, and negative margin allows bounded estimated overrun. Final provider usage/cost remains authoritative.</p>
+      </div>
+      <div class="action-card">
+        <h3>Update Policy</h3>
+        <form method="post" action="/admin/keys/{{ key.id }}/chat-streaming-live-burn">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="checkbox-row">
+            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="chat_streaming_live_burn_enabled" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %}>
+            Enable live-burn monitoring for Chat Completions streaming
+          </label>
+          <div id="detail-chat-streaming-live-burn-fields" class="form-grid">
+            <label>
+              Cost margin (EUR)
+              <input name="chat_streaming_live_burn_cost_margin_eur" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}" inputmode="decimal" autocomplete="off">
+            </label>
+            <label>
+              Output token margin
+              <input name="chat_streaming_live_burn_token_margin" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off">
+            </label>
+          </div>
+          <label>
+            Audit reason
+            <input name="reason" required autocomplete="off" placeholder="Required reason">
+          </label>
+          <p id="detail-chat-streaming-live-burn-hint" class="muted small">Applies only to <code>/v1/chat/completions</code> with <code>stream=true</code>. Margins are ignored while monitoring is off.</p>
+          <button type="submit">Update Chat streaming live-burn policy</button>
+        </form>
       </div>
     </div>
   </section>
@@ -459,4 +506,19 @@
     </div>
   </section>
 </section>
+<script>
+  (() => {
+    const checkbox = document.getElementById("detail-chat-streaming-live-burn-enabled");
+    const fields = document.getElementById("detail-chat-streaming-live-burn-fields");
+    if (!checkbox || !fields) return;
+    const inputs = Array.from(fields.querySelectorAll("input"));
+    const sync = () => {
+      const enabled = checkbox.checked;
+      fields.style.opacity = enabled ? "1" : "0.55";
+      for (const input of inputs) input.disabled = !enabled;
+    };
+    checkbox.addEventListener("change", sync);
+    sync();
+  })();
+</script>
 {% endblock %}

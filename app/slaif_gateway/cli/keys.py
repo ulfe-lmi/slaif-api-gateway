@@ -37,10 +37,17 @@ from slaif_gateway.schemas.keys import (
     RotateGatewayKeyInput,
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
+    UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.chat_streaming_live_burn import (
+    ChatStreamingLiveBurnPolicyError,
+    chat_streaming_live_burn_policy_from_metadata,
+    default_chat_streaming_live_burn_policy,
+    normalize_chat_streaming_live_burn_policy,
 )
 from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
@@ -234,6 +241,13 @@ def _parse_decimal(value: str | None, *, field_name: str) -> Decimal | None:
     return parsed
 
 
+def _parse_required_decimal(value: str, *, field_name: str) -> Decimal:
+    parsed = _parse_decimal(value, field_name=field_name)
+    if parsed is None:
+        raise typer.BadParameter(f"{field_name} is required")
+    return parsed
+
+
 def _validate_positive_int(value: int | None, *, option_name: str) -> int | None:
     if value is not None and value <= 0:
         raise typer.BadParameter(f"{option_name} must be positive")
@@ -269,6 +283,29 @@ def _rate_limit_policy_from_options(
             option_name="--rate-limit-window-seconds",
         ) or window_seconds
     return policy or None
+
+
+def _chat_streaming_live_burn_policy_from_options(
+    *,
+    enabled: bool,
+    cost_margin_eur: str | None,
+    token_margin: int | None,
+) -> dict[str, object]:
+    try:
+        return normalize_chat_streaming_live_burn_policy(
+            {
+                "version": 1,
+                "enabled": enabled,
+                "cost_margin_eur": (
+                    "0.000000000" if cost_margin_eur is None else cost_margin_eur
+                ),
+                "token_margin": 0 if token_margin is None else token_margin,
+            },
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        ).to_metadata()
+    except ChatStreamingLiveBurnPolicyError as exc:
+        raise typer.BadParameter(str(exc), param_hint=exc.param) from exc
 
 
 def _valid_until_from_options(
@@ -344,6 +381,9 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
         "responses_policy": _responses_policy_from_gateway_key(gateway_key),
+        "chat_streaming_live_burn_policy": _chat_streaming_live_burn_policy_from_gateway_key(
+            gateway_key
+        ),
     }
 
 
@@ -391,6 +431,18 @@ def _responses_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, obj
     return {str(key): value for key, value in policy.items() if isinstance(key, str)}
 
 
+def _chat_streaming_live_burn_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object]:
+    metadata_json = getattr(gateway_key, "metadata_json", None)
+    try:
+        return chat_streaming_live_burn_policy_from_metadata(
+            metadata_json if isinstance(metadata_json, dict) else {},
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        ).to_metadata()
+    except ChatStreamingLiveBurnPolicyError:
+        return default_chat_streaming_live_burn_policy().to_metadata()
+
+
 def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, object]:
     return {
         "gateway_key_id": result.gateway_key_id,
@@ -417,6 +469,7 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "allow_all_endpoints": result.allow_all_endpoints,
         "key_purpose": result.key_purpose,
         "capability_policy_mode": result.capability_policy_mode,
+        "chat_streaming_live_burn_policy": result.chat_streaming_live_burn_policy,
         "template_id": getattr(result, "template_id", None),
         "template_revision_id": getattr(result, "template_revision_id", None),
     }
@@ -432,6 +485,7 @@ def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = Tr
         "valid_from": result.valid_from,
         "valid_until": result.valid_until,
         "rate_limit_policy": result.rate_limit_policy,
+        "chat_streaming_live_burn_policy": result.chat_streaming_live_burn_policy,
         "key_purpose": result.key_purpose,
         "capability_policy_mode": result.capability_policy_mode,
     }
@@ -896,6 +950,13 @@ async def _update_rate_limits(
         )
 
 
+async def _update_chat_streaming_live_burn(
+    payload: UpdateGatewayKeyChatStreamingLiveBurnInput,
+) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, _, service):
+        return await service.update_gateway_key_chat_streaming_live_burn(payload)
+
+
 async def _update_policy(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyManagementResult:
     async with _key_runtime() as (_, _, service):
         return await service.update_gateway_key_policy(payload)
@@ -1114,6 +1175,27 @@ def create(
             help="Redis operational rate-limit window in seconds",
         ),
     ] = None,
+    chat_streaming_live_burn_enabled: Annotated[
+        bool,
+        typer.Option(
+            "--chat-streaming-live-burn-enabled/--no-chat-streaming-live-burn",
+            help="Enable Chat Completions streaming live-burn monitoring",
+        ),
+    ] = True,
+    chat_streaming_live_burn_cost_margin_eur: Annotated[
+        str | None,
+        typer.Option(
+            "--chat-streaming-live-burn-cost-margin-eur",
+            help="Chat streaming live-burn cost margin in EUR; may be negative",
+        ),
+    ] = None,
+    chat_streaming_live_burn_token_margin: Annotated[
+        int | None,
+        typer.Option(
+            "--chat-streaming-live-burn-token-margin",
+            help="Chat streaming live-burn output token margin; may be negative",
+        ),
+    ] = None,
     actor_admin_id: Annotated[
         str | None,
         typer.Option("--actor-admin-id", help="Acting admin UUID"),
@@ -1205,6 +1287,11 @@ def create(
             tokens_per_minute=rate_limit_tokens_per_minute,
             concurrent_requests=rate_limit_concurrent_requests,
             window_seconds=rate_limit_window_seconds,
+        ),
+        chat_streaming_live_burn_policy=_chat_streaming_live_burn_policy_from_options(
+            enabled=chat_streaming_live_burn_enabled,
+            cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
+            token_margin=chat_streaming_live_burn_token_margin,
         ),
         created_by_admin_id=(
             _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
@@ -1863,6 +1950,84 @@ def set_rate_limits(
                 if actor_admin_id
                 else None,
                 reason=reason,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    safe_result = _management_result_dict(result)
+    if json_output:
+        _emit_json(safe_result)
+        return
+    _echo_kv(safe_result)
+
+
+@app.command("set-chat-streaming-live-burn")
+def set_chat_streaming_live_burn(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    enabled: Annotated[
+        bool | None,
+        typer.Option(
+            "--enabled/--disabled",
+            help="Enable or disable Chat Completions streaming live-burn monitoring",
+        ),
+    ] = None,
+    cost_margin_eur: Annotated[
+        str | None,
+        typer.Option("--cost-margin-eur", help="Cost margin in EUR; may be negative"),
+    ] = None,
+    token_margin: Annotated[
+        int | None,
+        typer.Option("--token-margin", help="Output token margin; may be negative"),
+    ] = None,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Required audit reason")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Set Chat Completions streaming live-burn policy for a gateway key."""
+    if enabled is None and cost_margin_eur is None and token_margin is None:
+        raise typer.BadParameter("Provide --enabled/--disabled or at least one margin option")
+    if not reason or not reason.strip():
+        raise typer.BadParameter("--reason is required")
+
+    try:
+        gateway_key = _run_async(
+            _show_gateway_key(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
+        )
+        existing = _chat_streaming_live_burn_policy_from_gateway_key(gateway_key)
+        policy = normalize_chat_streaming_live_burn_policy(
+            {
+                "version": 1,
+                "enabled": existing["enabled"] if enabled is None else enabled,
+                "cost_margin_eur": (
+                    existing["cost_margin_eur"]
+                    if cost_margin_eur is None
+                    else _parse_required_decimal(
+                        cost_margin_eur,
+                        field_name="cost_margin_eur",
+                    )
+                ),
+                "token_margin": existing["token_margin"] if token_margin is None else token_margin,
+            },
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        )
+        result = _run_async(
+            _update_chat_streaming_live_burn(
+                UpdateGatewayKeyChatStreamingLiveBurnInput(
+                    gateway_key_id=gateway_key.id,
+                    chat_streaming_live_burn_policy=policy.to_metadata(),
+                    actor_admin_id=(
+                        _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                        if actor_admin_id
+                        else None
+                    ),
+                    reason=reason,
+                )
             )
         )
     except Exception as exc:  # noqa: BLE001

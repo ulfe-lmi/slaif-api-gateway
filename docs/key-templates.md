@@ -123,10 +123,10 @@ Current revision 1 stores:
 - an empty participant hosted-capability allowlist by default;
 - optional safe `responses_policy` metadata for the implemented stateless local
   Responses subset;
-- no active streaming live-burn policy fields; the planned
-  [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) milestone may
-  later allow safe per-key/template policy summaries, but existing revisions do
-  not implement stream interruption or mutate existing keys;
+- no template-specific streaming live-burn policy fields; Chat Completions
+  streaming live-burn is implemented as per-key metadata, and keys created from
+  templates receive the default enabled/zero-margin policy unless a future
+  template-policy PR adds safe snapshot support;
 - request, token, per-request, and cost limits from local accounting metadata;
 - optional validity and email-delivery defaults;
 - a safe proposal snapshot with warnings and assumptions.
@@ -238,5 +238,6 @@ Template previews should show safe summaries only:
 - pricing catalog references;
 - template revision IDs.
 - sanitized stateless local Responses policy summaries.
-- future streaming live-burn summaries only after that milestone is implemented,
-  and only as safe policy values/counters rather than streamed content.
+- future template-specific Chat streaming live-burn summaries only after that
+  scoped template milestone is implemented, and only as safe policy
+  values/counters rather than streamed content.

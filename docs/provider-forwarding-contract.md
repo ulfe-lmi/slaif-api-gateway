@@ -71,7 +71,7 @@ choices are not enabled by that metadata.
 | Body reconstruction | Provider JSON is rebuilt from accepted Chat Completions fields after request policy, caps, capability checks, and gateway mutations; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
-| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
+| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks. Chat Completions streaming live-burn monitoring may interrupt the stream before provider completion when the per-key estimated cost/token cutoff is crossed. `[DONE]` is sent only after final accounting succeeds |
 | Usage/accounting | Provider `usage` is parsed; local pricing and FX data compute actual EUR cost with cached/reasoning token handling where provider usage exposes it. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
 | Provider errors | Client receives a safe OpenAI-shaped error; raw provider body is not returned or stored; sanitized diagnostics may be stored. Streaming provider error events are converted to safe OpenAI-shaped SSE error events after reservation release |
 
@@ -95,7 +95,7 @@ provider, and route/provider config overrides must reference env var names only.
 | Body reconstruction | Provider JSON is rebuilt from accepted Chat Completions fields after request policy, caps, capability checks, and gateway mutations; unknown top-level fields fail closed before forwarding |
 | Body mutation | `model` is replaced with the resolved `upstream_model`; default output token control may be injected; streaming forces usage options |
 | Successful non-streaming response | Provider JSON body is returned to the client after accounting finalization succeeds |
-| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks; `[DONE]` is sent only after final accounting succeeds |
+| Successful streaming response | Provider SSE events are forwarded for accepted fields, including text deltas, local function `tool_calls` deltas, `finish_reason="tool_calls"`, logprobs chunks, and structured-output-compatible chunks. Chat Completions streaming live-burn monitoring may interrupt the stream before provider completion when the per-key estimated cost/token cutoff is crossed. `[DONE]` is sent only after final accounting succeeds |
 | Usage/accounting | Token usage is parsed; valid non-negative OpenRouter `usage.cost` or `usage.cost_usd` with supported currency is preferred for actual finalization while SLAIF-calculated cost remains comparison metadata. Invalid provider-reported cost falls back to SLAIF calculation. Successful finalized requests record safe cost-source/confidence and reservation-overrun metadata and also persist advisory usage-profile metadata |
 | Provider errors | OpenRouter JSON and streaming error events produce safe diagnostics; raw provider bodies are not returned or stored. Streaming provider error events are converted to safe OpenAI-shaped SSE error events after reservation release |
 
@@ -401,12 +401,12 @@ not hard real-time spend interruption inside one upstream call. If finalization
 puts the key above local token or cost limits, subsequent calls are blocked by
 normal quota admission until limits are raised or usage is reset.
 
-The planned streaming live-burn margin milestone is documented in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). It would add a
-gateway-side, provisional stream interruption brake for visible streaming text,
-starting with Chat Completions and then Responses. It is not implemented in the
-current forwarding path, is not invoice-grade billing truth, and must not
-replace PostgreSQL reservation/finalization or provider final usage/cost.
+Chat Completions streaming live-burn monitoring is documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). It is a
+gateway-side, provisional stream interruption brake for visible Chat streaming
+output only. It is not invoice-grade billing truth and does not replace
+PostgreSQL reservation/finalization or provider final usage/cost. Responses
+live-burn monitoring remains future work.
 
 ### Streaming Accounting
 
@@ -423,6 +423,15 @@ Streaming has an extra finalization rule because content may already have reache
 - If finalization succeeds, that record is marked finalized and `[DONE]` is emitted.
 - If finalization fails, the record is marked with `needs_reconciliation=true` and `recovery_state=provider_completed_finalization_failed`; `[DONE]` is not emitted.
 - Operator reconciliation can later finalize these provider-completed rows using stored usage/cost metadata without calling providers.
+- For Chat Completions only, per-key streaming live-burn monitoring estimates
+  admission input plus visible generated `choices[].delta.content` and function
+  tool-call name/argument deltas while forwarding chunks. If the estimated
+  request cost or token burn crosses the configured cutoff, SLAIF stops the
+  upstream stream when possible, emits a safe SSE error with code
+  `streaming_live_burn_limit_exceeded`, and suppresses normal `[DONE]`.
+- If provider final usage is unavailable because SLAIF intentionally stopped a
+  Chat stream for live-burn, the request is finalized as estimated interrupted
+  accounting with safe metadata. It is not released as normal zero-cost success.
 
 Responses streaming uses typed SSE events rather than Chat Completions chunk
 objects. For Responses, the gateway holds `response.completed` until
@@ -438,10 +447,10 @@ forwarding. Streaming `n > 1` is supported when route metadata explicitly
 enables multiple choices; SSE chunks, choice indexes, finish reasons, the final
 usage chunk, and `[DONE]` are preserved without buffering the full stream.
 
-Future live-burn interruption must remain gateway-side. Provider-bound request
-bodies and headers must not receive live-burn counters, margins, internal quota
-state, Redis keys, or gateway diagnostics, and the gateway must not store raw
-streamed content while estimating live burn.
+Live-burn interruption remains gateway-side. Provider-bound request bodies and
+headers must not receive live-burn counters, margins, internal quota state,
+Redis keys, or gateway diagnostics, and the gateway must not store raw streamed
+content while estimating live burn.
 
 ### Reconciliation
 

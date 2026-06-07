@@ -305,7 +305,15 @@ def test_admin_key_create_form_postgres(migrated_postgres_url: str) -> None:
         assert key.rate_limit_requests_per_minute == 60
         assert key.rate_limit_tokens_per_minute == 12000
         assert key.max_concurrent_requests == 4
-        assert key.metadata_json == {"rate_limit_policy": {"window_seconds": 30}}
+        assert key.metadata_json == {
+            "rate_limit_policy": {"window_seconds": 30},
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "0.000000000",
+                "token_margin": 0,
+            },
+        }
         assert key.token_hash
         assert not key.token_hash.startswith("sk-")
         assert plaintext_key not in key.token_hash
