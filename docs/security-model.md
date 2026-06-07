@@ -376,6 +376,17 @@ response-format schemas, metadata values, raw request/response bodies, gateway
 keys, provider keys, Authorization headers, cookies, CSRF/session tokens, and
 encrypted payloads are not stored or logged by streaming diagnostics.
 
+Streaming live-burn margin is a planned future milestone, not implemented
+runtime behavior. Its governance contract is
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). Any future
+implementation may store only safe provisional counters and low-cardinality
+metadata; it must not store prompt text, completion text, streamed chunk text,
+tool arguments or outputs, media payloads, raw request bodies, raw response
+bodies, provider keys, gateway plaintext keys, Authorization headers, cookies,
+CSRF/session tokens, encrypted payloads, or nonces. PostgreSQL remains
+authoritative for hard quota/accounting, Redis remains temporary operational
+state only, and provider final usage/cost remains authoritative when available.
+
 ## Chat Completions Non-Message Input Estimation
 
 Chat Completions request policy estimates input tokens before Redis rate

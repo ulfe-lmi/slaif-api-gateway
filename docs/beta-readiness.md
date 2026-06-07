@@ -57,6 +57,11 @@ operational guidance, not a production certification.
   once and possible output per choice, and finalizes provider usage once.
 - Streaming requests force `stream_options.include_usage=true`; missing final
   usage emits a safe stream error and does not emit a misleading success.
+- Streaming live-burn margin is planned future work only. The milestone in
+  [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) documents a
+  future gateway-side provisional interruption brake, Chat Completions first and
+  Responses second; it is not implemented in this readiness baseline and does
+  not change provider-final-usage accounting.
 - Provider authorization is substituted server-side; client `Authorization`
   headers are not forwarded upstream.
 
@@ -177,6 +182,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 ## Known Limitations
 
 - Bulk key synchronous `send-now` execution is not implemented.
+- Streaming live-burn margin is not implemented. The planned milestone is
+  documented in [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md)
+  and must preserve PostgreSQL hard quota truth, Redis temporary-state
+  boundaries, provider final usage/cost authority, and no streamed-content
+  storage.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
 - Responses API support is limited to stateless text-output
@@ -239,6 +249,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   `responses-compatibility.md`; decide separately whether to implement
   Responses hosted tools/stateful routes, bulk key send-now, embeddings, and
   native provider adapters.
+- Implement streaming live-burn margin only as a separate scoped milestone
+  under `streaming-live-burn-margin.md`, with documentation, tests, and
+  operator surfaces updated in the implementation PR.
 - Exercise the production/operator runbooks in at least one production-like
   staging deployment.
 - Continue tuning monitoring and alert routing for the target deployment.

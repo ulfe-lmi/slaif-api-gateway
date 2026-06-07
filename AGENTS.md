@@ -997,6 +997,13 @@ Streaming requirements:
 - If a stream is interrupted before final usage arrives, record an incomplete/interrupted accounting event and handle according to policy.
 - The gateway may inject provider-specific options needed to request streaming usage, if that does not break client compatibility.
 - Never silently ignore usage failures for cost-bearing requests. Mark them clearly in the ledger.
+- Planned streaming live-burn margin work is documented in
+  `docs/streaming-live-burn-margin.md`. Treat it as a future governance
+  milestone only until runtime support, schema/config changes, admin/CLI
+  surfaces, and tests are explicitly implemented. It must preserve provider
+  final usage/cost as authoritative, PostgreSQL as hard quota truth, Redis as
+  temporary operational state only, and no storage of prompts, completions, raw
+  bodies, streamed chunks, tool payloads, or media payloads.
 
 Quota period semantics for v1:
 
@@ -1326,10 +1333,12 @@ current truth for the behavior they describe and keep them synchronized with
 code changes:
 
 - `docs/database-schema.md`
+- `docs/accounting.md`
 - `docs/openai-compatibility.md`
 - `docs/provider-forwarding-contract.md`
 - `docs/compatibility-matrix.md`
-- `docs/accounting.md`, if present
+- `docs/streaming-live-burn-margin.md`, for the planned streaming live-burn
+  margin milestone
 - `docs/provider-routing.md`, if present
 - `README.md`, for top-level current status, quickstart, and operator-facing
   truth
@@ -1391,6 +1400,7 @@ changes. Examples include:
 - changing `stream_options.include_usage` behavior
 - changing missing-usage behavior
 - changing provider-completed finalization-failure behavior
+- adding, removing, or changing streaming live-burn margin behavior
 - changing client-disconnect behavior
 - changing quota reservation, finalization, or release behavior
 - changing reconciliation behavior

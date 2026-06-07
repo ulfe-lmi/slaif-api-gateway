@@ -204,6 +204,22 @@ PY
 Choose `RATE_LIMIT_FAIL_CLOSED` deliberately in production. Redis rate limits
 are operational throttles; PostgreSQL quota and accounting remain authoritative.
 
+## Planned Streaming Live-Burn Settings
+
+Streaming live-burn margin settings are documented as planned future work in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). They are not
+active environment variables in the current runtime, and `.env.example` should
+not list them until code implements parsing, validation, persistence/effective
+policy, admin/CLI surfaces, and tests.
+
+The milestone proposes per-key defaults with monitoring enabled and zero cost
+and output-token margins. Positive margins would stop streams early, zero
+margins would stop near the estimated quota boundary, and negative margins
+would allow bounded estimated overrun. Those estimates are provisional only:
+PostgreSQL remains authoritative for hard quota/accounting, Redis remains
+temporary operational state, and final provider usage/cost remains authoritative
+when available.
+
 ## Provider Configuration
 
 - `OPENAI_UPSTREAM_API_KEY` supplies the OpenAI provider key.

@@ -32,6 +32,10 @@ For exact reviewer-facing behavior, see:
   [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for local pricing
   catalog behavior and future refresh direction.
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
+- [`docs/accounting.md`](docs/accounting.md) and
+  [`docs/streaming-live-burn-margin.md`](docs/streaming-live-burn-margin.md)
+  for accounting invariants and the planned Streaming Live-Burn Margin
+  milestone.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
 - [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
 - [`.env.example`](.env.example) and [`docs/configuration.md`](docs/configuration.md) for safe configuration templates and environment variable reference.
@@ -75,6 +79,10 @@ Not implemented yet:
   provider-side file lifecycle, streaming custom tools, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with
   audio output.
+- Streaming live-burn margin. The planned governance milestone is documented in
+  [`docs/streaming-live-burn-margin.md`](docs/streaming-live-burn-margin.md);
+  it is not implemented, and current streaming accounting remains based on
+  provider final usage, PostgreSQL hard quota, and missing-usage failure paths.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the
