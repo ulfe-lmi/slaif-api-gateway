@@ -363,6 +363,14 @@ provider-side storage/state, `input_image.file_id`, `input_file.file_id`, file
 search/retrieval tools, audio inputs, image generation, audio output, and
 multimodal output are not priced or enabled in this foundation.
 
+`POST /v1/responses/input_tokens` is not a generation endpoint. It requires an
+explicit model route and `capabilities.responses.input_token_count=true`, but
+it does not reserve output quota, does not finalize a generation usage ledger
+row, and does not reuse `/v1/responses` pricing as invoice truth. It forwards
+the provider-reported `response.input_tokens` count for planning/admission
+compatibility. If a future provider charges separately for this metadata call,
+SLAIF must add an explicit safe accounting path before treating it as billable.
+
 ## Worst-Case Single-Request Cost
 
 Before forwarding a Responses request, the gateway should compute a conservative

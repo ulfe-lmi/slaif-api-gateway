@@ -11,6 +11,7 @@ from slaif_gateway.services.key_modes import is_trusted_calibration_key
 MODELS_LIST: Final[str] = "models.list"
 CHAT_COMPLETIONS: Final[str] = "chat.completions"
 RESPONSES: Final[str] = "responses"
+RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -32,6 +33,13 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "responses",
             "post /v1/responses",
             "/v1/responses",
+        }
+    ),
+    RESPONSES_INPUT_TOKENS: frozenset(
+        {
+            "responses.input_tokens",
+            "post /v1/responses/input_tokens",
+            "/v1/responses/input_tokens",
         }
     ),
 }

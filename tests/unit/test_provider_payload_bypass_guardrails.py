@@ -6,8 +6,10 @@ from pathlib import Path
 
 ALLOWED_UPSTREAM_BUILDERS = {
     "build_chat_completion_upstream_body",
+    "build_responses_input_tokens_upstream_body",
     "build_responses_upstream_body",
     "_build_safe_chat_completion_upstream_body",
+    "_build_safe_responses_input_tokens_upstream_body",
     "_build_safe_responses_upstream_body",
 }
 

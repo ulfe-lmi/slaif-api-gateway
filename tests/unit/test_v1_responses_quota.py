@@ -60,6 +60,7 @@ def _route_result(
     responses_custom_tools: bool = False,
     responses_image_input: bool = False,
     responses_file_input: bool = False,
+    responses_input_token_count: bool = False,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
@@ -69,6 +70,7 @@ def _route_result(
     capabilities["custom_tools"] = responses_custom_tools
     capabilities["image_input"] = responses_image_input
     capabilities["file_input"] = responses_file_input
+    capabilities["input_token_count"] = responses_input_token_count
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -396,6 +398,171 @@ def test_valid_responses_path_reserves_finalizes_then_returns_provider_response(
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
     assert finalize_calls == ["classroom-responses"]
+
+
+def test_responses_input_token_count_forwards_without_generation_quota_or_ledger(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/responses/input_tokens",)),
+    )
+    route_calls: list[tuple[str, str]] = []
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    finalize_calls: list[str] = []
+    provider_bodies: list[dict[str, object]] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key)
+        route_calls.append((requested_model, endpoint))
+        return _route_result(requested_model, responses_input_token_count=True)
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    async def _fake_finalize_successful_response(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        finalize_calls.append("finalize")
+
+    class _FakeAdapter:
+        async def forward_response_input_tokens(self, request):
+            assert request.endpoint == "responses.input_tokens"
+            provider_bodies.append(dict(request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"object": "response.input_tokens", "input_tokens": 123},
+            )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_response",
+        _fake_finalize_successful_response,
+    )
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+
+    response = TestClient(app).post(
+        "/v1/responses/input_tokens",
+        json={
+            "model": "classroom-responses",
+            "input": "hello",
+            "truncation": "disabled",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"object": "response.input_tokens", "input_tokens": 123}
+    assert route_calls == [("classroom-responses", "/v1/responses/input_tokens")]
+    assert provider_bodies == [
+        {"model": "gpt-5.2", "input": "hello", "truncation": "disabled"}
+    ]
+    assert pricing_calls == []
+    assert quota_calls == []
+    assert finalize_calls == []
+
+
+def test_responses_permission_does_not_allow_input_token_count(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/responses",)),
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses/input_tokens",
+        json={"model": "classroom-responses", "input": "hello"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "endpoint_not_allowed"
+
+
+def test_responses_input_token_count_rejects_missing_route_capability_before_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/responses/input_tokens",)),
+    )
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model)
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses/input_tokens",
+        json={"model": "classroom-responses", "input": "hello"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "responses_input_token_count_capability_not_supported"
+    assert provider_calls == []
+
+
+def test_responses_input_token_count_rejects_malformed_provider_response(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/responses/input_tokens",)),
+    )
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key, endpoint)
+        return _route_result(requested_model, responses_input_token_count=True)
+
+    class _FakeAdapter:
+        async def forward_response_input_tokens(self, request):
+            _ = request
+            return ProviderResponse(
+                provider="openai",
+                upstream_model="gpt-5.2",
+                status_code=200,
+                json_body={"object": "response.input_tokens", "input_tokens": "123"},
+            )
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+
+    response = TestClient(app).post(
+        "/v1/responses/input_tokens",
+        json={"model": "classroom-responses", "input": "hello"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "provider_response_invalid"
 
 
 def test_responses_function_tools_require_capability_before_rate_pricing_quota_provider(

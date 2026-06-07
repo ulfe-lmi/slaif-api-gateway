@@ -7,6 +7,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.services.upstream_request_contracts import (
     normalize_chat_completion_upstream_request,
+    normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
 )
 from slaif_gateway.services.key_modes import CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
@@ -15,6 +16,7 @@ from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.upstream_payloads import (
     build_chat_completion_upstream_body,
+    build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
 )
 
@@ -62,6 +64,19 @@ def _normalize_chat_body_with_resolved_model(
 def _normalize_responses_body(body: dict[str, object], *, resolved_model: str = "gpt-5.2"):
     policy_result = _responses_policy_result(body)
     return normalize_responses_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model=resolved_model,
+    )
+
+
+def _normalize_responses_input_tokens_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "gpt-5.2",
+):
+    policy_result = ResponsesRequestPolicy(_settings()).apply_input_token_count(body)
+    return normalize_responses_input_tokens_upstream_request(
         policy_result.effective_body,
         requested_model=policy_result.effective_body["model"],
         upstream_model=resolved_model,
@@ -448,6 +463,102 @@ def test_responses_minimal_text_request_reconstructs_exact_upstream_body() -> No
     }
     assert inbound == original
     assert outbound is not inbound
+
+
+def test_responses_input_token_count_text_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": "hello",
+        "instructions": "count carefully",
+        "text": {"format": {"type": "text"}},
+        "truncation": "disabled",
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_responses_input_tokens_body(inbound)
+    outbound = build_responses_input_tokens_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "instructions": "count carefully",
+        "text": {"format": {"type": "text"}},
+        "truncation": "disabled",
+    }
+    assert inbound == original
+    assert "store" not in outbound
+    assert "max_output_tokens" not in outbound
+
+
+def test_responses_input_token_count_item_array_and_tools_reconstruct_exact_body() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Count this image and file."},
+                    {"type": "input_image", "image_url": "https://example.org/image.png"},
+                    {"type": "input_file", "file_url": "https://example.org/file.pdf"},
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": "safe result",
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+        "parallel_tool_calls": False,
+    }
+
+    normalized_request = _normalize_responses_input_tokens_body(inbound)
+    outbound = build_responses_input_tokens_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Count this image and file."},
+                    {"type": "input_image", "image_url": "https://example.org/image.png"},
+                    {"type": "input_file", "file_url": "https://example.org/file.pdf"},
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": "safe result",
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+        "parallel_tool_calls": False,
+    }
+    assert outbound["input"] is not inbound["input"]
+    assert outbound["tools"] is not inbound["tools"]
+
+
+def test_responses_input_token_count_builder_rejects_raw_effective_body_mapping() -> None:
+    with pytest.raises(TypeError, match="normalized request contract"):
+        build_responses_input_tokens_upstream_body({
+            "model": "gpt-5.2",
+            "input": "hello",
+        })
 
 
 def test_responses_full_supported_text_request_reconstructs_exact_upstream_body() -> None:

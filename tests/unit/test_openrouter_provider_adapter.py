@@ -43,6 +43,21 @@ def _responses_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_input_tokens_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openrouter",
+        upstream_model="openai/gpt-5.2",
+        endpoint="/v1/responses/input_tokens",
+        body=body,
+        request_id="gw-count-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "X-CSRF-Token": "csrf",
+            "Accept": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openrouter_api_key_raises() -> None:
     adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY=None))
@@ -167,6 +182,43 @@ async def test_openrouter_response_posts_non_streaming_request(respx_mock) -> No
     assert response.usage.total_tokens == 15
     assert response.raw_cost_native == Decimal("0.00042")
     assert response.native_currency == "USD"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_response_input_tokens_posts_count_request(respx_mock) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/responses/input_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={"object": "response.input_tokens", "input_tokens": 123},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-count"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": "hello",
+        "tools": [{"type": "custom", "name": "emit_text"}],
+    }
+
+    response = await adapter.forward_response_input_tokens(
+        _responses_input_tokens_request(caller_body)
+    )
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_body == {
+        "model": "openai/gpt-5.2",
+        "input": "hello",
+        "tools": [{"type": "custom", "name": "emit_text"}],
+    }
+    assert caller_body["model"] == "client-model"
+    assert response.json_body == {"object": "response.input_tokens", "input_tokens": 123}
+    assert response.upstream_request_id == "req-openrouter-count"
     assert route.called
 
 

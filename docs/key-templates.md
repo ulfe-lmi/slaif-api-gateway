@@ -173,6 +173,7 @@ revision may summarize only these implemented stateless local capabilities:
 - `custom_tools`
 - `image_input`
 - `file_input`
+- `input_token_count`
 
 Allowed local tool types are limited to `function` and `custom`. The policy
 summary must keep `hosted_tools_allowed` empty and must set `stateful`,

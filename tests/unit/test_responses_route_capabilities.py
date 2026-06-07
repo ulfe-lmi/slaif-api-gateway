@@ -87,6 +87,16 @@ def test_file_input_capability_passes_when_explicit() -> None:
     )
 
 
+def test_input_token_count_capability_passes_when_explicit() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["input_token_count"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        input_token_count_requested=True,
+    )
+
+
 def test_streaming_image_input_requires_streaming_capability_too() -> None:
     capabilities = default_responses_capabilities()
     capabilities["image_input"] = True
@@ -197,6 +207,17 @@ def test_file_input_request_fails_when_capability_absent() -> None:
     assert exc_info.value.param == "input"
 
 
+def test_input_token_count_request_fails_when_capability_absent() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": default_responses_capabilities()},
+            input_token_count_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_input_token_count_capability_not_supported"
+    assert exc_info.value.param == "model"
+
+
 def test_function_tools_capability_does_not_imply_custom_tools() -> None:
     capabilities = default_responses_capabilities()
     capabilities["function_tools"] = True
@@ -208,6 +229,23 @@ def test_function_tools_capability_does_not_imply_custom_tools() -> None:
         )
 
     assert exc_info.value.error_code == "responses_custom_tool_capability_not_supported"
+
+
+def test_create_response_capabilities_do_not_imply_input_token_count() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["streaming"] = True
+    capabilities["function_tools"] = True
+    capabilities["custom_tools"] = True
+    capabilities["image_input"] = True
+    capabilities["file_input"] = True
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            input_token_count_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_input_token_count_capability_not_supported"
 
 
 def test_streaming_request_fails_when_route_flag_absent() -> None:
@@ -255,6 +293,10 @@ def test_unknown_capability_metadata_rejects() -> None:
 
 def test_defaults_are_added_only_for_responses_routes() -> None:
     assert "responses" in ensure_default_responses_capabilities(None, endpoint="/v1/responses")
+    assert "responses" in ensure_default_responses_capabilities(
+        None,
+        endpoint="/v1/responses/input_tokens",
+    )
     assert ensure_default_responses_capabilities(None, endpoint="/v1/chat/completions") == {}
 
 

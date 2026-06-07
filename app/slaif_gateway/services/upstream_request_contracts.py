@@ -65,6 +65,19 @@ RESPONSES_UPSTREAM_ALLOWED_FIELDS = frozenset(
     }
 )
 
+RESPONSES_INPUT_TOKENS_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+        "text",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "truncation",
+    }
+)
+
 
 def _is_set(value: object) -> bool:
     """Return true when a contract field carries a real value."""
@@ -190,6 +203,36 @@ class NormalizedResponsesUpstreamRequest:
         return fields
 
 
+@dataclass(frozen=True, slots=True)
+class NormalizedResponsesInputTokensUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+    input: str | tuple[Mapping[str, Any], ...]
+
+    instructions: object = _UNSET
+    text: object = _UNSET
+    tools: object = _UNSET
+    tool_choice: object = _UNSET
+    parallel_tool_calls: object = _UNSET
+    truncation: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        input_value: Any
+        if isinstance(self.input, tuple):
+            input_value = [copy.deepcopy(item) for item in self.input]
+        else:
+            input_value = self.input
+        fields: dict[str, Any] = {"input": input_value}
+        for name in self.__dataclass_fields__:
+            if name in {"requested_model", "upstream_model", "input"}:
+                continue
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
+        return fields
+
+
 def normalize_chat_completion_upstream_request(
     effective_body: Mapping[str, Any],
     *,
@@ -283,4 +326,42 @@ def normalize_responses_upstream_request(
         service_tier=_select_field(body.get("service_tier", _UNSET)),
         tools=_select_field(body.get("tools", _UNSET)),
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
+    )
+
+
+def normalize_responses_input_tokens_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedResponsesInputTokensUpstreamRequest:
+    """Build a normalized Responses input-token count contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Responses input-token count",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(
+        body,
+        allowed_fields=RESPONSES_INPUT_TOKENS_UPSTREAM_ALLOWED_FIELDS,
+    )
+
+    return NormalizedResponsesInputTokensUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        input=(
+            tuple(copy.deepcopy(item) for item in body["input"])
+            if isinstance(body["input"], list)
+            else copy.deepcopy(body["input"])
+        ),
+        instructions=_select_field(body.get("instructions", _UNSET)),
+        text=_select_field(body.get("text", _UNSET)),
+        tools=_select_field(body.get("tools", _UNSET)),
+        tool_choice=_select_field(body.get("tool_choice", _UNSET)),
+        parallel_tool_calls=_select_field(body.get("parallel_tool_calls", _UNSET)),
+        truncation=_select_field(body.get("truncation", _UNSET)),
     )

@@ -32,6 +32,18 @@ _SUPPORTED_FIELDS = frozenset(
         "tool_choice",
     }
 )
+_SUPPORTED_INPUT_TOKEN_COUNT_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+        "text",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "truncation",
+    }
+)
 TEXT_FORMAT_TEXT = "text"
 TEXT_FORMAT_JSON_OBJECT = "json_object"
 TEXT_FORMAT_JSON_SCHEMA = "json_schema"
@@ -199,10 +211,70 @@ class ResponsesRequestPolicy:
             injected_default_output_tokens=injected_default,
         )
 
-    def _reject_unknown_fields(self, body: Mapping[str, Any]) -> None:
+    def apply_input_token_count(self, body: Mapping[str, Any]) -> ResponsesPolicyResult:
+        """Validate a Responses input-token count request without create-only fields."""
+
+        effective_body = copy.deepcopy(dict(body))
+        self._reject_unknown_fields(
+            effective_body,
+            allowed_fields=_SUPPORTED_INPUT_TOKEN_COUNT_FIELDS,
+        )
+
+        model = effective_body.get("model")
+        if not isinstance(model, str) or not model.strip():
+            _raise(
+                "model",
+                "responses_field_invalid_type",
+                "The 'model' field must be a non-empty string.",
+            )
+
+        canonical_input, input_material_bytes = self._validate_input(effective_body.get("input"))
+        effective_body["input"] = canonical_input
+        instructions = self._validate_optional_string(
+            effective_body.get("instructions"),
+            param="instructions",
+            max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
+        )
+        self._validate_text_config(effective_body.get("text"), stream=False)
+        tools_schema_bytes = self._validate_tools(effective_body)
+        tool_choice_bytes = self._validate_tool_choice(effective_body)
+        self._validate_input_token_count_controls(effective_body)
+
+        estimated_input_tokens = self._estimate_input_tokens(
+            input_material_bytes=input_material_bytes,
+            instructions=instructions,
+            body=effective_body,
+            tools_schema_bytes=tools_schema_bytes,
+            tool_choice_bytes=tool_choice_bytes,
+        )
+        if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
+            _raise(
+                "input",
+                "input_token_limit_exceeded",
+                "Estimated Responses input size exceeds the configured hard maximum.",
+            )
+
+        return ResponsesPolicyResult(
+            effective_body=effective_body,
+            requested_output_tokens=0,
+            effective_output_tokens=0,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_message_input_tokens=estimated_input_tokens,
+            estimated_non_message_input_tokens=0,
+            estimated_non_message_input_bytes=0,
+            estimated_non_message_input_fields=(),
+            injected_default_output_tokens=False,
+        )
+
+    def _reject_unknown_fields(
+        self,
+        body: Mapping[str, Any],
+        *,
+        allowed_fields: frozenset[str] = _SUPPORTED_FIELDS,
+    ) -> None:
         for field in body:
             field_name = str(field)
-            if field_name not in _SUPPORTED_FIELDS:
+            if field_name not in allowed_fields:
                 code = _unsupported_code_for_field(field_name)
                 _raise(
                     field_name,
@@ -985,6 +1057,22 @@ class ResponsesRequestPolicy:
     def _validate_scalar_controls(self, body: Mapping[str, Any]) -> None:
         self._validate_number_range(body.get("temperature"), param="temperature", minimum=0, maximum=2)
         self._validate_number_range(body.get("top_p"), param="top_p", minimum=0, maximum=1)
+
+    def _validate_input_token_count_controls(self, body: Mapping[str, Any]) -> None:
+        parallel_tool_calls = body.get("parallel_tool_calls")
+        if parallel_tool_calls is not None and not isinstance(parallel_tool_calls, bool):
+            _raise(
+                "parallel_tool_calls",
+                "responses_field_invalid_type",
+                "The 'parallel_tool_calls' field must be a boolean when provided.",
+            )
+        truncation = body.get("truncation")
+        if truncation is not None and truncation not in {"auto", "disabled"}:
+            _raise(
+                "truncation",
+                "responses_field_value_not_supported",
+                "The 'truncation' field must be 'auto' or 'disabled' when provided.",
+            )
 
     def _validate_number_range(
         self,

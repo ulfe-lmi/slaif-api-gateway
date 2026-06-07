@@ -8,6 +8,7 @@ import copy
 
 from slaif_gateway.services.upstream_request_contracts import (
     NormalizedChatCompletionUpstreamRequest,
+    NormalizedResponsesInputTokensUpstreamRequest,
     NormalizedResponsesUpstreamRequest,
 )
 
@@ -62,6 +63,17 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
     "tool_choice",
 )
 
+RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "input",
+    "instructions",
+    "text",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "truncation",
+)
+
 
 def build_chat_completion_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest,
@@ -87,16 +99,33 @@ def build_responses_upstream_body(
     )
 
 
+def build_responses_input_tokens_upstream_body(
+    normalized_request: NormalizedResponsesInputTokensUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Responses input-token count provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS),
+        endpoint_label="Responses input-token count",
+    )
+
+
 def _build_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest
-    | NormalizedResponsesUpstreamRequest,
+    | NormalizedResponsesUpstreamRequest
+    | NormalizedResponsesInputTokensUpstreamRequest,
     *,
     allowed_fields: frozenset[str],
     endpoint_label: str,
 ) -> dict[str, Any]:
     if not isinstance(
         normalized_request,
-        (NormalizedChatCompletionUpstreamRequest, NormalizedResponsesUpstreamRequest),
+        (
+            NormalizedChatCompletionUpstreamRequest,
+            NormalizedResponsesUpstreamRequest,
+            NormalizedResponsesInputTokensUpstreamRequest,
+        ),
     ):
         raise TypeError(
             f"{endpoint_label} upstream payload must be built from a normalized request contract."

@@ -12,8 +12,14 @@ from slaif_gateway.services.route_resolution import matches_model_route
 
 MODELS_ENDPOINT = "/v1/models"
 RESPONSES_ENDPOINT = "/v1/responses"
+RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
-    {MODELS_ENDPOINT, CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT}
+    {
+        MODELS_ENDPOINT,
+        CHAT_COMPLETIONS_ENDPOINT,
+        RESPONSES_ENDPOINT,
+        RESPONSES_INPUT_TOKENS_ENDPOINT,
+    }
 )
 
 
@@ -52,7 +58,11 @@ async def validate_gateway_key_policy(
         if normalized.allow_all_endpoints
         else set(normalized.allowed_endpoints)
     )
-    model_backed_endpoints = effective_endpoints & {CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT}
+    model_backed_endpoints = effective_endpoints & {
+        CHAT_COMPLETIONS_ENDPOINT,
+        RESPONSES_ENDPOINT,
+        RESPONSES_INPUT_TOKENS_ENDPOINT,
+    }
     if not normalized.allow_all_models and model_backed_endpoints:
         if not normalized.allowed_models:
             raise InvalidGatewayKeyPolicyError(
@@ -118,7 +128,11 @@ async def _validate_models_have_routes(
     model_routes_repository: _ModelRoutesRepository,
 ) -> None:
     require_visible = endpoints == {MODELS_ENDPOINT}
-    endpoints_to_check = (CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT)
+    endpoints_to_check = (
+        CHAT_COMPLETIONS_ENDPOINT,
+        RESPONSES_ENDPOINT,
+        RESPONSES_INPUT_TOKENS_ENDPOINT,
+    )
     if endpoints and not require_visible:
         endpoints_to_check = tuple(endpoint for endpoint in endpoints_to_check if endpoint in endpoints)
 
