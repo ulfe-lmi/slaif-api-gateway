@@ -62,7 +62,7 @@ Current support is intentionally narrow:
 - no `input_image.file_id`, `input_file.file_id`, `input_audio`, audio output,
   image generation, `/v1/files`, file search/retrieval tools, or multimodal
   output;
-- no response delete/cancel/retrieve/list input items initially.
+- no response delete/cancel/retrieve/list/input-item listing endpoints.
 
 Responses streaming preserves typed provider events such as `response.created`,
 `response.output_text.delta`, `response.completed`, and safe `error` events. It

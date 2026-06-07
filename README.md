@@ -25,8 +25,7 @@ For exact reviewer-facing behavior, see:
   first RC-beta release-candidate notes and tagging checklist.
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
 - [`docs/responses-compatibility.md`](docs/responses-compatibility.md) for the
-  current stateless text-only Responses foundation and future RC2 Responses
-  contract.
+  current stateless local Responses subset and future RC2 Responses contract.
 - [`docs/key-templates.md`](docs/key-templates.md) for implemented template
   snapshots and single-key creation from template revisions, and
   [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for local pricing
@@ -47,7 +46,7 @@ Implemented:
 - Non-streaming and SSE streaming `POST /v1/chat/completions` with request field registry checks, scalar/request caps, route/model capability metadata, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
 - Current Chat Completions support includes text chat, streaming text, local function tools, non-streaming local custom tools, bounded `n > 1` multiple choices, image input to text output, inline file input to text output, audio input to text output, and non-streaming audio output when the resolved route/model explicitly enables the matching capability.
 - Chat Completions policy remains fail-closed for unknown fields and unsupported request shapes. Hosted/provider-side tools, MCP/connectors, web search, file search, code interpreter, computer use, image-generation tools, tool search, non-default service tiers, streaming custom tools, streaming audio output, file IDs/provider-side file lifecycle, and `n > 1` with audio output remain unsupported unless future explicit policy, pricing/accounting, forwarding, and tests add them.
-- Stateless text-only `POST /v1/responses` with non-streaming JSON and typed SSE streaming, explicit key endpoint permission, route/model Responses capability metadata, route resolution, `/v1/responses` pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization. Streaming requires explicit Responses streaming route capability and finalizes from provider usage on the completed response event. The gateway injects `store=false` when omitted and keeps Responses tools, background mode, provider-side storage/state, previous response IDs, conversations, multimodal input/output, MCP/connectors, and retrieval/cancel/delete/list routes unsupported.
+- Stateless local `POST /v1/responses` with text output, string input or bounded text item arrays, route-enabled image input to text output, route-enabled file input to text output, non-streaming JSON, typed SSE streaming, non-streaming structured `text.format` JSON object/schema output, local function tools, local custom tools, string-only function/custom tool output follow-up items, explicit key endpoint permission, route/model Responses capability metadata, route resolution, `/v1/responses` pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization. Streaming requires explicit Responses streaming route capability and finalizes from provider usage on the completed response event. The gateway injects `store=false` when omitted. Safe key-template `responses_policy` metadata is implemented for the supported stateless local capabilities.
 - `slaif-gateway bootstrap openai-completions-catalog` for seeding the local OpenAI provider config, exact Chat Completions routes, and explicit pricing rows from a curated in-repo catalog and an operator-controlled pricing CSV.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
@@ -64,11 +63,13 @@ Implemented:
 
 Not implemented yet:
 
-- Responses tools, provider-side Responses storage/state,
-  `previous_response_id`, conversations, response retrieval/cancel/delete/list
-  routes, Responses multimodal input/output, MCP/connectors, image generation,
-  and computer use. Only the stateless text-only `POST /v1/responses`
-  foundation is implemented, including typed SSE streaming.
+- Responses hosted/provider-side tools, MCP/connectors, web/file search, code
+  interpreter, shell, `apply_patch`, local environments/skills/containers,
+  computer use, image generation, audio input/output, `/v1/files`, `file_id`
+  lifecycle, provider-side Responses storage/state, `previous_response_id`,
+  conversations, response retrieval/cancel/delete/list/input-item endpoints,
+  and multimodal output. The implemented Responses subset remains stateless,
+  text-output only, and local/client-side for tools.
 - Embeddings, legacy `/v1/completions`, `/v1/files`, `/v1/audio/*`, image
   generation endpoints, batch endpoints, and Realtime API.
 - Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,

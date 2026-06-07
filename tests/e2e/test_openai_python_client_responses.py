@@ -39,6 +39,9 @@ async def _create_responses_test_data(
     structured_outputs: bool = False,
     json_mode: bool = False,
     function_tools: bool = False,
+    custom_tools: bool = False,
+    image_input: bool = False,
+    file_input: bool = False,
 ):
     from slaif_gateway.config import Settings
     from slaif_gateway.db.models import ModelRoute, PricingRule
@@ -126,6 +129,9 @@ async def _create_responses_test_data(
             capabilities["structured_outputs"] = structured_outputs
             capabilities["json_mode"] = json_mode
             capabilities["function_tools"] = function_tools
+            capabilities["custom_tools"] = custom_tools
+            capabilities["image_input"] = image_input
+            capabilities["file_input"] = file_input
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -999,6 +1005,318 @@ def test_openai_python_client_responses_function_tool_e2e(
         INPUT_TEXT,
         "Local lookup intent.",
         '{"query":"safe"}',
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_custom_tool_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_responses_test_data(database_url, custom_tools=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "resp_custom_tool_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "ct_custom_tool_test",
+                "type": "custom_tool_call",
+                "call_id": "call_custom_tool_test",
+                "name": "draft_email",
+                "input": "subject: safe",
+            }
+        ],
+        "usage": {"input_tokens": 23, "output_tokens": 29, "total_tokens": 52},
+        "store": False,
+    }
+    tools = [
+        {
+            "type": "custom",
+            "name": "draft_email",
+            "description": "Local drafting intent.",
+            "format": {
+                "type": "grammar",
+                "syntax": "regex",
+                "definition": r"subject: .+",
+            },
+        }
+    ]
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-responses-custom-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                max_output_tokens=32,
+                tools=tools,
+                tool_choice={"type": "custom", "name": "draft_email"},
+            )
+
+    assert response.id == "resp_custom_tool_test"
+    assert response.output[0].type == "custom_tool_call"
+    assert response.output[0].name == "draft_email"
+    assert response.output[0].input == "subject: safe"
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    assert json.loads(upstream_request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": INPUT_TEXT,
+        "max_output_tokens": 32,
+        "store": False,
+        "tools": tools,
+        "tool_choice": {"type": "custom", "name": "draft_email"},
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 52
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+    assert state.usage_ledger.prompt_tokens == 23
+    assert state.usage_ledger.completion_tokens == 29
+    assert state.usage_ledger.total_tokens == 52
+
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        INPUT_TEXT,
+        "Local drafting intent.",
+        "subject: safe",
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_image_input_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_responses_test_data(database_url, image_input=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    image_url = "https://example.org/slaif-e2e-image.png"
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Describe the image."},
+                {"type": "input_image", "image_url": image_url, "detail": "low"},
+            ],
+        }
+    ]
+    upstream_payload = {
+        "id": "resp_image_input_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_image_input_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 31, "output_tokens": 7, "total_tokens": 38},
+        "store": False,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-responses-image-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=input_items,
+                max_output_tokens=32,
+            )
+
+    assert response.id == "resp_image_input_test"
+    assert response.output_text == OUTPUT_TEXT
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    assert json.loads(upstream_request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": input_items,
+        "max_output_tokens": 32,
+        "store": False,
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 38
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        image_url,
+        OUTPUT_TEXT,
+        created.plaintext_key,
+        FAKE_OPENAI_UPSTREAM_KEY,
+    ):
+        assert forbidden not in ledger_text
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_file_input_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(_create_responses_test_data(database_url, file_input=True))
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    file_url = "https://example.org/slaif-e2e-document.pdf"
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize the file."},
+                {"type": "input_file", "file_url": file_url},
+            ],
+        }
+    ]
+    upstream_payload = {
+        "id": "resp_file_input_test",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_file_input_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 43, "output_tokens": 9, "total_tokens": 52},
+        "store": False,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "upstream-openai-responses-file-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=input_items,
+                max_output_tokens=32,
+            )
+
+    assert response.id == "resp_file_input_test"
+    assert response.output_text == OUTPUT_TEXT
+    assert len(upstream_route.calls) == 1
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    assert json.loads(upstream_request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": input_items,
+        "max_output_tokens": 32,
+        "store": False,
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 52
+    ledger_text = json.dumps(
+        {
+            "response_metadata": state.usage_ledger.response_metadata,
+            "usage_raw": state.usage_ledger.usage_raw,
+            "error_message": state.usage_ledger.error_message,
+        },
+        default=str,
+    )
+    for forbidden in (
+        file_url,
+        OUTPUT_TEXT,
         created.plaintext_key,
         FAKE_OPENAI_UPSTREAM_KEY,
     ):
