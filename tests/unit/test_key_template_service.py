@@ -83,6 +83,7 @@ class FakeKeyService:
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
             rate_limit_policy=payload.rate_limit_policy,
+            chat_streaming_live_burn_policy=payload.chat_streaming_live_burn_policy,
             key_purpose=payload.key_purpose,
             capability_policy_mode=payload.capability_policy_mode,
             template_id=payload.template_id,
@@ -126,6 +127,12 @@ def test_create_template_from_calibration_proposal_creates_template_revision_and
     assert result.revision.token_limit_total == 90
     assert result.revision.validity_days_default == 14
     assert result.revision.email_delivery_mode_default == "pending"
+    assert result.revision.template_snapshot["chat_streaming_live_burn"] == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert result.revision.created_audit_log_id == result.audit_log.id
     assert audit.rows[0].new_values["revision_number"] == 1
 
@@ -279,7 +286,87 @@ def test_create_key_from_template_revision_creates_standard_key_with_provenance(
     assert payload.cost_limit_eur == Decimal("0.030000000")
     assert payload.template_id == template.id
     assert payload.template_revision_id == revision.id
+    assert payload.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+    assert result.created_key.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert audit.rows[-1].action == "gateway_key.created_from_template"
+
+
+def test_create_key_from_template_copies_chat_live_burn_policy_snapshot() -> None:
+    templates = FakeTemplatesRepository()
+    key_service = FakeKeyService()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=key_service,
+    )
+    _template, revision = _template_revision(
+        templates,
+        template_snapshot={
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": False,
+                "cost_margin_eur": "-0.250000000",
+                "token_margin": -250,
+            }
+        },
+    )
+
+    asyncio.run(
+        service.create_key_from_revision(
+            template_revision_id=revision.id,
+            owner_id=uuid.uuid4(),
+            reason="Reviewed template",
+            confirm_create_key_from_template=True,
+        )
+    )
+
+    assert key_service.payloads[0].chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
+
+
+def test_create_key_from_template_rejects_unknown_chat_live_burn_snapshot_fields() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    _template, revision = _template_revision(
+        templates,
+        template_snapshot={
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "0",
+                "token_margin": 0,
+                "raw_request_body": "must not persist",
+            }
+        },
+    )
+
+    with pytest.raises(KeyTemplateError, match="unsupported Chat streaming live-burn"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Reviewed template",
+                confirm_create_key_from_template=True,
+            )
+        )
 
 
 def test_create_key_from_template_allows_safe_responses_policy_metadata() -> None:

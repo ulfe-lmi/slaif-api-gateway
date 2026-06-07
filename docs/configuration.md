@@ -884,7 +884,8 @@ pricing or provider APIs.
 Dashboard bulk key import preview is CSRF-protected and dry-run only. It accepts
 CSV or JSON key-creation rows and validates owner references, optional cohort
 references, validity windows, hard quota values, allowlist policy fields, Redis
-rate-limit policy fields, email delivery modes, upload size, and row count. It
+rate-limit policy fields, Chat Completions streaming live-burn policy fields,
+email delivery modes, upload size, and row count. It
 rejects unknown fields, gateway-key-looking input, provider-key-looking input,
 and secret-looking notes/metadata/policy values. Preview does not generate
 plaintext keys, does not write `gateway_keys`, `one_time_secrets`,
@@ -900,6 +901,14 @@ on a no-cache result page for `none` and `pending` rows, are suppressed for
 URLs, email delivery rows, logs, or Celery payloads. Bulk `enqueue` creates
 one-time secrets and pending email delivery rows, then queues Celery tasks with
 IDs only; SMTP is not called in the admin HTTP request.
+
+Optional bulk import fields
+`chat_streaming_live_burn_enabled`,
+`chat_streaming_live_burn_cost_margin_eur`, and
+`chat_streaming_live_burn_token_margin` use the same validation and persisted
+metadata shape as the Admin/CLI per-key Chat policy. Omitted fields default to
+enabled with zero margins. Disabled monitoring preserves supplied margins in
+metadata but ignores them at runtime.
 
 Dashboard pricing import execution is also CSRF-protected and uses the same
 parser/validation rules as preview. Execution requires explicit confirmation

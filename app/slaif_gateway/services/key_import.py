@@ -15,6 +15,11 @@ from io import StringIO
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
 from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.streaming_live_burn_surface import (
+    CHAT_STREAMING_LIVE_BURN_SURFACE,
+    normalize_streaming_live_burn_surface_policy,
+    streaming_live_burn_surface_policy_summary,
+)
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 KEY_IMPORT_ALLOWED_FIELDS = {
@@ -40,6 +45,9 @@ KEY_IMPORT_ALLOWED_FIELDS = {
     "rate_limit_tokens_per_minute",
     "rate_limit_concurrent_requests",
     "rate_limit_window_seconds",
+    "chat_streaming_live_burn_enabled",
+    "chat_streaming_live_burn_cost_margin_eur",
+    "chat_streaming_live_burn_token_margin",
     "email_delivery_mode",
     "note",
     "admin_note",
@@ -113,6 +121,7 @@ class KeyImportRowPreview:
     label: str | None = None
     note: str | None = None
     metadata_summary: str = "none"
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
     errors: tuple[str, ...] = ()
 
     @property
@@ -141,6 +150,10 @@ class KeyImportRowPreview:
         if "window_seconds" in self.rate_limit_policy:
             parts.append(f"{self.rate_limit_policy['window_seconds']}s window")
         return ", ".join(parts) if parts else "none"
+
+    @property
+    def chat_streaming_live_burn_summary(self) -> str:
+        return _chat_streaming_live_burn_summary(self.chat_streaming_live_burn_policy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +213,7 @@ class KeyImportExecutionRow:
     allowed_models: tuple[str, ...] = ()
     allowed_endpoints: tuple[str, ...] = ()
     rate_limit_policy: dict[str, int] | None = None
+    chat_streaming_live_burn_policy: dict[str, object] | None = None
     plaintext_key: str | None = None
     errors: tuple[str, ...] = ()
 
@@ -225,6 +239,10 @@ class KeyImportExecutionRow:
         if "window_seconds" in self.rate_limit_policy:
             parts.append(f"{self.rate_limit_policy['window_seconds']}s window")
         return ", ".join(parts) if parts else "none"
+
+    @property
+    def chat_streaming_live_burn_summary(self) -> str:
+        return _chat_streaming_live_burn_summary(self.chat_streaming_live_burn_policy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +435,9 @@ async def execute_key_import_plan(
                 allowed_models=row.allowed_models,
                 allowed_endpoints=row.allowed_endpoints,
                 rate_limit_policy=row.rate_limit_policy,
+                chat_streaming_live_burn_policy=(
+                    created.chat_streaming_live_burn_policy or row.chat_streaming_live_burn_policy
+                ),
                 plaintext_key=created.plaintext_key if row.email_delivery_mode in {"none", "pending"} else None,
             )
         )
@@ -513,6 +534,7 @@ def key_import_execution_result_from_preview_errors(preview: KeyImportPreview) -
             allowed_models=row.allowed_models,
             allowed_endpoints=row.allowed_endpoints,
             rate_limit_policy=row.rate_limit_policy,
+            chat_streaming_live_burn_policy=row.chat_streaming_live_burn_policy,
             errors=row.errors or ("row is invalid",),
         )
         for row in preview.rows
@@ -574,6 +596,8 @@ def key_import_preview_to_dict(preview: KeyImportPreview) -> dict[str, object]:
                 "allow_all_endpoints": row.allow_all_endpoints,
                 "allow_all_providers": row.allow_all_providers,
                 "rate_limit_policy": row.rate_limit_policy,
+                "chat_streaming_live_burn_policy": row.chat_streaming_live_burn_policy,
+                "chat_streaming_live_burn_summary": row.chat_streaming_live_burn_summary,
                 "email_delivery_mode": row.email_delivery_mode,
                 "label": row.label,
                 "note": row.note,
@@ -620,6 +644,7 @@ def _replace_execution_row(
         allowed_models=row.allowed_models,
         allowed_endpoints=row.allowed_endpoints,
         rate_limit_policy=row.rate_limit_policy,
+        chat_streaming_live_burn_policy=row.chat_streaming_live_burn_policy,
         plaintext_key=row.plaintext_key if plaintext_key is _UNSET else plaintext_key,
         errors=row.errors,
     )
@@ -665,6 +690,7 @@ def _validate_one_row(
     allow_all_endpoints = _optional_bool(row.get("allow_all_endpoints"), field_name="allow_all_endpoints")
     allow_all_providers = _optional_bool(row.get("allow_all_providers"), field_name="allow_all_providers")
     rate_limit_policy = _rate_limit_policy(row)
+    chat_streaming_live_burn_policy = _chat_streaming_live_burn_policy(row)
     email_delivery_mode = _email_delivery_mode(row.get("email_delivery_mode"), context=context, owner=owner)
     metadata = _optional_import_metadata(row.get("metadata"))
 
@@ -691,6 +717,7 @@ def _validate_one_row(
         allow_all_endpoints=allow_all_endpoints,
         allow_all_providers=allow_all_providers,
         rate_limit_policy=rate_limit_policy,
+        chat_streaming_live_burn_policy=chat_streaming_live_burn_policy,
         email_delivery_mode=email_delivery_mode,
         label=_optional_import_text(row.get("label"), field_name="label"),
         note=_optional_import_text(row.get("note", row.get("admin_note")), field_name="note"),
@@ -759,6 +786,37 @@ def _rate_limit_policy(row: Mapping[str, object]) -> dict[str, int] | None:
         if value is not None:
             policy[policy_name] = value
     return policy or None
+
+
+def _chat_streaming_live_burn_policy(row: Mapping[str, object]) -> dict[str, object]:
+    enabled = _optional_bool_default_true(
+        row.get("chat_streaming_live_burn_enabled"),
+        field_name="chat_streaming_live_burn_enabled",
+    )
+    cost_margin = row.get("chat_streaming_live_burn_cost_margin_eur", "0")
+    token_margin = row.get("chat_streaming_live_burn_token_margin", 0)
+    try:
+        policy = normalize_streaming_live_burn_surface_policy(
+            CHAT_STREAMING_LIVE_BURN_SURFACE,
+            {
+                "version": 1,
+                "enabled": enabled,
+                "cost_margin_eur": "0" if _is_blank(cost_margin) else cost_margin,
+                "token_margin": 0 if _is_blank(token_margin) else token_margin,
+            },
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    return policy.to_metadata()
+
+
+def _chat_streaming_live_burn_summary(policy: dict[str, object] | None) -> str:
+    return streaming_live_burn_surface_policy_summary(
+        CHAT_STREAMING_LIVE_BURN_SURFACE,
+        policy,
+    )
 
 
 def _email_delivery_mode(
@@ -870,6 +928,12 @@ def _optional_bool(value: object, *, field_name: str) -> bool:
     raise ValueError(f"{field_name} must be true or false")
 
 
+def _optional_bool_default_true(value: object, *, field_name: str) -> bool:
+    if _is_blank(value):
+        return True
+    return _optional_bool(value, field_name=field_name)
+
+
 def _optional_import_list(value: object, *, field_name: str) -> list[str]:
     if _is_blank(value):
         return []
@@ -951,6 +1015,7 @@ def _with_classification(row: KeyImportRowPreview, classification: str) -> KeyIm
         allow_all_endpoints=row.allow_all_endpoints,
         allow_all_providers=row.allow_all_providers,
         rate_limit_policy=row.rate_limit_policy,
+        chat_streaming_live_burn_policy=row.chat_streaming_live_burn_policy,
         email_delivery_mode=row.email_delivery_mode,
         label=row.label,
         note=row.note,
@@ -989,6 +1054,9 @@ def _create_gateway_key_input_from_row(
         allow_all_models=row.allow_all_models,
         allow_all_endpoints=row.allow_all_endpoints,
         rate_limit_policy=dict(row.rate_limit_policy) if row.rate_limit_policy else None,
+        chat_streaming_live_burn_policy=dict(row.chat_streaming_live_burn_policy)
+        if row.chat_streaming_live_burn_policy
+        else None,
         note=reason,
     )
 

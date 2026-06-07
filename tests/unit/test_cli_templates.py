@@ -53,6 +53,7 @@ def test_create_from_calibration_outputs_safe_text(monkeypatch) -> None:
     assert "Key template created" in result.stdout
     assert "No participant keys were created" in result.stdout
     assert "gpt-4.1-mini" in result.stdout
+    assert "Chat live-burn: on" in result.stdout
     assert SECRET_VALUE not in result.stdout
     assert PROMPT_TEXT not in result.stdout
     assert COMPLETION_TEXT not in result.stdout
@@ -84,6 +85,12 @@ def test_create_from_calibration_json_is_valid_and_safe(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["template"]["name"] == "Participants"
     assert payload["revision"]["revision_number"] == 1
+    assert payload["revision"]["chat_streaming_live_burn_policy"] == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     serialized = json.dumps(payload, sort_keys=True)
     assert SECRET_VALUE not in serialized
     assert PROMPT_TEXT not in serialized

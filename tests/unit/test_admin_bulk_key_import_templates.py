@@ -39,6 +39,9 @@ def test_bulk_import_form_template_includes_csrf_and_no_secret_fields(monkeypatc
     assert "Preview only" in html
     assert "no keys are generated" in html
     assert "no email is sent" in html
+    assert "chat_streaming_live_burn_enabled" in html
+    assert "chat_streaming_live_burn_cost_margin_eur" in html
+    assert "chat_streaming_live_burn_token_margin" in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html
@@ -90,6 +93,7 @@ def test_bulk_import_preview_template_includes_execution_controls(monkeypatch) -
     assert "will generate gateway keys" in html
     assert "enqueue" in html
     assert "send-now" in html
+    assert "Chat live-burn: on" in html
 
 
 def test_bulk_import_result_template_shows_plaintext_once_and_no_secret_fields(monkeypatch) -> None:
@@ -122,6 +126,7 @@ def test_bulk_import_result_template_shows_plaintext_once_and_no_secret_fields(m
 
     assert "Copy these keys now" in html
     assert html.count("sk-slaif-pub_bulk.plaintext-secret") == 1
+    assert "Chat live-burn: on" in html
     assert "owner_email,valid_days" not in html
     assert "sk-provider-secret" not in html
     assert "token_hash" not in html

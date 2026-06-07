@@ -96,6 +96,11 @@
           hosted/stateful/multimodal: denied
         </dd>
         {% endif %}
+        <dt>Chat Completions streaming live-burn</dt>
+        <dd>
+          <div>{{ current_revision_chat_live_burn_summary }}</div>
+          <div class="muted small">Scope: /v1/chat/completions stream=true. Positive margin stops early; zero stops near the estimated boundary; negative allows bounded estimated overrun. Final provider usage/cost remains authoritative.</div>
+        </dd>
       </dl>
     </section>
 

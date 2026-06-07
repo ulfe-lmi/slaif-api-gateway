@@ -668,6 +668,8 @@ def test_template_detail_page_shows_safe_metadata(monkeypatch) -> None:
     assert "Single-Key Creation Only" in response.text
     assert "gpt-4.1-mini" in response.text
     assert "web_search_options" in response.text
+    assert "Chat Completions streaming live-burn" in response.text
+    assert "Chat live-burn: on" in response.text
     assert "prompt text" not in response.text
     assert "sk-live" not in response.text
 
@@ -877,6 +879,7 @@ def test_create_key_from_template_creates_one_key_result(monkeypatch) -> None:
     assert "Gateway Key Created" in response.text
     assert "sk-slaif-templated.once-only" in response.text
     assert "Created from immutable key template revision" in response.text
+    assert "Chat live-burn: on" in response.text
     assert str(template_id) in response.text
     assert str(revision_id) in response.text
     assert "token_hash" not in response.text

@@ -112,6 +112,85 @@ def test_valid_row_resolves_owner_policy_and_rate_limits() -> None:
         "max_concurrent_requests": 4,
         "window_seconds": 30,
     }
+    assert row.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+    assert "Chat live-burn: on" in row.chat_streaming_live_burn_summary
+
+
+def test_live_burn_columns_accept_disabled_positive_zero_and_negative_margins() -> None:
+    preview = _preview(
+        [
+            _valid_row(
+                chat_streaming_live_burn_enabled="false",
+                chat_streaming_live_burn_cost_margin_eur="1.25",
+                chat_streaming_live_burn_token_margin="250",
+            ),
+            _valid_row(
+                owner_email="",
+                chat_streaming_live_burn_enabled="true",
+                chat_streaming_live_burn_cost_margin_eur="0",
+                chat_streaming_live_burn_token_margin="0",
+            ),
+            _valid_row(
+                owner_email="",
+                chat_streaming_live_burn_cost_margin_eur="-0.25",
+                chat_streaming_live_burn_token_margin="-250",
+            ),
+        ]
+    )
+
+    policies = [row.chat_streaming_live_burn_policy for row in preview.rows]
+
+    assert preview.valid_count == 3
+    assert policies[0] == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "1.250000000",
+        "token_margin": 250,
+    }
+    assert policies[1] == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+    assert policies[2] == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "chat_streaming_live_burn_enabled",
+            "maybe",
+            "chat_streaming_live_burn_enabled must be true or false",
+        ),
+        (
+            "chat_streaming_live_burn_cost_margin_eur",
+            "not-decimal",
+            "cost margin must be a finite decimal string",
+        ),
+        (
+            "chat_streaming_live_burn_token_margin",
+            "1.5",
+            "token margin must be an integer",
+        ),
+    ],
+)
+def test_live_burn_import_validation_errors_are_row_level(field: str, value: str, message: str) -> None:
+    preview = _preview([_valid_row(**{field: value})])
+
+    assert preview.invalid_count == 1
+    assert message in preview.rows[0].errors[0]
 
 
 @pytest.mark.parametrize(
@@ -330,6 +409,7 @@ class _FakeKeyService:
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
             rate_limit_policy=payload.rate_limit_policy,
+            chat_streaming_live_burn_policy=payload.chat_streaming_live_burn_policy,
         )
 
 
@@ -373,6 +453,18 @@ async def test_execute_key_import_plan_calls_key_service_and_returns_plaintext_o
     assert result.rows[0].email_delivery_id == uuid.UUID("77777777-7777-4777-8777-777777777777")
     assert key_service.payloads[0].owner_id == OWNER_ID
     assert key_service.payloads[0].cost_limit_eur == Decimal("10.50")
+    assert key_service.payloads[0].chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+    assert result.rows[0].chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert email_service.calls[0]["one_time_secret_id"] == uuid.UUID("66666666-6666-4666-8666-666666666666")
 
 

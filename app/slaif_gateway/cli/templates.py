@@ -21,7 +21,12 @@ from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.services.calibration_summary_service import CalibrationSummaryService
-from slaif_gateway.services.key_template_service import KeyTemplateCreationResult, KeyTemplateService
+from slaif_gateway.services.key_template_service import (
+    KeyTemplateCreationResult,
+    KeyTemplateService,
+    chat_streaming_live_burn_policy_for_template_revision,
+    chat_streaming_live_burn_policy_summary_for_template_revision,
+)
 
 app = typer.Typer(help="Create and inspect durable key templates")
 
@@ -148,6 +153,12 @@ def _result_dict(result: KeyTemplateCreationResult) -> dict[str, object]:
             "request_limit_total": revision.request_limit_total,
             "token_limit_total": revision.token_limit_total,
             "cost_limit_eur": revision.cost_limit_eur,
+            "chat_streaming_live_burn_policy": chat_streaming_live_burn_policy_for_template_revision(
+                revision
+            ).to_metadata(),
+            "chat_streaming_live_burn_policy_summary": (
+                chat_streaming_live_burn_policy_summary_for_template_revision(revision)
+            ),
             "warnings": _snapshot_warnings(revision.template_snapshot),
         },
         "audit_log_id": result.audit_log.id,
@@ -174,6 +185,10 @@ def _emit_human_result(result: KeyTemplateCreationResult) -> None:
     typer.echo(f"request_limit_total: {revision.request_limit_total}")
     typer.echo(f"token_limit_total: {revision.token_limit_total}")
     typer.echo(f"cost_limit_eur: {revision.cost_limit_eur or 'unknown'}")
+    typer.echo(
+        "chat_streaming_live_burn: "
+        + chat_streaming_live_burn_policy_summary_for_template_revision(revision)
+    )
     if revision.hosted_capabilities_requiring_review:
         typer.echo(
             "hosted_capabilities_requiring_review: "
