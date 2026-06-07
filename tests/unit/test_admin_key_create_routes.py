@@ -358,6 +358,7 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
             "rate_limit_tokens_per_minute": "12000",
             "rate_limit_concurrent_requests": "3",
             "rate_limit_window_seconds": "30",
+            "chat_streaming_live_burn_enabled": "true",
             "reason": "new workshop key",
         },
     )
@@ -394,8 +395,57 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
         "max_concurrent_requests": 3,
         "window_seconds": 30,
     }
+    assert payload.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert payload.key_purpose == "standard"
     assert payload.capability_policy_mode == "standard"
+
+
+def test_create_unchecked_chat_live_burn_checkbox_disables_policy(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        seen["payload"] = payload
+        return _created_key(owner_id=owner_id)
+
+    monkeypatch.setattr("slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id", get_owner_by_id)
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "reason": "disable live burn",
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen["payload"].chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
 
 
 def test_create_trusted_calibration_calls_key_service_and_renders_warning(monkeypatch) -> None:

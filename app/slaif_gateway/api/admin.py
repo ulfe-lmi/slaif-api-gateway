@@ -164,7 +164,11 @@ from slaif_gateway.schemas.keys import (
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnPolicyError,
     chat_streaming_live_burn_policy_from_metadata,
-    parse_chat_streaming_live_burn_form_policy,
+)
+from slaif_gateway.services.streaming_live_burn_surface import (
+    CHAT_STREAMING_LIVE_BURN_SURFACE,
+    parse_streaming_live_burn_surface_form_policy,
+    streaming_live_burn_surface_policy_summary,
 )
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
@@ -549,7 +553,7 @@ async def create_admin_key(
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
     rate_limit_window_seconds: str = Form(""),
-    chat_streaming_live_burn_enabled: str = Form("true"),
+    chat_streaming_live_burn_enabled: str = Form(""),
     chat_streaming_live_burn_cost_margin_eur: str = Form("0"),
     chat_streaming_live_burn_token_margin: str = Form("0"),
     trusted_calibration: str = Form(""),
@@ -796,6 +800,13 @@ async def create_admin_key(
                 "allow_all_models": parsed_input.allow_all_models,
                 "allow_all_endpoints": parsed_input.allow_all_endpoints,
                 "rate_limit_policy": parsed_input.rate_limit_policy,
+                "chat_streaming_live_burn_policy": created.chat_streaming_live_burn_policy,
+                "chat_streaming_live_burn_policy_summary": (
+                    streaming_live_burn_surface_policy_summary(
+                        CHAT_STREAMING_LIVE_BURN_SURFACE,
+                        created.chat_streaming_live_burn_policy,
+                    )
+                ),
             },
             "key_purpose": created.key_purpose,
             "capability_policy_mode": created.capability_policy_mode,
@@ -1510,6 +1521,13 @@ async def create_admin_key_from_template_revision(
                 "allow_all_models": False,
                 "allow_all_endpoints": False,
                 "rate_limit_policy": result.revision.rate_limit_policy,
+                "chat_streaming_live_burn_policy": result.created_key.chat_streaming_live_burn_policy,
+                "chat_streaming_live_burn_policy_summary": (
+                    streaming_live_burn_surface_policy_summary(
+                        CHAT_STREAMING_LIVE_BURN_SURFACE,
+                        result.created_key.chat_streaming_live_burn_policy,
+                    )
+                ),
             },
             "key_purpose": result.created_key.key_purpose,
             "capability_policy_mode": result.created_key.capability_policy_mode,
@@ -1632,7 +1650,8 @@ async def update_admin_key_chat_streaming_live_burn(
                 max_abs_cost_margin_eur=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
                 max_abs_token_margin=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
             )
-            policy = parse_chat_streaming_live_burn_form_policy(
+            policy = parse_streaming_live_burn_surface_form_policy(
+                CHAT_STREAMING_LIVE_BURN_SURFACE,
                 enabled=_is_checked(chat_streaming_live_burn_enabled),
                 cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
                 token_margin=chat_streaming_live_burn_token_margin,
@@ -6447,6 +6466,7 @@ def _render_key_detail(
             "policy_endpoint_options": sorted(IMPLEMENTED_CLIENT_ENDPOINTS),
             "models_endpoint": MODELS_ENDPOINT,
             "chat_completions_endpoint": CHAT_COMPLETIONS_ENDPOINT,
+            "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
             "error": error,
             "diagnostic_id": diagnostic_id,
         },
@@ -6658,6 +6678,7 @@ def _render_key_create_form(
             "form": form,
             "error": error,
             "diagnostic_id": diagnostic_id,
+            "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
             "trusted_calibration_settings": {
                 "enabled": settings.CALIBRATION_KEYS_ENABLED,
                 "max_requests": settings.TRUSTED_CALIBRATION_MAX_REQUESTS,
@@ -8280,8 +8301,9 @@ def _parse_key_create_form(
         _, token_limit_total = _parse_optional_admin_int(form.get("token_limit_total"))
         _, request_limit_total = _parse_optional_admin_int(form.get("request_limit_total"))
         rate_limit_policy = _parse_admin_rate_limit_policy(form)
-        chat_streaming_live_burn_policy = parse_chat_streaming_live_burn_form_policy(
-            enabled=_is_checked(form.get("chat_streaming_live_burn_enabled", "true")),
+        chat_streaming_live_burn_policy = parse_streaming_live_burn_surface_form_policy(
+            CHAT_STREAMING_LIVE_BURN_SURFACE,
+            enabled=_is_checked(form.get("chat_streaming_live_burn_enabled", "")),
             cost_margin_eur=form.get("chat_streaming_live_burn_cost_margin_eur"),
             token_margin=form.get("chat_streaming_live_burn_token_margin"),
             max_abs_cost_margin_eur=(
@@ -8426,6 +8448,11 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
         "capability_policy_mode": created.capability_policy_mode,
         "template_id": created.template_id,
         "template_revision_id": created.template_revision_id,
+        "chat_streaming_live_burn_policy": created.chat_streaming_live_burn_policy,
+        "chat_streaming_live_burn_policy_summary": streaming_live_burn_surface_policy_summary(
+            CHAT_STREAMING_LIVE_BURN_SURFACE,
+            created.chat_streaming_live_burn_policy,
+        ),
     }
 
 

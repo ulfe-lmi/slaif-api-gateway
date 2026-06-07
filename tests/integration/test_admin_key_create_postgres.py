@@ -276,6 +276,7 @@ def test_admin_key_create_form_postgres(migrated_postgres_url: str) -> None:
                 "rate_limit_tokens_per_minute": "12000",
                 "rate_limit_concurrent_requests": "4",
                 "rate_limit_window_seconds": "30",
+                "chat_streaming_live_burn_enabled": "true",
                 "reason": "dashboard create integration",
             },
         )

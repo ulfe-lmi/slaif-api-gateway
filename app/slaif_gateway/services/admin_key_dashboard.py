@@ -15,6 +15,10 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     chat_streaming_live_burn_policy_from_metadata,
     default_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.streaming_live_burn_surface import (
+    CHAT_STREAMING_LIVE_BURN_SURFACE,
+    streaming_live_burn_surface_policy_summary,
+)
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
@@ -260,11 +264,9 @@ def _chat_streaming_live_burn_policy(metadata_json: dict[str, object] | None) ->
 
 def _chat_streaming_live_burn_policy_summary(metadata_json: dict[str, object] | None) -> str:
     policy = _chat_streaming_live_burn_policy(metadata_json)
-    enabled = "enabled" if policy.get("enabled") is True else "disabled"
-    return (
-        f"Chat Completions streaming {enabled}; "
-        f"cost margin EUR {policy['cost_margin_eur']}; "
-        f"token margin {policy['token_margin']}"
+    return streaming_live_burn_surface_policy_summary(
+        CHAT_STREAMING_LIVE_BURN_SURFACE,
+        policy,
     )
 
 

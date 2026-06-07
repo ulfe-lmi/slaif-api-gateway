@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,9 @@ from slaif_gateway.services.key_modes import (
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 from tests.unit.test_admin_key_create_routes import _cohort, _owner, _patch_options
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) -> None:
@@ -54,9 +58,14 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
     assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
     assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
+    assert "Live estimates are provisional, not invoice-grade" in html
     assert "Positive margin stops streams early" in html
     assert "create-chat-streaming-live-burn-fields" in html
-    assert "input.disabled = !enabled" in html
+    assert "data-streaming-live-burn-surface" in html
+    assert 'src="/admin/static/js/streaming-live-burn.js"' in html
+    assert "https://cdn" not in html.lower()
+    assert "react" not in html.lower()
+    assert "vue" not in html.lower()
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html
@@ -66,6 +75,38 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "session-token-must-not-render" not in html
     assert "bulk" not in html.lower()
     assert "create-and-email" not in html.lower()
+
+
+def test_chat_live_burn_static_controls_are_local_and_scoped() -> None:
+    js = (
+        REPO_ROOT
+        / "app"
+        / "slaif_gateway"
+        / "web"
+        / "static"
+        / "js"
+        / "streaming-live-burn.js"
+    ).read_text()
+    css = (
+        REPO_ROOT
+        / "app"
+        / "slaif_gateway"
+        / "web"
+        / "static"
+        / "css"
+        / "admin.css"
+    ).read_text()
+
+    assert "data-streaming-live-burn-surface" in js
+    assert "data-streaming-live-burn-margin-fields" in js
+    assert "input.disabled = !enabled" in js
+    assert "cost_limit_eur" not in js
+    assert "rate_limit" not in js
+    assert "http://" not in js
+    assert "https://" not in js
+    assert "React" not in js
+    assert "Vue" not in js
+    assert ".live-burn-fields-disabled" in css
 
 
 def test_create_result_template_shows_plaintext_once_without_email_action(monkeypatch) -> None:
@@ -124,6 +165,8 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "rotate the key" in html
     assert "No email delivery row was created" in html
     assert "no Celery task was queued" in html
+    assert "Chat streaming live-burn" in html
+    assert "Chat live-burn: on" in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html

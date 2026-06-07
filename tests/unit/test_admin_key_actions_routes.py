@@ -1,5 +1,7 @@
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from fastapi.responses import HTMLResponse
@@ -271,6 +273,64 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
     assert payload.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
     assert payload.allow_all_models is False
     assert payload.allow_all_endpoints is False
+
+
+def test_update_chat_live_burn_disabled_blank_margins_preserves_existing(monkeypatch) -> None:
+    seen = {}
+    gateway_key_id = uuid.uuid4()
+    gateway_key = SimpleNamespace(
+        id=gateway_key_id,
+        metadata_json={
+            "chat_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "-0.250000000",
+                "token_margin": -250,
+            },
+            "rate_limit_policy": {"window_seconds": 30},
+        },
+    )
+
+    class FakeKeysRepository:
+        async def get_gateway_key_by_id(self, requested_gateway_key_id):
+            assert requested_gateway_key_id == gateway_key_id
+            return gateway_key
+
+    class FakeKeyService:
+        async def update_gateway_key_chat_streaming_live_burn(self, payload):
+            seen["payload"] = payload
+
+    @asynccontextmanager
+    async def fake_runtime(request):
+        yield FakeKeysRepository(), FakeKeyService()
+
+    monkeypatch.setattr("slaif_gateway.api.admin._admin_key_management_runtime_scope", fake_runtime)
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/chat-streaming-live-burn",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "reason": "pause live burn",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/admin/keys/{gateway_key_id}?message=key_chat_streaming_live_burn_updated"
+    )
+    payload = seen["payload"]
+    assert payload.gateway_key_id == gateway_key_id
+    assert payload.actor_admin_id == admin_user.id
+    assert payload.reason == "pause live burn"
+    assert payload.chat_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
 
 
 def test_revoke_requires_confirmation_before_service_call(monkeypatch) -> None:

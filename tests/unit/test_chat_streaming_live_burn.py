@@ -13,6 +13,13 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     metadata_with_chat_streaming_live_burn_policy,
     normalize_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.streaming_live_burn_surface import (
+    ACTIVE_STREAMING_LIVE_BURN_SURFACES,
+    CHAT_STREAMING_LIVE_BURN_SURFACE,
+    parse_streaming_live_burn_surface_form_policy,
+    streaming_live_burn_surface_policy_from_cli_options,
+    streaming_live_burn_surface_policy_summary,
+)
 
 
 def _estimate() -> ChatCostEstimate:
@@ -202,3 +209,58 @@ def test_monitor_records_safe_stop_metadata_without_chunk_text() -> None:
     serialized = str(result.metadata)
     assert "secret streamed text" not in serialized
     assert result.metadata["estimate_is_invoice_grade"] is False
+
+
+def test_chat_surface_is_only_active_streaming_live_burn_surface() -> None:
+    assert ACTIVE_STREAMING_LIVE_BURN_SURFACES == (CHAT_STREAMING_LIVE_BURN_SURFACE,)
+    assert CHAT_STREAMING_LIVE_BURN_SURFACE.metadata_key == "chat_streaming_live_burn"
+    assert CHAT_STREAMING_LIVE_BURN_SURFACE.streaming_scope_label == (
+        "/v1/chat/completions stream=true"
+    )
+
+
+def test_surface_form_policy_preserves_disabled_blank_existing_margins() -> None:
+    existing = normalize_chat_streaming_live_burn_policy(
+        {"enabled": True, "cost_margin_eur": "-0.25", "token_margin": -250},
+        max_abs_cost_margin_eur=Decimal("10"),
+        max_abs_token_margin=1000,
+    )
+
+    policy = parse_streaming_live_burn_surface_form_policy(
+        CHAT_STREAMING_LIVE_BURN_SURFACE,
+        enabled=False,
+        cost_margin_eur="",
+        token_margin="",
+        existing_policy=existing,
+        max_abs_cost_margin_eur=Decimal("10"),
+        max_abs_token_margin=1000,
+    )
+
+    assert policy.to_metadata() == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "-0.250000000",
+        "token_margin": -250,
+    }
+
+
+def test_surface_cli_policy_defaults_and_summary_are_chat_scoped() -> None:
+    policy = streaming_live_burn_surface_policy_from_cli_options(
+        CHAT_STREAMING_LIVE_BURN_SURFACE,
+        enabled=False,
+        cost_margin_eur=None,
+        token_margin=None,
+        max_abs_cost_margin_eur=Decimal("10"),
+        max_abs_token_margin=1000,
+    )
+
+    assert policy.to_metadata() == {
+        "version": 1,
+        "enabled": False,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
+    assert streaming_live_burn_surface_policy_summary(
+        CHAT_STREAMING_LIVE_BURN_SURFACE,
+        policy,
+    ) == "Chat live-burn: off (margins ignored), cost margin EUR 0.000000000, token margin 0"

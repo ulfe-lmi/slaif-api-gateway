@@ -224,6 +224,14 @@ Per-key metadata defaults to enabled monitoring with zero margins:
 }
 ```
 
+Admins can configure this per key from the key creation page, the key detail
+page's separate Chat streaming live-burn update form, or the matching CLI flags
+and `keys set-chat-streaming-live-burn` command. Those operator surfaces share
+service-layer validation, require an audit reason for updates, and preserve
+unrelated key metadata such as Redis rate-limit policy. When monitoring is
+disabled, the dashboard greys and disables only the Chat live-burn margin
+fields; hard quota and Redis rate-limit fields remain independent.
+
 Positive margins stop streams early before the quota boundary, zero margins
 stop near the estimated boundary, and negative margins allow bounded estimated
 overrun. If monitoring is disabled for a key, stored margins are preserved but
