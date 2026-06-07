@@ -50,9 +50,10 @@
       </label>
       <label>
         Or paste CSV/JSON
-        <textarea name="import_text" rows="14" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,token_limit_total,request_limit_total,email_delivery_mode&#10;ada@example.org,30,10.00,100000,1000,none">{{ form.import_text }}</textarea>
+        <textarea name="import_text" rows="14" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,token_limit_total,request_limit_total,email_delivery_mode,chat_streaming_live_burn_enabled,chat_streaming_live_burn_cost_margin_eur,chat_streaming_live_burn_token_margin&#10;ada@example.org,30,10.00,100000,1000,none,true,0,0">{{ form.import_text }}</textarea>
       </label>
       <p class="muted small">Use either upload or paste, not both. Secret-looking values, gateway keys, provider keys, encrypted secret material, password credentials, session credentials, prompts, and completions are rejected or excluded.</p>
+      <p class="muted small">Optional Chat Completions streaming live-burn columns: <code>chat_streaming_live_burn_enabled</code>, <code>chat_streaming_live_burn_cost_margin_eur</code>, and <code>chat_streaming_live_burn_token_margin</code>. Omitted columns default to enabled with zero margins.</p>
       <button type="submit">Preview import</button>
     </section>
   </form>

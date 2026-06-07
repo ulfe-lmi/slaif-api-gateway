@@ -314,11 +314,8 @@ Exact database field names, constraints, defaults, and migrations must be define
 
 ### 5.5 Key-template policy
 
-Template-specific live-burn policy is future work. Keys created through current
-template workflows receive the normal default Chat Completions streaming
-live-burn policy unless their creation path explicitly sets a per-key override.
-
-Possible future safe template summary:
+Template revisions may carry the same safe Chat Completions streaming
+live-burn policy summary used by gateway keys:
 
 ```json
 {
@@ -335,7 +332,9 @@ Template rules:
 
 - Existing keys must not be silently mutated when a template changes.
 - Revisions remain immutable snapshots.
-- Keys created from a template may copy the safe policy summary to the created key.
+- Keys created from a template copy the safe Chat policy summary to the created key.
+- Template revisions without this summary default to enabled with zero margins.
+- Calibration-derived templates default to enabled with zero margins; calibration does not recommend custom live-burn margins yet.
 - Bulk key creation from templates remains a separate workflow unless explicitly implemented.
 - Template policy must not store raw content or secrets.
 
@@ -746,9 +745,25 @@ later, but this implementation exposes and persists only the Chat policy.
 
 ### 12.3 Templates
 
-Current key-template workflows do not carry a template-specific live-burn
-policy. Template-created keys receive the per-key default policy unless a future
-template-policy PR adds safe snapshot support.
+Current key-template workflows carry a safe `chat_streaming_live_burn` snapshot
+for Chat Completions streaming. Creating one key from a selected immutable
+template revision copies that sanitized policy into the created key metadata.
+Older template revisions without the snapshot default to enabled with zero
+cost/token margins. Calibration-derived templates currently use that default;
+custom calibration-derived margin recommendations are future work.
+
+Dashboard bulk key import also accepts optional Chat Completions streaming
+live-burn fields:
+
+```text
+chat_streaming_live_burn_enabled
+chat_streaming_live_burn_cost_margin_eur
+chat_streaming_live_burn_token_margin
+```
+
+If all three fields are omitted, bulk-created keys use the enabled/zero-margin
+default. If monitoring is disabled, margins are preserved in metadata but
+ignored at runtime. Preview and result pages show only a safe compact summary.
 
 Existing keys must not be silently mutated.
 

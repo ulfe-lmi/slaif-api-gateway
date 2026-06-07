@@ -123,10 +123,9 @@ Current revision 1 stores:
 - an empty participant hosted-capability allowlist by default;
 - optional safe `responses_policy` metadata for the implemented local/stored
   Responses subset;
-- no template-specific streaming live-burn policy fields; Chat Completions
-  streaming live-burn is implemented as per-key metadata, and keys created from
-  templates receive the default enabled/zero-margin policy unless a future
-  template-policy PR adds safe snapshot support;
+- safe `chat_streaming_live_burn` metadata for Chat Completions streaming,
+  defaulting to enabled with zero cost and token margins for
+  calibration-derived templates;
 - request, token, per-request, and cost limits from local accounting metadata;
 - optional validity and email-delivery defaults;
 - a safe proposal snapshot with warnings and assumptions.
@@ -148,8 +147,8 @@ Rules:
 - the selected revision is loaded server-side by revision ID, so browser hidden
   fields cannot override policy;
 - supported endpoint/model/provider policy, request/token/cost limits, rate
-  limits, validity defaults, and email-delivery defaults are copied at creation
-  time;
+  limits, Chat Completions streaming live-burn policy, validity defaults, and
+  email-delivery defaults are copied at creation time;
 - existing keys, templates, and revisions are not mutated;
 - plaintext display and email delivery use the existing one-time key creation
   behavior;
@@ -223,6 +222,20 @@ the reviewed request policy.
 If a bulk row overrides a template field, the override must be explicit in the
 preview and audit output. Silent overrides are not acceptable.
 
+Current bulk key import supports direct per-row Chat Completions streaming
+live-burn policy columns:
+
+```text
+chat_streaming_live_burn_enabled
+chat_streaming_live_burn_cost_margin_eur
+chat_streaming_live_burn_token_margin
+```
+
+If all fields are omitted, imported keys default to enabled with zero margins.
+If `chat_streaming_live_burn_enabled` is false, cost and token margins are
+preserved in key metadata when supplied but ignored at runtime. Positive,
+zero, and negative margin semantics match normal per-key configuration.
+
 ## Security Boundaries
 
 Templates must not contain plaintext gateway keys, provider API keys, SMTP
@@ -238,11 +251,10 @@ Template previews should show safe summaries only:
 - allowed endpoint/model/provider/tool lists;
 - quota limits;
 - rate-limit limits;
+- Chat Completions streaming live-burn policy summaries;
 - validity defaults;
 - bounded-overrun assumptions;
 - pricing catalog references;
 - template revision IDs.
 - sanitized stateless local Responses policy summaries.
-- future template-specific Chat streaming live-burn summaries only after that
-  scoped template milestone is implemented, and only as safe policy
-  values/counters rather than streamed content.
+- Chat streaming live-burn policy values/counters rather than streamed content.

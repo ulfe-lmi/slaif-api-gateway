@@ -314,7 +314,10 @@ normal participant keys; external MCP/connectors remain denied by default.
 Admins may also create one normal standard gateway key from a selected
 immutable template revision. That workflow uses normal key creation, records
 template provenance on the key, and does not mutate existing keys or template
-revisions. Bulk participant-key generation remains future work.
+revisions. Safe Chat Completions streaming live-burn policy snapshots may be
+copied from template revisions into created key metadata, but they contain only
+enabled state and numeric margins, never streamed content or request payloads.
+Bulk participant-key generation remains future work.
 
 Quota, accounting, and reconciliation are covered by invariant-oriented unit
 and PostgreSQL tests. The coverage checks that reserved and used counters do not
@@ -701,8 +704,9 @@ and changes future EUR conversion only after confirmed local FX rows are
 created. Dashboard bulk key import preview requires an authenticated admin
 session and CSRF token. It validates CSV/JSON key-creation rows, owner
 references, optional cohort references, validity windows, hard quota fields,
-allowlist policy fields, Redis rate-limit policy fields, email delivery modes,
-upload size, row count, and secret-looking input. It is preview-only: no
+allowlist policy fields, Redis rate-limit policy fields, Chat Completions
+streaming live-burn policy fields, email delivery modes, upload size, row
+count, and secret-looking input. It is preview-only: no
 plaintext keys are generated, no `gateway_keys`, `one_time_secrets`,
 `email_deliveries`, or audit rows are written, no Celery tasks are enqueued, no
 email is sent, and no providers are called. Dashboard bulk key import execution

@@ -92,7 +92,11 @@ from slaif_gateway.services.key_import import (
     validate_key_import_rows,
 )
 from slaif_gateway.services.key_service import KeyService
-from slaif_gateway.services.key_template_service import KeyTemplateError, KeyTemplateService
+from slaif_gateway.services.key_template_service import (
+    KeyTemplateError,
+    KeyTemplateService,
+    chat_streaming_live_burn_policy_summary_for_template_revision,
+)
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
@@ -1300,6 +1304,9 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
             "csrf_token": csrf_token,
             "template": template,
             "current_revision": current_revision,
+            "current_revision_chat_live_burn_summary": _template_chat_live_burn_summary(
+                current_revision
+            ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
             "form": _default_template_key_create_form(current_revision),
@@ -6495,6 +6502,9 @@ def _render_template_detail_error(
             "csrf_token": csrf_token,
             "template": template,
             "current_revision": current_revision,
+            "current_revision_chat_live_burn_summary": _template_chat_live_burn_summary(
+                current_revision
+            ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
             "form": form,
@@ -6545,6 +6555,15 @@ def _current_template_revision(template: object) -> object | None:
     if not revisions:
         return None
     return max(revisions, key=lambda revision: getattr(revision, "revision_number", 0))
+
+
+def _template_chat_live_burn_summary(revision: object | None) -> str:
+    if revision is None:
+        return "Chat live-burn: on, cost margin EUR 0.000000000, token margin 0"
+    try:
+        return chat_streaming_live_burn_policy_summary_for_template_revision(revision)
+    except KeyTemplateError:
+        return "Chat live-burn: invalid template policy"
 
 
 async def _render_key_policy_error(

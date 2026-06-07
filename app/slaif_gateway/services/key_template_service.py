@@ -11,6 +11,13 @@ from typing import Protocol
 from slaif_gateway.db.models import AuditLog, KeyTemplate, KeyTemplateRevision
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
 from slaif_gateway.services.calibration_summary_service import CalibrationPreviewResult
+from slaif_gateway.services.chat_streaming_live_burn import (
+    CHAT_STREAMING_LIVE_BURN_METADATA_KEY,
+    ChatStreamingLiveBurnPolicy,
+    ChatStreamingLiveBurnPolicyError,
+    default_chat_streaming_live_burn_policy,
+    normalize_chat_streaming_live_burn_policy,
+)
 from slaif_gateway.services.key_policy_validation import (
     IMPLEMENTED_CLIENT_ENDPOINTS,
     RESPONSES_ENDPOINT,
@@ -34,6 +41,9 @@ from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 _CALIBRATION_TEMPLATE_UNIMPLEMENTED_ENDPOINTS = frozenset({RESPONSES_ENDPOINT, "/v1/completions"})
 _TEMPLATE_KEY_UNIMPLEMENTED_ENDPOINTS = frozenset({"/v1/completions"})
 _ALLOWED_DEFAULT_EMAIL_MODES = frozenset({"none", "pending"})
+_CHAT_STREAMING_LIVE_BURN_ALLOWED_KEYS = frozenset(
+    {"version", "enabled", "cost_margin_eur", "token_margin"}
+)
 _RESPONSES_POLICY_KEY = "responses_policy"
 _RESPONSES_POLICY_ALLOWED_KEYS = frozenset(
     {
@@ -341,6 +351,9 @@ class KeyTemplateService:
         if set(revision.allowed_endpoints) - set(allowed_endpoints):
             raise KeyTemplateError("Template revision includes unsupported endpoints.")
         responses_policy = _responses_policy_for_revision(revision)
+        chat_streaming_live_burn_policy = chat_streaming_live_burn_policy_for_template_revision(
+            revision
+        )
 
         start = _coerce_valid_from(valid_from)
         until = _resolve_template_valid_until(
@@ -368,6 +381,7 @@ class KeyTemplateService:
             key_purpose="standard",
             capability_policy_mode="standard",
             responses_policy=responses_policy,
+            chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
             template_id=template.id,
             template_revision_id=revision.id,
             allowed_providers=list(revision.allowed_providers) if revision.allowed_providers else None,
@@ -393,6 +407,7 @@ class KeyTemplateService:
                 "token_limit_total": revision.token_limit_total,
                 "cost_limit_eur": str(revision.cost_limit_eur) if revision.cost_limit_eur else None,
                 "responses_policy": responses_policy,
+                "chat_streaming_live_burn_policy": chat_streaming_live_burn_policy.to_metadata(),
             },
             note=cleaned_reason,
         )
@@ -417,7 +432,56 @@ def _safe_snapshot(preview: CalibrationPreviewResult) -> dict[str, object]:
     }
     sanitized = sanitize_metadata_mapping(_json_value(payload), drop_content_keys=True)
     cleaned = _drop_forbidden_text_values(sanitized)
-    return cleaned if isinstance(cleaned, dict) else {}
+    if not isinstance(cleaned, dict):
+        return {
+            CHAT_STREAMING_LIVE_BURN_METADATA_KEY: (
+                default_chat_streaming_live_burn_policy().to_metadata()
+            )
+        }
+    cleaned[CHAT_STREAMING_LIVE_BURN_METADATA_KEY] = (
+        default_chat_streaming_live_burn_policy().to_metadata()
+    )
+    return cleaned
+
+
+def chat_streaming_live_burn_policy_for_template_revision(
+    revision: KeyTemplateRevision,
+) -> ChatStreamingLiveBurnPolicy:
+    snapshot = getattr(revision, "template_snapshot", None)
+    raw_policy = (
+        snapshot.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY) if isinstance(snapshot, dict) else None
+    )
+    if raw_policy is None:
+        return default_chat_streaming_live_burn_policy()
+    if not isinstance(raw_policy, dict):
+        raise KeyTemplateError("Template revision has an invalid Chat streaming live-burn policy.")
+    unknown_keys = set(str(key) for key in raw_policy) - _CHAT_STREAMING_LIVE_BURN_ALLOWED_KEYS
+    if unknown_keys:
+        raise KeyTemplateError(
+            "Template revision has unsupported Chat streaming live-burn policy fields."
+        )
+    try:
+        return normalize_chat_streaming_live_burn_policy(
+            raw_policy,
+            max_abs_cost_margin_eur=Decimal("1000000"),
+            max_abs_token_margin=1000000000,
+        )
+    except ChatStreamingLiveBurnPolicyError as exc:
+        raise KeyTemplateError(str(exc)) from exc
+
+
+def chat_streaming_live_burn_policy_summary_for_template_revision(
+    revision: KeyTemplateRevision,
+) -> str:
+    policy = chat_streaming_live_burn_policy_for_template_revision(revision)
+    state = "on" if policy.enabled else "off"
+    ignored = " (margins ignored)" if not policy.enabled else ""
+    metadata = policy.to_metadata()
+    return (
+        f"Chat live-burn: {state}{ignored}, "
+        f"cost margin EUR {metadata['cost_margin_eur']}, "
+        f"token margin {metadata['token_margin']}"
+    )
 
 
 def _json_value(value: object) -> object:
