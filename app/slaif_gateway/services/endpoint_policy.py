@@ -12,6 +12,8 @@ MODELS_LIST: Final[str] = "models.list"
 CHAT_COMPLETIONS: Final[str] = "chat.completions"
 RESPONSES: Final[str] = "responses"
 RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
+RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
+RESPONSES_DELETE: Final[str] = "responses.delete"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -40,6 +42,18 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "responses.input_tokens",
             "post /v1/responses/input_tokens",
             "/v1/responses/input_tokens",
+        }
+    ),
+    RESPONSES_RETRIEVE: frozenset(
+        {
+            "responses.retrieve",
+            "get /v1/responses/{response_id}",
+        }
+    ),
+    RESPONSES_DELETE: frozenset(
+        {
+            "responses.delete",
+            "delete /v1/responses/{response_id}",
         }
     ),
 }

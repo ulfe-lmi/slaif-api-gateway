@@ -46,6 +46,10 @@ def _responses_policy_result(body: dict[str, object], **settings_overrides: obje
     return ResponsesRequestPolicy(_settings(**settings_overrides)).apply(body)
 
 
+def _stored_responses_policy_result(body: dict[str, object], **settings_overrides: object):
+    return ResponsesRequestPolicy(_settings(**settings_overrides)).apply(body, allow_store=True)
+
+
 def _normalize_chat_body(body: dict[str, object], **settings_overrides: object):
     return _normalize_chat_body_with_resolved_model(body, resolved_model="gpt-4.1-mini", **settings_overrides)
 
@@ -1269,6 +1273,31 @@ def test_responses_custom_tool_format_deep_copy_isolation() -> None:
     outbound["tools"][0]["format"]["definition"] = "[A-Z]+"
     rebuilt = build_responses_upstream_body(normalized_request)
     assert rebuilt["tools"][0]["format"]["definition"] == "[a-z]+"
+
+
+def test_responses_store_true_reconstructs_exact_upstream_body() -> None:
+    policy_result = _stored_responses_policy_result(
+        {
+            "model": "classroom-responses",
+            "input": "hello",
+            "max_output_tokens": 12,
+            "store": True,
+        }
+    )
+
+    normalized_request = normalize_responses_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model="gpt-5.2",
+    )
+    outbound = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": "hello",
+        "max_output_tokens": 12,
+        "store": True,
+    }
 
 
 @pytest.mark.parametrize(

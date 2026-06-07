@@ -39,6 +39,7 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
     "interrupted",
     "released",
 )
+STATUS_VALUES_RESPONSE_REFERENCES = ("active", "deleted")
 SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
@@ -288,6 +289,7 @@ class GatewayKey(Base):
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
+    response_references: Mapped[list[ResponseReference]] = relationship(back_populates="gateway_key")
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="gateway_key")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
@@ -341,6 +343,58 @@ class GatewayKey(Base):
         Index("ix_gateway_keys_capability_policy_mode", "capability_policy_mode"),
         Index("ix_gateway_keys_template_id", "template_id"),
         Index("ix_gateway_keys_template_revision_id", "template_revision_id"),
+    )
+
+
+class ResponseReference(Base):
+    __tablename__ = "response_references"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider_response_id: Mapped[str] = mapped_column(Text, nullable=False)
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="SET NULL"), nullable=True
+    )
+    cohort_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cohorts.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upstream_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    route_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    provider_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference_metadata: Mapped[dict[str, object]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="response_references")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_RESPONSE_REFERENCES}",
+            name="response_references_status_allowed_values",
+        ),
+        UniqueConstraint("provider", "provider_response_id", name="uq_response_references_provider_response"),
+        Index("ix_response_references_gateway_key_id_status", "gateway_key_id", "status"),
+        Index("ix_response_references_provider_response_id", "provider", "provider_response_id"),
+        Index("ix_response_references_route_id", "route_id"),
+        Index("ix_response_references_created_at", "created_at"),
+        Index("ix_response_references_expires_at", "expires_at"),
     )
 
 

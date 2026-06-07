@@ -43,6 +43,24 @@ def test_stream_true_is_policy_valid_before_route_capability_check() -> None:
     assert result.effective_body["store"] is False
 
 
+def test_store_true_passes_only_in_stored_response_policy_mode() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(_body(store=True), allow_store=True)
+
+    assert result.effective_body["store"] is True
+    assert "stream" not in result.effective_body
+
+
+def test_store_true_stream_true_rejects_before_route_provider() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            _body(store=True, stream=True),
+            allow_store=True,
+        )
+
+    assert exc_info.value.error_code == "responses_stored_response_streaming_not_supported"
+    assert exc_info.value.param == "stream"
+
+
 def test_omitted_max_output_tokens_injects_default() -> None:
     result = ResponsesRequestPolicy(Settings(DEFAULT_MAX_OUTPUT_TOKENS=77)).apply(
         {"model": "gpt-test", "input": "hello"}

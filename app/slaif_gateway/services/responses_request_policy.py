@@ -144,7 +144,7 @@ class ResponsesRequestPolicy:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def apply(self, body: Mapping[str, Any]) -> ResponsesPolicyResult:
+    def apply(self, body: Mapping[str, Any], *, allow_store: bool = False) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         self._reject_unknown_fields(effective_body)
 
@@ -163,7 +163,7 @@ class ResponsesRequestPolicy:
             param="instructions",
             max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
         )
-        self._validate_stateless_fields(effective_body)
+        self._validate_storage_fields(effective_body, allow_store=allow_store)
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
         self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
@@ -1023,7 +1023,7 @@ class ResponsesRequestPolicy:
         self._validate_string_bytes(value, param=param, max_bytes=max_bytes)
         return value
 
-    def _validate_stateless_fields(self, body: dict[str, Any]) -> None:
+    def _validate_storage_fields(self, body: dict[str, Any], *, allow_store: bool) -> None:
         if "stream" in body and (
             body.get("stream") is not None and not isinstance(body.get("stream"), bool)
         ):
@@ -1032,19 +1032,26 @@ class ResponsesRequestPolicy:
                 "responses_field_invalid_type",
                 "The 'stream' field must be a boolean when provided.",
             )
-        if body.get("store") is True:
-            _raise(
-                "store",
-                "responses_store_not_supported",
+        store = body.get("store")
+        if store is True and not allow_store:
+            raise ResponsesRequestPolicyError(
                 "Provider-side Responses storage is not enabled by this gateway.",
+                param="store",
+                error_code="responses_store_not_supported",
             )
-        if "store" in body and body.get("store") is not False and body.get("store") is not None:
+        if store is True and body.get("stream") is True:
+            raise ResponsesRequestPolicyError(
+                "Streaming stored Responses are not enabled by this gateway.",
+                param="stream",
+                error_code="responses_stored_response_streaming_not_supported",
+            )
+        if "store" in body and store not in (None, False, True):
             _raise(
                 "store",
                 "responses_field_invalid_type",
-                "The 'store' field must be false when provided.",
+                "The 'store' field must be a boolean when provided.",
             )
-        body["store"] = False
+        body["store"] = store is True
 
         service_tier = body.get("service_tier")
         if service_tier not in (None, "auto"):

@@ -797,9 +797,9 @@ check(cost_source in ('provider_reported', 'slaif_calculated', 'mixed', 'unknown
 
 Rules:
 
-- Current population is Chat Completions first; stateless text-output Responses
-  requests may use the existing usage ledger, but Responses-specific profiling
-  and template recommendation rows remain future work.
+- Current population is Chat Completions first; Responses create requests may
+  use the existing usage ledger, but Responses-specific profiling and template
+  recommendation rows remain future work.
 - Store gateway endpoint paths and provider host/path only. Strip query strings,
   fragments, credentials, signed URLs, bearer tokens, and arbitrary URL
   metadata.
@@ -950,7 +950,80 @@ Rules:
   payloads, nonces, cookies, sessions, CSRF tokens, password hashes, email
   bodies, or raw chain-of-thought.
 
-## 5.12 `provider_configs`
+## 5.12 `response_references`
+
+Safe ownership metadata for provider-stored Responses. Rows exist only so the
+gateway can prove that a gateway key owns a provider response ID before
+proxying retrieve/delete control calls. They are not response-content storage.
+
+Columns:
+
+```text
+id UUID primary key
+provider_response_id text not null
+gateway_key_id UUID not null references gateway_keys(id) on delete restrict
+owner_id UUID null references owners(id) on delete set null
+institution_id UUID null references institutions(id) on delete set null
+cohort_id UUID null references cohorts(id) on delete set null
+
+provider text not null
+requested_model text null
+upstream_model text null
+endpoint text not null
+route_id UUID null references model_routes(id) on delete set null
+
+status text not null default 'active'
+provider_request_id text null
+expires_at timestamptz null
+deleted_at timestamptz null
+metadata jsonb not null default '{}'
+
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Allowed `status` values:
+
+```text
+active
+deleted
+```
+
+Constraints/indexes:
+
+```text
+unique(provider, provider_response_id)
+index(provider_response_id)
+index(gateway_key_id, status, created_at)
+index(owner_id, created_at)
+index(institution_id, created_at)
+index(cohort_id, created_at)
+check(status in ('active', 'deleted'))
+```
+
+Rules:
+
+- Store only provider response reference metadata needed for ownership,
+  provider routing, lifecycle status, and auditability.
+- Retrieve/delete must first find an `active` row for both the requested
+  provider response ID and the authenticated gateway key. Missing, non-owned,
+  or locally deleted references return an OpenAI-shaped 404 and are not proxied
+  upstream.
+- Mark rows `deleted` after successful provider delete. Do not remove rows just
+  to hide ownership history unless a future retention/anonymization policy says
+  so.
+- `metadata` must be sanitized safe metadata only. It may contain bounded
+  provider request IDs or route/accounting references when they are already
+  safe.
+- Do not store prompts, completions, raw request bodies, raw response bodies,
+  tool schemas, tool inputs, tool outputs, image/file URLs, image/file data,
+  base64 payloads, provider keys, gateway plaintext keys, token hashes,
+  encrypted one-time secret payloads, nonces, password hashes, session tokens,
+  CSRF tokens, or email bodies.
+
+---
+
+## 5.13 `provider_configs`
 
 Configuration metadata for upstream providers.
 
@@ -1006,7 +1079,7 @@ Rules:
 
 ---
 
-## 5.13 `model_routes`
+## 5.14 `model_routes`
 
 Maps user-requested model names to provider/upstream model names.
 
@@ -1069,6 +1142,8 @@ responses.function_tools
 responses.custom_tools
 responses.image_input
 responses.file_input
+responses.input_token_count
+responses.stored_responses
 ```
 
 Route/model capability metadata is separate from gateway-key endpoint/model
@@ -1194,7 +1269,7 @@ Rules:
 
 ---
 
-## 5.14 `pricing_rules`
+## 5.15 `pricing_rules`
 
 Approved pricing table used for cost estimation and final accounting.
 
@@ -1250,7 +1325,7 @@ Rules:
 
 ---
 
-## 5.15 `fx_rates`
+## 5.16 `fx_rates`
 
 Currency conversion table for converting native upstream costs to EUR limits.
 
@@ -1291,7 +1366,7 @@ Rules:
 
 ---
 
-## 5.16 `one_time_secrets`
+## 5.17 `one_time_secrets`
 
 Short-lived encrypted secrets used for workflows that temporarily need recoverable plaintext, especially email delivery of newly generated or rotated gateway keys.
 
@@ -1339,7 +1414,7 @@ Rules:
 
 ---
 
-## 5.17 `email_deliveries`
+## 5.18 `email_deliveries`
 
 Tracks outbound key emails and other administrative emails.
 
@@ -1394,7 +1469,7 @@ Rules:
 
 ---
 
-## 5.18 `audit_log`
+## 5.19 `audit_log`
 
 Security-relevant administrative action log.
 
@@ -1456,7 +1531,7 @@ Rules:
 
 ---
 
-## 5.19 `background_jobs`
+## 5.20 `background_jobs`
 
 Optional but recommended table for tracking Celery jobs visible from the admin dashboard.
 

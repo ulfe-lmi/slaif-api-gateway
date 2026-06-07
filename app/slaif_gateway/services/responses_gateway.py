@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import anyio
 from fastapi.responses import JSONResponse
@@ -22,11 +24,13 @@ from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_err
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
+from slaif_gateway.db.models import ResponseReference
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
+from slaif_gateway.db.repositories.response_references import ResponseReferencesRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.metrics import (
@@ -42,6 +46,7 @@ from slaif_gateway.metrics import (
     record_provider_call_result,
 )
 from slaif_gateway.providers.errors import ProviderError
+from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.streaming import format_responses_error_event
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
@@ -91,6 +96,10 @@ RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_INPUT_TOKENS_PROVIDER_ENDPOINT = "responses.input_tokens"
+RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
+RESPONSES_DELETE_ENDPOINT = "DELETE /v1/responses/{response_id}"
+RESPONSES_RETRIEVE_PROVIDER_ENDPOINT = "responses.retrieve"
+RESPONSES_DELETE_PROVIDER_ENDPOINT = "responses.delete"
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -183,6 +192,7 @@ async def handle_response_input_tokens_count(
         image_input_requested=responses_image_input_requested(policy_result.effective_body),
         file_input_requested=responses_file_input_requested(policy_result.effective_body),
         input_token_count_requested=True,
+        stored_responses_requested=False,
         request=request,
     )
     upstream_body = _build_safe_responses_input_tokens_upstream_body(
@@ -223,7 +233,7 @@ async def handle_response_create(
     body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
     policy = ResponsesRequestPolicy(settings=settings)
     try:
-        policy_result = policy.apply(body)
+        policy_result = policy.apply(body, allow_store=True)
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
@@ -239,6 +249,7 @@ async def handle_response_create(
         image_input_requested=responses_image_input_requested(policy_result.effective_body),
         file_input_requested=responses_file_input_requested(policy_result.effective_body),
         input_token_count_requested=False,
+        stored_responses_requested=policy_result.effective_body.get("store") is True,
         request=request,
     )
     upstream_body = _build_safe_responses_upstream_body(
@@ -338,6 +349,13 @@ async def handle_response_create(
                 provider_response=provider_response,
                 accounting_result=accounting_result,
             )
+            if policy_result.effective_body.get("store") is True:
+                await _persist_stored_response_reference(
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    provider_response=provider_response,
+                    request=request,
+                )
         except AccountingError as exc:
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc
@@ -358,6 +376,95 @@ async def handle_response_create(
     return response
 
 
+async def handle_response_retrieve(
+    *,
+    response_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    safe_response_id = _validate_response_id(response_id)
+    reference = await _get_owned_active_response_reference(
+        response_id=safe_response_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _response_not_found_error()
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model=reference.upstream_model or "",
+            endpoint=RESPONSES_RETRIEVE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=RESPONSES_RETRIEVE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.retrieve_response(
+                provider_request,
+                response_id=safe_response_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_response_delete(
+    *,
+    response_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    safe_response_id = _validate_response_id(response_id)
+    reference = await _get_owned_active_response_reference(
+        response_id=safe_response_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _response_not_found_error()
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model=reference.upstream_model or "",
+            endpoint=RESPONSES_DELETE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=RESPONSES_DELETE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.delete_response(
+                provider_request,
+                response_id=safe_response_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    await _mark_response_reference_deleted(reference_id=reference.id, request=request)
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
 async def _resolve_responses_route(
     *,
     authenticated_key: AuthenticatedGatewayKey,
@@ -370,6 +477,7 @@ async def _resolve_responses_route(
     image_input_requested: bool,
     file_input_requested: bool,
     input_token_count_requested: bool,
+    stored_responses_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -400,6 +508,7 @@ async def _resolve_responses_route(
                 image_input_requested=image_input_requested,
                 file_input_requested=file_input_requested,
                 input_token_count_requested=input_token_count_requested,
+                stored_responses_requested=stored_responses_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -955,6 +1064,155 @@ async def _mark_provider_completed_finalization_failed(
             await session.commit()
     finally:
         await session_iterator.aclose()
+
+
+async def _persist_stored_response_reference(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    provider_response: ProviderResponse,
+    request: Request | None,
+) -> None:
+    provider_response_id = _provider_response_id(provider_response)
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        repository = ResponseReferencesRepository(session)
+        await repository.create_response_reference(
+            provider_response_id=provider_response_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            owner_id=authenticated_key.owner_id,
+            cohort_id=authenticated_key.cohort_id,
+            provider=route.provider,
+            requested_model=route.requested_model,
+            upstream_model=route.resolved_model,
+            endpoint=RESPONSES_ENDPOINT,
+            route_id=route.route_id,
+            provider_request_id=provider_response.upstream_request_id,
+            metadata={},
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    finally:
+        await session_iterator.aclose()
+
+
+async def _get_owned_active_response_reference(
+    *,
+    response_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    request: Request | None,
+):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        repository = ResponseReferencesRepository(session)
+        return await repository.get_active_reference_for_key(
+            provider_response_id=response_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+        )
+    finally:
+        await session_iterator.aclose()
+
+
+async def _provider_route_for_reference(reference, *, request: Request | None):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        provider_config = await ProviderConfigsRepository(session).get_provider_config_by_provider(
+            reference.provider
+        )
+        if provider_config is None or provider_config.enabled is not True:
+            raise ProviderConfigurationError(
+                "Provider is not configured for this stored Response.",
+                provider=reference.provider,
+                error_code="provider_configuration_error",
+            )
+        return SimpleNamespace(
+            provider=provider_config.provider,
+            provider_base_url=provider_config.base_url,
+            provider_api_key_env_var=provider_config.api_key_env_var,
+            provider_timeout_seconds=provider_config.timeout_seconds,
+            provider_max_retries=provider_config.max_retries,
+        )
+    finally:
+        await session_iterator.aclose()
+
+
+async def _mark_response_reference_deleted(
+    *,
+    reference_id: uuid.UUID,
+    request: Request | None,
+) -> None:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        reference = await session.get(ResponseReference, reference_id)
+        if reference is None or reference.status != "active":
+            raise OpenAICompatibleError(
+                "Stored Response delete could not update local reference metadata.",
+                status_code=500,
+                error_type="server_error",
+                code="response_reference_update_failed",
+            )
+        await ResponseReferencesRepository(session).mark_deleted(
+            reference,
+            deleted_at=datetime.now(UTC),
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    finally:
+        await session_iterator.aclose()
+
+
+def _provider_response_id(provider_response: ProviderResponse) -> str:
+    response_id = provider_response.json_body.get("id")
+    if isinstance(response_id, str) and response_id:
+        return response_id
+    raise OpenAICompatibleError(
+        "Provider did not return a retrievable stored Response ID.",
+        status_code=502,
+        error_type="server_error",
+        code="provider_response_invalid",
+    )
+
+
+def _validate_response_id(response_id: str) -> str:
+    if not response_id or len(response_id.encode("utf-8")) > 512 or any(
+        ord(char) < 32 for char in response_id
+    ):
+        raise OpenAICompatibleError(
+            "Response not found.",
+            status_code=404,
+            error_type="invalid_request_error",
+            code="response_not_found",
+        )
+    return response_id
+
+
+def _response_not_found_error() -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "Response not found.",
+        status_code=404,
+        error_type="invalid_request_error",
+        code="response_not_found",
+    )
 
 
 def _record_success_metrics(

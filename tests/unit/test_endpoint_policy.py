@@ -9,7 +9,10 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
     MODELS_LIST,
+    RESPONSES,
+    RESPONSES_DELETE,
     RESPONSES_INPUT_TOKENS,
+    RESPONSES_RETRIEVE,
     EndpointPolicyService,
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointNotAllowedError
@@ -47,7 +50,10 @@ def test_allow_all_endpoints_allows_known_endpoints() -> None:
 
     service.ensure_endpoint_allowed(auth, MODELS_LIST)
     service.ensure_endpoint_allowed(auth, CHAT_COMPLETIONS)
+    service.ensure_endpoint_allowed(auth, RESPONSES)
     service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_TOKENS)
+    service.ensure_endpoint_allowed(auth, RESPONSES_RETRIEVE)
+    service.ensure_endpoint_allowed(auth, RESPONSES_DELETE)
 
 
 def test_stable_endpoint_identifiers_are_enforced() -> None:
@@ -62,6 +68,14 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
         _auth(allowed_endpoints=("responses.input_tokens",)),
         RESPONSES_INPUT_TOKENS,
     )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("responses.retrieve",)),
+        RESPONSES_RETRIEVE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("responses.delete",)),
+        RESPONSES_DELETE,
+    )
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("models.list",)), CHAT_COMPLETIONS)
@@ -71,6 +85,12 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), RESPONSES_INPUT_TOKENS)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), RESPONSES_RETRIEVE)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses.retrieve",)), RESPONSES_DELETE)
 
 
 def test_empty_endpoint_allow_list_rejects_when_allow_all_false() -> None:
@@ -100,6 +120,14 @@ def test_literal_method_paths_and_bare_paths_are_supported() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("/v1/responses/input_tokens",)),
         RESPONSES_INPUT_TOKENS,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("GET /v1/responses/{response_id}",)),
+        RESPONSES_RETRIEVE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("DELETE /v1/responses/{response_id}",)),
+        RESPONSES_DELETE,
     )
 
     with pytest.raises(EndpointNotAllowedError):

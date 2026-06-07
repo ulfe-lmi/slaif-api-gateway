@@ -18,7 +18,8 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming | Stateless text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, user-message `input_file` URL/data URL parts behind explicit Responses file capability, non-streaming structured `text.format` JSON mode/schema support, and local/client-side function/custom tools. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, hosted tools, storage/state, background, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
+| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming for stateless requests; stored create is non-streaming only | Text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, user-message `input_file` URL/data URL parts behind explicit Responses file capability, non-streaming structured `text.format` JSON mode/schema support, local/client-side function/custom tools, and non-streaming `store=true` create behind explicit stored-response route capability. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, hosted tools, background, previous-response/conversation state, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
+| `GET /v1/responses/{response_id}` / `DELETE /v1/responses/{response_id}` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for provider-stored Responses created through SLAIF. The gateway looks up a safe local response reference for the authenticated key before proxying; missing, non-owned, or deleted references return OpenAI-shaped 404. Response content is not stored locally |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -34,7 +35,8 @@ Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error h
 
 Current support is intentionally narrow:
 
-- stateless text-output `POST /v1/responses`;
+- text-output `POST /v1/responses`, stateless by default with non-streaming
+  stored create only when explicitly enabled;
 - `input` as a string or bounded message/input item array;
 - user-message `input_image` content parts with fully-qualified `http`/`https`
   URLs or configured base64 image data URLs when route/model metadata
@@ -57,7 +59,8 @@ Current support is intentionally narrow:
 - default-off per key;
 - explicit endpoint, model, provider, route capability, and pricing policy;
 - no `background=true`;
-- no `store=true` or provider-side response retrieval;
+- non-streaming `store=true` only when the route explicitly enables stored
+  Responses;
 - no `previous_response_id`;
 - no `conversation`/provider-side state;
 - no hosted/provider-side tools;
@@ -65,7 +68,8 @@ Current support is intentionally narrow:
 - no `input_image.file_id`, `input_file.file_id`, `input_audio`, audio output,
   image generation, `/v1/files`, file search/retrieval tools, or multimodal
   output;
-- no response delete/cancel/retrieve/list/input-item listing endpoints.
+- owned response retrieve/delete only for locally referenced stored Responses;
+- no response cancel/list/input-item listing endpoints.
 
 `/v1/responses/input_tokens` returns the provider's official
 `{"object":"response.input_tokens","input_tokens":...}` shape. It does not
@@ -73,6 +77,17 @@ create a Response, inject output-token defaults, reserve generation quota, or
 write a normal generation usage ledger row. It rejects `stream`, `store`,
 `max_output_tokens`, stateful fields, hosted tools, audio, file IDs, and the
 other unsupported Responses surfaces listed above.
+
+Stored Responses are supported only for non-streaming `POST /v1/responses`
+with explicit `store=true` and `capabilities.responses.stored_responses=true`.
+After a successful provider response with an ID, SLAIF stores only safe
+reference metadata needed for ownership and provider routing. `GET` and
+`DELETE /v1/responses/{response_id}` require explicit key endpoint permission
+and an active local reference owned by the same gateway key before any upstream
+proxy call occurs. SLAIF does not store prompts, completions, raw bodies, tool
+payloads, image/file URLs, media payloads, or provider secrets for this
+lifecycle. `previous_response_id`, conversations, cancel, list, compact, and
+input-item listing remain unsupported.
 
 Responses streaming preserves typed provider events such as `response.created`,
 `response.output_text.delta`, `response.completed`, and safe `error` events. It
@@ -499,13 +514,14 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
 
 ## What Is Not Implemented
 
-- Responses retrieval/delete/cancel/list endpoints, Responses hosted tools,
-  audio input/output, image generation, multimodal output, provider-side
-  storage, background mode, previous-response/conversation state,
+- Responses cancel/list endpoints, Responses hosted tools, audio input/output,
+  image generation, multimodal output, background mode,
+  previous-response/conversation state,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
-  search/retrieval tools, and MCP/connectors. Only the stateless text-output
-  `POST /v1/responses` foundation is implemented, including URL/data URL image
-  input, URL/data URL file input, non-streaming JSON, and typed SSE streaming; see
+  search/retrieval tools, and MCP/connectors. The implemented text-output
+  Responses foundation includes URL/data URL image input, URL/data URL file
+  input, non-streaming JSON, typed SSE streaming for stateless requests, and
+  non-streaming stored create plus owned retrieve/delete; see
   `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration

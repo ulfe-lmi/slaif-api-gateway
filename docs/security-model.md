@@ -410,13 +410,15 @@ Completions hardening only; it does not implement Responses API behavior.
 
 ## Responses API Security Model
 
-Responses API support is limited to stateless text-output `POST /v1/responses`
+Responses API support is limited to text-output `POST /v1/responses`
 with string input or bounded input item arrays, route-enabled user-message
 image URL/data URL input, route-enabled user-message file URL/data URL input,
 non-streaming JSON, typed SSE streaming, non-streaming local function tools,
-and non-streaming local custom tools. `POST /v1/responses/input_tokens` is a
-separate provider-reported count endpoint for the same stateless local input
-subset. It is default-off and policy-first:
+non-streaming local custom tools, and non-streaming stored-response create.
+`POST /v1/responses/input_tokens` is a separate provider-reported count
+endpoint for the same local input subset. `GET` and
+`DELETE /v1/responses/{response_id}` are ownership-checked proxy calls for
+provider-stored Responses references. It is default-off and policy-first:
 
 - Responses generation must be explicitly enabled per key through the
   `/v1/responses` endpoint allowlist. Input-token counting must be explicitly
@@ -446,14 +448,20 @@ subset. It is default-off and policy-first:
   Response, does not inject output-token defaults, does not reserve generation
   quota, and does not create a normal generation usage ledger row. Payload
   storage and logging prohibitions are the same as generation requests.
+- Stored create requires explicit `capabilities.responses.stored_responses=true`
+  and must be non-streaming. SLAIF stores only safe provider response reference
+  metadata after successful provider create responses with IDs. Retrieve/delete
+  require explicit key endpoint permission and an active local reference owned
+  by the authenticated gateway key; missing, non-owned, or locally deleted
+  response IDs return OpenAI-shaped 404 and are not proxied upstream.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
-  the implemented stateless local subset. Template-created keys copy only that
+  the implemented local/stored subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
-- `background`, `store`, `previous_response_id`, conversation/provider-side
-  state, retrieval, delete, cancel, and input-item listing are excluded until
-  ownership mapping, quota, accounting, and audit behavior are implemented.
+- `background`, `previous_response_id`, conversation/provider-side state,
+  cancel, compact, and input-item listing are excluded until ownership mapping,
+  quota, accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
 - Tool-enabled policies, when implemented later, require bounded-overrun cost
   calculations that admins can inspect before enabling the policy.
@@ -768,13 +776,15 @@ never recover or send old plaintext keys.
   migrations explicitly, use HTTPS, and keep `/readyz` and `/metrics` internal
   or allowlisted.
 - Native Anthropic API support is not implemented.
-- Responses API support is limited to stateless text-output
-  `POST /v1/responses` with URL/data URL image input, URL/data URL file input,
-  typed SSE streaming, non-streaming local function tools, and non-streaming
-  local custom tools; hosted Responses tools, stateful lifecycle routes, file
-  IDs, `/v1/files`, file search/retrieval tools, audio input/output, image
-  generation, and multimodal Responses output remain future work under
-  `docs/responses-compatibility.md`. Embeddings API is not implemented.
+- Responses API support is limited to text-output `POST /v1/responses` with
+  URL/data URL image input, URL/data URL file input, typed SSE streaming for
+  stateless requests, non-streaming local function/custom tools, non-streaming
+  stored create, and owned retrieve/delete through safe response-reference
+  metadata; hosted Responses tools, previous-response/conversation lifecycle,
+  background mode, cancel/list/input-item routes, file IDs, `/v1/files`, file
+  search/retrieval tools, audio input/output, image generation, and multimodal
+  Responses output remain future work under `docs/responses-compatibility.md`.
+  Embeddings API is not implemented.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.

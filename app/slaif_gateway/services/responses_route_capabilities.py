@@ -1,4 +1,4 @@
-"""Route/model capability policy for stateless text-output Responses."""
+"""Route/model capability policy for text-output Responses."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ RESPONSES_CAPABILITY_CUSTOM_TOOLS = "custom_tools"
 RESPONSES_CAPABILITY_IMAGE_INPUT = "image_input"
 RESPONSES_CAPABILITY_FILE_INPUT = "file_input"
 RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT = "input_token_count"
+RESPONSES_CAPABILITY_STORED_RESPONSES = "stored_responses"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -34,6 +35,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_IMAGE_INPUT,
         RESPONSES_CAPABILITY_FILE_INPUT,
         RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT,
+        RESPONSES_CAPABILITY_STORED_RESPONSES,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -56,6 +58,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_IMAGE_INPUT: False,
         RESPONSES_CAPABILITY_FILE_INPUT: False,
         RESPONSES_CAPABILITY_INPUT_TOKEN_COUNT: False,
+        RESPONSES_CAPABILITY_STORED_RESPONSES: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -107,8 +110,9 @@ def enforce_responses_route_capabilities(
     image_input_requested: bool = False,
     file_input_requested: bool = False,
     input_token_count_requested: bool = False,
+    stored_responses_requested: bool = False,
 ) -> None:
-    """Require explicit text+stateless Responses metadata and fail closed."""
+    """Require explicit Responses metadata and fail closed."""
 
     capabilities = _parse_route_capabilities(route_capabilities)
     required = (
@@ -118,16 +122,30 @@ def enforce_responses_route_capabilities(
             error_code="responses_route_capability_not_supported",
             safe_message="This model route does not support text Responses.",
         ),
-        ResponsesRouteCapabilityFinding(
-            capability=RESPONSES_CAPABILITY_STATELESS,
-            field="model",
-            error_code="responses_route_capability_not_supported",
-            safe_message="This model route does not support stateless Responses.",
-        ),
     )
     for finding in required:
         if capabilities.get(finding.capability) is not True:
             raise ResponsesRouteCapabilityError(finding)
+
+    if stored_responses_requested:
+        if capabilities.get(RESPONSES_CAPABILITY_STORED_RESPONSES) is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_STORED_RESPONSES,
+                    field="store",
+                    error_code="responses_stored_response_capability_not_supported",
+                    safe_message="This model route does not support stored Responses.",
+                )
+            )
+    elif capabilities.get(RESPONSES_CAPABILITY_STATELESS) is not True:
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_STATELESS,
+                field="model",
+                error_code="responses_route_capability_not_supported",
+                safe_message="This model route does not support stateless Responses.",
+            )
+        )
 
     if streaming_requested:
         if capabilities.get(RESPONSES_CAPABILITY_STREAMING) is not True:
