@@ -15,6 +15,7 @@ RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
 RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
 RESPONSES_DELETE: Final[str] = "responses.delete"
 RESPONSES_INPUT_ITEMS: Final[str] = "responses.input_items"
+RESPONSES_COMPACT: Final[str] = "responses.compact"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -61,6 +62,13 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
         {
             "responses.input_items",
             "get /v1/responses/{response_id}/input_items",
+        }
+    ),
+    RESPONSES_COMPACT: frozenset(
+        {
+            "responses.compact",
+            "post /v1/responses/compact",
+            "/v1/responses/compact",
         }
     ),
 }

@@ -127,6 +127,22 @@ async def test_policy_validation_accepts_route_backed_responses_input_token_coun
 
 
 @pytest.mark.asyncio
+async def test_policy_validation_accepts_route_backed_responses_compact_models() -> None:
+    policy = await validate_gateway_key_policy(
+        GatewayKeyPolicy(
+            allowed_models=["gpt-5.2"],
+            allowed_endpoints=["/v1/responses/compact"],
+        ),
+        model_routes_repository=_RoutesRepo(
+            [_route("gpt-5.2", endpoint="/v1/responses/compact")]
+        ),
+    )
+
+    assert policy.allowed_models == ["gpt-5.2"]
+    assert policy.allowed_endpoints == ["/v1/responses/compact"]
+
+
+@pytest.mark.asyncio
 async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_without_model_routes() -> None:
     policy = await validate_gateway_key_policy(
         GatewayKeyPolicy(
@@ -179,6 +195,18 @@ async def test_policy_validation_rejects_input_token_count_model_without_matchin
             GatewayKeyPolicy(
                 allowed_models=["gpt-5.2"],
                 allowed_endpoints=["/v1/responses/input_tokens"],
+            ),
+            model_routes_repository=_RoutesRepo([_route("gpt-5.2", endpoint="/v1/responses")]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_policy_validation_rejects_compact_model_without_matching_route() -> None:
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="No enabled route exists for model gpt-5.2"):
+        await validate_gateway_key_policy(
+            GatewayKeyPolicy(
+                allowed_models=["gpt-5.2"],
+                allowed_endpoints=["/v1/responses/compact"],
             ),
             model_routes_repository=_RoutesRepo([_route("gpt-5.2", endpoint="/v1/responses")]),
         )

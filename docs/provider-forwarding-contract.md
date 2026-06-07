@@ -231,6 +231,16 @@ Responses-specific rules for the current foundation:
   plus only validated `after`, `limit`, `order`, and conservative `include`
   query parameters; SLAIF does not store, inspect, or log returned input-item
   content and does not create a normal generation usage ledger row;
+- `POST /v1/responses/compact` is routed and forwarded separately through
+  explicit `/v1/responses/compact` routes. Its canonical upstream body may
+  include only `model`, required bounded text-focused `input`, and optional
+  `instructions`. The provider request is rebuilt from normalized compact
+  fields, not raw client bodies. Compact rejects streaming, storage/background
+  state, `previous_response_id`, tools, hosted-tool markers, media/file/audio
+  input, file IDs, and unknown fields in this first slice. SLAIF accounts
+  compact as a model operation using endpoint-specific pricing, conservative
+  admission reservation, and provider usage finalization, but does not store or
+  log compact input, output, encrypted compaction content, or raw bodies;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe `error` events;
   it is not converted into Chat Completions chunks;
@@ -247,8 +257,8 @@ Responses-specific rules for the current foundation:
 - MCP/connectors are excluded;
 - `background`, `conversation`, and streaming `previous_response_id` are
   rejected before provider forwarding;
-- response cancel, compact, and response listing require explicit provider
-  response ownership mapping before they can be implemented;
+- response cancel and response listing require explicit provider response
+  ownership mapping before they can be implemented;
 - provider response IDs and tool diagnostics must be treated as metadata and
   sanitized before storage or display.
 

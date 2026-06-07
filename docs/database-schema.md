@@ -1146,6 +1146,7 @@ responses.file_input
 responses.input_token_count
 responses.stored_responses
 responses.previous_response_id
+responses.compact
 ```
 
 Route/model capability metadata is separate from gateway-key endpoint/model

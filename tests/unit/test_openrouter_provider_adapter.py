@@ -58,6 +58,21 @@ def _responses_input_tokens_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_compact_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openrouter",
+        upstream_model="openai/gpt-5.2",
+        endpoint="/v1/responses/compact",
+        body=body,
+        request_id="gw-compact-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "X-CSRF-Token": "csrf",
+            "Accept": "application/json",
+        },
+    )
+
+
 def _responses_lifecycle_request(endpoint: str) -> ProviderRequest:
     return ProviderRequest(
         provider="openrouter",
@@ -195,6 +210,55 @@ async def test_openrouter_response_posts_non_streaming_request(respx_mock) -> No
     assert response.usage.prompt_tokens == 11
     assert response.usage.completion_tokens == 4
     assert response.usage.total_tokens == 15
+    assert response.raw_cost_native == Decimal("0.00042")
+    assert response.native_currency == "USD"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openrouter_response_compact_posts_native_request(respx_mock) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/responses/compact").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "cmpct_or_123",
+                "object": "response.compaction",
+                "created_at": 1,
+                "output": [],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 4,
+                    "total_tokens": 15,
+                    "cost_usd": "0.00042",
+                },
+            },
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-compact"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": [{"role": "user", "content": "compact this"}],
+    }
+
+    response = await adapter.compact_response(_responses_compact_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_request.headers["x-request-id"] == "gw-compact-req"
+    assert sent_body == {
+        "model": "openai/gpt-5.2",
+        "input": [{"role": "user", "content": "compact this"}],
+    }
+    assert response.status_code == 200
+    assert response.upstream_request_id == "req-openrouter-compact"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 11
+    assert response.usage.completion_tokens == 4
     assert response.raw_cost_native == Decimal("0.00042")
     assert response.native_currency == "USD"
     assert route.called

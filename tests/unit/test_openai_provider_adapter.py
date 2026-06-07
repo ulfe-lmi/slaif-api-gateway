@@ -57,6 +57,21 @@ def _responses_input_tokens_request(body: dict) -> ProviderRequest:
     )
 
 
+def _responses_compact_request(body: dict) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="gpt-5.2",
+        endpoint="/v1/responses/compact",
+        body=body,
+        request_id="gw-compact-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "Cookie": "cookie",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 def _responses_lifecycle_request(endpoint: str) -> ProviderRequest:
     return ProviderRequest(
         provider="openai",
@@ -200,6 +215,48 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
     assert response.usage.total_tokens == 13
     assert response.usage.cached_tokens == 2
     assert response.usage.reasoning_tokens == 1
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_response_compact_posts_native_request(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/responses/compact").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "cmpct_123",
+                "object": "response.compaction",
+                "created_at": 1,
+                "output": [],
+                "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+            },
+            headers={"OpenAI-Request-ID": "req-openai-compact"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    caller_body = {
+        "model": "client-model",
+        "input": [{"role": "user", "content": "compact this"}],
+    }
+
+    response = await adapter.compact_response(_responses_compact_request(caller_body))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_request.headers["x-request-id"] == "gw-compact-req"
+    assert sent_body == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": "compact this"}],
+    }
+    assert response.status_code == 200
+    assert response.upstream_request_id == "req-openai-compact"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 3
     assert route.called
 
 

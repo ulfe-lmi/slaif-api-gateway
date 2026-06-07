@@ -37,6 +37,11 @@ class ProviderAdapter(ABC):
         _ = request
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def compact_response(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a Responses compaction request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def retrieve_response(self, request: ProviderRequest, *, response_id: str) -> ProviderResponse:
         """Retrieve a provider-stored Response by provider response ID."""
         _ = (request, response_id)

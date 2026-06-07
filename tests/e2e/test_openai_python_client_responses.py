@@ -25,6 +25,7 @@ from tests.integration.db_test_utils import run_alembic_upgrade_head
 TEST_RESPONSES_MODEL = "gpt-responses-text-test"
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
+RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
 INPUT_TEXT = "Hello from SLAIF Responses test"
 OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
@@ -47,6 +48,7 @@ async def _create_responses_test_data(
     stored_responses: bool = False,
     previous_response_id: bool = False,
     list_input_items: bool = False,
+    compact: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -143,6 +145,7 @@ async def _create_responses_test_data(
             capabilities["stored_responses"] = stored_responses
             capabilities["previous_response_id"] = previous_response_id
             capabilities["list_input_items"] = list_input_items
+            capabilities["compact"] = compact
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -1732,3 +1735,84 @@ def test_openai_python_client_responses_input_token_count_e2e(
         "input": input_items,
         "truncation": "disabled",
     }
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_compact_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            compact=True,
+            endpoint=RESPONSES_COMPACT_ENDPOINT,
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    compact_input = [
+        {"role": "user", "content": "Create a simple landing page."},
+        {
+            "type": "message",
+            "id": "msg_compact_e2e",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Previous output."}],
+        },
+    ]
+    upstream_payload = {
+        "id": "cmpct_e2e",
+        "object": "response.compaction",
+        "created_at": 123,
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Compacted output."}],
+            }
+        ],
+        "usage": {"input_tokens": 13, "output_tokens": 17, "total_tokens": 30},
+    }
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        router.route(host="127.0.0.1").pass_through()
+        upstream_route = router.post("https://api.openai.com/v1/responses/compact").mock(
+            return_value=httpx.Response(
+                200,
+                json=upstream_payload,
+                headers={"OpenAI-Request-ID": "req-responses-compact-e2e"},
+            )
+        )
+        with _run_uvicorn_server(app, port):
+            client = OpenAI()
+            response = client.responses.compact(
+                model=TEST_RESPONSES_MODEL,
+                input=compact_input,
+                instructions="Preserve decisions.",
+            )
+
+    assert response.id == "cmpct_e2e"
+    assert response.object == "response.compaction"
+    assert upstream_route.called
+    upstream_request = upstream_route.calls[0].request
+    assert upstream_request.headers["authorization"] == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    assert upstream_request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    assert json.loads(upstream_request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": compact_input,
+        "instructions": "Preserve decisions.",
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.usage_ledger.endpoint == "responses.compact"

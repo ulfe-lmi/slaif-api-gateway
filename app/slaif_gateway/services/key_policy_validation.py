@@ -16,6 +16,7 @@ RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
 RESPONSES_DELETE_ENDPOINT = "DELETE /v1/responses/{response_id}"
 RESPONSES_INPUT_ITEMS_ENDPOINT = "GET /v1/responses/{response_id}/input_items"
+RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
 IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
     {
         MODELS_ENDPOINT,
@@ -25,6 +26,7 @@ IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
         RESPONSES_RETRIEVE_ENDPOINT,
         RESPONSES_DELETE_ENDPOINT,
         RESPONSES_INPUT_ITEMS_ENDPOINT,
+        RESPONSES_COMPACT_ENDPOINT,
     }
 )
 
@@ -68,6 +70,7 @@ async def validate_gateway_key_policy(
         CHAT_COMPLETIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
+        RESPONSES_COMPACT_ENDPOINT,
     }
     if not normalized.allow_all_models and model_backed_endpoints:
         if not normalized.allowed_models:
@@ -147,6 +150,7 @@ async def _validate_models_have_routes(
         CHAT_COMPLETIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
+        RESPONSES_COMPACT_ENDPOINT,
     )
     if endpoints and not require_visible:
         endpoints_to_check = tuple(endpoint for endpoint in endpoints_to_check if endpoint in endpoints)
