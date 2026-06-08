@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -19,6 +19,7 @@ from slaif_gateway.schemas.admin_activity import (
     AdminUsageDetail,
     AdminUsageListRow,
 )
+from slaif_gateway.services.chat_live_burn_telemetry import parse_chat_live_burn_usage_detail
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 from slaif_gateway.utils.sanitization import is_content_key, sanitize_metadata
 
@@ -205,6 +206,11 @@ class AdminActivityDashboardService:
 
 
 def _usage_list_row(row: UsageLedger) -> AdminUsageListRow:
+    chat_live_burn = parse_chat_live_burn_usage_detail(
+        endpoint=row.endpoint,
+        streaming=row.streaming,
+        response_metadata=row.response_metadata,
+    )
     return AdminUsageListRow(
         id=row.id,
         request_id=row.request_id,
@@ -233,13 +239,14 @@ def _usage_list_row(row: UsageLedger) -> AdminUsageListRow:
         latency_ms=row.latency_ms,
         created_at=row.created_at,
         completed_at=row.finished_at,
+        chat_live_burn=chat_live_burn,
     )
 
 
 def _usage_detail(row: UsageLedger) -> AdminUsageDetail:
     base = _usage_list_row(row)
     return AdminUsageDetail(
-        **asdict(base),
+        **{field.name: getattr(base, field.name) for field in fields(AdminUsageListRow)},
         client_request_id=_safe_optional_text(row.client_request_id),
         quota_reservation_id=row.quota_reservation_id,
         upstream_request_id=_safe_optional_text(row.upstream_request_id),

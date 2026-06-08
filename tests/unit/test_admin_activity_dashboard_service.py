@@ -117,6 +117,26 @@ def _usage_row() -> UsageLedger:
     return row
 
 
+def _live_burn_usage_row() -> UsageLedger:
+    row = _usage_row()
+    row.success = False
+    row.accounting_status = "interrupted_estimated"
+    row.http_status = 200
+    row.response_metadata = {
+        "streaming_live_burn_enabled": True,
+        "streaming_live_burn_triggered": True,
+        "streaming_live_burn_stop_reason": "both",
+        "estimated_tokens_at_stop": 142,
+        "estimated_cost_eur_at_stop": "0.220000000",
+        "cost_margin_eur": "-0.010000000",
+        "token_margin": -50,
+        "final_provider_usage_available": False,
+        "estimate_is_invoice_grade": False,
+        "raw_response_body": "completion-content-must-not-render",
+    }
+    return row
+
+
 def _audit_row() -> AuditLog:
     return AuditLog(
         id=uuid.uuid4(),
@@ -182,6 +202,50 @@ async def test_activity_service_returns_safe_rows_and_details() -> None:
     assert "Bearer abc" not in (audit_detail.note or "")
     assert email_rows[0].public_key_id == "pub_email"
     assert email_detail.provider_message_id == "smtp-message-id"
+
+
+@pytest.mark.asyncio
+async def test_activity_service_projects_safe_chat_live_burn_detail() -> None:
+    usage = _live_burn_usage_row()
+    service, _, _, _ = _service(usage=usage)
+
+    rows = await service.list_usage()
+    detail = await service.get_usage_detail(usage.id)
+
+    assert rows[0].chat_live_burn is not None
+    assert rows[0].chat_live_burn.stopped_label == "Live-burn: stopped (both)"
+    assert detail.chat_live_burn is not None
+    assert detail.chat_live_burn.triggered is True
+    assert detail.chat_live_burn.stop_reason == "both"
+    assert detail.chat_live_burn.estimated_tokens_at_stop == 142
+    assert detail.chat_live_burn.estimated_cost_eur_at_stop == Decimal("0.220000000")
+    assert detail.chat_live_burn.cost_margin_eur == Decimal("-0.010000000")
+    assert detail.chat_live_burn.token_margin == -50
+    assert detail.chat_live_burn.final_provider_usage_available is False
+    assert detail.chat_live_burn.estimate_is_invoice_grade is False
+    assert "completion-content-must-not-render" not in detail.response_metadata_summary
+
+
+@pytest.mark.asyncio
+async def test_malformed_live_burn_metadata_is_safe() -> None:
+    usage = _usage_row()
+    usage.response_metadata = {
+        "streaming_live_burn_triggered": True,
+        "streaming_live_burn_stop_reason": "raw chunk marker",
+        "estimated_tokens_at_stop": "not-an-int",
+        "estimated_cost_eur_at_stop": "NaN",
+        "final_provider_usage_available": "false",
+        "estimate_is_invoice_grade": True,
+    }
+    service, _, _, _ = _service(usage=usage)
+
+    detail = await service.get_usage_detail(usage.id)
+
+    assert detail.chat_live_burn is not None
+    assert detail.chat_live_burn.stop_reason == "unknown"
+    assert detail.chat_live_burn.estimated_tokens_at_stop is None
+    assert detail.chat_live_burn.estimated_cost_eur_at_stop is None
+    assert detail.chat_live_burn.estimate_is_invoice_grade is False
 
 
 @pytest.mark.asyncio

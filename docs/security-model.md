@@ -395,6 +395,17 @@ temporary operational state only, and provider final usage/cost remains
 authoritative when available. Responses live-burn monitoring remains future
 work under [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 
+Admin and CLI Chat live-burn reporting reads only sanitized PostgreSQL usage
+ledger metadata. Usage list/detail pages, usage CSV exports, and
+`slaif-gateway usage live-burn-summary` may display safe counters, stop
+reasons, margins, and final-provider-usage availability. They must not display
+raw metadata JSON for the live-burn section, streamed chunks, prompts,
+completions, tool arguments, media payloads, raw request/response bodies,
+provider keys, gateway plaintext keys, token hashes, Authorization headers,
+cookies, CSRF/session tokens, encrypted payloads, nonces, password hashes, or
+email bodies. Malformed historical metadata must fail closed into omitted or
+`unknown` fields rather than a 500 or raw-value render.
+
 ## Chat Completions Non-Message Input Estimation
 
 Chat Completions request policy estimates input tokens before Redis rate

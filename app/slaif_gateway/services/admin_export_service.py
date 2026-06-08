@@ -14,6 +14,7 @@ from io import StringIO
 from typing import Protocol
 
 from slaif_gateway.db.models import AuditLog, UsageLedger
+from slaif_gateway.services.chat_live_burn_telemetry import parse_chat_live_burn_usage_detail
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 from slaif_gateway.utils.sanitization import is_content_key, sanitize_metadata
 
@@ -50,6 +51,13 @@ USAGE_CSV_COLUMNS = (
     "actual_cost_eur",
     "native_currency",
     "latency_ms",
+    "chat_live_burn_triggered",
+    "chat_live_burn_stop_reason",
+    "chat_live_burn_estimated_tokens_at_stop",
+    "chat_live_burn_estimated_cost_eur_at_stop",
+    "chat_live_burn_cost_margin_eur",
+    "chat_live_burn_token_margin",
+    "chat_live_burn_final_provider_usage_available",
 )
 
 AUDIT_CSV_COLUMNS = (
@@ -283,39 +291,60 @@ def build_usage_csv(rows: list[UsageLedger]) -> str:
     """Render safe usage-ledger metadata rows as CSV."""
     return _build_csv(
         USAGE_CSV_COLUMNS,
-        (
-            {
-                "created_at": row.created_at,
-                "completed_at": row.finished_at,
-                "request_id": row.request_id,
-                "gateway_key_id": row.gateway_key_id,
-                "key_public_id": row.gateway_key.public_key_id if row.gateway_key is not None else None,
-                "owner_id": row.owner_id,
-                "owner_email": row.owner_email_snapshot,
-                "institution_id": row.institution_id,
-                "cohort_id": row.cohort_id,
-                "endpoint": row.endpoint,
-                "provider": row.provider,
-                "requested_model": row.requested_model,
-                "resolved_model": row.resolved_model,
-                "streaming": row.streaming,
-                "accounting_status": row.accounting_status,
-                "success": row.success,
-                "http_status": row.http_status,
-                "error_type": row.error_type,
-                "prompt_tokens": row.prompt_tokens,
-                "completion_tokens": row.completion_tokens,
-                "total_tokens": row.total_tokens,
-                "cached_tokens": row.cached_tokens,
-                "reasoning_tokens": row.reasoning_tokens,
-                "estimated_cost_eur": row.estimated_cost_eur,
-                "actual_cost_eur": row.actual_cost_eur,
-                "native_currency": row.native_currency,
-                "latency_ms": row.latency_ms,
-            }
-            for row in rows
-        ),
+        (_usage_csv_row(row) for row in rows),
     )
+
+
+def _usage_csv_row(row: UsageLedger) -> dict[str, object]:
+    chat_live_burn = parse_chat_live_burn_usage_detail(
+        endpoint=row.endpoint,
+        streaming=row.streaming,
+        response_metadata=row.response_metadata,
+    )
+    return {
+        "created_at": row.created_at,
+        "completed_at": row.finished_at,
+        "request_id": row.request_id,
+        "gateway_key_id": row.gateway_key_id,
+        "key_public_id": row.gateway_key.public_key_id if row.gateway_key is not None else None,
+        "owner_id": row.owner_id,
+        "owner_email": row.owner_email_snapshot,
+        "institution_id": row.institution_id,
+        "cohort_id": row.cohort_id,
+        "endpoint": row.endpoint,
+        "provider": row.provider,
+        "requested_model": row.requested_model,
+        "resolved_model": row.resolved_model,
+        "streaming": row.streaming,
+        "accounting_status": row.accounting_status,
+        "success": row.success,
+        "http_status": row.http_status,
+        "error_type": row.error_type,
+        "prompt_tokens": row.prompt_tokens,
+        "completion_tokens": row.completion_tokens,
+        "total_tokens": row.total_tokens,
+        "cached_tokens": row.cached_tokens,
+        "reasoning_tokens": row.reasoning_tokens,
+        "estimated_cost_eur": row.estimated_cost_eur,
+        "actual_cost_eur": row.actual_cost_eur,
+        "native_currency": row.native_currency,
+        "latency_ms": row.latency_ms,
+        "chat_live_burn_triggered": chat_live_burn.triggered if chat_live_burn is not None else False,
+        "chat_live_burn_stop_reason": chat_live_burn.stop_reason if chat_live_burn is not None else None,
+        "chat_live_burn_estimated_tokens_at_stop": (
+            chat_live_burn.estimated_tokens_at_stop if chat_live_burn is not None else None
+        ),
+        "chat_live_burn_estimated_cost_eur_at_stop": (
+            chat_live_burn.estimated_cost_eur_at_stop if chat_live_burn is not None else None
+        ),
+        "chat_live_burn_cost_margin_eur": (
+            chat_live_burn.cost_margin_eur if chat_live_burn is not None else None
+        ),
+        "chat_live_burn_token_margin": chat_live_burn.token_margin if chat_live_burn is not None else None,
+        "chat_live_burn_final_provider_usage_available": (
+            chat_live_burn.final_provider_usage_available if chat_live_burn is not None else None
+        ),
+    }
 
 
 def build_audit_csv(rows: list[AuditLog]) -> str:

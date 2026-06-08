@@ -69,6 +69,24 @@
     </section>
   </div>
 
+  {% if usage.chat_live_burn %}
+  <section class="detail-panel">
+    <h2>Chat streaming live-burn</h2>
+    <dl>
+      <dt>Monitoring enabled</dt><dd>{{ "yes" if usage.chat_live_burn.monitoring_enabled else "no" if usage.chat_live_burn.monitoring_enabled is sameas false else "n/a" }}</dd>
+      <dt>Triggered</dt><dd>{{ "yes" if usage.chat_live_burn.triggered else "no" }}</dd>
+      <dt>Stop reason</dt><dd>{{ usage.chat_live_burn.stop_reason or "n/a" }}</dd>
+      <dt>Estimated tokens at stop</dt><dd>{{ usage.chat_live_burn.estimated_tokens_at_stop if usage.chat_live_burn.estimated_tokens_at_stop is not none else "n/a" }}</dd>
+      <dt>Estimated cost EUR at stop</dt><dd>{{ usage.chat_live_burn.estimated_cost_eur_at_stop if usage.chat_live_burn.estimated_cost_eur_at_stop is not none else "n/a" }}</dd>
+      <dt>Configured cost margin EUR</dt><dd>{{ usage.chat_live_burn.cost_margin_eur if usage.chat_live_burn.cost_margin_eur is not none else "n/a" }}</dd>
+      <dt>Configured token margin</dt><dd>{{ usage.chat_live_burn.token_margin if usage.chat_live_burn.token_margin is not none else "n/a" }}</dd>
+      <dt>Final provider usage available</dt><dd>{{ "yes" if usage.chat_live_burn.final_provider_usage_available else "no" if usage.chat_live_burn.final_provider_usage_available is sameas false else "n/a" }}</dd>
+      <dt>Estimate is invoice-grade</dt><dd>{{ "yes" if usage.chat_live_burn.estimate_is_invoice_grade else "no" }}</dd>
+    </dl>
+    <p class="muted small">Live-burn estimates are provisional operator telemetry. Final provider usage and cost remain authoritative when available.</p>
+  </section>
+  {% endif %}
+
   <section class="detail-panel">
     <h2>Safe Metadata</h2>
     <dl>

@@ -781,7 +781,13 @@ and audit CSVs exclude prompts, completions, raw request/response bodies, email
 bodies, plaintext key material, token hashes, one-time-secret material, provider
 key values, password hashes, and session tokens. Usage, audit, and email
 delivery pages show safe local metadata only and do not call providers or
-external services.
+external services. Chat Completions streaming live-burn telemetry is reported
+from existing PostgreSQL usage ledger metadata: usage list/detail pages show
+safe stopped-status and estimate fields, usage CSV exports include safe
+`chat_live_burn_*` columns, and `slaif-gateway usage live-burn-summary` prints
+aggregate counts and sums. These reports do not store or render streamed
+chunks, prompts, completions, tool arguments, raw bodies, secrets, or raw
+live-burn metadata JSON.
 
 Arbitrary old-key dashboard email resend actions, bulk key send-now execution,
 external FX refresh workflows, standalone
@@ -977,6 +983,12 @@ Dashboard usage and audit CSV exports are capped by:
 
 Both values must be positive integers. The optional form-level export limit must
 also be positive and cannot exceed the configured cap.
+
+`slaif-gateway usage live-burn-summary` is a read-only Chat Completions
+streaming report over usage ledger metadata. It supports the same safe usage
+filters as the usage summary command and has `--json` output. Prometheus
+runtime live-burn counters remain future work; no additional configuration is
+required for this reporting slice.
 
 Optional reconciliation alerts are operator-visibility only. They are generated
 from the inspection task, do not call providers, do not send email, and do not

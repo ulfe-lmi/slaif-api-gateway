@@ -125,6 +125,9 @@
           <td>
             <span class="status-pill status-{{ 'active' if row.success else 'revoked' if row.success is sameas false else 'suspended' }}">{{ row.accounting_status }}</span>
             <div class="muted small">HTTP {{ row.http_status or "n/a" }}{% if row.streaming %} / streaming{% endif %}</div>
+            {% if row.chat_live_burn and row.chat_live_burn.triggered %}
+            <div class="muted small">Live-burn: stopped ({{ row.chat_live_burn.stop_reason or "unknown" }})</div>
+            {% endif %}
           </td>
           <td>{{ row.total_tokens }} total</td>
           <td>{{ row.actual_cost_eur or row.estimated_cost_eur or "n/a" }} EUR</td>

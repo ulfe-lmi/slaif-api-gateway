@@ -57,7 +57,9 @@ but are not a production certification.
   `POST /v1/chat/completions` with `stream=true`. It is a per-key,
   gateway-side provisional interruption brake with enabled/zero-margin defaults;
   final provider usage/cost remains authoritative. Responses live-burn
-  monitoring remains future work.
+  monitoring remains future work. Admin usage pages, usage CSV export, and
+  `slaif-gateway usage live-burn-summary` report only safe Chat live-burn
+  metadata from PostgreSQL usage ledger rows.
 - Optional Redis operational rate limiting for request, estimated-token, and
   concurrency throttles.
 - Admin dashboard for keys, records, providers, routes, pricing, FX, usage,

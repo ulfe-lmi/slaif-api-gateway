@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,7 @@ class AdminUsageListRow:
     latency_ms: int | None
     created_at: datetime
     completed_at: datetime | None
+    chat_live_burn: Any | None
 
 
 @dataclass(frozen=True, slots=True)

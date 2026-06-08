@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from slaif_gateway.cli import usage as usage_cli
 from slaif_gateway.cli.main import app
 from slaif_gateway.schemas.usage import UsageExportRow, UsageSummaryRow
+from slaif_gateway.services.chat_live_burn_telemetry import ChatLiveBurnAggregate
 
 runner = CliRunner()
 KEY_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -62,6 +63,13 @@ def _export_row() -> UsageExportRow:
         actual_cost_eur=Decimal("0.008000000"),
         native_currency="EUR",
         upstream_request_id="upstream-safe",
+        chat_live_burn_triggered=True,
+        chat_live_burn_stop_reason="tokens",
+        chat_live_burn_estimated_tokens_at_stop=142,
+        chat_live_burn_estimated_cost_eur_at_stop=Decimal("0.220000000"),
+        chat_live_burn_cost_margin_eur=Decimal("0.010000000"),
+        chat_live_burn_token_margin=50,
+        chat_live_burn_final_provider_usage_available=False,
     )
 
 
@@ -71,6 +79,7 @@ def test_usage_help_registers_commands() -> None:
     assert result.exit_code == 0
     assert "summarize" in result.stdout
     assert "export" in result.stdout
+    assert "live-burn-summary" in result.stdout
 
 
 def test_summarize_outputs_safe_text(monkeypatch) -> None:
@@ -170,6 +179,9 @@ def test_export_csv_stdout_uses_stable_columns(monkeypatch) -> None:
     rows = list(csv.DictReader(result.stdout.splitlines()))
     assert rows[0]["request_id"] == "req-safe"
     assert rows[0]["actual_cost_eur"] == "0.008000000"
+    assert rows[0]["chat_live_burn_triggered"] == "true"
+    assert rows[0]["chat_live_burn_stop_reason"] == "tokens"
+    assert rows[0]["chat_live_burn_estimated_tokens_at_stop"] == "142"
     assert list(rows[0]) == usage_cli._EXPORT_COLUMNS
 
 
@@ -185,6 +197,73 @@ def test_export_json_stdout_outputs_valid_json(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload[0]["gateway_key_id"] == str(KEY_ID)
     assert payload[0]["actual_cost_eur"] == "0.008000000"
+    assert payload[0]["chat_live_burn_final_provider_usage_available"] is False
+
+
+def test_live_burn_summary_outputs_safe_text(monkeypatch) -> None:
+    async def fake_summarize_chat_live_burn(**kwargs: object) -> ChatLiveBurnAggregate:
+        return ChatLiveBurnAggregate(
+            triggered_total=12,
+            stop_reason_tokens=8,
+            stop_reason_cost=3,
+            stop_reason_both=1,
+            stop_reason_unknown=0,
+            final_provider_usage_available=5,
+            final_provider_usage_missing=7,
+            estimated_tokens_at_stop_sum=1234,
+            estimated_cost_eur_at_stop_sum=Decimal("0.340000000"),
+        )
+
+    monkeypatch.setattr(usage_cli, "_summarize_chat_live_burn", fake_summarize_chat_live_burn)
+
+    result = runner.invoke(app, ["usage", "live-burn-summary"])
+
+    assert result.exit_code == 0
+    assert "Chat streaming live-burn summary" in result.stdout
+    assert "triggered_total: 12" in result.stdout
+    assert "stop_reason_tokens: 8" in result.stdout
+    assert "raw_response_body" not in result.stdout
+
+
+def test_live_burn_summary_json_outputs_safe_payload(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_summarize_chat_live_burn(**kwargs: object) -> ChatLiveBurnAggregate:
+        seen.update(kwargs)
+        return ChatLiveBurnAggregate(
+            triggered_total=1,
+            stop_reason_tokens=0,
+            stop_reason_cost=1,
+            stop_reason_both=0,
+            stop_reason_unknown=0,
+            final_provider_usage_available=1,
+            final_provider_usage_missing=0,
+            estimated_tokens_at_stop_sum=10,
+            estimated_cost_eur_at_stop_sum=Decimal("0.100000000"),
+        )
+
+    monkeypatch.setattr(usage_cli, "_summarize_chat_live_burn", fake_summarize_chat_live_burn)
+
+    result = runner.invoke(
+        app,
+        [
+            "usage",
+            "live-burn-summary",
+            "--json",
+            "--provider",
+            "openai",
+            "--key-id",
+            str(KEY_ID),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)["chat_streaming_live_burn_summary"]
+    assert payload["triggered_total"] == 1
+    assert payload["estimated_cost_eur_at_stop_sum"] == "0.100000000"
+    filters = seen["filters"]
+    assert filters.provider == "openai"
+    assert filters.gateway_key_id == KEY_ID
 
 
 def test_export_output_file_and_existing_file_behavior(tmp_path, monkeypatch) -> None:

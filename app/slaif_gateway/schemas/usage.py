@@ -54,6 +54,13 @@ class UsageExportRow:
     actual_cost_eur: Decimal | None
     native_currency: str | None
     upstream_request_id: str | None
+    chat_live_burn_triggered: bool
+    chat_live_burn_stop_reason: str | None
+    chat_live_burn_estimated_tokens_at_stop: int | None
+    chat_live_burn_estimated_cost_eur_at_stop: Decimal | None
+    chat_live_burn_cost_margin_eur: Decimal | None
+    chat_live_burn_token_margin: int | None
+    chat_live_burn_final_provider_usage_available: bool | None
 
 
 @dataclass(frozen=True, slots=True)

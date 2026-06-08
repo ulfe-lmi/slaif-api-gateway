@@ -11,6 +11,11 @@ from typing import Final
 from slaif_gateway.db.models import UsageLedger
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.schemas.usage import UsageExportRow, UsageReportFilters, UsageSummaryRow
+from slaif_gateway.services.chat_live_burn_telemetry import (
+    ChatLiveBurnAggregate,
+    aggregate_chat_live_burn_usage,
+    parse_chat_live_burn_usage_detail,
+)
 
 GROUP_BY_VALUES: Final[set[str]] = {"provider", "model", "provider_model", "owner", "cohort", "key", "day"}
 
@@ -56,6 +61,26 @@ class UsageReportService:
             ascending=True,
         )
         return [_to_export_row(row) for row in rows]
+
+    async def summarize_chat_live_burn(
+        self,
+        *,
+        filters: UsageReportFilters | None = None,
+    ) -> ChatLiveBurnAggregate:
+        rows = await self._usage.list_usage_records(
+            **_filters_kwargs(filters),
+            limit=None,
+            ascending=True,
+        )
+        details = [
+            parse_chat_live_burn_usage_detail(
+                endpoint=row.endpoint,
+                streaming=row.streaming,
+                response_metadata=row.response_metadata,
+            )
+            for row in rows
+        ]
+        return aggregate_chat_live_burn_usage(details)
 
 
 def validate_group_by(group_by: str) -> str:
@@ -215,6 +240,11 @@ def _timestamp(value: datetime | None) -> float:
 
 
 def _to_export_row(row: UsageLedger) -> UsageExportRow:
+    chat_live_burn = parse_chat_live_burn_usage_detail(
+        endpoint=row.endpoint,
+        streaming=row.streaming,
+        response_metadata=row.response_metadata,
+    )
     return UsageExportRow(
         created_at=row.created_at,
         request_id=row.request_id,
@@ -237,4 +267,17 @@ def _to_export_row(row: UsageLedger) -> UsageExportRow:
         actual_cost_eur=row.actual_cost_eur,
         native_currency=row.native_currency,
         upstream_request_id=row.upstream_request_id,
+        chat_live_burn_triggered=chat_live_burn.triggered if chat_live_burn is not None else False,
+        chat_live_burn_stop_reason=chat_live_burn.stop_reason if chat_live_burn is not None else None,
+        chat_live_burn_estimated_tokens_at_stop=(
+            chat_live_burn.estimated_tokens_at_stop if chat_live_burn is not None else None
+        ),
+        chat_live_burn_estimated_cost_eur_at_stop=(
+            chat_live_burn.estimated_cost_eur_at_stop if chat_live_burn is not None else None
+        ),
+        chat_live_burn_cost_margin_eur=chat_live_burn.cost_margin_eur if chat_live_burn is not None else None,
+        chat_live_burn_token_margin=chat_live_burn.token_margin if chat_live_burn is not None else None,
+        chat_live_burn_final_provider_usage_available=(
+            chat_live_burn.final_provider_usage_available if chat_live_burn is not None else None
+        ),
     )

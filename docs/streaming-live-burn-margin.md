@@ -767,6 +767,48 @@ ignored at runtime. Preview and result pages show only a safe compact summary.
 
 Existing keys must not be silently mutated.
 
+### 12.4 Usage reporting
+
+Implemented Chat operator reporting reads safe PostgreSQL usage-ledger
+metadata for `POST /v1/chat/completions` streaming rows. It does not inspect
+Redis, replay provider streams, or change live-burn enforcement behavior.
+
+Admin usage reporting:
+
+- `/admin/usage` shows a compact `Live-burn: stopped (<reason>)` indicator
+  only for rows where Chat streaming live-burn metadata says monitoring
+  triggered.
+- `/admin/usage/{usage_ledger_id}` shows a `Chat streaming live-burn` section
+  with only sanitized fields: monitoring enabled, triggered, stop reason,
+  estimated tokens/cost at stop, configured margins, final-provider-usage
+  availability, and `estimate is invoice-grade`.
+- Usage CSV exports include safe Chat live-burn columns for triggered status,
+  stop reason, estimated tokens/cost at stop, margins, and final provider
+  usage availability.
+
+CLI reporting:
+
+```text
+slaif-gateway usage live-burn-summary
+slaif-gateway usage live-burn-summary --json
+```
+
+The summary reports aggregate counts by stop reason, final-provider-usage
+availability counts, and estimated token/cost sums. It supports the existing
+safe usage filters such as time window, gateway key, owner, cohort, provider,
+and model.
+
+All reporting is provisional operator telemetry. Final provider usage/cost
+remains authoritative. Reporting must not render raw metadata JSON by default
+for the live-burn section, and must never store or display streamed chunks,
+prompts, completions, tool arguments, media payloads, raw request bodies, raw
+response bodies, provider keys, gateway plaintext keys, token hashes,
+Authorization headers, cookies, CSRF/session tokens, encrypted payloads, or
+nonces.
+
+Prometheus runtime live-burn counters remain future work; this slice is
+ledger-derived admin/CLI/CSV reporting only.
+
 ---
 
 ## 13. Chat Completions milestone
