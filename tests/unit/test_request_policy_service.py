@@ -577,6 +577,18 @@ def test_invalid_audio_output_shapes_are_rejected_without_raw_values(
         assert raw_marker not in exc_info.value.safe_message
 
 
+def test_streaming_audio_output_is_rejected_even_if_toggle_is_enabled() -> None:
+    settings = _settings(HARD_MAX_INPUT_TOKENS=5000)
+    settings.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT = True
+    policy = ChatCompletionRequestPolicy(settings)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(_audio_output_request(stream=True))
+
+    assert exc_info.value.error_code == "chat_streaming_audio_output_not_supported"
+    assert exc_info.value.param == "stream"
+
+
 def test_audio_config_without_audio_modality_is_rejected() -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
 

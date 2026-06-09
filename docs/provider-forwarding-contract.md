@@ -474,30 +474,35 @@ finalization, Redis concurrency state, or provider-completed reconciliation.
 
 Streaming has an extra finalization rule because content may already have reached the client:
 
-- Provider chunks are forwarded as they arrive.
+- Supported provider chunks are counted and validated before forwarding.
 - The forwarded chunk surface includes plain text deltas, local/client-side
   function `tool_calls` deltas, `finish_reason="tool_calls"`, provider
   `logprobs` data, and response-format-compatible JSON/text deltas when those
   request fields pass policy.
 - Final provider usage is required for success.
-- If usage is missing, the reservation is released, a failed/incomplete event is recorded with zero actual cost, a safe SSE error event is emitted, and normal successful `[DONE]` is not emitted.
+- If usage is missing after token-bearing output reached the client, the
+  request is finalized as estimated interrupted usage instead of full
+  reservation release. If no token-bearing output was observed, the existing
+  release/failure path may be used.
 - If usage is present, the gateway writes a durable provider-completed record before final counter mutation.
 - If finalization succeeds, that record is marked finalized and `[DONE]` is emitted.
 - If finalization fails, the record is marked with `needs_reconciliation=true` and `recovery_state=provider_completed_finalization_failed`; `[DONE]` is not emitted.
 - Operator reconciliation can later finalize these provider-completed rows using stored usage/cost metadata without calling providers.
 - For Chat Completions only, per-key streaming live-burn monitoring estimates
   admission input plus visible generated `choices[].delta.content` and function
-  tool-call name/argument deltas while forwarding chunks. If the estimated
+  tool-call name/argument deltas before forwarding chunks. If the estimated
   request cost or token burn crosses the configured cutoff, SLAIF stops the
   upstream stream when possible, emits a safe SSE error with code
-  `streaming_live_burn_limit_exceeded`, and suppresses normal `[DONE]`.
+  `streaming_live_burn_limit_exceeded`, suppresses normal `[DONE]`, and
+  withholds the threshold-crossing chunk.
 - For the supported stateless text-output Responses streaming subset, per-key
   live-burn monitoring estimates admission input plus visible generated
-  `response.output_text.delta` text while forwarding typed SSE events. If the
+  `response.output_text.delta` text before forwarding typed SSE events. If the
   estimated request cost or token burn crosses the configured cutoff, SLAIF
   stops the upstream stream when possible, emits a safe typed Responses error
-  event with code `streaming_live_burn_limit_exceeded`, and suppresses normal
-  `response.completed` / `[DONE]` success markers.
+  event with code `streaming_live_burn_limit_exceeded`, suppresses normal
+  `response.completed` / `[DONE]` success markers, and withholds the
+  threshold-crossing delta.
 - If provider final usage is unavailable because SLAIF intentionally stopped a
   Chat stream for live-burn, the request is finalized as estimated interrupted
   accounting with safe metadata. It is not released as normal zero-cost success.

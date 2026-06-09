@@ -345,6 +345,50 @@ def pre_provider_chat_streaming_live_burn_error(
     return monitor.check()
 
 
+def build_chat_streaming_estimate_monitor(
+    *,
+    cost_estimate: ChatCostEstimate,
+    estimate_multiplier: Decimal,
+    budget: ChatStreamingLiveBurnBudget | None = None,
+) -> ChatStreamingLiveBurnMonitor:
+    """Return a monitor that always tracks streamed output estimates.
+
+    When live-burn is disabled or no request-specific cutoffs exist, the
+    returned monitor still counts safe token-bearing output for interrupted
+    streaming accounting, but never trips a cutoff on its own.
+    """
+    runtime_budget = budget or ChatStreamingLiveBurnBudget(
+        policy=default_chat_streaming_live_burn_policy(),
+        cost_cutoff_eur=None,
+        token_cutoff=None,
+        admission_input_tokens=_safe_estimated_tokens(cost_estimate, field_name="estimated_input_tokens"),
+        admission_input_cost_eur=_safe_input_cost_eur(cost_estimate),
+        output_price_per_1m_eur=_safe_output_price_per_1m_eur(cost_estimate),
+        estimate_multiplier=estimate_multiplier,
+    )
+    return ChatStreamingLiveBurnMonitor(runtime_budget)
+
+
+def safe_chat_streaming_interrupted_estimate_metadata(
+    *,
+    estimated_input_tokens: int,
+    estimated_output_tokens: int,
+    estimated_total_tokens: int,
+    estimated_cost_eur: Decimal,
+    interruption_reason: str,
+    final_provider_usage_available: bool,
+) -> dict[str, object]:
+    return {
+        "stream_interruption_reason": interruption_reason,
+        "estimated_input_tokens_at_stop": estimated_input_tokens,
+        "estimated_output_tokens_at_stop": estimated_output_tokens,
+        "estimated_tokens_at_stop": estimated_total_tokens,
+        "estimated_cost_eur_at_stop": _format_eur(estimated_cost_eur),
+        "final_provider_usage_available": final_provider_usage_available,
+        "estimate_is_invoice_grade": False,
+    }
+
+
 def parse_chat_streaming_live_burn_form_policy(
     *,
     enabled: bool,
@@ -464,12 +508,67 @@ def _input_cost_eur(cost_estimate: ChatCostEstimate) -> Decimal:
     return cost_estimate.estimated_input_cost_native * fx_rate
 
 
+def _safe_output_price_per_1m_eur(cost_estimate: object) -> Decimal:
+    if isinstance(cost_estimate, ChatCostEstimate):
+        return _output_price_per_1m_eur(cost_estimate)
+    direct_price = getattr(cost_estimate, "output_price_per_1m", None)
+    if direct_price is not None:
+        return _coerce_decimal(direct_price)
+    output_tokens = _safe_estimated_tokens(cost_estimate, field_name="estimated_output_tokens")
+    if output_tokens <= 0:
+        return Decimal("0")
+    output_cost_native = _coerce_decimal(getattr(cost_estimate, "estimated_output_cost_native", Decimal("0")))
+    fx_rate = _safe_fx_rate(cost_estimate)
+    return output_cost_native * fx_rate * _ONE_MILLION / Decimal(output_tokens)
+
+
+def _safe_input_cost_eur(cost_estimate: object) -> Decimal:
+    if isinstance(cost_estimate, ChatCostEstimate):
+        return _input_cost_eur(cost_estimate)
+    input_cost_native = _coerce_decimal(getattr(cost_estimate, "estimated_input_cost_native", Decimal("0")))
+    return input_cost_native * _safe_fx_rate(cost_estimate)
+
+
 def _fx_rate(cost_estimate: ChatCostEstimate) -> Decimal:
     if cost_estimate.fx_rate is not None:
         return cost_estimate.fx_rate
     if cost_estimate.estimated_total_cost_native == 0:
         return Decimal("0")
     return cost_estimate.estimated_total_cost_eur / cost_estimate.estimated_total_cost_native
+
+
+def _safe_fx_rate(cost_estimate: object) -> Decimal:
+    if isinstance(cost_estimate, ChatCostEstimate):
+        return _fx_rate(cost_estimate)
+    fx_rate = getattr(cost_estimate, "fx_rate", None)
+    if fx_rate is not None:
+        return _coerce_decimal(fx_rate)
+    total_native = _coerce_decimal(getattr(cost_estimate, "estimated_total_cost_native", Decimal("0")))
+    if total_native == 0:
+        return Decimal("0")
+    total_eur = _coerce_decimal(getattr(cost_estimate, "estimated_total_cost_eur", Decimal("0")))
+    return total_eur / total_native
+
+
+def _safe_estimated_tokens(cost_estimate: object, *, field_name: str) -> int:
+    value = getattr(cost_estimate, field_name, 0)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_decimal(value: object) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
 
 
 def _format_eur(value: Decimal) -> str:

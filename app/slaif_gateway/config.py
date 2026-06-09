@@ -511,6 +511,11 @@ class Settings(BaseSettings):
             raise ValueError("CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
         if self.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:
             raise ValueError("CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR must be non-negative")
+        if self.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT:
+            raise ValueError(
+                "CHAT_ALLOW_STREAMING_AUDIO_OUTPUT is not supported until streaming audio "
+                "live-burn accounting is implemented"
+            )
         if self.RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER <= 0:
             raise ValueError("RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
         if self.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:

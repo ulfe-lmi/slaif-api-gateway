@@ -286,6 +286,43 @@ async def test_streaming_live_burn_abort_finalizes_estimated_interrupted_usage()
 
 
 @pytest.mark.asyncio
+async def test_streaming_interrupted_estimate_uses_requested_reason_and_safe_metadata() -> None:
+    service, key, reservation, usage_repo = _service()
+
+    result = await service.record_streaming_interrupted_estimate(
+        reservation.id,
+        _auth(key.id),
+        _route(),
+        _estimate(),
+        request_id="req_stream_interrupt",
+        estimated_input_tokens=100,
+        estimated_output_tokens=12,
+        estimated_total_tokens=112,
+        estimated_cost_eur=Decimal("0.150000000"),
+        response_metadata={
+            "stream_interruption_reason": "chat_streaming_provider_error_estimated",
+            "final_provider_usage_available": False,
+            "estimate_is_invoice_grade": False,
+            "completion": "must be dropped",
+        },
+        endpoint="chat.completions",
+        estimate_reason="chat_streaming_provider_error_estimated",
+        error_type="provider_timeout",
+        error_message="provider_timeout",
+        status_code=None,
+    )
+
+    assert result.accounting_status == "estimated"
+    ledger = usage_repo.usage_calls[0]
+    assert ledger["error_type"] == "provider_timeout"
+    assert ledger["error_message"] == "provider_timeout"
+    assert ledger["response_metadata"]["accounting_estimate_reason"] == (
+        "chat_streaming_provider_error_estimated"
+    )
+    assert "must be dropped" not in str(ledger["response_metadata"])
+
+
+@pytest.mark.asyncio
 async def test_provider_failure_stores_sanitized_diagnostic_metadata() -> None:
     service, key, reservation, usage_repo = _service()
 
