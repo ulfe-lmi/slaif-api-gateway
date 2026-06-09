@@ -134,6 +134,8 @@ class UpdateGatewayKeyPolicyInput:
     gateway_key_id: uuid.UUID
     allowed_models: list[str] = field(default_factory=list)
     allowed_endpoints: list[str] = field(default_factory=list)
+    allowed_providers: list[str] | None = None
+    update_allowed_providers: bool = False
     allow_all_models: bool = False
     allow_all_endpoints: bool = False
     actor_admin_id: uuid.UUID | None = None

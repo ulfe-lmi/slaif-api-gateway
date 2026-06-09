@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
@@ -59,6 +59,7 @@ class AdminKeyListRow:
     chat_streaming_live_burn_policy_summary: str
     created_at: datetime
     updated_at: datetime
+    allowed_providers: tuple[str, ...] | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

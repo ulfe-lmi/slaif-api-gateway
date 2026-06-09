@@ -52,6 +52,12 @@ be created from the CLI or admin key creation page, both with explicit
 confirmation. They are not safe participant keys, and bulk key import does not
 create them.
 
+The ordinary admin key creation page and key-detail request-policy editor now
+share the same selectable local provider/endpoint/model policy builder.
+Template provenance remains immutable metadata only: using those admin pages to
+create or edit a normal gateway key does not mutate existing template
+revisions.
+
 Current Chat Completions requests persist safe `usage_profiles` rows after
 successful accounting finalization. Those rows provide the first source table
 for future recommendation summaries: endpoint, provider/model, sanitized

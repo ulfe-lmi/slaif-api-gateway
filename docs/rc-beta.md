@@ -65,6 +65,9 @@ but are not a production certification.
 - Admin dashboard for keys, records, providers, routes, pricing, FX, usage,
   audit, email delivery, import preview/execution workflows, and usage/audit
   CSV exports.
+- Admin key create/detail request-policy UI now uses selectable local
+  provider, endpoint, and route-backed model metadata, with advanced manual
+  policy strings retained as fallback.
 - Bulk key import execution for `none`, `pending`, and `enqueue` email modes.
 - CLI administration commands for the implemented metadata, key, usage, email,
   reconciliation, and migration workflows.

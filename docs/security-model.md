@@ -40,6 +40,9 @@ Provider secrets live in environment variables or deployment secrets. The
 not secret values. Admin provider config forms accept `api_key_env_var` names
 only and reject provider-secret-looking values; they never accept, store, or
 display provider key values.
+Admin key policy selectors use only local provider-config metadata and local
+route metadata. They do not display provider key values, plaintext gateway
+keys, token hashes, prompts, completions, or raw request/response bodies.
 
 In production, enabled built-in OpenAI/OpenRouter providers require configured,
 non-placeholder upstream provider secrets. The server treats `OPENAI_API_KEY` as

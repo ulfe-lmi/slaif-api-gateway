@@ -100,28 +100,8 @@
 
     <section class="action-panel" aria-labelledby="create-policy-heading">
       <h2 id="create-policy-heading">Request Policy</h2>
-      <p class="muted">Use model IDs for models and `/v1` API paths for endpoints. Values are validated against implemented endpoints and route metadata.</p>
-      <p class="muted small">Models must not start with `/v1/`. Endpoints must start with `/v1/`. Allow `/v1/models` for `client.models.list()` and `/v1/chat/completions` for `chat.completions.create()`.</p>
-      <div class="form-grid">
-        <label>
-          Allowed models: model IDs such as gpt-5.2 or gpt-4o-mini
-          <textarea name="allowed_models" rows="4" autocomplete="off">{{ form.allowed_models }}</textarea>
-        </label>
-        <label>
-          Allowed endpoints: API paths such as /v1/models and /v1/chat/completions
-          <textarea name="allowed_endpoints" rows="4" autocomplete="off">{{ form.allowed_endpoints }}</textarea>
-        </label>
-      </div>
-      <div class="form-grid">
-        <label class="checkbox-row">
-          <input type="checkbox" name="allow_all_models" value="true" {% if form.allow_all_models %}checked{% endif %}>
-          Allow all models backed by enabled routes
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="allow_all_endpoints" value="true" {% if form.allow_all_endpoints %}checked{% endif %}>
-          Allow all implemented endpoints
-        </label>
-      </div>
+      {% set selector_id_prefix = "create-policy" %}
+      {% include "keys/_policy_selector.html" %}
     </section>
 
     <section class="action-panel" aria-labelledby="create-rate-limit-heading">
@@ -217,5 +197,6 @@
     </section>
   </form>
 </section>
+<script src="/admin/static/js/policy-selector.js"></script>
 <script src="/admin/static/js/streaming-live-burn.js"></script>
 {% endblock %}

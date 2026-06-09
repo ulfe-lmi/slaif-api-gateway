@@ -91,6 +91,14 @@
     <section class="detail-section">
       <h2>Policy</h2>
       <dl>
+        <dt>Allowed providers</dt>
+        <dd>
+          {% if policy.allow_all_providers %}
+          All enabled providers
+          {% else %}
+          {{ ", ".join(policy.allowed_providers) if policy.allowed_providers else "None" }}
+          {% endif %}
+        </dd>
         <dt>Allowed models</dt>
         <dd>
           {% if policy.allow_all_models %}

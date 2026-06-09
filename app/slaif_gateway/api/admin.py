@@ -7,6 +7,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -104,7 +105,11 @@ from slaif_gateway.services.key_modes import (
 from slaif_gateway.services.key_policy_validation import (
     IMPLEMENTED_CLIENT_ENDPOINTS,
     MODELS_ENDPOINT,
+    RESPONSES_COMPACT_ENDPOINT,
+    RESPONSES_ENDPOINT,
+    RESPONSES_INPUT_TOKENS_ENDPOINT,
     GatewayKeyPolicy,
+    validate_gateway_key_policy,
     validate_gateway_key_policy_values,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
@@ -180,6 +185,47 @@ from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
 logger = structlog.get_logger(__name__)
+
+_POLICY_SELECTOR_MODEL_BACKED_ENDPOINTS = frozenset(
+    {
+        CHAT_COMPLETIONS_ENDPOINT,
+        RESPONSES_ENDPOINT,
+        RESPONSES_INPUT_TOKENS_ENDPOINT,
+        RESPONSES_COMPACT_ENDPOINT,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyProviderChoice:
+    value: str
+    display_name: str
+    kind: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyEndpointChoice:
+    value: str
+    label: str
+    description: str
+    is_model_backed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyModelChoice:
+    route_key: str
+    token: str
+    provider: str
+    provider_label: str
+    endpoint: str
+    match_type: str
+    upstream_model: str
+    label: str
+    group_label: str
+    visible_in_models: bool
+    supports_streaming: bool
+    capability_summary: str | None
 
 _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_created": ("success", "Gateway key created."),
@@ -549,8 +595,10 @@ async def create_admin_key(
     cost_limit_eur: str = Form(""),
     token_limit_total: str = Form(""),
     request_limit_total: str = Form(""),
+    allowed_providers: str = Form(""),
     allowed_models: str = Form(""),
     allowed_endpoints: str = Form(""),
+    allow_all_providers: str = Form(""),
     allow_all_models: str = Form(""),
     allow_all_endpoints: str = Form(""),
     rate_limit_requests_per_minute: str = Form(""),
@@ -582,8 +630,10 @@ async def create_admin_key(
         "cost_limit_eur": cost_limit_eur,
         "token_limit_total": token_limit_total,
         "request_limit_total": request_limit_total,
+        "allowed_providers": allowed_providers,
         "allowed_models": allowed_models,
         "allowed_endpoints": allowed_endpoints,
+        "allow_all_providers": allow_all_providers,
         "allow_all_models": allow_all_models,
         "allow_all_endpoints": allow_all_endpoints,
         "rate_limit_requests_per_minute": rate_limit_requests_per_minute,
@@ -605,6 +655,21 @@ async def create_admin_key(
             form,
             actor_admin_id=action_context.admin_user.id,
             settings=settings,
+            available_provider_values=options["policy_catalog"]["enabled_provider_values"],
+        )
+        validated_request_policy = await _validate_admin_request_policy(
+            request,
+            allowed_models=parsed_input.allowed_models,
+            allowed_endpoints=parsed_input.allowed_endpoints,
+            allow_all_models=parsed_input.allow_all_models,
+            allow_all_endpoints=parsed_input.allow_all_endpoints,
+        )
+        parsed_input = replace(
+            parsed_input,
+            allowed_models=validated_request_policy.allowed_models,
+            allowed_endpoints=validated_request_policy.allowed_endpoints,
+            allow_all_models=validated_request_policy.allow_all_models,
+            allow_all_endpoints=validated_request_policy.allow_all_endpoints,
         )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
@@ -799,8 +864,10 @@ async def create_admin_key(
                 "request_limit_total": parsed_input.request_limit_total,
             },
             "policy": {
+                "allowed_providers": parsed_input.allowed_providers,
                 "allowed_models": parsed_input.allowed_models,
                 "allowed_endpoints": parsed_input.allowed_endpoints,
+                "allow_all_providers": parsed_input.allowed_providers is None,
                 "allow_all_models": parsed_input.allow_all_models,
                 "allow_all_endpoints": parsed_input.allow_all_endpoints,
                 "rate_limit_policy": parsed_input.rate_limit_policy,
@@ -1039,13 +1106,14 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
     except AdminKeyNotFoundError:
         return HTMLResponse("Gateway key not found.", status_code=404)
 
-    available_model_routes = await _load_key_policy_route_options(request)
+    policy_catalog = await _load_key_policy_catalog(request)
     return _render_key_detail(
         request,
         admin=context.admin_user,
         csrf_token=csrf_token,
         key=key,
-        available_model_routes=available_model_routes,
+        policy_catalog=policy_catalog,
+        policy_form=_default_key_policy_form_for_key(key),
     )
 
 
@@ -1523,8 +1591,10 @@ async def create_admin_key_from_template_revision(
                 "request_limit_total": result.revision.request_limit_total,
             },
             "policy": {
+                "allowed_providers": result.revision.allowed_providers,
                 "allowed_models": result.revision.allowed_models,
                 "allowed_endpoints": result.revision.allowed_endpoints,
+                "allow_all_providers": not bool(result.revision.allowed_providers),
                 "allow_all_models": False,
                 "allow_all_endpoints": False,
                 "rate_limit_policy": result.revision.rate_limit_policy,
@@ -1558,8 +1628,10 @@ async def update_admin_key_policy(
     request: Request,
     gateway_key_id: str,
     csrf_token: str = Form(""),
+    allowed_providers: str = Form(""),
     allowed_models: str = Form(""),
     allowed_endpoints: str = Form(""),
+    allow_all_providers: str = Form(""),
     allow_all_models: str = Form(""),
     allow_all_endpoints: str = Form(""),
     reason: str = Form(""),
@@ -1584,22 +1656,53 @@ async def update_admin_key_policy(
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
             error=_ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
+            policy_form={
+                "allowed_providers": allowed_providers,
+                "allowed_models": allowed_models,
+                "allowed_endpoints": allowed_endpoints,
+                "allow_all_providers": allow_all_providers,
+                "allow_all_models": allow_all_models,
+                "allow_all_endpoints": allow_all_endpoints,
+                "reason": reason,
+            },
         )
 
+    policy_catalog = await _load_key_policy_catalog(request)
+    policy_form = {
+        "allowed_providers": allowed_providers,
+        "allowed_models": allowed_models,
+        "allowed_endpoints": allowed_endpoints,
+        "allow_all_providers": allow_all_providers,
+        "allow_all_models": allow_all_models,
+        "allow_all_endpoints": allow_all_endpoints,
+        "reason": reason,
+    }
     try:
+        validated_request_policy = await _validate_admin_request_policy(
+            request,
+            allowed_models=_parse_admin_text_list(allowed_models),
+            allowed_endpoints=_parse_admin_text_list(allowed_endpoints),
+            allow_all_models=_is_checked(allow_all_models),
+            allow_all_endpoints=_is_checked(allow_all_endpoints),
+        )
         async with _admin_key_management_service_scope(request) as service:
             await service.update_gateway_key_policy(
                 UpdateGatewayKeyPolicyInput(
                     gateway_key_id=parsed_key_id,
-                    allowed_models=_parse_admin_text_list(allowed_models),
-                    allowed_endpoints=_parse_admin_text_list(allowed_endpoints),
-                    allow_all_models=_is_checked(allow_all_models),
-                    allow_all_endpoints=_is_checked(allow_all_endpoints),
+                    allowed_providers=_parse_admin_allowed_providers(
+                        policy_form,
+                        available_provider_values=policy_catalog["enabled_provider_values"],
+                    ),
+                    update_allowed_providers=True,
+                    allowed_models=validated_request_policy.allowed_models,
+                    allowed_endpoints=validated_request_policy.allowed_endpoints,
+                    allow_all_models=validated_request_policy.allow_all_models,
+                    allow_all_endpoints=validated_request_policy.allow_all_endpoints,
                     actor_admin_id=action_context.admin_user.id,
                     reason=cleaned_reason,
                 )
             )
-    except KeyManagementError as exc:
+    except (KeyManagementError, ValueError) as exc:
         _log_admin_key_policy_failure(
             request,
             exc=exc,
@@ -1611,7 +1714,8 @@ async def update_admin_key_policy(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=exc.safe_message,
+            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+            policy_form=policy_form,
             diagnostic_id=_admin_diagnostic_id(request),
         )
 
@@ -6416,14 +6520,18 @@ async def _load_key_create_form_options(request: Request) -> dict[str, object]:
     async with _admin_records_dashboard_service_scope(request) as service:
         owners = await service.list_owners(limit=200)
         cohorts = await service.list_cohorts(limit=200)
-    return {"owners": owners, "cohorts": cohorts}
+    return {
+        "owners": owners,
+        "cohorts": cohorts,
+        "policy_catalog": await _load_key_policy_catalog(request),
+    }
 
 
 async def _load_key_create_form_options_or_empty(request: Request) -> dict[str, object]:
     try:
         return await _load_key_create_form_options(request)
     except (AttributeError, RuntimeError):
-        return {"owners": [], "cohorts": []}
+        return {"owners": [], "cohorts": [], "policy_catalog": _empty_policy_catalog()}
 
 
 async def _load_template_for_render(request: Request, template_id: uuid.UUID) -> object | None:
@@ -6433,21 +6541,260 @@ async def _load_template_for_render(request: Request, template_id: uuid.UUID) ->
             return await KeyTemplatesRepository(session).get_template_for_admin_detail(template_id)
 
 
-async def _load_key_policy_route_options(request: Request) -> dict[str, list[object]]:
+async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
     try:
         session_factory = get_sessionmaker_from_app(request)
         async with session_factory() as session:
             async with session.begin():
+                providers = await ProviderConfigsRepository(session).list_provider_configs(enabled=True, limit=500)
                 routes = await ModelRoutesRepository(session).list_enabled_model_routes()
     except (AttributeError, RuntimeError):
-        return {}
+        return _empty_policy_catalog()
 
-    grouped: dict[str, list[object]] = {}
-    for route in routes:
-        if route.endpoint not in IMPLEMENTED_CLIENT_ENDPOINTS:
+    provider_choices = _build_policy_provider_choices(providers)
+    provider_labels = {choice.value: choice.display_name for choice in provider_choices}
+    enabled_provider_values = tuple(choice.value for choice in provider_choices)
+    enabled_provider_set = set(enabled_provider_values)
+
+    filtered_routes = [
+        route
+        for route in routes
+        if route.endpoint in IMPLEMENTED_CLIENT_ENDPOINTS and route.provider in enabled_provider_set
+    ]
+    model_choices = _build_policy_model_choices(filtered_routes, provider_labels=provider_labels)
+    model_choices_by_group: dict[str, list[_PolicyModelChoice]] = {}
+    for choice in model_choices:
+        model_choices_by_group.setdefault(choice.group_label, []).append(choice)
+
+    return {
+        "provider_choices": provider_choices,
+        "endpoint_choices": _build_policy_endpoint_choices(),
+        "model_choices": model_choices,
+        "model_choices_by_group": model_choices_by_group,
+        "enabled_provider_values": enabled_provider_values,
+    }
+
+
+def _empty_policy_catalog() -> dict[str, object]:
+    return {
+        "provider_choices": [],
+        "endpoint_choices": [],
+        "model_choices": [],
+        "model_choices_by_group": {},
+        "enabled_provider_values": (),
+    }
+
+
+def _build_policy_provider_choices(provider_rows: Sequence[object]) -> list[_PolicyProviderChoice]:
+    choices: list[_PolicyProviderChoice] = []
+    for row in provider_rows:
+        provider = str(getattr(row, "provider", "") or "").strip()
+        if not provider:
             continue
-        grouped.setdefault(route.endpoint, []).append(route)
-    return grouped
+        display_name = str(getattr(row, "display_name", "") or provider).strip() or provider
+        kind = str(getattr(row, "kind", "") or "provider").strip() or "provider"
+        label = f"{display_name} | {provider} | {kind}"
+        choices.append(
+            _PolicyProviderChoice(
+                value=provider,
+                display_name=display_name,
+                kind=kind,
+                label=label,
+            )
+        )
+    return sorted(choices, key=lambda choice: (choice.display_name.lower(), choice.value.lower()))
+
+
+def _build_policy_endpoint_choices() -> list[_PolicyEndpointChoice]:
+    choices = [
+        _PolicyEndpointChoice(
+            value=endpoint,
+            label=_policy_endpoint_label(endpoint),
+            description=_policy_endpoint_description(endpoint),
+            is_model_backed=endpoint in _POLICY_SELECTOR_MODEL_BACKED_ENDPOINTS,
+        )
+        for endpoint in sorted(IMPLEMENTED_CLIENT_ENDPOINTS)
+    ]
+    return choices
+
+
+def _build_policy_model_choices(
+    routes: Sequence[object],
+    *,
+    provider_labels: dict[str, str],
+) -> list[_PolicyModelChoice]:
+    choices: list[_PolicyModelChoice] = []
+    for route in routes:
+        provider = str(getattr(route, "provider", "") or "").strip()
+        endpoint = str(getattr(route, "endpoint", "") or "").strip()
+        token = str(getattr(route, "requested_model", "") or "").strip()
+        upstream_model = str(getattr(route, "upstream_model", "") or "").strip()
+        match_type = str(getattr(route, "match_type", "") or "exact").strip() or "exact"
+        visible_in_models = bool(getattr(route, "visible_in_models", False))
+        supports_streaming = bool(getattr(route, "supports_streaming", False))
+        provider_label = provider_labels.get(provider, provider)
+        route_key = f"{provider}|{endpoint}|{token}|{match_type}|{upstream_model}"
+        visibility_text = "visible in /v1/models" if visible_in_models else "hidden from /v1/models"
+        streaming_text = "streaming" if supports_streaming else "non-streaming"
+        capability_summary = _policy_route_capability_summary(getattr(route, "capabilities", None))
+        label_parts = [
+            token,
+            provider,
+            endpoint,
+            match_type,
+            upstream_model,
+            visibility_text,
+            streaming_text,
+        ]
+        if capability_summary:
+            label_parts.append(capability_summary)
+        choices.append(
+            _PolicyModelChoice(
+                route_key=route_key,
+                token=token,
+                provider=provider,
+                provider_label=provider_label,
+                endpoint=endpoint,
+                match_type=match_type,
+                upstream_model=upstream_model,
+                label=" | ".join(part for part in label_parts if part),
+                group_label=f"{endpoint} | {provider_label}",
+                visible_in_models=visible_in_models,
+                supports_streaming=supports_streaming,
+                capability_summary=capability_summary,
+            )
+        )
+    return sorted(
+        choices,
+        key=lambda choice: (
+            choice.endpoint,
+            choice.provider_label.lower(),
+            choice.token.lower(),
+            choice.match_type,
+            choice.upstream_model.lower(),
+        ),
+    )
+
+
+def _policy_route_capability_summary(capabilities: object) -> str | None:
+    if not isinstance(capabilities, dict):
+        return None
+    parts: list[str] = []
+    for name, value in sorted(capabilities.items()):
+        if isinstance(value, bool):
+            if value:
+                parts.append(str(name))
+            continue
+        if isinstance(value, dict):
+            nested = [
+                f"{name}.{nested_name}"
+                for nested_name, nested_value in sorted(value.items())
+                if nested_value is True
+            ]
+            parts.extend(nested)
+    if not parts:
+        return None
+    preview = parts[:4]
+    if len(parts) > 4:
+        preview.append("...")
+    return f"capabilities: {', '.join(preview)}"
+
+
+def _policy_endpoint_label(endpoint: str) -> str:
+    friendly = {
+        MODELS_ENDPOINT: "/v1/models | list visible models",
+        CHAT_COMPLETIONS_ENDPOINT: "/v1/chat/completions | Chat Completions",
+        RESPONSES_ENDPOINT: "/v1/responses | Responses create",
+        RESPONSES_INPUT_TOKENS_ENDPOINT: "/v1/responses/input_tokens | Responses input token count",
+        RESPONSES_COMPACT_ENDPOINT: "/v1/responses/compact | Responses compact",
+    }
+    if endpoint in friendly:
+        return friendly[endpoint]
+    return f"{endpoint} | {_policy_endpoint_short_name(endpoint)}"
+
+
+def _policy_endpoint_description(endpoint: str) -> str:
+    if endpoint == MODELS_ENDPOINT:
+        return "Catalog listing behaves differently from model-backed generation endpoints."
+    if endpoint in _POLICY_SELECTOR_MODEL_BACKED_ENDPOINTS:
+        return "Model-backed endpoint. Explicit models or allow-all-models may be required."
+    return "Lifecycle or non-model-backed endpoint."
+
+
+def _policy_endpoint_short_name(endpoint: str) -> str:
+    if endpoint.startswith("GET "):
+        return "retrieve/list"
+    if endpoint.startswith("DELETE "):
+        return "delete"
+    if endpoint.startswith("POST "):
+        return "create"
+    return "endpoint"
+
+
+def _default_key_policy_form_for_key(key: object) -> dict[str, str]:
+    allowed_providers = getattr(key, "allowed_providers", None)
+    return {
+        "allowed_providers": "\n".join(allowed_providers or ()),
+        "allowed_models": "\n".join(getattr(key, "allowed_models", ()) or ()),
+        "allowed_endpoints": "\n".join(getattr(key, "allowed_endpoints", ()) or ()),
+        "allow_all_providers": "true" if allowed_providers is None else "",
+        "allow_all_models": "true" if getattr(key, "allow_all_models", False) else "",
+        "allow_all_endpoints": "true" if getattr(key, "allow_all_endpoints", False) else "",
+        "reason": "",
+    }
+
+
+def _build_policy_selector_form_state(
+    form: dict[str, str],
+    *,
+    policy_catalog: dict[str, object],
+) -> dict[str, object]:
+    allow_all_providers = _is_checked(form.get("allow_all_providers", ""))
+    allow_all_models = _is_checked(form.get("allow_all_models", ""))
+    allow_all_endpoints = _is_checked(form.get("allow_all_endpoints", ""))
+    selected_provider_values = tuple(_parse_admin_text_list(form.get("allowed_providers")))
+    selected_endpoint_values = tuple(_parse_admin_text_list(form.get("allowed_endpoints")))
+    selected_model_values = tuple(_parse_admin_text_list(form.get("allowed_models")))
+
+    provider_lookup = {
+        choice.value: choice.label
+        for choice in policy_catalog.get("provider_choices", [])
+    }
+    endpoint_lookup = {
+        choice.value: choice.label
+        for choice in policy_catalog.get("endpoint_choices", [])
+    }
+
+    return {
+        "allow_all_providers": allow_all_providers,
+        "allow_all_models": allow_all_models,
+        "allow_all_endpoints": allow_all_endpoints,
+        "selected_provider_values": selected_provider_values,
+        "selected_endpoint_values": selected_endpoint_values,
+        "selected_model_values": selected_model_values,
+        "selected_provider_options": [
+            {
+                "value": value,
+                "label": provider_lookup.get(value, f"{value} | manual entry"),
+            }
+            for value in selected_provider_values
+        ],
+        "selected_endpoint_options": [
+            {
+                "value": value,
+                "label": endpoint_lookup.get(value, f"{value} | manual entry"),
+            }
+            for value in selected_endpoint_values
+        ],
+        "selected_model_options": [
+            {
+                "value": value,
+                "label": value,
+            }
+            for value in selected_model_values
+        ],
+        "models_only_selected": not allow_all_endpoints and set(selected_endpoint_values) == {MODELS_ENDPOINT},
+    }
 
 
 def _render_key_detail(
@@ -6456,7 +6803,8 @@ def _render_key_detail(
     admin: object,
     csrf_token: str,
     key: object,
-    available_model_routes: dict[str, list[object]],
+    policy_catalog: dict[str, object],
+    policy_form: dict[str, str],
     error: str | None = None,
     diagnostic_id: str | None = None,
     status_code: int = 200,
@@ -6469,8 +6817,12 @@ def _render_key_detail(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "key": key,
-            "available_model_routes": available_model_routes,
-            "policy_endpoint_options": sorted(IMPLEMENTED_CLIENT_ENDPOINTS),
+            "policy_catalog": policy_catalog,
+            "policy_form": policy_form,
+            "policy_form_state": _build_policy_selector_form_state(
+                policy_form,
+                policy_catalog=policy_catalog,
+            ),
             "models_endpoint": MODELS_ENDPOINT,
             "chat_completions_endpoint": CHAT_COMPLETIONS_ENDPOINT,
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
@@ -6573,6 +6925,7 @@ async def _render_key_policy_error(
     csrf_token: str,
     gateway_key_id: uuid.UUID,
     error: str,
+    policy_form: dict[str, str] | None = None,
     diagnostic_id: str | None = None,
 ) -> Response:
     try:
@@ -6585,7 +6938,8 @@ async def _render_key_policy_error(
         admin=admin,
         csrf_token=csrf_token,
         key=key,
-        available_model_routes=await _load_key_policy_route_options(request),
+        policy_catalog=await _load_key_policy_catalog(request),
+        policy_form=policy_form or _default_key_policy_form_for_key(key),
         error=error,
         diagnostic_id=diagnostic_id,
         status_code=400,
@@ -6694,6 +7048,11 @@ def _render_key_create_form(
             "csrf_token": csrf_token,
             "owners": options["owners"],
             "cohorts": options["cohorts"],
+            "policy_catalog": options["policy_catalog"],
+            "policy_form_state": _build_policy_selector_form_state(
+                form,
+                policy_catalog=options["policy_catalog"],
+            ),
             "form": form,
             "error": error,
             "diagnostic_id": diagnostic_id,
@@ -6770,8 +7129,10 @@ def _default_key_create_form() -> dict[str, str]:
         "cost_limit_eur": "",
         "token_limit_total": "",
         "request_limit_total": "",
+        "allowed_providers": "",
         "allowed_models": "",
         "allowed_endpoints": "",
+        "allow_all_providers": "true",
         "allow_all_models": "",
         "allow_all_endpoints": "",
         "rate_limit_requests_per_minute": "",
@@ -8296,6 +8657,7 @@ def _parse_key_create_form(
     *,
     actor_admin_id: uuid.UUID,
     settings: Settings | None = None,
+    available_provider_values: Sequence[str] = (),
 ) -> CreateGatewayKeyInput:
     owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
@@ -8349,6 +8711,12 @@ def _parse_key_create_form(
             or _is_checked(form.get("allow_all_endpoints")),
         )
     )
+    allowed_providers = None
+    if not trusted_calibration:
+        allowed_providers = _parse_admin_allowed_providers(
+            form,
+            available_provider_values=available_provider_values,
+        )
 
     key_purpose = "standard"
     capability_policy_mode = "standard"
@@ -8389,6 +8757,7 @@ def _parse_key_create_form(
         allowed_endpoints=request_policy.allowed_endpoints,
         allow_all_models=request_policy.allow_all_models,
         allow_all_endpoints=request_policy.allow_all_endpoints,
+        allowed_providers=allowed_providers,
         key_purpose=key_purpose,
         capability_policy_mode=capability_policy_mode,
         calibration_metadata=calibration_metadata,
@@ -8397,6 +8766,27 @@ def _parse_key_create_form(
         chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
         note=cleaned_reason,
     )
+
+
+async def _validate_admin_request_policy(
+    request: Request,
+    *,
+    allowed_models: list[str],
+    allowed_endpoints: list[str],
+    allow_all_models: bool,
+    allow_all_endpoints: bool,
+) -> GatewayKeyPolicy:
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        return await validate_gateway_key_policy(
+            GatewayKeyPolicy(
+                allowed_models=allowed_models,
+                allowed_endpoints=allowed_endpoints,
+                allow_all_models=allow_all_models,
+                allow_all_endpoints=allow_all_endpoints,
+            ),
+            model_routes_repository=ModelRoutesRepository(session),
+        )
 
 
 def _parse_admin_email_delivery_mode(value: str | None) -> str:
@@ -8534,6 +8924,27 @@ def _parse_admin_text_list(value: str | None) -> list[str]:
         return []
     normalized = value.replace(",", "\n")
     return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+def _parse_admin_allowed_providers(
+    form: dict[str, str],
+    *,
+    available_provider_values: Sequence[str],
+) -> list[str] | None:
+    if _is_checked(form.get("allow_all_providers", "")):
+        return None
+
+    available_provider_set = {str(value).strip() for value in available_provider_values if str(value).strip()}
+    providers = [_parse_provider_slug(value) for value in _parse_admin_text_list(form.get("allowed_providers"))]
+    if not providers:
+        return None
+
+    invalid = [provider for provider in providers if provider not in available_provider_set]
+    if invalid:
+        raise ValueError(
+            f"Provider {invalid[0]} is not available. Select from enabled local provider configs only."
+        )
+    return providers
 
 
 def _parse_provider_slug(value: str | None) -> str:

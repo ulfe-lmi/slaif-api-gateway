@@ -188,6 +188,25 @@ async def test_standard_key_defaults_to_standard_purpose_and_mode() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_gateway_key_can_persist_allowed_providers_in_metadata() -> None:
+    service, keys_repo, _, audit_repo = _make_service()
+    payload = _base_create_payload(allowed_providers=["openai"])
+
+    await service.create_gateway_key(payload)
+
+    assert keys_repo.calls[0]["metadata_json"] == {
+        "allowed_providers": ["openai"],
+        "chat_streaming_live_burn": {
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
+    }
+    assert audit_repo.calls[0]["new_values"]["allowed_providers"] == ["openai"]
+
+
+@pytest.mark.asyncio
 async def test_trusted_calibration_key_can_be_created_with_confirmation() -> None:
     service, keys_repo, _, audit_repo = _make_service()
     payload = _trusted_calibration_payload()

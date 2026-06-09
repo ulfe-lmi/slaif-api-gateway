@@ -285,6 +285,7 @@ async def _create_dashboard_data(database_url: str) -> dict[str, object]:
                 )
                 return {
                     "admin_email": admin.email,
+                    "suffix": suffix,
                     "key_id": key.id,
                     "trusted_key_id": trusted_key.id,
                     "trusted_public_key_id": trusted_key.public_key_id,
@@ -293,6 +294,7 @@ async def _create_dashboard_data(database_url: str) -> dict[str, object]:
                     "institution_id": institution.id,
                     "cohort_id": cohort.id,
                     "provider_id": provider.id,
+                    "provider_slug": provider.provider,
                     "route_id": route.id,
                     "pricing_id": pricing.id,
                     "fx_id": fx.id,
@@ -469,5 +471,54 @@ def test_admin_dashboard_browser_smoke() -> None:
             page.click('form[action="/admin/logout"] button[type="submit"]')
             page.wait_for_url("**/admin/login")
             assert "Admin Login" in page.content()
+        finally:
+            context.close()
+
+
+@pytest.mark.playwright
+def test_admin_key_policy_selector_browser_flow() -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    data = asyncio.run(_create_dashboard_data(database_url))
+
+    app = create_app(_settings(database_url))
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+
+    with _run_uvicorn_server(app, port), _chromium_browser() as browser:
+        context = browser.new_context(base_url=base_url)
+        page = context.new_page()
+        try:
+            page.goto("/admin/login")
+            page.fill('input[name="email"]', str(data["admin_email"]))
+            page.fill('input[name="password"]', ADMIN_PASSWORD)
+            page.click('button[type="submit"]')
+            page.wait_for_url("**/admin")
+
+            page.goto("/admin/keys/create")
+            assert "Create Gateway Key" in page.content()
+            page.set_checked('input[name="allow_all_providers"]', False)
+            page.set_checked('input[name="allow_all_endpoints"]', False)
+            page.set_checked('input[name="allow_all_models"]', False)
+            page.select_option("#create-policy-providers-available", value=data["provider_slug"])
+            page.click('[data-policy-add="providers"]')
+            page.select_option("#create-policy-endpoints-available", value="/v1/chat/completions")
+            page.click('[data-policy-add="endpoints"]')
+            page.select_option(
+                "#create-policy-models-available",
+                label=f"browser-gpt-{data['suffix']} | {data['provider_slug']} | /v1/chat/completions | exact | browser-upstream-{data['suffix']} | visible in /v1/models | streaming | capabilities: browser",
+            )
+            page.click('[data-policy-add="models"]')
+
+            assert page.locator('#create-policy-providers-selected option[value]').count() == 1
+            assert page.locator('#create-policy-endpoints-selected option[value]').count() == 1
+            assert page.locator('#create-policy-models-selected option[value]').count() == 1
+            assert page.locator('textarea[name="allowed_providers"]').input_value() == data["provider_slug"]
+            assert page.locator('textarea[name="allowed_endpoints"]').input_value() == "/v1/chat/completions"
+            assert page.locator('textarea[name="allowed_models"]').input_value() == f"browser-gpt-{data['suffix']}"
+
+            page.goto(f"/admin/keys/{data['key_id']}")
+            assert "Update Request Policy" in page.content()
+            assert page.locator('[data-policy-selector-surface]').count() >= 1
         finally:
             context.close()

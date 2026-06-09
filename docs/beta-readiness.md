@@ -175,6 +175,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   remains future work.
 - Provider keys are referenced by environment variable names and are not stored
   or displayed by dashboard metadata forms.
+- Admin key create/detail request-policy UI now uses selectable local provider,
+  endpoint, and route-backed model metadata instead of raw typing as the
+  primary workflow; advanced manual strings remain as fallback.
 - One-time plaintext gateway keys are only shown on explicit no-cache
   create/rotate/bulk result pages where documented.
 - Bulk enqueue mode queues Celery tasks with IDs only and suppresses browser
