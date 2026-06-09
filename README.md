@@ -566,13 +566,13 @@ For production streaming behind Nginx, disable proxy buffering and use long read
 Janez Perš, Jon Muhovič  
 Faculty of Electrical Engineering, University of Ljubljana  
 Laboratory for Machine Intelligence (LMI)  
-Email: 
-    jon.muhovic@fe.uni-lj.si (Jon is first point of contact)
-    janez.pers@fe.uni-lj.si 
+- Email: 
+    - jon.muhovic@fe.uni-lj.si (Jon is first point of contact)
+    - janez.pers@fe.uni-lj.si 
 
 - Profile:
-    https://lmi.fe.uni-lj.si/en/janez-pers-2/
-    https://lmi.fe.uni-lj.si/en/jon-muhovic/
+    - https://lmi.fe.uni-lj.si/en/janez-pers-2/
+    - https://lmi.fe.uni-lj.si/en/jon-muhovic/
 - Laboratory: https://lmi.fe.uni-lj.si/en
 
 ## Security Contact
