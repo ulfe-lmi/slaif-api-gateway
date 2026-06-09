@@ -17,6 +17,7 @@ RESPONSES_DELETE: Final[str] = "responses.delete"
 RESPONSES_INPUT_ITEMS: Final[str] = "responses.input_items"
 RESPONSES_COMPACT: Final[str] = "responses.compact"
 CONVERSATIONS_CREATE: Final[str] = "conversations.create"
+CONVERSATIONS_UPDATE: Final[str] = "conversations.update"
 CONVERSATIONS_RETRIEVE: Final[str] = "conversations.retrieve"
 CONVERSATIONS_DELETE: Final[str] = "conversations.delete"
 CONVERSATION_ITEMS_CREATE: Final[str] = "conversations.items.create"
@@ -83,6 +84,12 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "conversations.create",
             "post /v1/conversations",
             "/v1/conversations",
+        }
+    ),
+    CONVERSATIONS_UPDATE: frozenset(
+        {
+            "conversations.update",
+            "post /v1/conversations/{conversation_id}",
         }
     ),
     CONVERSATIONS_RETRIEVE: frozenset(

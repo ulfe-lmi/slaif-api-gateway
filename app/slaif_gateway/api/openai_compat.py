@@ -19,6 +19,7 @@ from slaif_gateway.services.endpoint_policy import (
     CONVERSATION_ITEMS_LIST,
     CONVERSATION_ITEMS_RETRIEVE,
     CONVERSATIONS_CREATE,
+    CONVERSATIONS_UPDATE,
     CONVERSATIONS_DELETE,
     CONVERSATIONS_RETRIEVE,
     MODELS_LIST,
@@ -38,6 +39,7 @@ from slaif_gateway.services.responses_gateway import (
     handle_conversation_item_retrieve,
     handle_conversation_items_list,
     handle_conversation_create,
+    handle_conversation_update,
     handle_conversation_delete,
     handle_conversation_retrieve,
     handle_response_compact,
@@ -206,6 +208,25 @@ async def create_conversation(
     if "request" in inspect.signature(handle_conversation_create).parameters:
         kwargs["request"] = request
     return await handle_conversation_create(**kwargs)
+
+
+@router.post("/v1/conversations/{conversation_id}")
+async def update_conversation(
+    conversation_id: str,
+    request: Request,
+    payload: dict[str, object] | None = Body(default=None),
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATIONS_UPDATE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_update).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_update(**kwargs)
 
 
 @router.post("/v1/conversations/{conversation_id}/items")

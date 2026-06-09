@@ -13,6 +13,7 @@ from slaif_gateway.services.endpoint_policy import (
     CONVERSATION_ITEMS_LIST,
     CONVERSATION_ITEMS_RETRIEVE,
     CONVERSATIONS_CREATE,
+    CONVERSATIONS_UPDATE,
     CONVERSATIONS_DELETE,
     CONVERSATIONS_RETRIEVE,
     MODELS_LIST,
@@ -66,6 +67,7 @@ def test_allow_all_endpoints_allows_known_endpoints() -> None:
     service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_ITEMS)
     service.ensure_endpoint_allowed(auth, RESPONSES_COMPACT)
     service.ensure_endpoint_allowed(auth, CONVERSATIONS_CREATE)
+    service.ensure_endpoint_allowed(auth, CONVERSATIONS_UPDATE)
     service.ensure_endpoint_allowed(auth, CONVERSATIONS_RETRIEVE)
     service.ensure_endpoint_allowed(auth, CONVERSATIONS_DELETE)
     service.ensure_endpoint_allowed(auth, CONVERSATION_ITEMS_CREATE)
@@ -105,6 +107,10 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("conversations.create",)),
         CONVERSATIONS_CREATE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("conversations.update",)),
+        CONVERSATIONS_UPDATE,
     )
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("conversations.retrieve",)),
@@ -163,6 +169,12 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), CONVERSATIONS_CREATE)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(
+            _auth(allowed_endpoints=("conversations.create",)),
+            CONVERSATIONS_UPDATE,
+        )
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(
@@ -253,6 +265,10 @@ def test_literal_method_paths_and_bare_paths_are_supported() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("/v1/conversations",)),
         CONVERSATIONS_CREATE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("POST /v1/conversations/{conversation_id}",)),
+        CONVERSATIONS_UPDATE,
     )
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("GET /v1/conversations/{conversation_id}",)),

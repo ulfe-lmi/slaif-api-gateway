@@ -273,6 +273,36 @@ class OpenAIProviderAdapter(ProviderAdapter):
         response = await self._get_json(_conversation_path(conversation_id), headers=headers)
         return self._provider_response(request, response)
 
+    async def update_conversation(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        if request.endpoint not in {
+            "/v1/conversations/{conversation_id}",
+            "conversations.update",
+        }:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._post_json(
+            _conversation_path(conversation_id),
+            json=request.body,
+            headers=headers,
+        )
+        return self._provider_response(request, response)
+
     async def delete_conversation(
         self,
         request: ProviderRequest,

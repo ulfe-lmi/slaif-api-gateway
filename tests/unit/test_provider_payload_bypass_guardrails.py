@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ALLOWED_UPSTREAM_BUILDERS = {
+    "build_conversation_update_upstream_body",
     "build_conversation_items_create_upstream_body",
     "build_conversation_items_query_params",
     "build_chat_completion_upstream_body",
@@ -13,6 +14,7 @@ ALLOWED_UPSTREAM_BUILDERS = {
     "build_responses_input_items_query_params",
     "build_responses_upstream_body",
     "_build_safe_chat_completion_upstream_body",
+    "_build_safe_conversation_update_upstream_body",
     "_build_safe_conversation_items_create_upstream_body",
     "_build_safe_conversation_items_query_params",
     "_build_safe_responses_compact_upstream_body",

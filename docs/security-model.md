@@ -523,7 +523,7 @@ default-off and policy-first:
   safe summary as provenance metadata; they still require normal key endpoint,
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
-- `background`, conversation update endpoints, cancel, response listing,
+- `background`, cancel, response listing,
   and compact `previous_response_id` are excluded until ownership mapping,
   quota, accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
@@ -848,7 +848,8 @@ never recover or send old plaintext keys.
   owned input-item listing through safe response-reference metadata, plus
   bounded non-streaming text-focused compact and the first ownership-checked
   conversation reference foundation, and ownership-checked Conversation item
-  proxying; hosted Responses tools, conversation update, background mode,
+  proxying, and ownership-checked Conversation metadata update;
+  hosted Responses tools, background mode,
   cancel/list routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.

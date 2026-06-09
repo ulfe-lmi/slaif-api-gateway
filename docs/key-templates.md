@@ -186,14 +186,15 @@ summary must keep `hosted_tools_allowed` empty and must set `stateful`,
 web/file search, code interpreter, shell, `apply_patch`, local environments,
 skills, MCP or connectors, computer use, image generation, tool search,
 provider-side storage beyond safe response/conversation references, background
-mode, conversation update endpoints, `/v1/files`, file search/retrieval
+mode, `/v1/files`, file search/retrieval
 tools, audio input, audio output, and multimodal Responses output remain future
 work and are rejected for template-created keys. `previous_response_id` and
 `list_input_items` are only safe capability summaries for owned local response
 references, `conversations` is only a safe capability summary for owned local
-conversation references, `conversation_items` is only a safe capability
-summary for ownership-checked Conversation item proxying, and `compact` is only
-a safe capability summary for the bounded text-focused compact endpoint. They
+conversation references and ownership-checked Conversation metadata update,
+`conversation_items` is only a safe capability summary for ownership-checked
+Conversation item proxying, and `compact` is only a safe capability summary
+for the bounded text-focused compact endpoint. They
 do not permit live response IDs, conversation IDs from user traffic, input
 items, conversation items, compact input/output, or encrypted compaction
 content in template metadata.

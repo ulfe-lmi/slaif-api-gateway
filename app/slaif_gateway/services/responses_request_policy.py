@@ -85,6 +85,10 @@ _SUPPORTED_CUSTOM_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_TEXT_FORMAT_FIELDS = frozenset({"type"})
 _SUPPORTED_CUSTOM_TOOL_GRAMMAR_FORMAT_FIELDS = frozenset({"type", "syntax", "definition"})
 _SUPPORTED_CONVERSATION_ITEM_CREATE_FIELDS = frozenset({"items"})
+_SUPPORTED_CONVERSATION_UPDATE_FIELDS = frozenset({"metadata"})
+_CONVERSATION_UPDATE_MAX_METADATA_KEYS = 16
+_CONVERSATION_UPDATE_MAX_METADATA_KEY_CHARS = 64
+_CONVERSATION_UPDATE_MAX_METADATA_VALUE_CHARS = 512
 _FUNCTION_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _CUSTOM_TOOL_NAME_PATTERN = _FUNCTION_TOOL_NAME_PATTERN
 _MULTIMODAL_INPUT_ITEM_TYPES = frozenset(
@@ -2225,6 +2229,72 @@ def validate_conversation_items_create_body(
     return {"items": canonical_items}
 
 
+def validate_conversation_update_body(payload: Mapping[str, Any] | None) -> dict[str, object]:
+    """Validate metadata-only Conversation update payloads."""
+
+    if not isinstance(payload, Mapping):
+        raise ResponsesRequestPolicyError(
+            "Conversation update request body must be an object.",
+            param="body",
+            error_code="conversation_update_body_invalid",
+        )
+    unknown = set(payload) - _SUPPORTED_CONVERSATION_UPDATE_FIELDS
+    if unknown:
+        raise ResponsesRequestPolicyError(
+            "This Conversation update field is not enabled by this gateway.",
+            param=sorted(unknown)[0],
+            error_code="conversation_update_field_not_supported",
+        )
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise ResponsesRequestPolicyError(
+            "Conversation update requires a metadata object.",
+            param="metadata",
+            error_code="conversation_update_metadata_invalid",
+        )
+    if len(metadata) > _CONVERSATION_UPDATE_MAX_METADATA_KEYS:
+        raise ResponsesRequestPolicyError(
+            "Conversation update metadata has too many keys.",
+            param="metadata",
+            error_code="conversation_update_metadata_invalid",
+        )
+
+    canonical_metadata: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key:
+            raise ResponsesRequestPolicyError(
+                "Conversation update metadata keys must be non-empty strings.",
+                param="metadata",
+                error_code="conversation_update_metadata_invalid",
+            )
+        if len(key) > _CONVERSATION_UPDATE_MAX_METADATA_KEY_CHARS or any(
+            ord(char) < 32 for char in key
+        ):
+            raise ResponsesRequestPolicyError(
+                "Conversation update metadata keys exceed the gateway limit.",
+                param="metadata",
+                error_code="conversation_update_metadata_invalid",
+            )
+        if not isinstance(value, str):
+            raise ResponsesRequestPolicyError(
+                "Conversation update metadata values must be strings.",
+                param="metadata",
+                error_code="conversation_update_metadata_invalid",
+            )
+        if len(value) > _CONVERSATION_UPDATE_MAX_METADATA_VALUE_CHARS or any(
+            ord(char) < 32 for char in value
+        ):
+            raise ResponsesRequestPolicyError(
+                "Conversation update metadata values exceed the gateway limit.",
+                param="metadata",
+                error_code="conversation_update_metadata_invalid",
+            )
+        _validate_conversation_update_metadata_entry(key=key, value=value)
+        canonical_metadata[key] = value
+
+    return {"metadata": canonical_metadata}
+
+
 def _validate_conversation_text_message_item(item: Mapping[str, Any], *, index: int) -> None:
     item_type = item.get("type")
     if item_type not in (None, "message"):
@@ -2248,6 +2318,44 @@ def _validate_conversation_text_message_item(item: Mapping[str, Any], *, index: 
                 "Conversation item content parts are limited to input_text in this gateway.",
                 param=f"items[{index}].content[{part_index}].type",
                 error_code="conversation_item_create_content_not_supported",
+            )
+
+
+def _validate_conversation_update_metadata_entry(*, key: str, value: str) -> None:
+    lowered_key = key.strip().lower()
+    if lowered_key in {
+        "authorization",
+        "connector_id",
+        "headers",
+        "password",
+        "secret",
+        "server_url",
+        "token",
+    }:
+        raise ResponsesRequestPolicyError(
+            "Conversation update metadata field is not enabled by this gateway.",
+            param="metadata",
+            error_code="conversation_update_metadata_not_supported",
+        )
+    if lowered_key.startswith("mcp") or lowered_key.startswith("tool"):
+        raise ResponsesRequestPolicyError(
+            "Conversation update metadata field is not enabled by this gateway.",
+            param="metadata",
+            error_code="conversation_update_metadata_not_supported",
+        )
+    if value.lower().startswith("bearer "):
+        raise ResponsesRequestPolicyError(
+            "Conversation update metadata value is not enabled by this gateway.",
+            param="metadata",
+            error_code="conversation_update_metadata_not_supported",
+        )
+    if "://" in value:
+        parts = urlsplit(value)
+        if parts.username is not None or parts.password is not None:
+            raise ResponsesRequestPolicyError(
+                "Conversation update metadata value is not enabled by this gateway.",
+                param="metadata",
+                error_code="conversation_update_metadata_not_supported",
             )
 
 

@@ -1334,6 +1334,130 @@ def test_conversation_create_rejects_initial_items_in_first_slice(monkeypatch) -
     assert response.json()["error"]["code"] == "conversation_create_fields_not_supported"
 
 
+def test_conversation_update_requires_explicit_endpoint_permission(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/conversations",)),
+    )
+
+    response = TestClient(app).post(
+        "/v1/conversations/conv_owned",
+        json={"metadata": {"course": "slaif"}},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "endpoint_not_allowed"
+
+
+def test_conversation_update_owned_reference_proxies_metadata_without_generation_accounting(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key(
+        allowed_endpoints=("POST /v1/conversations/{conversation_id}",)
+    )
+    _wire_auth_and_db(monkeypatch, app, auth)
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[tuple[str, dict[str, object], str]] = []
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = request
+        assert authenticated_key.gateway_key_id == auth.gateway_key_id
+        assert conversation_id == "conv_owned"
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_conversation_id="conv_provider",
+            route_id=None,
+        )
+
+    async def _fake_route_for_reference(reference, *, request):
+        _ = request
+        assert reference.provider == "openai"
+        return SimpleNamespace(provider="openai")
+
+    class _FakeAdapter:
+        async def update_conversation(self, request, *, conversation_id):
+            provider_calls.append((conversation_id, request.body, request.endpoint))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model="",
+                status_code=200,
+                json_body={"id": conversation_id, "object": "conversation"},
+            )
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "_provider_route_for_conversation_reference", _fake_route_for_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+
+    response = TestClient(app).post(
+        "/v1/conversations/conv_owned",
+        json={"metadata": {"course": "slaif"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": "conv_provider", "object": "conversation"}
+    assert provider_calls == [
+        ("conv_provider", {"metadata": {"course": "slaif"}}, "conversations.update")
+    ]
+    assert pricing_calls == []
+    assert quota_calls == []
+
+
+def test_conversation_update_missing_or_non_owned_returns_404_before_provider(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=("POST /v1/conversations/{conversation_id}",)
+        ),
+    )
+    provider_calls: list[str] = []
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = (conversation_id, authenticated_key, request)
+        return None
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/conversations/conv_missing",
+        json={"metadata": {"course": "slaif"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "conversation_not_found"
+    assert provider_calls == []
+
+
 def test_conversation_retrieve_owned_reference_proxies_without_generation_accounting(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 

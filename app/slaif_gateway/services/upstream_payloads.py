@@ -9,6 +9,7 @@ import copy
 from slaif_gateway.services.upstream_request_contracts import (
     NormalizedConversationItemsCreateUpstreamRequest,
     NormalizedConversationItemsQueryRequest,
+    NormalizedConversationUpdateUpstreamRequest,
     NormalizedChatCompletionUpstreamRequest,
     NormalizedResponsesCompactUpstreamRequest,
     NormalizedResponsesInputTokensUpstreamRequest,
@@ -92,6 +93,7 @@ RESPONSES_COMPACT_UPSTREAM_FIELDS: tuple[str, ...] = (
     "instructions",
 )
 CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS: tuple[str, ...] = ("items",)
+CONVERSATION_UPDATE_UPSTREAM_FIELDS: tuple[str, ...] = ("metadata",)
 CONVERSATION_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
     "after",
     "before",
@@ -197,6 +199,26 @@ def build_conversation_items_query_params(
     return {
         field: copy.deepcopy(fields[field])
         for field in CONVERSATION_ITEMS_QUERY_FIELDS
+        if field in fields
+    }
+
+
+def build_conversation_update_upstream_body(
+    normalized_request: NormalizedConversationUpdateUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Conversation update payload from approved fields only."""
+
+    if not isinstance(normalized_request, NormalizedConversationUpdateUpstreamRequest):
+        raise TypeError(
+            "Conversation update upstream payload must be built from a normalized request contract."
+        )
+    fields = normalized_request.as_upstream_fields()
+    unknown_fields = set(fields) - set(CONVERSATION_UPDATE_UPSTREAM_FIELDS)
+    if unknown_fields:
+        raise ValueError("Conversation update payload contains unsupported fields.")
+    return {
+        field: copy.deepcopy(fields[field])
+        for field in CONVERSATION_UPDATE_UPSTREAM_FIELDS
         if field in fields
     }
 

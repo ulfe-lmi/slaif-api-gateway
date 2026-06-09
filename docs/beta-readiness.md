@@ -212,7 +212,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   Conversation create/retrieve/delete, Conversation item
   create/list/retrieve/delete, and non-streaming Responses create with an owned
   conversation reference are supported through safe local conversation-reference
-  metadata. Hosted/provider-side Responses tools, conversation update,
+  metadata. Hosted/provider-side Responses tools,
   streaming conversation state, streaming
   previous-response state, compact `previous_response_id`, background mode,
   cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
@@ -252,7 +252,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses hosted tools, conversation update endpoints, background
+- No Responses hosted tools, background
   routes, streaming conversation state, streaming previous-response state,
   compact `previous_response_id`, cancel/list routes,
   embeddings, files endpoints, image generation
@@ -267,7 +267,7 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Add formal security review or penetration testing before production claims.
 - Continue Responses API as scoped RC2 work under
   `responses-compatibility.md`; decide separately whether to implement
-  Responses hosted tools, conversation update endpoints, background routes,
+  Responses hosted tools, background routes,
   broader lifecycle routes,
   bulk key send-now, embeddings, and native provider adapters.
 - Implement Responses streaming live-burn only as a separate scoped milestone

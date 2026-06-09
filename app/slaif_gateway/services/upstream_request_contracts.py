@@ -88,6 +88,7 @@ RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS = frozenset(
     }
 )
 CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"items"})
+CONVERSATION_UPDATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"metadata"})
 CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS = frozenset(
     {
         "after",
@@ -281,6 +282,14 @@ class NormalizedConversationItemsCreateUpstreamRequest:
 
     def as_upstream_fields(self) -> dict[str, Any]:
         return {"items": [copy.deepcopy(item) for item in self.items]}
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedConversationUpdateUpstreamRequest:
+    metadata: Mapping[str, str]
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        return {"metadata": copy.deepcopy(dict(self.metadata))}
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,6 +494,24 @@ def normalize_conversation_items_create_upstream_request(
         raise ValueError("Conversation item create request is missing items.")
     return NormalizedConversationItemsCreateUpstreamRequest(
         items=tuple(copy.deepcopy(item) for item in items)
+    )
+
+
+def normalize_conversation_update_upstream_request(
+    effective_body: Mapping[str, Any],
+) -> NormalizedConversationUpdateUpstreamRequest:
+    """Build a normalized Conversation update contract from policy-approved metadata."""
+
+    body = dict(effective_body)
+    _ensure_no_unknown_fields(
+        body,
+        allowed_fields=CONVERSATION_UPDATE_UPSTREAM_ALLOWED_FIELDS,
+    )
+    metadata = body.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise ValueError("Conversation update request is missing metadata.")
+    return NormalizedConversationUpdateUpstreamRequest(
+        metadata=copy.deepcopy(dict(metadata))
     )
 
 

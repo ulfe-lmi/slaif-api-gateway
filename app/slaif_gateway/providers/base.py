@@ -77,6 +77,16 @@ class ProviderAdapter(ABC):
         _ = (request, conversation_id)
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def update_conversation(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        """Update a provider-side Conversation by provider conversation ID."""
+        _ = (request, conversation_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def delete_conversation(
         self,
         request: ProviderRequest,
