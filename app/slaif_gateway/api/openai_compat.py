@@ -14,6 +14,10 @@ from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList,
 from slaif_gateway.services.chat_completion_gateway import handle_chat_completion
 from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
+    CONVERSATION_ITEMS_CREATE,
+    CONVERSATION_ITEMS_DELETE,
+    CONVERSATION_ITEMS_LIST,
+    CONVERSATION_ITEMS_RETRIEVE,
     CONVERSATIONS_CREATE,
     CONVERSATIONS_DELETE,
     CONVERSATIONS_RETRIEVE,
@@ -29,6 +33,10 @@ from slaif_gateway.services.endpoint_policy import (
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
 from slaif_gateway.services.responses_gateway import (
+    handle_conversation_item_create,
+    handle_conversation_item_delete,
+    handle_conversation_item_retrieve,
+    handle_conversation_items_list,
     handle_conversation_create,
     handle_conversation_delete,
     handle_conversation_retrieve,
@@ -198,6 +206,80 @@ async def create_conversation(
     if "request" in inspect.signature(handle_conversation_create).parameters:
         kwargs["request"] = request
     return await handle_conversation_create(**kwargs)
+
+
+@router.post("/v1/conversations/{conversation_id}/items")
+async def create_conversation_items(
+    conversation_id: str,
+    request: Request,
+    payload: dict[str, object] | None = Body(default=None),
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATION_ITEMS_CREATE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_item_create).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_item_create(**kwargs)
+
+
+@router.get("/v1/conversations/{conversation_id}/items")
+async def list_conversation_items(
+    conversation_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATION_ITEMS_LIST)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_items_list).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_items_list(**kwargs)
+
+
+@router.get("/v1/conversations/{conversation_id}/items/{item_id}")
+async def retrieve_conversation_item(
+    conversation_id: str,
+    item_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATION_ITEMS_RETRIEVE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "item_id": item_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_item_retrieve).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_item_retrieve(**kwargs)
+
+
+@router.delete("/v1/conversations/{conversation_id}/items/{item_id}")
+async def delete_conversation_item(
+    conversation_id: str,
+    item_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATION_ITEMS_DELETE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "item_id": item_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_item_delete).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_item_delete(**kwargs)
 
 
 @router.get("/v1/conversations/{conversation_id}")

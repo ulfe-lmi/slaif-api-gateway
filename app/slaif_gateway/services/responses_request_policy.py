@@ -84,6 +84,7 @@ _SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_TEXT_FORMAT_FIELDS = frozenset({"type"})
 _SUPPORTED_CUSTOM_TOOL_GRAMMAR_FORMAT_FIELDS = frozenset({"type", "syntax", "definition"})
+_SUPPORTED_CONVERSATION_ITEM_CREATE_FIELDS = frozenset({"items"})
 _FUNCTION_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _CUSTOM_TOOL_NAME_PATTERN = _FUNCTION_TOOL_NAME_PATTERN
 _MULTIMODAL_INPUT_ITEM_TYPES = frozenset(
@@ -2189,6 +2190,65 @@ def previous_response_id_requested(body: Mapping[str, Any]) -> bool:
 
 def conversation_requested(body: Mapping[str, Any]) -> bool:
     return "conversation" in body
+
+
+def validate_conversation_items_create_body(
+    payload: Mapping[str, Any] | None,
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    """Validate the first supported text-only Conversation item create body."""
+
+    if not isinstance(payload, Mapping):
+        raise ResponsesRequestPolicyError(
+            "Conversation item create request body must be an object.",
+            param="body",
+            error_code="conversation_item_create_body_invalid",
+        )
+    unknown = set(payload) - _SUPPORTED_CONVERSATION_ITEM_CREATE_FIELDS
+    if unknown:
+        raise ResponsesRequestPolicyError(
+            "This Conversation item create field is not enabled by this gateway.",
+            param=sorted(unknown)[0],
+            error_code="conversation_item_create_field_not_supported",
+        )
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raise ResponsesRequestPolicyError(
+            "Conversation item create requires an items array.",
+            param="items",
+            error_code="conversation_item_create_items_invalid",
+        )
+    canonical_items, _ = ResponsesRequestPolicy(settings=settings)._validate_input_item_array(raw_items)
+    for index, item in enumerate(canonical_items):
+        _validate_conversation_text_message_item(item, index=index)
+    return {"items": canonical_items}
+
+
+def _validate_conversation_text_message_item(item: Mapping[str, Any], *, index: int) -> None:
+    item_type = item.get("type")
+    if item_type not in (None, "message"):
+        raise ResponsesRequestPolicyError(
+            "Only text message Conversation items are enabled by this gateway.",
+            param=f"items[{index}].type",
+            error_code="conversation_item_create_item_not_supported",
+        )
+    content = item.get("content")
+    if isinstance(content, str):
+        return
+    if not isinstance(content, list):
+        raise ResponsesRequestPolicyError(
+            "Conversation item message content must be text or input_text parts.",
+            param=f"items[{index}].content",
+            error_code="conversation_item_create_content_invalid",
+        )
+    for part_index, part in enumerate(content):
+        if not isinstance(part, Mapping) or part.get("type") != "input_text":
+            raise ResponsesRequestPolicyError(
+                "Conversation item content parts are limited to input_text in this gateway.",
+                param=f"items[{index}].content[{part_index}].type",
+                error_code="conversation_item_create_content_not_supported",
+            )
 
 
 def _input_contains_function_call_output(value: Any) -> bool:

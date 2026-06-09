@@ -22,6 +22,7 @@ RESPONSES_CAPABILITY_PREVIOUS_RESPONSE_ID = "previous_response_id"
 RESPONSES_CAPABILITY_LIST_INPUT_ITEMS = "list_input_items"
 RESPONSES_CAPABILITY_COMPACT = "compact"
 RESPONSES_CAPABILITY_CONVERSATIONS = "conversations"
+RESPONSES_CAPABILITY_CONVERSATION_ITEMS = "conversation_items"
 RESPONSES_CAPABILITY_MULTIMODAL = "multimodal"
 RESPONSES_CAPABILITY_STORAGE = "storage"
 RESPONSES_CAPABILITY_BACKGROUND = "background"
@@ -44,6 +45,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_LIST_INPUT_ITEMS,
         RESPONSES_CAPABILITY_COMPACT,
         RESPONSES_CAPABILITY_CONVERSATIONS,
+        RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
         RESPONSES_CAPABILITY_MULTIMODAL,
         RESPONSES_CAPABILITY_STORAGE,
         RESPONSES_CAPABILITY_BACKGROUND,
@@ -71,6 +73,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_LIST_INPUT_ITEMS: False,
         RESPONSES_CAPABILITY_COMPACT: False,
         RESPONSES_CAPABILITY_CONVERSATIONS: False,
+        RESPONSES_CAPABILITY_CONVERSATION_ITEMS: False,
         RESPONSES_CAPABILITY_MULTIMODAL: False,
         RESPONSES_CAPABILITY_STORAGE: False,
         RESPONSES_CAPABILITY_BACKGROUND: False,
@@ -127,6 +130,7 @@ def enforce_responses_route_capabilities(
     list_input_items_requested: bool = False,
     compact_requested: bool = False,
     conversations_requested: bool = False,
+    conversation_items_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -191,6 +195,19 @@ def enforce_responses_route_capabilities(
                 )
             )
 
+    if conversation_items_requested:
+        if capabilities.get(RESPONSES_CAPABILITY_CONVERSATION_ITEMS) is not True:
+            raise ResponsesRouteCapabilityError(
+                ResponsesRouteCapabilityFinding(
+                    capability=RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
+                    field="conversation_id",
+                    error_code="responses_conversation_items_capability_not_supported",
+                    safe_message=(
+                        "This model route does not support Responses conversation item endpoints."
+                    ),
+                )
+            )
+
     if stored_responses_requested:
         if capabilities.get(RESPONSES_CAPABILITY_STORED_RESPONSES) is not True:
             raise ResponsesRouteCapabilityError(
@@ -206,6 +223,7 @@ def enforce_responses_route_capabilities(
         and not list_input_items_requested
         and not compact_requested
         and not conversations_requested
+        and not conversation_items_requested
         and capabilities.get(RESPONSES_CAPABILITY_STATELESS) is not True
     ):
         raise ResponsesRouteCapabilityError(

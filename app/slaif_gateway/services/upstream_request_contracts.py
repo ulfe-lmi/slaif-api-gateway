@@ -87,6 +87,16 @@ RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "instructions",
     }
 )
+CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"items"})
+CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS = frozenset(
+    {
+        "after",
+        "before",
+        "include",
+        "limit",
+        "order",
+    }
+)
 
 
 def _is_set(value: object) -> bool:
@@ -265,6 +275,32 @@ class NormalizedResponsesCompactUpstreamRequest:
         return fields
 
 
+@dataclass(frozen=True, slots=True)
+class NormalizedConversationItemsCreateUpstreamRequest:
+    items: tuple[Mapping[str, Any], ...]
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        return {"items": [copy.deepcopy(item) for item in self.items]}
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedConversationItemsQueryRequest:
+    after: object = _UNSET
+    before: object = _UNSET
+    include: object = _UNSET
+    limit: object = _UNSET
+    order: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
+        return fields
+
+
 def normalize_chat_completion_upstream_request(
     effective_body: Mapping[str, Any],
     *,
@@ -431,4 +467,38 @@ def normalize_responses_compact_upstream_request(
             else copy.deepcopy(body["input"])
         ),
         instructions=_select_field(body.get("instructions", _UNSET)),
+    )
+
+
+def normalize_conversation_items_create_upstream_request(
+    effective_body: Mapping[str, Any],
+) -> NormalizedConversationItemsCreateUpstreamRequest:
+    """Build a normalized Conversation items create contract from policy-approved items."""
+
+    body = dict(effective_body)
+    _ensure_no_unknown_fields(
+        body,
+        allowed_fields=CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS,
+    )
+    items = body.get("items")
+    if not isinstance(items, list):
+        raise ValueError("Conversation item create request is missing items.")
+    return NormalizedConversationItemsCreateUpstreamRequest(
+        items=tuple(copy.deepcopy(item) for item in items)
+    )
+
+
+def normalize_conversation_items_query_request(
+    query_params: Mapping[str, Any],
+) -> NormalizedConversationItemsQueryRequest:
+    """Build a normalized Conversation items query contract from validated params."""
+
+    body = dict(query_params)
+    _ensure_no_unknown_fields(body, allowed_fields=CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS)
+    return NormalizedConversationItemsQueryRequest(
+        after=_select_field(body.get("after", _UNSET)),
+        before=_select_field(body.get("before", _UNSET)),
+        include=_select_field(body.get("include", _UNSET)),
+        limit=_select_field(body.get("limit", _UNSET)),
+        order=_select_field(body.get("order", _UNSET)),
     )

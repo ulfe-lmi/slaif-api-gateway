@@ -19,6 +19,10 @@ RESPONSES_COMPACT: Final[str] = "responses.compact"
 CONVERSATIONS_CREATE: Final[str] = "conversations.create"
 CONVERSATIONS_RETRIEVE: Final[str] = "conversations.retrieve"
 CONVERSATIONS_DELETE: Final[str] = "conversations.delete"
+CONVERSATION_ITEMS_CREATE: Final[str] = "conversations.items.create"
+CONVERSATION_ITEMS_LIST: Final[str] = "conversations.items.list"
+CONVERSATION_ITEMS_RETRIEVE: Final[str] = "conversations.items.retrieve"
+CONVERSATION_ITEMS_DELETE: Final[str] = "conversations.items.delete"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -91,6 +95,30 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
         {
             "conversations.delete",
             "delete /v1/conversations/{conversation_id}",
+        }
+    ),
+    CONVERSATION_ITEMS_CREATE: frozenset(
+        {
+            "conversations.items.create",
+            "post /v1/conversations/{conversation_id}/items",
+        }
+    ),
+    CONVERSATION_ITEMS_LIST: frozenset(
+        {
+            "conversations.items.list",
+            "get /v1/conversations/{conversation_id}/items",
+        }
+    ),
+    CONVERSATION_ITEMS_RETRIEVE: frozenset(
+        {
+            "conversations.items.retrieve",
+            "get /v1/conversations/{conversation_id}/items/{item_id}",
+        }
+    ),
+    CONVERSATION_ITEMS_DELETE: frozenset(
+        {
+            "conversations.items.delete",
+            "delete /v1/conversations/{conversation_id}/items/{item_id}",
         }
     ),
 }

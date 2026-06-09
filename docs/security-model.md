@@ -511,12 +511,19 @@ default-off and policy-first:
   conversation reference metadata for ownership/routing. Conversation item
   content is not stored, unknown/non-owned/deleted conversation IDs are not
   proxied upstream, and provider mismatches fail closed.
+- Conversation item endpoints require explicit item endpoint permission and an
+  active local conversation reference owned by the authenticated gateway key.
+  Item create is limited to bounded text message items; list/retrieve/delete
+  forward only validated query/path data to the owning provider. SLAIF does not
+  store, log, or inspect returned conversation item content, and these resource
+  calls do not reserve generation quota or create normal generation ledger
+  rows.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented local/stored subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
-- `background`, conversation item/update endpoints, cancel, response listing,
+- `background`, conversation update endpoints, cancel, response listing,
   and compact `previous_response_id` are excluded until ownership mapping,
   quota, accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
@@ -840,8 +847,9 @@ never recover or send old plaintext keys.
   stored create, owned previous-response chaining, owned retrieve/delete, and
   owned input-item listing through safe response-reference metadata, plus
   bounded non-streaming text-focused compact and the first ownership-checked
-  conversation reference foundation; hosted Responses tools, conversation item
-  endpoints/update, background mode, cancel/list routes, file IDs, `/v1/files`, file
+  conversation reference foundation, and ownership-checked Conversation item
+  proxying; hosted Responses tools, conversation update, background mode,
+  cancel/list routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.
   Embeddings API is not implemented.

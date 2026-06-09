@@ -29,6 +29,10 @@ RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
 CONVERSATIONS_CREATE_ENDPOINT = "POST /v1/conversations"
 CONVERSATIONS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}"
 CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
+CONVERSATION_ITEMS_CREATE_ENDPOINT = "POST /v1/conversations/{conversation_id}/items"
+CONVERSATION_ITEMS_LIST_ENDPOINT = "GET /v1/conversations/{conversation_id}/items"
+CONVERSATION_ITEMS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}/items/{item_id}"
+CONVERSATION_ITEMS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}/items/{item_id}"
 INPUT_TEXT = "Hello from SLAIF Responses test"
 OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
@@ -669,6 +673,10 @@ def test_openai_python_client_responses_conversations_e2e(
                 CONVERSATIONS_CREATE_ENDPOINT,
                 CONVERSATIONS_RETRIEVE_ENDPOINT,
                 CONVERSATIONS_DELETE_ENDPOINT,
+                CONVERSATION_ITEMS_CREATE_ENDPOINT,
+                CONVERSATION_ITEMS_LIST_ENDPOINT,
+                CONVERSATION_ITEMS_RETRIEVE_ENDPOINT,
+                CONVERSATION_ITEMS_DELETE_ENDPOINT,
             ],
         )
     )
@@ -710,6 +718,26 @@ def test_openai_python_client_responses_conversations_e2e(
         "object": "conversation.deleted",
         "deleted": True,
     }
+    item_list_payload = {
+        "object": "list",
+        "data": [
+            {
+                "id": "msg_conversation_item_e2e",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": INPUT_TEXT}],
+            }
+        ],
+        "first_id": "msg_conversation_item_e2e",
+        "last_id": "msg_conversation_item_e2e",
+        "has_more": False,
+    }
+    item_payload = {
+        "id": "msg_conversation_item_e2e",
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": INPUT_TEXT}],
+    }
 
     with _run_uvicorn_server(app, port):
         with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
@@ -732,6 +760,42 @@ def test_openai_python_client_responses_conversations_e2e(
                     headers={"x-request-id": "upstream-openai-conversation-retrieve-e2e"},
                 )
             )
+            conversation_items_create_route = router.post(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e/items"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=item_list_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-items-create-e2e"},
+                )
+            )
+            conversation_items_list_route = router.get(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e/items"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=item_list_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-items-list-e2e"},
+                )
+            )
+            conversation_item_retrieve_route = router.get(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e/items/msg_conversation_item_e2e"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=item_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-item-retrieve-e2e"},
+                )
+            )
+            conversation_item_delete_route = router.delete(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e/items/msg_conversation_item_e2e"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=conversation_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-item-delete-e2e"},
+                )
+            )
             response_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
                     200,
@@ -751,6 +815,15 @@ def test_openai_python_client_responses_conversations_e2e(
 
             client = OpenAI()
             conversation = client.conversations.create()
+            created_items = client.conversations.items.create(
+                "conv_responses_e2e",
+                items=[{"type": "message", "role": "user", "content": INPUT_TEXT}],
+            )
+            listed_items = client.conversations.items.list("conv_responses_e2e")
+            retrieved_item = client.conversations.items.retrieve(
+                "msg_conversation_item_e2e",
+                conversation_id="conv_responses_e2e",
+            )
             response = client.responses.create(
                 model=TEST_RESPONSES_MODEL,
                 input=INPUT_TEXT,
@@ -758,9 +831,17 @@ def test_openai_python_client_responses_conversations_e2e(
                 max_output_tokens=32,
             )
             retrieved_conversation = client.conversations.retrieve("conv_responses_e2e")
+            deleted_item_conversation = client.conversations.items.delete(
+                "msg_conversation_item_e2e",
+                conversation_id="conv_responses_e2e",
+            )
             deleted_conversation = client.conversations.delete("conv_responses_e2e")
 
     assert conversation.id == "conv_responses_e2e"
+    assert created_items.object == "list"
+    assert listed_items.object == "list"
+    assert retrieved_item.id == "msg_conversation_item_e2e"
+    assert deleted_item_conversation.id == "conv_responses_e2e"
     assert response.id == "resp_conversation_e2e"
     assert retrieved_conversation.id == "conv_responses_e2e"
     assert deleted_conversation.id == "conv_responses_e2e"
@@ -769,6 +850,10 @@ def test_openai_python_client_responses_conversations_e2e(
     for route in (
         conversation_create_route,
         conversation_retrieve_route,
+        conversation_items_create_route,
+        conversation_items_list_route,
+        conversation_item_retrieve_route,
+        conversation_item_delete_route,
         response_route,
         conversation_delete_route,
     ):
@@ -778,6 +863,9 @@ def test_openai_python_client_responses_conversations_e2e(
         assert created.plaintext_key not in authorization
 
     assert json.loads(conversation_create_route.calls[0].request.content) == {}
+    assert json.loads(conversation_items_create_route.calls[0].request.content) == {
+        "items": [{"type": "message", "role": "user", "content": INPUT_TEXT}]
+    }
     assert json.loads(response_route.calls[0].request.content) == {
         "model": TEST_RESPONSES_MODEL,
         "input": INPUT_TEXT,

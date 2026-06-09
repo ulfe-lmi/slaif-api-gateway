@@ -155,6 +155,10 @@ async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_
                 "POST /v1/conversations",
                 "GET /v1/conversations/{conversation_id}",
                 "DELETE /v1/conversations/{conversation_id}",
+                "POST /v1/conversations/{conversation_id}/items",
+                "GET /v1/conversations/{conversation_id}/items",
+                "GET /v1/conversations/{conversation_id}/items/{item_id}",
+                "DELETE /v1/conversations/{conversation_id}/items/{item_id}",
             ],
         ),
         model_routes_repository=_RoutesRepo([]),
@@ -169,6 +173,10 @@ async def test_policy_validation_accepts_explicit_responses_lifecycle_endpoints_
         "POST /v1/conversations",
         "GET /v1/conversations/{conversation_id}",
         "DELETE /v1/conversations/{conversation_id}",
+        "POST /v1/conversations/{conversation_id}/items",
+        "GET /v1/conversations/{conversation_id}/items",
+        "GET /v1/conversations/{conversation_id}/items/{item_id}",
+        "DELETE /v1/conversations/{conversation_id}/items/{item_id}",
     ]
 
 

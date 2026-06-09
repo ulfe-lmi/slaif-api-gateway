@@ -73,13 +73,14 @@ from slaif_gateway.services.responses_request_policy import ResponsesRequestPoli
 from slaif_gateway.services.responses_request_policy import (
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA,
+    conversation_requested,
+    previous_response_id_requested,
     responses_custom_tools_requested,
     responses_file_input_requested,
     responses_function_tools_requested,
     responses_image_input_requested,
-    conversation_requested,
     responses_text_format_type,
-    previous_response_id_requested,
+    validate_conversation_items_create_body,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
@@ -87,11 +88,15 @@ from slaif_gateway.services.responses_route_capabilities import (
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 from slaif_gateway.services.upstream_request_contracts import (
+    normalize_conversation_items_create_upstream_request,
+    normalize_conversation_items_query_request,
     normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
 )
 from slaif_gateway.services.upstream_payloads import (
+    build_conversation_items_create_upstream_body,
+    build_conversation_items_query_params,
     build_responses_compact_upstream_body,
     build_responses_input_items_query_params,
     build_responses_input_tokens_upstream_body,
@@ -116,8 +121,20 @@ CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
 CONVERSATIONS_CREATE_PROVIDER_ENDPOINT = "conversations.create"
 CONVERSATIONS_RETRIEVE_PROVIDER_ENDPOINT = "conversations.retrieve"
 CONVERSATIONS_DELETE_PROVIDER_ENDPOINT = "conversations.delete"
+CONVERSATION_ITEMS_CREATE_ENDPOINT = "POST /v1/conversations/{conversation_id}/items"
+CONVERSATION_ITEMS_LIST_ENDPOINT = "GET /v1/conversations/{conversation_id}/items"
+CONVERSATION_ITEMS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}/items/{item_id}"
+CONVERSATION_ITEMS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}/items/{item_id}"
+CONVERSATION_ITEMS_CREATE_PROVIDER_ENDPOINT = "conversations.items.create"
+CONVERSATION_ITEMS_LIST_PROVIDER_ENDPOINT = "conversations.items.list"
+CONVERSATION_ITEMS_RETRIEVE_PROVIDER_ENDPOINT = "conversations.items.retrieve"
+CONVERSATION_ITEMS_DELETE_PROVIDER_ENDPOINT = "conversations.items.delete"
 _RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS = frozenset({"after", "include", "include[]", "limit", "order"})
 _RESPONSES_INPUT_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
+_CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
+    {"after", "before", "include", "include[]", "limit", "order"}
+)
+_CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -180,6 +197,36 @@ def _build_safe_responses_compact_upstream_body(
     except (TypeError, ValueError) as exc:
         raise OpenAICompatibleError(
             "Request contains fields that are not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
+
+
+def _build_safe_conversation_items_create_upstream_body(
+    effective_body: dict[str, object],
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_conversation_items_create_upstream_request(effective_body)
+        return build_conversation_items_create_upstream_body(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Conversation item create payload is not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
+
+
+def _build_safe_conversation_items_query_params(
+    query_params: dict[str, object],
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_conversation_items_query_request(query_params)
+        return build_conversation_items_query_params(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Conversation items query is not approved for upstream forwarding.",
             status_code=400,
             error_type="invalid_request_error",
             code="upstream_payload_not_approved",
@@ -835,6 +882,186 @@ async def handle_conversation_delete(
         raise openai_error_from_provider_error(exc) from exc
 
     await _mark_conversation_reference_deleted(reference_id=reference.id, request=request)
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_item_create(
+    *,
+    conversation_id: str,
+    payload: dict[str, object] | None,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    reference = await _owned_conversation_reference_or_404(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    try:
+        effective_body = validate_conversation_items_create_body(payload, settings=settings)
+    except RequestPolicyError as exc:
+        raise openai_error_from_request_policy_error(exc) from exc
+    upstream_body = _build_safe_conversation_items_create_upstream_body(effective_body)
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATION_ITEMS_CREATE_PROVIDER_ENDPOINT,
+            body=upstream_body,
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATION_ITEMS_CREATE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.create_conversation_items(
+                provider_request,
+                conversation_id=reference.provider_conversation_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_items_list(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    reference = await _owned_conversation_reference_or_404(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    query_params = _validate_conversation_items_query(request, allow_pagination=True)
+    upstream_query = _build_safe_conversation_items_query_params(query_params)
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATION_ITEMS_LIST_PROVIDER_ENDPOINT,
+            body=upstream_query,
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATION_ITEMS_LIST_PROVIDER_ENDPOINT,
+            call=lambda: adapter.list_conversation_items(
+                provider_request,
+                conversation_id=reference.provider_conversation_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_item_retrieve(
+    *,
+    conversation_id: str,
+    item_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    reference = await _owned_conversation_reference_or_404(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    safe_item_id = _validate_conversation_item_id(item_id)
+    query_params = _validate_conversation_items_query(request, allow_pagination=False)
+    upstream_query = _build_safe_conversation_items_query_params(query_params)
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATION_ITEMS_RETRIEVE_PROVIDER_ENDPOINT,
+            body=upstream_query,
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATION_ITEMS_RETRIEVE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.retrieve_conversation_item(
+                provider_request,
+                conversation_id=reference.provider_conversation_id,
+                item_id=safe_item_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_item_delete(
+    *,
+    conversation_id: str,
+    item_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    reference = await _owned_conversation_reference_or_404(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    safe_item_id = _validate_conversation_item_id(item_id)
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATION_ITEMS_DELETE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATION_ITEMS_DELETE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.delete_conversation_item(
+                provider_request,
+                conversation_id=reference.provider_conversation_id,
+                item_id=safe_item_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
     return JSONResponse(
         status_code=provider_response.status_code,
         content=dict(provider_response.json_body),
@@ -1540,6 +1767,23 @@ async def _get_owned_active_conversation_reference(
         await session_iterator.aclose()
 
 
+async def _owned_conversation_reference_or_404(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    request: Request | None,
+) -> ConversationReference:
+    safe_conversation_id = _validate_conversation_id(conversation_id)
+    reference = await _get_owned_active_conversation_reference(
+        conversation_id=safe_conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _conversation_not_found_error()
+    return reference
+
+
 async def _verify_conversation_reference(
     *,
     conversation_id: str,
@@ -1804,12 +2048,100 @@ def _validate_response_input_items_query(request: Request | None) -> dict[str, o
     return query
 
 
+def _validate_conversation_items_query(
+    request: Request | None,
+    *,
+    allow_pagination: bool,
+) -> dict[str, object]:
+    if request is None:
+        return {}
+    params = request.query_params
+    allowed_keys = (
+        _CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS
+        if allow_pagination
+        else frozenset({"include", "include[]"})
+    )
+    unknown_keys = set(params.keys()) - allowed_keys
+    if unknown_keys:
+        raise _conversation_items_query_error(
+            "Unsupported Conversation items query parameter.",
+            param="query",
+        )
+
+    query: dict[str, object] = {}
+    if allow_pagination:
+        after = params.get("after")
+        if after is not None:
+            query["after"] = _validate_items_cursor(after, param="after")
+
+        before = params.get("before")
+        if before is not None:
+            query["before"] = _validate_items_cursor(before, param="before")
+
+        limit = params.get("limit")
+        if limit is not None:
+            try:
+                limit_value = int(limit)
+            except ValueError as exc:
+                raise _conversation_items_query_error(
+                    "Invalid Conversation items limit.",
+                    param="limit",
+                ) from exc
+            if str(limit_value) != limit or limit_value < 1 or limit_value > 100:
+                raise _conversation_items_query_error(
+                    "Invalid Conversation items limit.",
+                    param="limit",
+                )
+            query["limit"] = limit_value
+
+        order = params.get("order")
+        if order is not None:
+            if order not in {"asc", "desc"}:
+                raise _conversation_items_query_error(
+                    "Invalid Conversation items order.",
+                    param="order",
+                )
+            query["order"] = order
+
+    include_values = [*params.getlist("include"), *params.getlist("include[]")]
+    if include_values:
+        cleaned_include: list[str] = []
+        for include in include_values:
+            if include not in _CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES:
+                raise _conversation_items_query_error(
+                    "Unsupported Conversation items include value.",
+                    param="include",
+                )
+            cleaned_include.append(include)
+        query["include"] = cleaned_include
+    return query
+
+
+def _validate_items_cursor(value: str, *, param: str) -> str:
+    if not value or len(value.encode("utf-8")) > 256 or any(ord(char) < 32 for char in value):
+        raise _conversation_items_query_error(
+            "Invalid Conversation items cursor.",
+            param=param,
+        )
+    return value
+
+
 def _input_items_query_error(message: str, *, param: str) -> OpenAICompatibleError:
     return OpenAICompatibleError(
         message,
         status_code=400,
         error_type="invalid_request_error",
         code="invalid_response_input_items_query",
+        param=param,
+    )
+
+
+def _conversation_items_query_error(message: str, *, param: str) -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        message,
+        status_code=400,
+        error_type="invalid_request_error",
+        code="invalid_conversation_items_query",
         param=param,
     )
 
@@ -1936,6 +2268,17 @@ def _validate_conversation_id(conversation_id: str) -> str:
     ):
         raise _conversation_not_found_error()
     return conversation_id
+
+
+def _validate_conversation_item_id(item_id: str) -> str:
+    if not item_id or len(item_id.encode("utf-8")) > 512 or any(ord(char) < 32 for char in item_id):
+        raise OpenAICompatibleError(
+            "Conversation item not found.",
+            status_code=404,
+            error_type="invalid_request_error",
+            code="conversation_item_not_found",
+        )
+    return item_id
 
 
 def _response_not_found_error() -> OpenAICompatibleError:

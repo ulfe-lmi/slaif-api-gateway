@@ -1501,6 +1501,351 @@ def test_conversation_delete_owned_reference_marks_deleted_without_generation_ac
     assert quota_calls == []
 
 
+def test_conversation_items_require_explicit_endpoint_permission(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("/v1/conversations",)),
+    )
+    client = TestClient(app)
+
+    assert client.post("/v1/conversations/conv_owned/items", json={"items": []}).status_code == 403
+    assert client.get("/v1/conversations/conv_owned/items").status_code == 403
+    assert client.get("/v1/conversations/conv_owned/items/msg_1").status_code == 403
+    assert client.delete("/v1/conversations/conv_owned/items/msg_1").status_code == 403
+
+
+def test_conversation_item_create_owned_reference_proxies_text_items_without_generation_accounting(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key(
+        allowed_endpoints=("POST /v1/conversations/{conversation_id}/items",)
+    )
+    _wire_auth_and_db(monkeypatch, app, auth)
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[dict[str, object]] = []
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = request
+        assert authenticated_key.gateway_key_id == auth.gateway_key_id
+        assert conversation_id == "conv_owned"
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_conversation_id="conv_provider",
+            route_id=None,
+        )
+
+    async def _fake_route_for_reference(reference, *, request):
+        _ = (reference, request)
+        return SimpleNamespace(provider="openai")
+
+    class _FakeAdapter:
+        async def create_conversation_items(self, request, *, conversation_id):
+            assert conversation_id == "conv_provider"
+            assert request.endpoint == "conversations.items.create"
+            provider_calls.append(request.body)
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model="",
+                status_code=200,
+                json_body={"object": "list", "data": [{"id": "msg_1", "type": "message"}]},
+            )
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "_provider_route_for_conversation_reference", _fake_route_for_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+
+    response = TestClient(app).post(
+        "/v1/conversations/conv_owned/items",
+        json={
+            "items": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["object"] == "list"
+    assert provider_calls == [
+        {
+            "items": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                }
+            ]
+        }
+    ]
+    assert pricing_calls == []
+    assert quota_calls == []
+
+
+def test_conversation_item_create_rejects_tool_and_media_payloads(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=("POST /v1/conversations/{conversation_id}/items",)
+        ),
+    )
+    import slaif_gateway.services.responses_gateway as main_module
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = (conversation_id, authenticated_key, request)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_conversation_id="conv_provider",
+            route_id=None,
+        )
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    client = TestClient(app)
+
+    for item in (
+        {"type": "function_call_output", "call_id": "call_1", "output": "result"},
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": "https://example.test/image.png"}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_file", "file_url": "https://example.test/file.pdf"}],
+        },
+    ):
+        response = client.post("/v1/conversations/conv_owned/items", json={"items": [item]})
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] in {
+            "conversation_item_create_item_not_supported",
+            "conversation_item_create_content_not_supported",
+        }
+
+
+def test_conversation_items_list_retrieve_delete_owned_reference_proxy_without_generation_accounting(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    auth = _fake_authenticated_gateway_key(
+        allowed_endpoints=(
+            "GET /v1/conversations/{conversation_id}/items",
+            "GET /v1/conversations/{conversation_id}/items/{item_id}",
+            "DELETE /v1/conversations/{conversation_id}/items/{item_id}",
+        )
+    )
+    _wire_auth_and_db(monkeypatch, app, auth)
+    pricing_calls: list[str] = []
+    quota_calls: list[str] = []
+    provider_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = request
+        assert authenticated_key.gateway_key_id == auth.gateway_key_id
+        assert conversation_id == "conv_owned"
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_conversation_id="conv_provider",
+            route_id=None,
+        )
+
+    async def _fake_route_for_reference(reference, *, request):
+        _ = (reference, request)
+        return SimpleNamespace(provider="openai")
+
+    class _FakeAdapter:
+        async def list_conversation_items(self, request, *, conversation_id):
+            assert conversation_id == "conv_provider"
+            assert request.endpoint == "conversations.items.list"
+            provider_calls.append(("list", request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model="",
+                status_code=200,
+                json_body={"object": "list", "data": [], "has_more": False},
+            )
+
+        async def retrieve_conversation_item(self, request, *, conversation_id, item_id):
+            assert conversation_id == "conv_provider"
+            assert item_id == "msg_1"
+            assert request.endpoint == "conversations.items.retrieve"
+            provider_calls.append(("retrieve", request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model="",
+                status_code=200,
+                json_body={"id": item_id, "type": "message", "role": "user"},
+            )
+
+        async def delete_conversation_item(self, request, *, conversation_id, item_id):
+            assert conversation_id == "conv_provider"
+            assert item_id == "msg_1"
+            assert request.endpoint == "conversations.items.delete"
+            provider_calls.append(("delete", request.body))
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model="",
+                status_code=200,
+                json_body={"id": "conv_provider", "object": "conversation"},
+            )
+
+    async def _fake_estimate_chat_completion_cost(self, **kwargs):
+        _ = self
+        pricing_calls.append(str(kwargs))
+
+    async def _fake_reserve(self, **kwargs):
+        _ = self
+        quota_calls.append(str(kwargs))
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "_provider_route_for_conversation_reference", _fake_route_for_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
+
+    client = TestClient(app)
+    listed = client.get(
+        "/v1/conversations/conv_owned/items"
+        "?after=msg_0&before=msg_9&limit=10&order=asc&include=message.input_image.image_url"
+    )
+    retrieved = client.get(
+        "/v1/conversations/conv_owned/items/msg_1?include=message.input_image.image_url"
+    )
+    deleted = client.delete("/v1/conversations/conv_owned/items/msg_1")
+
+    assert listed.status_code == 200
+    assert retrieved.status_code == 200
+    assert deleted.status_code == 200
+    assert provider_calls == [
+        (
+            "list",
+            {
+                "after": "msg_0",
+                "before": "msg_9",
+                "include": ["message.input_image.image_url"],
+                "limit": 10,
+                "order": "asc",
+            },
+        ),
+        ("retrieve", {"include": ["message.input_image.image_url"]}),
+        ("delete", {}),
+    ]
+    assert pricing_calls == []
+    assert quota_calls == []
+
+
+def test_conversation_items_missing_or_non_owned_reference_returns_404_before_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=(
+                "GET /v1/conversations/{conversation_id}/items",
+                "GET /v1/conversations/{conversation_id}/items/{item_id}",
+                "DELETE /v1/conversations/{conversation_id}/items/{item_id}",
+            )
+        ),
+    )
+    provider_calls: list[str] = []
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = (conversation_id, authenticated_key, request)
+        return None
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+    client = TestClient(app)
+
+    for response in (
+        client.get("/v1/conversations/conv_missing/items"),
+        client.get("/v1/conversations/conv_missing/items/msg_1"),
+        client.delete("/v1/conversations/conv_missing/items/msg_1"),
+    ):
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "conversation_not_found"
+    assert provider_calls == []
+
+
+def test_conversation_items_query_params_are_validated(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            allowed_endpoints=("GET /v1/conversations/{conversation_id}/items",)
+        ),
+    )
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = (conversation_id, authenticated_key, request)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_conversation_id="conv_provider",
+            route_id=None,
+        )
+
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    client = TestClient(app)
+
+    for query in (
+        "?limit=0",
+        "?limit=101",
+        "?order=newest",
+        "?after=" + ("x" * 257),
+        "?unknown=1",
+        "?include=web_search_call.action.sources",
+    ):
+        response = client.get(f"/v1/conversations/conv_owned/items{query}")
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_conversation_items_query"
+
+
 def test_response_delete_owned_reference_marks_deleted_without_generation_accounting(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 
