@@ -18,7 +18,8 @@ active, same-key provider response references after provider/route compatibility
 checks. Input-item listing is supported only for owned locally recorded
 provider response references and is proxied without local input-item content
 storage. Conversations are supported as owned provider-side state references
-through `POST /v1/conversations`, owned retrieve/delete, owned conversation
+through `POST /v1/conversations`, owned metadata-only update, owned
+retrieve/delete, owned conversation
 item create/list/retrieve/delete proxying, and non-streaming
 `POST /v1/responses` with a locally recorded owned `conversation` ID; SLAIF
 stores only safe conversation reference metadata and never stores conversation
@@ -29,7 +30,7 @@ provider-reported count endpoint for the same local input subset.
 text-focused compaction endpoint with explicit endpoint permission, route
 capability, endpoint-specific pricing, quota reservation, and provider-usage
 finalization. These slices have no hosted tools, MCP/connectors, background
-mode, conversation update, `/v1/files` lifecycle,
+mode, `/v1/files` lifecycle,
 audio input, audio output, image generation, file search,
 cancel/response-list routes, or multimodal output. SLAIF does not store
 compact input, output, or encrypted compaction content.
@@ -45,6 +46,7 @@ The first implemented endpoint is:
 - `DELETE /v1/responses/{response_id}`
 - `GET /v1/responses/{response_id}/input_items`
 - `POST /v1/conversations`
+- `POST /v1/conversations/{conversation_id}`
 - `GET /v1/conversations/{conversation_id}`
 - `DELETE /v1/conversations/{conversation_id}`
 - `POST /v1/conversations/{conversation_id}/items`
@@ -302,7 +304,7 @@ Retrieve/delete/input-item listing are control-plane proxy calls: they do not
 reserve output quota or create normal generation usage ledger rows. Stored
 create and `POST /v1/responses` with `conversation` remain ordinary generation
 requests and use the existing reservation/finalization accounting path.
-Conversation create/retrieve/delete and conversation item create/list/retrieve/delete
+Conversation create/update/retrieve/delete and conversation item create/list/retrieve/delete
 are control-plane proxy calls and do not reserve output quota or create normal
 generation usage ledger rows. If a
 provider returns no response ID for `store=true`, SLAIF fails safely instead of
@@ -312,7 +314,6 @@ conversation ID, SLAIF fails safely instead of claiming owned state.
 Still unsupported:
 
 - `background=true`
-- conversation update
 - MCP/connectors
 - streaming `previous_response_id`
 - streaming `conversation`
@@ -624,7 +625,7 @@ The local/stored Responses foundation is implemented with:
 - endpoint allowlist and pipeline-ordering tests;
 - PostgreSQL-backed mocked official OpenAI Python client E2E coverage.
 
-Broader hosted-tool, background, conversation update, and streaming
+Broader hosted-tool, background, and streaming
 stateful Responses support remains future work until these are present and
 green:
 

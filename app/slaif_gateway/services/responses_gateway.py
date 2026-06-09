@@ -81,6 +81,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_image_input_requested,
     responses_text_format_type,
     validate_conversation_items_create_body,
+    validate_conversation_update_body,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
@@ -88,6 +89,7 @@ from slaif_gateway.services.responses_route_capabilities import (
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 from slaif_gateway.services.upstream_request_contracts import (
+    normalize_conversation_update_upstream_request,
     normalize_conversation_items_create_upstream_request,
     normalize_conversation_items_query_request,
     normalize_responses_compact_upstream_request,
@@ -95,6 +97,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_responses_upstream_request,
 )
 from slaif_gateway.services.upstream_payloads import (
+    build_conversation_update_upstream_body,
     build_conversation_items_create_upstream_body,
     build_conversation_items_query_params,
     build_responses_compact_upstream_body,
@@ -116,9 +119,11 @@ RESPONSES_RETRIEVE_PROVIDER_ENDPOINT = "responses.retrieve"
 RESPONSES_DELETE_PROVIDER_ENDPOINT = "responses.delete"
 RESPONSES_INPUT_ITEMS_PROVIDER_ENDPOINT = "responses.input_items"
 CONVERSATIONS_CREATE_ENDPOINT = "/v1/conversations"
+CONVERSATIONS_UPDATE_ENDPOINT = "POST /v1/conversations/{conversation_id}"
 CONVERSATIONS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}"
 CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
 CONVERSATIONS_CREATE_PROVIDER_ENDPOINT = "conversations.create"
+CONVERSATIONS_UPDATE_PROVIDER_ENDPOINT = "conversations.update"
 CONVERSATIONS_RETRIEVE_PROVIDER_ENDPOINT = "conversations.retrieve"
 CONVERSATIONS_DELETE_PROVIDER_ENDPOINT = "conversations.delete"
 CONVERSATION_ITEMS_CREATE_ENDPOINT = "POST /v1/conversations/{conversation_id}/items"
@@ -212,6 +217,21 @@ def _build_safe_conversation_items_create_upstream_body(
     except (TypeError, ValueError) as exc:
         raise OpenAICompatibleError(
             "Conversation item create payload is not approved for upstream forwarding.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="upstream_payload_not_approved",
+        ) from exc
+
+
+def _build_safe_conversation_update_upstream_body(
+    effective_body: dict[str, object],
+) -> dict[str, object]:
+    try:
+        normalized_request = normalize_conversation_update_upstream_request(effective_body)
+        return build_conversation_update_upstream_body(normalized_request)
+    except (TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "Conversation update payload is not approved for upstream forwarding.",
             status_code=400,
             error_type="invalid_request_error",
             code="upstream_payload_not_approved",
@@ -793,6 +813,53 @@ async def handle_conversation_create(
         provider_response=provider_response,
         request=request,
     )
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_update(
+    *,
+    conversation_id: str,
+    payload: dict[str, object] | None,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    reference = await _owned_conversation_reference_or_404(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    try:
+        effective_body = validate_conversation_update_body(payload)
+    except RequestPolicyError as exc:
+        raise openai_error_from_request_policy_error(exc) from exc
+    upstream_body = _build_safe_conversation_update_upstream_body(effective_body)
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATIONS_UPDATE_PROVIDER_ENDPOINT,
+            body=upstream_body,
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATIONS_UPDATE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.update_conversation(
+                provider_request,
+                conversation_id=reference.provider_conversation_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
     return JSONResponse(
         status_code=provider_response.status_code,
         content=dict(provider_response.json_body),

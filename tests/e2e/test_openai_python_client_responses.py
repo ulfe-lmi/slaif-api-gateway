@@ -27,6 +27,7 @@ RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
 CONVERSATIONS_CREATE_ENDPOINT = "POST /v1/conversations"
+CONVERSATIONS_UPDATE_ENDPOINT = "POST /v1/conversations/{conversation_id}"
 CONVERSATIONS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}"
 CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
 CONVERSATION_ITEMS_CREATE_ENDPOINT = "POST /v1/conversations/{conversation_id}/items"
@@ -878,6 +879,78 @@ def test_openai_python_client_responses_conversations_e2e(
     assert state.gateway_key.requests_used_total == 1
     assert state.gateway_key.tokens_used_total == 18
     assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
+
+
+@pytest.mark.e2e
+def test_openai_python_client_conversation_update_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            allowed_endpoints=[CONVERSATIONS_CREATE_ENDPOINT, CONVERSATIONS_UPDATE_ENDPOINT],
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    update_payload = {
+        "id": "conv_update_e2e",
+        "object": "conversation",
+        "metadata": {"course": "slaif"},
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            conversation_create_route = router.post(
+                "https://api.openai.com/v1/conversations"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"id": "conv_update_e2e", "object": "conversation"},
+                    headers={"x-request-id": "upstream-openai-conversation-create-update-e2e"},
+                )
+            )
+            conversation_update_route = router.post(
+                "https://api.openai.com/v1/conversations/conv_update_e2e"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=update_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-update-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            created_conversation = client.conversations.create()
+            updated_conversation = client.conversations.update(
+                "conv_update_e2e",
+                metadata={"course": "slaif"},
+            )
+
+    assert created_conversation.id == "conv_update_e2e"
+    assert updated_conversation.id == "conv_update_e2e"
+    assert updated_conversation.metadata == {"course": "slaif"}
+    assert conversation_create_route.called
+    assert conversation_update_route.called
+    assert conversation_update_route.calls[0].request.headers["authorization"] == (
+        f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+    )
+    assert created.plaintext_key not in conversation_update_route.calls[0].request.headers["authorization"]
+    assert json.loads(conversation_update_route.calls[0].request.content) == {
+        "metadata": {"course": "slaif"}
+    }
 
 
 @pytest.mark.e2e

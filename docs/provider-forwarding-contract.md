@@ -120,7 +120,8 @@ non-streaming stored create when explicitly enabled.
 `POST /v1/responses/input_tokens` has a separate provider-reported count
 forwarding path for the same local input subset. `GET` and
 `DELETE /v1/responses/{response_id}` are control-plane proxy calls after local
-ownership checks. `POST`, `GET`, and `DELETE /v1/conversations` plus
+ownership checks. `POST /v1/conversations`, `POST`/`GET`/`DELETE
+/v1/conversations/{conversation_id}`, plus
 `POST`/`GET`/`DELETE /v1/conversations/{conversation_id}/items` are
 control-plane proxy calls that use only safe provider conversation reference
 metadata for ownership/routing; `POST /v1/responses` may forward a conversation
@@ -221,9 +222,11 @@ Responses-specific rules for the current foundation:
   the route advertises `capabilities.responses.conversations=true`, and
   provider metadata is compatible. Unknown, non-owned, deleted, or
   provider-mismatched conversation IDs are not proxied upstream. Conversation
-  create/retrieve/delete provider requests are built from endpoint-specific
-  normalized data and the stored provider conversation ID, never raw unchecked
-  client IDs;
+  create/update/retrieve/delete provider requests are built from
+  endpoint-specific normalized data and the stored provider conversation ID,
+  never raw unchecked client IDs. Conversation update accepts metadata only,
+  validates it conservatively, and does not store or log metadata values
+  locally;
 - `max_output_tokens` is defaulted or capped before forwarding;
 - `/v1/responses/input_tokens` is routed and forwarded separately. Its
   canonical upstream body may include `input`, `instructions`, `text`, local
@@ -268,7 +271,7 @@ Responses-specific rules for the current foundation:
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;
-- `background`, conversation update, streaming conversation, and
+- `background`, streaming conversation, and
   streaming `previous_response_id` are rejected before provider forwarding;
 - response cancel and response listing require explicit provider response
   ownership mapping before they can be implemented;

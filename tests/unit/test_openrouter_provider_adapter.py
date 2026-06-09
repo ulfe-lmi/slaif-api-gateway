@@ -98,6 +98,8 @@ def _conversation_request(endpoint: str, body: dict | None = None) -> ProviderRe
         extra_headers={
             "Authorization": "Bearer client-key",
             "X-CSRF-Token": "csrf",
+            "X-Admin-Session": "session",
+            "X-Gateway-Internal": "internal",
             "Accept": "application/json",
         },
     )
@@ -533,6 +535,36 @@ async def test_openrouter_conversation_retrieve_delete_use_provider_auth_and_exa
     assert deleted.upstream_request_id == "req-openrouter-conversation-delete"
     assert retrieved.json_body["object"] == "conversation"
     assert deleted.json_body["object"] == "conversation.deleted"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_conversation_update_uses_provider_auth_exact_path_and_metadata_only_body(
+    respx_mock,
+) -> None:
+    route = respx_mock.post("https://openrouter.ai/api/v1/conversations/conv_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "conv_123", "object": "conversation", "metadata": {"course": "slaif"}},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-conversation-update"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+
+    response = await adapter.update_conversation(
+        _conversation_request("conversations.update", {"metadata": {"course": "slaif"}}),
+        conversation_id="conv_123",
+    )
+
+    sent_request = route.calls[0].request
+    assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "x-csrf-token" not in sent_request.headers
+    assert "x-admin-session" not in sent_request.headers
+    assert "x-gateway-internal" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_request.headers["x-request-id"] == "gw-conversation-req"
+    assert json.loads(sent_request.content) == {"metadata": {"course": "slaif"}}
+    assert response.upstream_request_id == "req-openrouter-conversation-update"
 
 
 @pytest.mark.asyncio

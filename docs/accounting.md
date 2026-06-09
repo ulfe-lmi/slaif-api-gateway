@@ -22,9 +22,9 @@ Core invariants:
   hard quota or accounting store.
 - Cost-bearing provider calls reserve quota in PostgreSQL before forwarding.
 - Ownership-checked Responses and Conversations resource/control calls
-  (retrieve/delete/input-item listing and Conversation item
-  create/list/retrieve/delete) do not reserve generation quota or write normal
-  generation usage ledger rows.
+  (retrieve/delete/input-item listing, Conversation update, and Conversation
+  item create/list/retrieve/delete) do not reserve generation quota or write
+  normal generation usage ledger rows.
 - Successful accounting finalizes from provider usage/cost where available.
 - Final provider usage/cost wins over admission estimates and provisional
   metadata.

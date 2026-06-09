@@ -9,6 +9,7 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     validate_conversation_items_create_body,
+    validate_conversation_update_body,
 )
 
 
@@ -1759,6 +1760,57 @@ def test_conversation_item_create_accepts_text_message_items() -> None:
             }
         ]
     }
+
+
+def test_conversation_update_accepts_bounded_metadata_object() -> None:
+    result = validate_conversation_update_body(
+        {"metadata": {"course": "slaif", "cohort": "2026-summer"}}
+    )
+
+    assert result == {"metadata": {"course": "slaif", "cohort": "2026-summer"}}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"metadata": "nope"},
+        {"metadata": {"nested": {"x": "y"}}},
+        {"metadata": {"array": ["x"]}},
+        {"metadata": {1: "value"}},
+        {"metadata": {"": "value"}},
+        {"metadata": {"authorization": "Bearer sk-secret"}},
+        {"metadata": {"connector_id": "conn_123"}},
+        {"metadata": {"server_url": "https://user:pass@example.test/path"}},
+        {"metadata": {"tool_name": "lookup"}},
+        {"metadata": {"safe": "Bearer sk-secret"}},
+        {"metadata": {"safe": "https://user:pass@example.test/path"}},
+        {"metadata": {"safe": "ok"}, "extra": "field"},
+    ],
+)
+def test_conversation_update_rejects_invalid_or_unsupported_metadata(payload: object) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        validate_conversation_update_body(payload)  # type: ignore[arg-type]
+
+    assert exc_info.value.error_code in {
+        "conversation_update_body_invalid",
+        "conversation_update_field_not_supported",
+        "conversation_update_metadata_invalid",
+        "conversation_update_metadata_not_supported",
+    }
+    assert "secret" not in exc_info.value.safe_message.lower()
+
+
+def test_conversation_update_rejects_too_many_pairs_and_overlong_key_value() -> None:
+    too_many = {"metadata": {f"k{i}": "v" for i in range(17)}}
+    overlong_key = {"metadata": {"k" * 65: "value"}}
+    overlong_value = {"metadata": {"safe": "v" * 513}}
+
+    for payload in (too_many, overlong_key, overlong_value):
+        with pytest.raises(RequestPolicyError) as exc_info:
+            validate_conversation_update_body(payload)
+        assert exc_info.value.error_code == "conversation_update_metadata_invalid"
 
 
 @pytest.mark.parametrize(
