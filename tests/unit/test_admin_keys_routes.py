@@ -342,6 +342,8 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     assert "Available enabled providers" in response.text
     assert "Available implemented endpoints" in response.text
     assert "Available route-backed model candidates" in response.text
+    assert "Selected allowed providers" in response.text
+    assert "The selected list stores requested model tokens, not route IDs." in response.text
     assert 'name="allowed_providers"' in response.text
     assert 'name="allow_all_providers" value="true"' in response.text
     assert 'name="allowed_models"' in response.text
@@ -349,6 +351,7 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     assert 'name="allow_all_models" value="true"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
     assert "hidden from /v1/models" in response.text
+    assert "Advanced manual policy strings (fallback)" in response.text
 
 
 def test_admin_key_policy_update_rejects_model_backed_endpoint_without_models(monkeypatch) -> None:

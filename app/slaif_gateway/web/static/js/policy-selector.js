@@ -44,8 +44,37 @@
         toggle: surface.querySelector(`[data-policy-toggle="${dimension}"]`),
         addButton: surface.querySelector(`[data-policy-add="${dimension}"]`),
         removeButton: surface.querySelector(`[data-policy-remove="${dimension}"]`),
+        emptyAvailable: surface.querySelector(`[data-policy-empty="${dimension}-available"]`),
+        emptySelected: surface.querySelector(`[data-policy-empty="${dimension}-selected"]`),
+        emptySelectedAway: surface.querySelector(`[data-policy-empty="${dimension}-selected-away"]`),
       };
     }
+    groups.models.emptyNone = surface.querySelector('[data-policy-empty="models-none"]');
+    groups.models.emptyFiltered = surface.querySelector('[data-policy-empty="models-filtered"]');
+
+    const choiceLabels = {
+      providers: new Map(),
+      endpoints: new Map(),
+      models: new Map(),
+    };
+
+    const registerChoiceLabels = (dimension) => {
+      for (const option of groups[dimension].available?.querySelectorAll("option") || []) {
+        if (dimension === "models") {
+          const token = option.dataset.modelToken || "";
+          if (token && !choiceLabels.models.has(token)) {
+            choiceLabels.models.set(token, `${token} | allowed model token`);
+          }
+        } else if (option.value) {
+          choiceLabels[dimension].set(option.value, option.textContent || option.value);
+        }
+      }
+      for (const option of groups[dimension].selected?.querySelectorAll("option") || []) {
+        if (option.value && !choiceLabels[dimension].has(option.value)) {
+          choiceLabels[dimension].set(option.value, option.textContent || option.value);
+        }
+      }
+    };
 
     const selectedValues = (dimension) =>
       Array.from(groups[dimension].selected?.options || []).map((option) => option.value);
@@ -59,7 +88,7 @@
       for (const value of uniqueValues(values)) {
         const option = document.createElement("option");
         option.value = value;
-        option.textContent = value;
+        option.textContent = choiceLabels[dimension].get(value) || value;
         selected.appendChild(option);
       }
     };
@@ -147,6 +176,83 @@
       }
     };
 
+    const visibleOptionCount = (select) =>
+      Array.from(select?.querySelectorAll("option") || []).filter((option) => !option.hidden).length;
+
+    const setHidden = (element, hidden) => {
+      if (!element) {
+        return;
+      }
+      element.hidden = hidden;
+    };
+
+    const refreshEmptyStates = () => {
+      for (const dimension of ["providers", "endpoints"]) {
+        if (groups[dimension].toggle?.checked) {
+          setHidden(groups[dimension].emptyAvailable, true);
+          setHidden(groups[dimension].emptySelectedAway, true);
+          setHidden(groups[dimension].emptySelected, true);
+          continue;
+        }
+        const availableVisible = visibleOptionCount(groups[dimension].available);
+        const selectedCount = selectedValues(dimension).length;
+        const totalAvailableChoices = Array.from(
+          groups[dimension].available?.querySelectorAll("option") || []
+        ).length;
+        const hasNoChoices = totalAvailableChoices === 0;
+        const allAlreadySelected =
+          totalAvailableChoices > 0 && availableVisible === 0 && selectedCount > 0;
+        setHidden(groups[dimension].emptyAvailable, !hasNoChoices);
+        setHidden(
+          groups[dimension].emptySelectedAway,
+          !allAlreadySelected
+        );
+        setHidden(groups[dimension].emptySelected, selectedCount > 0);
+      }
+
+      const modelsVisible = visibleOptionCount(groups.models.available);
+      const modelsSelected = selectedValues("models").length;
+      const totalModelOptions = Array.from(
+        groups.models.available?.querySelectorAll("option") || []
+      ).length;
+      if (groups.models.toggle?.checked) {
+        setHidden(groups.models.emptySelected, true);
+        setHidden(groups.models.emptyNone, true);
+        setHidden(groups.models.emptyFiltered, true);
+        setHidden(groups.models.emptySelectedAway, true);
+        return;
+      }
+      setHidden(groups.models.emptySelected, modelsSelected > 0);
+      setHidden(groups.models.emptyNone, totalModelOptions > 0);
+      setHidden(
+        groups.models.emptyFiltered,
+        !(totalModelOptions > 0 && modelsVisible === 0 && modelsSelected === 0)
+      );
+      setHidden(
+        groups.models.emptySelectedAway,
+        !(totalModelOptions > 0 && modelsVisible === 0 && modelsSelected > 0)
+      );
+      setHidden(
+        groups.models.emptyAvailable,
+        !(totalModelOptions > 0 && modelsVisible === 0)
+      );
+    };
+
+    const refreshButtonStates = () => {
+      for (const dimension of dimensions) {
+        if (groups[dimension].addButton) {
+          groups[dimension].addButton.disabled =
+            groups[dimension].toggle?.checked ||
+            !Array.from(groups[dimension].available?.selectedOptions || []).length;
+        }
+        if (groups[dimension].removeButton) {
+          groups[dimension].removeButton.disabled =
+            groups[dimension].toggle?.checked ||
+            !Array.from(groups[dimension].selected?.selectedOptions || []).length;
+        }
+      }
+    };
+
     const syncGroupDisabled = (dimension) => {
       const group = groups[dimension];
       if (!group.container || !group.toggle) {
@@ -169,6 +275,8 @@
       for (const dimension of dimensions) {
         syncGroupDisabled(dimension);
       }
+      refreshEmptyStates();
+      refreshButtonStates();
     };
 
     const addSelected = (dimension) => {
@@ -202,6 +310,7 @@
     };
 
     for (const dimension of dimensions) {
+      registerChoiceLabels(dimension);
       syncSelectedFromManual(dimension);
       groups[dimension].manual?.addEventListener("input", () => {
         syncSelectedFromManual(dimension);
@@ -210,6 +319,7 @@
       groups[dimension].addButton?.addEventListener("click", () => addSelected(dimension));
       groups[dimension].removeButton?.addEventListener("click", () => removeSelected(dimension));
       groups[dimension].toggle?.addEventListener("change", refreshAll);
+      groups[dimension].available?.addEventListener("change", refreshButtonStates);
     }
 
     groups.providers.selected?.addEventListener("change", refreshAll);

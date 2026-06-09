@@ -47,11 +47,20 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "Available enabled providers" in html
     assert "Available implemented endpoints" in html
     assert "Available route-backed model candidates" in html
+    assert "Choices come from enabled local provider config and enabled local route metadata only" in html
+    assert "Provider allow-lists, endpoint allow-lists, and model allow-lists are distinct policy dimensions." in html
+    assert "catalog-only and behaves differently from model-backed generation endpoints." in html
+    assert "Add selected -&gt;" in html
+    assert "&lt;- Remove selected" in html
+    assert "No enabled providers are available. Add or enable a provider config under" in html
+    assert "No enabled route-backed models are available. Add or enable model routes under" in html
+    assert "No matching route-backed models for the current provider/endpoint selection." in html
     assert 'name="allowed_providers"' in html
     assert 'name="allow_all_providers" value="true" checked' in html
     assert 'name="allowed_models"' in html
     assert 'name="allowed_endpoints"' in html
-    assert "Advanced manual policy strings" in html
+    assert "Advanced manual policy strings (fallback)" in html
+    assert "This is a fallback for no-JavaScript or direct manual edits." in html
     assert "Trusted Calibration Key" in html
     assert 'name="trusted_calibration" value="true"' in html
     assert 'name="confirm_trusted_calibration" value="true"' in html
@@ -126,6 +135,7 @@ def test_chat_live_burn_static_controls_are_local_and_scoped() -> None:
     assert "data-policy-selector-surface" in policy_js
     assert "data-policy-toggle" in policy_js
     assert "data-policy-manual" in policy_js
+    assert "data-policy-empty" in policy_js
     assert "fetch(" not in policy_js
     assert "axios" not in policy_js.lower()
     assert "React" not in policy_js
@@ -133,6 +143,8 @@ def test_chat_live_burn_static_controls_are_local_and_scoped() -> None:
     assert "https://" not in policy_js
     assert ".live-burn-fields-disabled" in css
     assert ".policy-selector-grid" in css
+    assert ".policy-selector-pane" in css
+    assert ".policy-selector-empty" in css
 
 
 def test_create_result_template_shows_plaintext_once_without_email_action(monkeypatch) -> None:

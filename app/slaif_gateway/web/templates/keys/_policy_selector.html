@@ -1,40 +1,60 @@
 <div class="policy-selector-surface" data-policy-selector-surface>
-  <p class="muted">
-    Choices come from enabled local provider configs and enabled local route metadata only. The gateway does not fetch upstream provider catalogs for this UI.
-  </p>
+  <div class="policy-selector-intro">
+    <p class="muted">
+      Choices come from enabled local provider config and enabled local route metadata only. The gateway does not fetch upstream provider catalogs for this UI.
+    </p>
+    <p class="muted small">
+      Provider allow-lists, endpoint allow-lists, and model allow-lists are distinct policy dimensions. <code>{{ models_endpoint }}</code> is catalog-only and behaves differently from model-backed generation endpoints.
+    </p>
+  </div>
 
   <section class="policy-selector-section" aria-labelledby="{{ selector_id_prefix }}-providers-heading">
     <div class="policy-selector-heading">
       <h3 id="{{ selector_id_prefix }}-providers-heading">Providers</h3>
-      <p class="muted small">Provider allow-lists are distinct from endpoint and model allow-lists.</p>
+      <p class="muted small">Select from enabled local provider configs only. No provider key values are displayed here.</p>
     </div>
     <label class="checkbox-row">
       <input type="checkbox" name="allow_all_providers" value="true" {% if policy_form_state.allow_all_providers %}checked{% endif %} data-policy-toggle="providers">
       Allow all enabled providers
     </label>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_providers %} policy-selector-disabled{% endif %}" data-policy-selector-group="providers">
-      <label>
-        Available enabled providers
-        <select id="{{ selector_id_prefix }}-providers-available" multiple size="8" data-policy-available="providers">
-          {% for choice in policy_catalog.provider_choices %}
-          {% if choice.value not in policy_form_state.selected_provider_values %}
-          <option value="{{ choice.value }}">{{ choice.label }}</option>
-          {% endif %}
-          {% endfor %}
-        </select>
-      </label>
-      <div class="policy-selector-buttons" aria-label="Provider selector controls">
-        <button type="button" class="secondary" data-policy-add="providers">Add -></button>
-        <button type="button" class="secondary" data-policy-remove="providers"><- Remove</button>
+      <div class="policy-selector-pane">
+        <label>
+          Available enabled providers
+          <span class="policy-selector-caption">Available from local provider config.</span>
+          <select id="{{ selector_id_prefix }}-providers-available" multiple size="8" data-policy-available="providers">
+            {% for choice in policy_catalog.provider_choices %}
+            {% if choice.value not in policy_form_state.selected_provider_values %}
+            <option value="{{ choice.value }}">{{ choice.label }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="providers-available" hidden>
+          No enabled providers are available. Add or enable a provider config under <code>/admin/providers</code>.
+        </p>
+        <p class="policy-selector-empty small" data-policy-empty="providers-selected-away" hidden>
+          All enabled providers are already selected.
+        </p>
       </div>
-      <label>
-        Selected allowed providers
-        <select id="{{ selector_id_prefix }}-providers-selected" multiple size="8" data-policy-selected="providers">
-          {% for option in policy_form_state.selected_provider_options %}
-          <option value="{{ option.value }}">{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
+      <div class="policy-selector-buttons" aria-label="Provider selector controls">
+        <button type="button" class="secondary" data-policy-add="providers">Add selected -&gt;</button>
+        <button type="button" class="secondary" data-policy-remove="providers">&lt;- Remove selected</button>
+      </div>
+      <div class="policy-selector-pane">
+        <label>
+          Selected allowed providers
+          <span class="policy-selector-caption">Used only when "Allow all enabled providers" is off.</span>
+          <select id="{{ selector_id_prefix }}-providers-selected" multiple size="8" data-policy-selected="providers">
+            {% for option in policy_form_state.selected_provider_options %}
+            <option value="{{ option.value }}">{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="providers-selected" hidden>
+          No explicit provider allow-list is selected.
+        </p>
+      </div>
     </div>
   </section>
 
@@ -48,28 +68,40 @@
       Allow all implemented endpoints
     </label>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_endpoints %} policy-selector-disabled{% endif %}" data-policy-selector-group="endpoints">
-      <label>
-        Available implemented endpoints
-        <select id="{{ selector_id_prefix }}-endpoints-available" multiple size="10" data-policy-available="endpoints">
-          {% for choice in policy_catalog.endpoint_choices %}
-          {% if choice.value not in policy_form_state.selected_endpoint_values %}
-          <option value="{{ choice.value }}" data-model-backed="{{ 'true' if choice.is_model_backed else 'false' }}">{{ choice.label }}</option>
-          {% endif %}
-          {% endfor %}
-        </select>
-      </label>
-      <div class="policy-selector-buttons" aria-label="Endpoint selector controls">
-        <button type="button" class="secondary" data-policy-add="endpoints">Add -></button>
-        <button type="button" class="secondary" data-policy-remove="endpoints"><- Remove</button>
+      <div class="policy-selector-pane">
+        <label>
+          Available implemented endpoints
+          <span class="policy-selector-caption">Rendered from the locally implemented endpoint set.</span>
+          <select id="{{ selector_id_prefix }}-endpoints-available" multiple size="10" data-policy-available="endpoints">
+            {% for choice in policy_catalog.endpoint_choices %}
+            {% if choice.value not in policy_form_state.selected_endpoint_values %}
+            <option value="{{ choice.value }}" data-model-backed="{{ 'true' if choice.is_model_backed else 'false' }}">{{ choice.label }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="endpoints-available" hidden>
+          All implemented endpoints are already selected.
+        </p>
       </div>
-      <label>
-        Selected allowed endpoints
-        <select id="{{ selector_id_prefix }}-endpoints-selected" multiple size="10" data-policy-selected="endpoints">
-          {% for option in policy_form_state.selected_endpoint_options %}
-          <option value="{{ option.value }}">{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
+      <div class="policy-selector-buttons" aria-label="Endpoint selector controls">
+        <button type="button" class="secondary" data-policy-add="endpoints">Add selected -&gt;</button>
+        <button type="button" class="secondary" data-policy-remove="endpoints">&lt;- Remove selected</button>
+      </div>
+      <div class="policy-selector-pane">
+        <label>
+          Selected allowed endpoints
+          <span class="policy-selector-caption">Catalog-only endpoints and model-backed endpoints are kept separate here on purpose.</span>
+          <select id="{{ selector_id_prefix }}-endpoints-selected" multiple size="10" data-policy-selected="endpoints">
+            {% for option in policy_form_state.selected_endpoint_options %}
+            <option value="{{ option.value }}">{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="endpoints-selected" hidden>
+          No explicit endpoint allow-list is selected.
+        </p>
+      </div>
     </div>
     <p class="muted small">
       <code>{{ models_endpoint }}</code> can be allowed without any generation endpoints, but model-backed endpoints still require explicit models unless "Allow all models" is checked.
@@ -86,37 +118,55 @@
       Allow all models backed by enabled routes
     </label>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_models %} policy-selector-disabled{% endif %}" data-policy-selector-group="models">
-      <label>
-        Available route-backed model candidates
-        <select id="{{ selector_id_prefix }}-models-available" multiple size="14" data-policy-available="models">
-          {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
-          <optgroup label="{{ group_label }}">
-            {% for choice in choices %}
-            <option
-              value="{{ choice.route_key }}"
-              data-model-token="{{ choice.token }}"
-              data-provider="{{ choice.provider }}"
-              data-endpoint="{{ choice.endpoint }}"
-              data-visible-in-models="{{ 'true' if choice.visible_in_models else 'false' }}"
-              data-supports-streaming="{{ 'true' if choice.supports_streaming else 'false' }}"
-            >{{ choice.label }}</option>
+      <div class="policy-selector-pane">
+        <label>
+          Available route-backed model candidates
+          <span class="policy-selector-caption">Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled.</span>
+          <select id="{{ selector_id_prefix }}-models-available" multiple size="14" data-policy-available="models">
+            {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
+            <optgroup label="{{ group_label }}">
+              {% for choice in choices %}
+              <option
+                value="{{ choice.route_key }}"
+                data-model-token="{{ choice.token }}"
+                data-provider="{{ choice.provider }}"
+                data-endpoint="{{ choice.endpoint }}"
+                data-visible-in-models="{{ 'true' if choice.visible_in_models else 'false' }}"
+                data-supports-streaming="{{ 'true' if choice.supports_streaming else 'false' }}"
+              >{{ choice.label }}</option>
+              {% endfor %}
+            </optgroup>
             {% endfor %}
-          </optgroup>
-          {% endfor %}
-        </select>
-      </label>
-      <div class="policy-selector-buttons" aria-label="Model selector controls">
-        <button type="button" class="secondary" data-policy-add="models">Add -></button>
-        <button type="button" class="secondary" data-policy-remove="models"><- Remove</button>
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="models-none" hidden>
+          No enabled route-backed models are available. Add or enable model routes under <code>/admin/routes</code>.
+        </p>
+        <p class="policy-selector-empty small" data-policy-empty="models-filtered" hidden>
+          No matching route-backed models for the current provider/endpoint selection.
+        </p>
+        <p class="policy-selector-empty small" data-policy-empty="models-selected-away" hidden>
+          All matching route-backed model candidates are already selected.
+        </p>
       </div>
-      <label>
-        Selected allowed model tokens
-        <select id="{{ selector_id_prefix }}-models-selected" multiple size="14" data-policy-selected="models">
-          {% for option in policy_form_state.selected_model_options %}
-          <option value="{{ option.value }}">{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
+      <div class="policy-selector-buttons" aria-label="Model selector controls">
+        <button type="button" class="secondary" data-policy-add="models">Add selected -&gt;</button>
+        <button type="button" class="secondary" data-policy-remove="models">&lt;- Remove selected</button>
+      </div>
+      <div class="policy-selector-pane">
+        <label>
+          Selected allowed model tokens
+          <span class="policy-selector-caption">The selected list stores requested model tokens, not route IDs.</span>
+          <select id="{{ selector_id_prefix }}-models-selected" multiple size="14" data-policy-selected="models">
+            {% for option in policy_form_state.selected_model_options %}
+            <option value="{{ option.value }}">{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="policy-selector-empty small" data-policy-empty="models-selected" hidden>
+          No explicit model allow-list is selected.
+        </p>
+      </div>
     </div>
     <p class="muted small">
       Hidden routes are labeled <em>hidden from /v1/models</em>. Prefix and glob routes keep their match-type labels so the selection is not misleading.
@@ -129,8 +179,9 @@
   </section>
 
   <details class="policy-manual-details">
-    <summary>Advanced manual policy strings</summary>
-    <p class="muted small">Use newline or comma-separated values. When JavaScript is enabled, the selectors above keep these fields synchronized.</p>
+    <summary>Advanced manual policy strings (fallback)</summary>
+    <p class="muted small">This is a fallback for no-JavaScript or direct manual edits. The selector above remains the primary workflow. Use newline or comma-separated values.</p>
+    <p class="muted small">When JavaScript is enabled, the selectors above keep these fields synchronized.</p>
     <div class="form-grid">
       <label>
         Allowed providers
