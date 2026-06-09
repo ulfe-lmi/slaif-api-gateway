@@ -38,14 +38,15 @@ Core invariants:
 ## Chat Completions Streaming Live-Burn Margin
 
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) records a
-per-key streaming live-burn margin policy. The implemented runtime slice is
-strictly limited to `POST /v1/chat/completions` with `stream=true`. Responses
-live-burn monitoring remains future work.
+per-key streaming live-burn margin policy. The implemented runtime slices are
+`POST /v1/chat/completions` with `stream=true` and the supported stateless
+text-output `POST /v1/responses` streaming subset.
 
 The feature is an operational stream interruption control, not billing truth:
 
 - Chat Completions streaming is implemented.
-- Responses typed SSE remains the second implementation target.
+- Responses typed SSE live-burn is implemented for the supported stateless
+  text-output subset only.
 - The per-key default is enabled with zero cost and token margins.
 - Positive margins stop before the quota boundary, zero margins stop near the
   estimated boundary, and negative margins allow bounded estimated overrun.
@@ -59,9 +60,9 @@ The feature is an operational stream interruption control, not billing truth:
   metrics.
 - No streamed content, prompts, completions, tool payloads, media payloads, raw
   request bodies, or raw response bodies may be stored.
-- Missing provider usage after an intentional Chat streaming live-burn
-  interruption is recorded as estimated interrupted accounting; it is not normal
-  zero-cost success.
+- Missing provider usage after an intentional streaming live-burn interruption
+  is recorded as estimated interrupted accounting; it is not normal zero-cost
+  success.
 
 The persisted safe key metadata shape is:
 

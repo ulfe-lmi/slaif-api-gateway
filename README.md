@@ -33,8 +33,8 @@ For exact reviewer-facing behavior, see:
 - [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
 - [`docs/accounting.md`](docs/accounting.md) and
   [`docs/streaming-live-burn-margin.md`](docs/streaming-live-burn-margin.md)
-  for accounting invariants, Chat Completions streaming live-burn behavior, and
-  the future Responses live-burn milestone.
+  for accounting invariants and the implemented Chat Completions and Responses
+  streaming live-burn behavior.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
 - [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
 - [`.env.example`](.env.example) and [`docs/configuration.md`](docs/configuration.md) for safe configuration templates and environment variable reference.
@@ -88,8 +88,9 @@ Not implemented yet:
   provider-side file lifecycle, streaming custom tools, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with
   audio output.
-- Responses streaming live-burn monitoring. Chat Completions streaming
-  live-burn is implemented; Responses live-burn remains a later milestone.
+- Background/cancel/stateful Responses streaming slices. Stateless text
+  Responses streaming live-burn is implemented; background mode, cancel,
+  response listing, audio, and stateful streaming remain separate milestones.
 - Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
 - Automatic key-email sending by default.
 - OpenTelemetry tracing and full production hardening/runbooks beyond the

@@ -192,10 +192,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 ## Known Limitations
 
 - Bulk key synchronous `send-now` execution is not implemented.
-- Responses streaming live-burn margin is not implemented. Chat Completions
-  streaming live-burn is implemented and must preserve PostgreSQL hard quota
-  truth, Redis temporary-state boundaries, provider final usage/cost authority,
-  and no streamed-content storage.
+- Responses streaming live-burn is implemented for the supported stateless
+  text-output streaming subset. It must preserve PostgreSQL hard quota truth,
+  Redis temporary-state boundaries, provider final usage/cost authority, and
+  no streamed-content storage. Background mode, cancel, response listing,
+  Responses audio, and stateful streaming remain separate work.
 - Native Anthropic API is not implemented; Anthropic-family models are supported
   only through OpenRouter's OpenAI-compatible interface when routed that way.
 - Responses API support is limited to text-output
@@ -277,9 +278,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   Responses hosted tools, background routes,
   broader lifecycle routes,
   bulk key send-now, embeddings, and native provider adapters.
-- Implement Responses streaming live-burn only as a separate scoped milestone
-  under `streaming-live-burn-margin.md`, after the current Chat Completions
-  streaming live-burn slice.
+- Extend Responses live-burn beyond the current stateless text-output
+  streaming subset only as separate scoped work under
+  `streaming-live-burn-margin.md`.
 - Exercise the production/operator runbooks in at least one production-like
   staging deployment.
 - Continue tuning monitoring and alert routing for the target deployment.

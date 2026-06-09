@@ -459,12 +459,12 @@ not hard real-time spend interruption inside one upstream call. If finalization
 puts the key above local token or cost limits, subsequent calls are blocked by
 normal quota admission until limits are raised or usage is reset.
 
-Chat Completions streaming live-burn monitoring is documented in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). It is a
-gateway-side, provisional stream interruption brake for visible Chat streaming
-output only. It is not invoice-grade billing truth and does not replace
-PostgreSQL reservation/finalization or provider final usage/cost. Responses
-live-burn monitoring remains future work.
+Chat Completions and the supported stateless text-output Responses streaming
+live-burn monitoring are documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). They are
+gateway-side, provisional stream interruption brakes for visible streamed text
+only. They are not invoice-grade billing truth and do not replace PostgreSQL
+reservation/finalization or provider final usage/cost.
 
 Chat live-burn reporting is post-hoc operator visibility over safe usage
 ledger metadata. It does not alter provider forwarding, streaming
@@ -491,6 +491,13 @@ Streaming has an extra finalization rule because content may already have reache
   request cost or token burn crosses the configured cutoff, SLAIF stops the
   upstream stream when possible, emits a safe SSE error with code
   `streaming_live_burn_limit_exceeded`, and suppresses normal `[DONE]`.
+- For the supported stateless text-output Responses streaming subset, per-key
+  live-burn monitoring estimates admission input plus visible generated
+  `response.output_text.delta` text while forwarding typed SSE events. If the
+  estimated request cost or token burn crosses the configured cutoff, SLAIF
+  stops the upstream stream when possible, emits a safe typed Responses error
+  event with code `streaming_live_burn_limit_exceeded`, and suppresses normal
+  `response.completed` / `[DONE]` success markers.
 - If provider final usage is unavailable because SLAIF intentionally stopped a
   Chat stream for live-burn, the request is finalized as estimated interrupted
   accounting with safe metadata. It is not released as normal zero-cost success.

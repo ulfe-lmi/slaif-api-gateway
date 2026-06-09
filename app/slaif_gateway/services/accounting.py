@@ -581,10 +581,11 @@ class AccountingService:
         estimated_cost_eur: Decimal,
         response_metadata: Mapping[str, object],
         endpoint: str = "chat.completions",
+        estimate_reason: str = "chat_streaming_live_burn_interrupted",
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> FinalizedAccountingResult:
-        """Finalize an intentional Chat streaming live-burn abort with safe estimates."""
+        """Finalize an intentional streaming live-burn abort with safe estimates."""
         finished = _aware_now(finished_at)
         reservation = await self._locked_pending_reservation(
             reservation_id,
@@ -638,7 +639,7 @@ class AccountingService:
                 else {}
             ),
             **overrun_metadata,
-            "accounting_estimate_reason": "chat_streaming_live_burn_interrupted",
+            "accounting_estimate_reason": estimate_reason,
         }
         try:
             ledger = await self._usage_ledger_repository.create_usage_record(

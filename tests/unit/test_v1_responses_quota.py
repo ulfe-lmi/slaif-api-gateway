@@ -27,6 +27,9 @@ from slaif_gateway.services.routing_errors import ModelNotFoundError
 def _fake_authenticated_gateway_key(
     *,
     allowed_endpoints: tuple[str, ...] = ("/v1/responses",),
+    cost_limit_eur: Decimal | None = None,
+    token_limit_total: int | None = None,
+    responses_streaming_live_burn_policy: dict[str, object] | None = None,
 ) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
     return AuthenticatedGatewayKey(
@@ -42,10 +45,11 @@ def _fake_authenticated_gateway_key(
         allow_all_endpoints=False,
         allowed_endpoints=allowed_endpoints,
         allowed_providers=None,
-        cost_limit_eur=None,
-        token_limit_total=None,
+        cost_limit_eur=cost_limit_eur,
+        token_limit_total=token_limit_total,
         request_limit_total=None,
         rate_limit_policy={},
+        responses_streaming_live_burn_policy=responses_streaming_live_burn_policy,
     )
 
 
@@ -3455,6 +3459,7 @@ def _wire_streaming_gateway(
         "finalize_calls": [],
         "recovery_failure_calls": [],
         "failure_calls": [],
+        "live_burn_estimate_calls": [],
         "rate_release_calls": [],
     }
     completed_record_id = uuid.uuid4()
@@ -3577,6 +3582,11 @@ def _wire_streaming_gateway(
         _ = (self, args)
         state["failure_calls"].append(kwargs)
 
+    async def _fake_live_burn_estimate(self, *args, **kwargs):
+        _ = (self, args)
+        state["live_burn_estimate_calls"].append(kwargs)
+        return SimpleNamespace(accounting_status="estimated")
+
     monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
     monkeypatch.setattr(main_module, "_release_rate_limit_concurrency", _fake_release_rate_limit)
     monkeypatch.setattr(main_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
@@ -3599,6 +3609,11 @@ def _wire_streaming_gateway(
         main_module.AccountingService,
         "record_provider_failure_and_release",
         _fake_record_provider_failure_and_release,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_streaming_live_burn_interrupted_estimate",
+        _fake_live_burn_estimate,
     )
     return state, completed_record_id, rate_reservation
 
@@ -3803,6 +3818,60 @@ def test_streaming_responses_provider_error_after_partial_output_releases_reserv
     assert len(state["failure_calls"]) == 1
     assert state["failure_calls"][0]["streaming"] is True
     assert state["failure_calls"][0]["error_code"] == "provider_timeout"
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+
+
+def test_streaming_responses_live_burn_abort_emits_safe_error_without_success(
+    monkeypatch,
+) -> None:
+    app = create_app()
+    auth_key = _fake_authenticated_gateway_key(
+        token_limit_total=24,
+        responses_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+            "token_margin": 0,
+        },
+    )
+    _wire_auth_and_db(monkeypatch, app, auth_key)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk(
+            {"type": "response.output_text.delta", "delta": "secret streamed text"}
+        ),
+        _response_stream_chunk(
+            _completed_payload(),
+            usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        _done_chunk(),
+    ]
+    state, _completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "response.output_text.delta" in body
+    assert "streaming_live_burn_limit_exceeded" in body
+    assert "response.completed" not in body
+    assert "data: [DONE]" not in body
+    assert state["provider_completed_calls"] == []
+    assert state["finalize_calls"] == []
+    assert state["failure_calls"] == []
+    assert len(state["live_burn_estimate_calls"]) == 1
+    response_metadata = state["live_burn_estimate_calls"][0]["response_metadata"]
+    assert response_metadata["streaming_live_burn_triggered"] is True
+    assert response_metadata["streaming_live_burn_stop_reason"] == "tokens"
+    assert "secret streamed text" not in json.dumps(response_metadata)
     assert state["rate_release_calls"] == [(rate_reservation, True)]
 
 

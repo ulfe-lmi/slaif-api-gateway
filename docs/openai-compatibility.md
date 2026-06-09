@@ -127,12 +127,16 @@ streaming accounting uses provider usage from the completed response event;
 also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization. Missing final usage is not treated as zero cost.
 
-Responses live-burn monitoring is future work. The implemented live-burn slice
-applies only to Chat Completions streaming, as documented in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md). Responses
-streaming accounting remains final-usage driven, missing usage is not normal
-success, and the gateway does not interrupt Responses streams based on
-provisional live-burn estimates.
+Responses live-burn monitoring is implemented for the supported stateless
+text-output Responses streaming subset. As documented in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md), SLAIF counts
+safe `response.output_text.delta` text only, discards the text after counting,
+and may intentionally stop the upstream stream when the estimated request cost
+or token burn crosses the key's configured Responses streaming live-burn
+cutoff. Provider final usage remains authoritative when it arrives before an
+abort; missing final usage is still not normal success. This does not enable
+background mode, cancel, response listing, Responses audio, or stateful
+streaming with `store=true`, `previous_response_id`, or `conversation`.
 
 Responses structured text output is not a tool and does not add a separate
 billing category. JSON schemas are capped, forwarded only under

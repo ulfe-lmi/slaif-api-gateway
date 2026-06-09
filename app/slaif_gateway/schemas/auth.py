@@ -34,5 +34,6 @@ class AuthenticatedGatewayKey:
     tokens_reserved_total: int = 0
     responses_policy: dict[str, object] | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
+    responses_streaming_live_burn_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"

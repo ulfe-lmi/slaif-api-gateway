@@ -13,6 +13,11 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     chat_streaming_live_burn_policy_from_metadata,
     default_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.responses_streaming_live_burn import (
+    ResponsesStreamingLiveBurnPolicyError,
+    default_responses_streaming_live_burn_policy,
+    responses_streaming_live_burn_policy_from_metadata,
+)
 from slaif_gateway.services.key_modes import is_trusted_calibration_key
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.crypto import parse_gateway_key_public_id, verify_hmac_sha256_token
@@ -131,6 +136,7 @@ class GatewayAuthService:
         rate_limit_metadata: dict[str, object] = {}
         responses_policy: dict[str, object] | None = None
         chat_streaming_live_burn_policy = default_chat_streaming_live_burn_policy()
+        responses_streaming_live_burn_policy = default_responses_streaming_live_burn_policy()
         if isinstance(gateway_key.metadata_json, dict):
             providers = gateway_key.metadata_json.get("allowed_providers")
             if isinstance(providers, list):
@@ -157,6 +163,22 @@ class GatewayAuthService:
                 )
             except ChatStreamingLiveBurnPolicyError:
                 chat_streaming_live_burn_policy = default_chat_streaming_live_burn_policy()
+            try:
+                responses_streaming_live_burn_policy = (
+                    responses_streaming_live_burn_policy_from_metadata(
+                        gateway_key.metadata_json,
+                        max_abs_cost_margin_eur=(
+                            self._settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                        ),
+                        max_abs_token_margin=(
+                            self._settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
+                        ),
+                    )
+                )
+            except ResponsesStreamingLiveBurnPolicyError:
+                responses_streaming_live_burn_policy = (
+                    default_responses_streaming_live_burn_policy()
+                )
 
         window_seconds = rate_limit_metadata.get("window_seconds")
         if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
@@ -195,6 +217,9 @@ class GatewayAuthService:
             },
             responses_policy=responses_policy,
             chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
+            responses_streaming_live_burn_policy=(
+                responses_streaming_live_burn_policy.to_metadata()
+            ),
             key_purpose=getattr(gateway_key, "key_purpose", "standard"),
             capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
         )

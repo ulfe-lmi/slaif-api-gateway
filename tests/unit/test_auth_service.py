@@ -104,6 +104,12 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
         "cost_margin_eur": "0.000000000",
         "token_margin": 0,
     }
+    assert result.responses_streaming_live_burn_policy == {
+        "version": 1,
+        "enabled": True,
+        "cost_margin_eur": "0.000000000",
+        "token_margin": 0,
+    }
     assert not hasattr(result, "plaintext_key")
     assert not hasattr(result, "token_hash")
 

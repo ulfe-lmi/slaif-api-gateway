@@ -6,6 +6,7 @@ import asyncio
 import time
 import uuid
 from datetime import UTC, datetime
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import anyio
@@ -69,6 +70,19 @@ from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.rate_limit_errors import RateLimitError, RedisRateLimitUnavailableError
 from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
+from slaif_gateway.services.responses_streaming_live_burn import (
+    RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
+    RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+    ResponsesStreamingLiveBurnBudget,
+    ResponsesStreamingLiveBurnEstimate,
+    ResponsesStreamingLiveBurnMonitor,
+    ResponsesStreamingLiveBurnPolicy,
+    ResponsesStreamingLiveBurnPolicyError,
+    build_responses_streaming_live_burn_budget,
+    default_responses_streaming_live_burn_policy,
+    pre_provider_responses_streaming_live_burn_error,
+    responses_streaming_live_burn_policy_from_metadata,
+)
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.responses_request_policy import (
     TEXT_FORMAT_JSON_OBJECT,
@@ -143,6 +157,13 @@ _CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.ima
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponsesQuotaReservation:
+    cost_estimate: ChatCostEstimate
+    reservation: QuotaReservationResult
+    live_burn_budget: ResponsesStreamingLiveBurnBudget | None
 
 
 def _build_safe_responses_upstream_body(
@@ -394,14 +415,17 @@ async def handle_response_compact(
         request=request,
     )
     try:
-        cost_estimate, reservation = await _reserve_responses_quota(
+        quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
             route=route,
             policy_result=policy_result,
             request_id=request_id,
+            settings=settings,
             request=request,
             endpoint=RESPONSES_COMPACT_ENDPOINT,
         )
+        cost_estimate = quota.cost_estimate
+        reservation = quota.reservation
         provider_request = ProviderRequest(
             provider=route.provider,
             upstream_model=route.resolved_model,
@@ -527,13 +551,44 @@ async def handle_response_create(
         request=request,
     )
     try:
-        cost_estimate, reservation = await _reserve_responses_quota(
+        quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
             route=route,
             policy_result=policy_result,
             request_id=request_id,
+            settings=settings,
             request=request,
         )
+        cost_estimate = quota.cost_estimate
+        reservation = quota.reservation
+
+        pre_provider_live_burn = pre_provider_responses_streaming_live_burn_error(
+            quota.live_burn_budget
+        )
+        if policy_result.effective_body.get("stream") is True and pre_provider_live_burn is not None:
+            try:
+                await _record_streaming_live_burn_abort_estimate(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    estimate=pre_provider_live_burn,
+                    request=request,
+                )
+            except AccountingError as accounting_exc:
+                increment_accounting_failure(accounting_exc.error_code)
+                raise openai_error_from_accounting_error(accounting_exc) from accounting_exc
+            except QuotaError as quota_exc:
+                increment_quota_rejection(quota_exc.error_code)
+                raise openai_error_from_quota_error(quota_exc) from quota_exc
+            increment_quota_rejection(RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE)
+            raise OpenAICompatibleError(
+                RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+                status_code=429,
+                error_type="insufficient_quota",
+                code=RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
+            )
 
         if policy_result.effective_body.get("stream") is True:
             try:
@@ -548,6 +603,7 @@ async def handle_response_create(
                     request=request,
                     rate_limit_reservation=rate_limit_reservation,
                     upstream_body=upstream_body,
+                    live_burn_budget=quota.live_burn_budget,
                 )
                 return response
             except ProviderError as exc:
@@ -1202,9 +1258,10 @@ async def _reserve_responses_quota(
     route: RouteResolutionResult,
     policy_result: ResponsesPolicyResult,
     request_id: str,
+    settings: Settings,
     request: Request | None,
     endpoint: str = RESPONSES_ENDPOINT,
-) -> tuple[ChatCostEstimate, QuotaReservationResult]:
+) -> _ResponsesQuotaReservation:
     session_iterator = _db_session_iterator(request)
     try:
         session = await anext(session_iterator)
@@ -1225,8 +1282,9 @@ async def _reserve_responses_quota(
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
 
+        gateway_keys_repository = GatewayKeysRepository(session)
         quota_service = QuotaService(
-            gateway_keys_repository=GatewayKeysRepository(session),
+            gateway_keys_repository=gateway_keys_repository,
             quota_reservations_repository=QuotaReservationsRepository(session),
         )
         try:
@@ -1242,9 +1300,28 @@ async def _reserve_responses_quota(
             increment_quota_rejection(quota_exc_code(exc))
             raise openai_error_from_quota_error(exc) from exc
 
+        gateway_key = None
+        try:
+            gateway_key = await gateway_keys_repository.get_gateway_key_by_id(
+                authenticated_key.gateway_key_id
+            )
+        except Exception:  # noqa: BLE001
+            gateway_key = None
+        live_burn_budget = _build_responses_streaming_live_burn_budget(
+            authenticated_key=authenticated_key,
+            gateway_key=gateway_key,
+            reservation=reservation,
+            cost_estimate=cost_estimate,
+            settings=settings,
+        )
+
         if hasattr(session, "commit"):
             await session.commit()
-        return cost_estimate, reservation
+        return _ResponsesQuotaReservation(
+            cost_estimate=cost_estimate,
+            reservation=reservation,
+            live_burn_budget=live_burn_budget,
+        )
     finally:
         await session_iterator.aclose()
 
@@ -1261,6 +1338,7 @@ def _streaming_responses_response(
     request: Request | None,
     rate_limit_reservation: _RateLimitReservation | None,
     upstream_body: dict[str, object],
+    live_burn_budget: ResponsesStreamingLiveBurnBudget | None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -1279,6 +1357,11 @@ def _streaming_responses_response(
         terminal_done_event: str | None = None
         completed = False
         provider_status = "error"
+        live_burn_monitor = (
+            ResponsesStreamingLiveBurnMonitor(live_burn_budget)
+            if live_burn_budget is not None
+            else None
+        )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = _start_rate_limit_heartbeat(
             rate_limit_reservation,
@@ -1297,6 +1380,28 @@ def _streaming_responses_response(
                     terminal_done_event = chunk.raw_sse_event
                     continue
                 yield chunk.raw_sse_event
+                live_burn_estimate = (
+                    live_burn_monitor.observe_chunk(chunk.json_body)
+                    if live_burn_monitor is not None
+                    else None
+                )
+                if live_burn_estimate is not None:
+                    await _record_streaming_live_burn_abort_estimate(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        estimate=live_burn_estimate,
+                        request=request,
+                    )
+                    provider_status = "interrupted"
+                    yield format_responses_error_event(
+                        message=RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
+                        code=RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
+                        request_id=request_id,
+                    )
+                    return
 
             if completed and completed_chunk is not None and completed_chunk.usage is not None:
                 provider_response = _provider_response_from_response_stream(
@@ -1627,6 +1732,49 @@ async def _release_streaming_reservation_after_error(
         raise
 
 
+async def _record_streaming_live_burn_abort_estimate(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    cost_estimate: ChatCostEstimate,
+    request_id: str,
+    estimate: ResponsesStreamingLiveBurnEstimate,
+    request: Request | None,
+) -> FinalizedAccountingResult:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        result = await accounting_service.record_streaming_live_burn_interrupted_estimate(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            request_id,
+            estimated_input_tokens=cost_estimate.estimated_input_tokens,
+            estimated_output_tokens=estimate.estimated_output_tokens,
+            estimated_total_tokens=estimate.estimated_request_tokens,
+            estimated_cost_eur=estimate.estimated_cost_eur,
+            response_metadata=estimate.metadata,
+            endpoint=RESPONSES_PROVIDER_ENDPOINT,
+            estimate_reason="responses_streaming_live_burn_interrupted",
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
+
+
 async def _finalize_successful_response(
     *,
     reservation: QuotaReservationResult,
@@ -1744,6 +1892,81 @@ async def _mark_provider_completed_finalization_failed(
             await session.commit()
     finally:
         await session_iterator.aclose()
+
+
+def _build_responses_streaming_live_burn_budget(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    gateway_key: object | None,
+    reservation: QuotaReservationResult,
+    cost_estimate: ChatCostEstimate,
+    settings: Settings,
+) -> ResponsesStreamingLiveBurnBudget | None:
+    policy = _responses_streaming_live_burn_policy_from_key(
+        authenticated_key=authenticated_key,
+        gateway_key=gateway_key,
+        settings=settings,
+    )
+    cost_limit = getattr(gateway_key, "cost_limit_eur", authenticated_key.cost_limit_eur)
+    token_limit = getattr(gateway_key, "token_limit_total", authenticated_key.token_limit_total)
+    cost_used = getattr(gateway_key, "cost_used_eur", authenticated_key.cost_used_eur)
+    tokens_used = getattr(gateway_key, "tokens_used_total", authenticated_key.tokens_used_total)
+    cost_reserved = getattr(
+        gateway_key,
+        "cost_reserved_eur",
+        authenticated_key.cost_reserved_eur + reservation.reserved_cost_eur,
+    )
+    tokens_reserved = getattr(
+        gateway_key,
+        "tokens_reserved_total",
+        authenticated_key.tokens_reserved_total + reservation.reserved_tokens,
+    )
+    return build_responses_streaming_live_burn_budget(
+        policy=policy,
+        cost_limit_eur=cost_limit,
+        token_limit_total=token_limit,
+        cost_used_eur=cost_used,
+        tokens_used_total=tokens_used,
+        cost_reserved_eur=cost_reserved,
+        tokens_reserved_total=tokens_reserved,
+        current_reserved_cost_eur=reservation.reserved_cost_eur,
+        current_reserved_tokens=reservation.reserved_tokens,
+        cost_estimate=cost_estimate,
+        estimate_multiplier=settings.RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER,
+    )
+
+
+def _responses_streaming_live_burn_policy_from_key(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    gateway_key: object | None,
+    settings: Settings,
+) -> ResponsesStreamingLiveBurnPolicy:
+    metadata = getattr(gateway_key, "metadata_json", None)
+    if isinstance(metadata, dict):
+        try:
+            return responses_streaming_live_burn_policy_from_metadata(
+                metadata,
+                max_abs_cost_margin_eur=(
+                    settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                ),
+                max_abs_token_margin=settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ResponsesStreamingLiveBurnPolicyError:
+            return default_responses_streaming_live_burn_policy()
+    policy = authenticated_key.responses_streaming_live_burn_policy
+    if isinstance(policy, dict):
+        try:
+            return responses_streaming_live_burn_policy_from_metadata(
+                {"responses_streaming_live_burn": dict(policy)},
+                max_abs_cost_margin_eur=(
+                    settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                ),
+                max_abs_token_margin=settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
+            )
+        except ResponsesStreamingLiveBurnPolicyError:
+            return default_responses_streaming_live_burn_policy()
+    return default_responses_streaming_live_burn_policy()
 
 
 async def _persist_stored_response_reference(
