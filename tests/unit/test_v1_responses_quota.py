@@ -1510,10 +1510,15 @@ def test_conversation_items_require_explicit_endpoint_permission(monkeypatch) ->
     )
     client = TestClient(app)
 
-    assert client.post("/v1/conversations/conv_owned/items", json={"items": []}).status_code == 403
-    assert client.get("/v1/conversations/conv_owned/items").status_code == 403
-    assert client.get("/v1/conversations/conv_owned/items/msg_1").status_code == 403
-    assert client.delete("/v1/conversations/conv_owned/items/msg_1").status_code == 403
+    create_response = client.post("/v1/conversations/conv_owned/items", json={"items": []})
+    list_response = client.get("/v1/conversations/conv_owned/items")
+    retrieve_response = client.get("/v1/conversations/conv_owned/items/msg_1")
+    delete_response = client.delete("/v1/conversations/conv_owned/items/msg_1")
+
+    assert create_response.status_code == 403
+    assert list_response.status_code == 403
+    assert retrieve_response.status_code == 403
+    assert delete_response.status_code == 403
 
 
 def test_conversation_item_create_owned_reference_proxies_text_items_without_generation_accounting(
