@@ -177,25 +177,28 @@ revision may summarize only these implemented local/stored capabilities:
 - `previous_response_id`
 - `list_input_items`
 - `compact`
+- `conversations`
 
 Allowed local tool types are limited to `function` and `custom`. The policy
 summary must keep `hosted_tools_allowed` empty and must set `stateful`,
 `storage`, `background`, and multimodal-output claims to `false`. Hosted
 web/file search, code interpreter, shell, `apply_patch`, local environments,
 skills, MCP or connectors, computer use, image generation, tool search,
-provider-side storage beyond safe response references, background mode,
-conversation lifecycle, `/v1/files`, file search/retrieval tools, audio input,
-audio output, and multimodal Responses output remain future work and are
-rejected for template-created keys. `previous_response_id` and
+provider-side storage beyond safe response/conversation references, background
+mode, conversation item/update endpoints, `/v1/files`, file search/retrieval
+tools, audio input, audio output, and multimodal Responses output remain future
+work and are rejected for template-created keys. `previous_response_id` and
 `list_input_items` are only safe capability summaries for owned local response
-references, and `compact` is only a safe capability summary for the bounded
-text-focused compact endpoint. They do not permit live response IDs, input
-items, compact input/output, or encrypted compaction content in template
-metadata. The summary is operator provenance metadata only; it must not contain
+references, `conversations` is only a safe capability summary for owned local
+conversation references, and `compact` is only a safe capability summary for
+the bounded text-focused compact endpoint. They do not permit live response
+IDs, conversation IDs from user traffic, input items, conversation items,
+compact input/output, or encrypted compaction content in template metadata.
+The summary is operator provenance metadata only; it must not contain
 raw image URLs, image data URLs, file URLs, filenames, file data URLs, base64
-payloads, provider response IDs from user traffic, tool definitions, JSON
-schemas, grammar definitions, model-generated tool input, tool outputs, prompts,
-completions, raw request bodies, or raw response bodies.
+payloads, provider response/conversation IDs from user traffic, tool
+definitions, JSON schemas, grammar definitions, model-generated tool input,
+tool outputs, prompts, completions, raw request bodies, or raw response bodies.
 
 When a key is created from a safe Responses template revision, the created
 standard key stores the sanitized `responses_policy` summary in key metadata for

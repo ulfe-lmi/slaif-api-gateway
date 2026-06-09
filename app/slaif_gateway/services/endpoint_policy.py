@@ -16,6 +16,9 @@ RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
 RESPONSES_DELETE: Final[str] = "responses.delete"
 RESPONSES_INPUT_ITEMS: Final[str] = "responses.input_items"
 RESPONSES_COMPACT: Final[str] = "responses.compact"
+CONVERSATIONS_CREATE: Final[str] = "conversations.create"
+CONVERSATIONS_RETRIEVE: Final[str] = "conversations.retrieve"
+CONVERSATIONS_DELETE: Final[str] = "conversations.delete"
 
 _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
     MODELS_LIST: frozenset(
@@ -69,6 +72,25 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "responses.compact",
             "post /v1/responses/compact",
             "/v1/responses/compact",
+        }
+    ),
+    CONVERSATIONS_CREATE: frozenset(
+        {
+            "conversations.create",
+            "post /v1/conversations",
+            "/v1/conversations",
+        }
+    ),
+    CONVERSATIONS_RETRIEVE: frozenset(
+        {
+            "conversations.retrieve",
+            "get /v1/conversations/{conversation_id}",
+        }
+    ),
+    CONVERSATIONS_DELETE: frozenset(
+        {
+            "conversations.delete",
+            "delete /v1/conversations/{conversation_id}",
         }
     ),
 }

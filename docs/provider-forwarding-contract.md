@@ -120,7 +120,11 @@ non-streaming stored create when explicitly enabled.
 `POST /v1/responses/input_tokens` has a separate provider-reported count
 forwarding path for the same local input subset. `GET` and
 `DELETE /v1/responses/{response_id}` are control-plane proxy calls after local
-ownership checks.
+ownership checks. `POST`, `GET`, and `DELETE /v1/conversations` are
+control-plane proxy calls that persist only safe provider conversation
+reference metadata for ownership/routing; `POST /v1/responses` may forward a
+conversation ID only after that ID resolves to an active local reference owned
+by the authenticated gateway key and compatible with the resolved provider.
 
 Responses forwarding follows the same provider-secret boundary:
 
@@ -211,6 +215,14 @@ Responses-specific rules for the current foundation:
   the route advertises `capabilities.responses.previous_response_id=true`, and
   provider/route metadata is compatible. Unknown, non-owned, deleted,
   provider-mismatched, or route-incompatible IDs are not proxied upstream;
+- non-streaming `conversation` is forwarded only after the ID resolves to an
+  active local conversation reference owned by the authenticated gateway key,
+  the route advertises `capabilities.responses.conversations=true`, and
+  provider metadata is compatible. Unknown, non-owned, deleted, or
+  provider-mismatched conversation IDs are not proxied upstream. Conversation
+  create/retrieve/delete provider requests are built from endpoint-specific
+  normalized data and the stored provider conversation ID, never raw unchecked
+  client IDs;
 - `max_output_tokens` is defaulted or capped before forwarding;
 - `/v1/responses/input_tokens` is routed and forwarded separately. Its
   canonical upstream body may include `input`, `instructions`, `text`, local
@@ -255,8 +267,8 @@ Responses-specific rules for the current foundation:
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;
-- `background`, `conversation`, and streaming `previous_response_id` are
-  rejected before provider forwarding;
+- `background`, conversation item/update endpoints, streaming conversation, and
+  streaming `previous_response_id` are rejected before provider forwarding;
 - response cancel and response listing require explicit provider response
   ownership mapping before they can be implemented;
 - provider response IDs and tool diagnostics must be treated as metadata and

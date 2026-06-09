@@ -26,6 +26,9 @@ TEST_RESPONSES_MODEL = "gpt-responses-text-test"
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_COMPACT_ENDPOINT = "/v1/responses/compact"
+CONVERSATIONS_CREATE_ENDPOINT = "POST /v1/conversations"
+CONVERSATIONS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}"
+CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
 INPUT_TEXT = "Hello from SLAIF Responses test"
 OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
@@ -49,6 +52,7 @@ async def _create_responses_test_data(
     previous_response_id: bool = False,
     list_input_items: bool = False,
     compact: bool = False,
+    conversations: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -146,6 +150,7 @@ async def _create_responses_test_data(
             capabilities["previous_response_id"] = previous_response_id
             capabilities["list_input_items"] = list_input_items
             capabilities["compact"] = compact
+            capabilities["conversations"] = conversations
 
             await routes.create_model_route(
                 requested_model=TEST_RESPONSES_MODEL,
@@ -646,6 +651,145 @@ def test_openai_python_client_responses_input_items_list_e2e(
     assert list_request.url.params.get("include") == "message.input_image.image_url"
     assert list_request.url.params.get("limit") == "25"
     assert list_request.url.params.get("order") == "asc"
+
+
+@pytest.mark.e2e
+def test_openai_python_client_responses_conversations_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            conversations=True,
+            allowed_endpoints=[
+                RESPONSES_ENDPOINT,
+                CONVERSATIONS_CREATE_ENDPOINT,
+                CONVERSATIONS_RETRIEVE_ENDPOINT,
+                CONVERSATIONS_DELETE_ENDPOINT,
+            ],
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+
+    app = create_app(get_settings())
+    conversation_payload = {
+        "id": "conv_responses_e2e",
+        "object": "conversation",
+        "created_at": 123,
+    }
+    response_payload = {
+        "id": "resp_conversation_e2e",
+        "object": "response",
+        "created_at": 124,
+        "status": "completed",
+        "model": TEST_RESPONSES_MODEL,
+        "output": [
+            {
+                "id": "msg_conversation_e2e",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": OUTPUT_TEXT, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+        "store": False,
+    }
+    delete_payload = {
+        "id": "conv_responses_e2e",
+        "object": "conversation.deleted",
+        "deleted": True,
+    }
+
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            conversation_create_route = router.post(
+                "https://api.openai.com/v1/conversations"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=conversation_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-create-e2e"},
+                )
+            )
+            conversation_retrieve_route = router.get(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=conversation_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-retrieve-e2e"},
+                )
+            )
+            response_route = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=response_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-response-e2e"},
+                )
+            )
+            conversation_delete_route = router.delete(
+                "https://api.openai.com/v1/conversations/conv_responses_e2e"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=delete_payload,
+                    headers={"x-request-id": "upstream-openai-conversation-delete-e2e"},
+                )
+            )
+
+            client = OpenAI()
+            conversation = client.conversations.create()
+            response = client.responses.create(
+                model=TEST_RESPONSES_MODEL,
+                input=INPUT_TEXT,
+                conversation="conv_responses_e2e",
+                max_output_tokens=32,
+            )
+            retrieved_conversation = client.conversations.retrieve("conv_responses_e2e")
+            deleted_conversation = client.conversations.delete("conv_responses_e2e")
+
+    assert conversation.id == "conv_responses_e2e"
+    assert response.id == "resp_conversation_e2e"
+    assert retrieved_conversation.id == "conv_responses_e2e"
+    assert deleted_conversation.id == "conv_responses_e2e"
+    assert getattr(deleted_conversation, "deleted") is True
+
+    for route in (
+        conversation_create_route,
+        conversation_retrieve_route,
+        response_route,
+        conversation_delete_route,
+    ):
+        assert route.called
+        authorization = route.calls[0].request.headers["authorization"]
+        assert authorization == f"Bearer {FAKE_OPENAI_UPSTREAM_KEY}"
+        assert created.plaintext_key not in authorization
+
+    assert json.loads(conversation_create_route.calls[0].request.content) == {}
+    assert json.loads(response_route.calls[0].request.content) == {
+        "model": TEST_RESPONSES_MODEL,
+        "input": INPUT_TEXT,
+        "conversation": "conv_responses_e2e",
+        "max_output_tokens": 32,
+        "store": False,
+    }
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
+    assert state.gateway_key.requests_used_total == 1
+    assert state.gateway_key.tokens_used_total == 18
+    assert state.usage_ledger.endpoint == RESPONSES_ENDPOINT
 
 
 @pytest.mark.e2e

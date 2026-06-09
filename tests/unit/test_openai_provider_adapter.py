@@ -87,6 +87,21 @@ def _responses_lifecycle_request(endpoint: str) -> ProviderRequest:
     )
 
 
+def _conversation_request(endpoint: str, body: dict | None = None) -> ProviderRequest:
+    return ProviderRequest(
+        provider="openai",
+        upstream_model="",
+        endpoint=endpoint,
+        body=body or {},
+        request_id="gw-conversation-req",
+        extra_headers={
+            "Authorization": "Bearer client-key",
+            "Cookie": "cookie",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_openai_api_key_raises() -> None:
     adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY=None))
@@ -447,6 +462,68 @@ async def test_openai_response_input_items_uses_provider_auth_exact_path_and_que
     }
     assert response.upstream_request_id == "req-openai-input-items"
     assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_conversation_create_uses_provider_auth_and_empty_body(respx_mock) -> None:
+    route = respx_mock.post("https://api.openai.com/v1/conversations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "conv_123", "object": "conversation"},
+            headers={"OpenAI-Request-ID": "req-openai-conversation-create"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+
+    response = await adapter.create_conversation(_conversation_request("conversations.create"))
+
+    sent_request = route.calls[0].request
+    sent_body = json.loads(sent_request.content)
+    assert sent_request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in sent_request.headers["authorization"]
+    assert "cookie" not in sent_request.headers
+    assert sent_request.headers["accept"] == "application/json"
+    assert sent_request.headers["x-request-id"] == "gw-conversation-req"
+    assert sent_body == {}
+    assert response.json_body == {"id": "conv_123", "object": "conversation"}
+    assert response.upstream_request_id == "req-openai-conversation-create"
+
+
+@pytest.mark.asyncio
+async def test_openai_conversation_retrieve_delete_use_provider_auth_and_exact_path(respx_mock) -> None:
+    retrieve_route = respx_mock.get("https://api.openai.com/v1/conversations/conv_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "conv_123", "object": "conversation"},
+            headers={"OpenAI-Request-ID": "req-openai-conversation-retrieve"},
+        )
+    )
+    delete_route = respx_mock.delete("https://api.openai.com/v1/conversations/conv_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "conv_123", "object": "conversation.deleted", "deleted": True},
+            headers={"OpenAI-Request-ID": "req-openai-conversation-delete"},
+        )
+    )
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+
+    retrieved = await adapter.retrieve_conversation(
+        _conversation_request("conversations.retrieve"),
+        conversation_id="conv_123",
+    )
+    deleted = await adapter.delete_conversation(
+        _conversation_request("conversations.delete"),
+        conversation_id="conv_123",
+    )
+
+    assert retrieve_route.calls[0].request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert delete_route.calls[0].request.headers["authorization"] == "Bearer openai-upstream-key"
+    assert "client-key" not in retrieve_route.calls[0].request.headers["authorization"]
+    assert "client-key" not in delete_route.calls[0].request.headers["authorization"]
+    assert retrieved.upstream_request_id == "req-openai-conversation-retrieve"
+    assert deleted.upstream_request_id == "req-openai-conversation-delete"
+    assert retrieved.json_body["object"] == "conversation"
+    assert deleted.json_body["object"] == "conversation.deleted"
 
 
 @pytest.mark.asyncio

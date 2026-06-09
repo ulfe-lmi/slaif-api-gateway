@@ -1013,6 +1013,71 @@ Rules:
 - Mark rows `deleted` after successful provider delete. Do not remove rows just
   to hide ownership history unless a future retention/anonymization policy says
   so.
+
+## 5.13 `conversation_references`
+
+Safe ownership metadata for provider-side Responses Conversations. Rows exist
+only so the gateway can prove that a gateway key owns a provider conversation
+ID before proxying retrieve/delete control calls or forwarding that
+conversation ID in `POST /v1/responses`. They are not conversation item content
+storage.
+
+Columns:
+
+```text
+id UUID primary key
+provider_conversation_id text not null
+gateway_key_id UUID not null references gateway_keys(id) on delete restrict
+owner_id UUID null references owners(id) on delete set null
+institution_id UUID null references institutions(id) on delete set null
+cohort_id UUID null references cohorts(id) on delete set null
+
+provider text not null
+endpoint text not null
+route_id UUID null references model_routes(id) on delete set null
+
+status text not null default 'active'
+provider_request_id text null
+deleted_at timestamptz null
+metadata jsonb not null default '{}'
+
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Allowed `status` values:
+
+```text
+active
+deleted
+```
+
+Constraints/indexes:
+
+```text
+unique(provider, provider_conversation_id)
+index(provider, provider_conversation_id)
+index(gateway_key_id, status)
+index(route_id)
+index(created_at)
+check(status in ('active', 'deleted'))
+```
+
+Rules:
+
+- Store only provider conversation reference metadata needed for ownership,
+  provider routing, lifecycle status, and auditability.
+- Conversation retrieve/delete and `POST /v1/responses` with `conversation`
+  must first find an `active` row for both the requested provider
+  conversation ID and the authenticated gateway key. Missing, non-owned, or
+  locally deleted references return an OpenAI-shaped 404 and are not proxied
+  upstream.
+- Mark rows `deleted` after successful provider delete. Do not remove rows just
+  to hide ownership history unless a future retention/anonymization policy says
+  so.
+- Do not store conversation item content, prompts, completions, raw request or
+  response bodies, tool/media payloads, provider keys, plaintext gateway keys,
+  token hashes, or one-time secret material.
 - `metadata` must be sanitized safe metadata only. It may contain bounded
   provider request IDs or route/accounting references when they are already
   safe.
@@ -1147,6 +1212,7 @@ responses.input_token_count
 responses.stored_responses
 responses.previous_response_id
 responses.compact
+responses.conversations
 ```
 
 Route/model capability metadata is separate from gateway-key endpoint/model

@@ -209,10 +209,12 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   `capabilities.responses.compact=true`, endpoint-specific pricing, quota
   reservation, provider usage finalization, and no compact input/output
   storage.
-  Hosted/provider-side Responses tools,
-  conversation state, streaming previous-response state, compact
-  `previous_response_id`, background mode, cancel/list routes,
-  `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
+  Conversation create/retrieve/delete and non-streaming Responses create with
+  an owned conversation reference are supported through safe local
+  conversation-reference metadata. Hosted/provider-side Responses tools,
+  conversation item/update endpoints, streaming conversation state, streaming
+  previous-response state, compact `previous_response_id`, background mode,
+  cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
   search/retrieval tools, audio input, image generation, multimodal output, and
   MCP/connectors remain future work. Safe Chat
   Completions usage profiling, trusted calibration keys, calibration proposal
@@ -249,8 +251,9 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
-- No Responses hosted tools, conversation/background routes, streaming
-  previous-response state, compact `previous_response_id`, cancel/list routes,
+- No Responses hosted tools, conversation item/update endpoints, background
+  routes, streaming conversation state, streaming previous-response state,
+  compact `previous_response_id`, cancel/list routes,
   embeddings, files endpoints, image generation
   endpoints, or audio endpoints in RC1.
 - No MFA or full RBAC.
@@ -263,7 +266,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Add formal security review or penetration testing before production claims.
 - Continue Responses API as scoped RC2 work under
   `responses-compatibility.md`; decide separately whether to implement
-  Responses hosted tools, conversation/background routes, broader lifecycle routes,
+  Responses hosted tools, conversation item/update endpoints, background routes,
+  broader lifecycle routes,
   bulk key send-now, embeddings, and native provider adapters.
 - Implement Responses streaming live-burn only as a separate scoped milestone
   under `streaming-live-burn-margin.md`, after the current Chat Completions

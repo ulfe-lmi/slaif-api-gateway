@@ -31,6 +31,7 @@ _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _RESPONSES_PATH = "/responses"
 _RESPONSES_INPUT_TOKENS_PATH = "/responses/input_tokens"
 _RESPONSES_COMPACT_PATH = "/responses/compact"
+_CONVERSATIONS_PATH = "/conversations"
 _UPSTREAM_REQUEST_ID_HEADERS = ("x-request-id", "openai-request-id")
 
 
@@ -226,6 +227,76 @@ class OpenAIProviderAdapter(ProviderAdapter):
             headers=headers,
             params=request.body,
         )
+        return self._provider_response(request, response)
+
+    async def create_conversation(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/conversations", "conversations.create"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._post_json(_CONVERSATIONS_PATH, json=request.body, headers=headers)
+        return self._provider_response(request, response)
+
+    async def retrieve_conversation(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        if request.endpoint not in {
+            "/v1/conversations/{conversation_id}",
+            "conversations.retrieve",
+        }:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._get_json(_conversation_path(conversation_id), headers=headers)
+        return self._provider_response(request, response)
+
+    async def delete_conversation(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        if request.endpoint not in {
+            "/v1/conversations/{conversation_id}",
+            "conversations.delete",
+        }:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._delete_json(_conversation_path(conversation_id), headers=headers)
         return self._provider_response(request, response)
 
     async def stream_response(
@@ -505,3 +576,7 @@ def _responses_event_response_payload(payload: Mapping[str, Any] | None) -> Mapp
 
 def _response_path(response_id: str) -> str:
     return f"{_RESPONSES_PATH}/{quote(response_id, safe='')}"
+
+
+def _conversation_path(conversation_id: str) -> str:
+    return f"{_CONVERSATIONS_PATH}/{quote(conversation_id, safe='')}"

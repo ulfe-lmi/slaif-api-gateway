@@ -2,7 +2,7 @@
 
 import inspect
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
@@ -14,6 +14,9 @@ from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList,
 from slaif_gateway.services.chat_completion_gateway import handle_chat_completion
 from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
+    CONVERSATIONS_CREATE,
+    CONVERSATIONS_DELETE,
+    CONVERSATIONS_RETRIEVE,
     MODELS_LIST,
     RESPONSES,
     RESPONSES_COMPACT,
@@ -26,6 +29,9 @@ from slaif_gateway.services.endpoint_policy import (
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
 from slaif_gateway.services.responses_gateway import (
+    handle_conversation_create,
+    handle_conversation_delete,
+    handle_conversation_retrieve,
     handle_response_compact,
     handle_response_create,
     handle_response_delete,
@@ -175,6 +181,57 @@ async def delete_response(
     if "request" in inspect.signature(handle_response_delete).parameters:
         kwargs["request"] = request
     return await handle_response_delete(**kwargs)
+
+
+@router.post("/v1/conversations")
+async def create_conversation(
+    request: Request,
+    payload: dict[str, object] | None = Body(default=None),
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATIONS_CREATE)
+    kwargs = {
+        "payload": payload,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_create).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_create(**kwargs)
+
+
+@router.get("/v1/conversations/{conversation_id}")
+async def retrieve_conversation(
+    conversation_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATIONS_RETRIEVE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_retrieve).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_retrieve(**kwargs)
+
+
+@router.delete("/v1/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, CONVERSATIONS_DELETE)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "authenticated_key": authenticated_key,
+        "settings": request.app.state.settings,
+    }
+    if "request" in inspect.signature(handle_conversation_delete).parameters:
+        kwargs["request"] = request
+    return await handle_conversation_delete(**kwargs)
 
 
 def _ensure_endpoint_allowed(authenticated_key: AuthenticatedGatewayKey, endpoint: str) -> None:

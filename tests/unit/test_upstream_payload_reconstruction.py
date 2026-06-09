@@ -1398,12 +1398,41 @@ def test_responses_previous_response_id_reconstructs_exact_upstream_body() -> No
     }
 
 
+def test_responses_conversation_reconstructs_exact_upstream_body_and_deep_copies() -> None:
+    inbound = {
+        "model": "classroom-responses",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "continue"}]}],
+        "max_output_tokens": 12,
+        "conversation": "conv_owned_123",
+    }
+    original = copy.deepcopy(inbound)
+    policy_result = _stored_responses_policy_result(inbound)
+
+    normalized_request = normalize_responses_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model="gpt-5.2",
+    )
+    outbound = build_responses_upstream_body(normalized_request)
+    inbound["input"][0]["content"][0]["text"] = "mutated"
+    rebuilt = build_responses_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-5.2",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "continue"}]}],
+        "max_output_tokens": 12,
+        "store": False,
+        "conversation": "conv_owned_123",
+    }
+    assert rebuilt["input"][0]["content"][0]["text"] == "continue"
+    assert original["input"][0]["content"][0]["text"] == "continue"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "code"),
     [
         ("unknown_top_level", "SHOULD_NOT_REACH_PROVIDER_TOP_LEVEL", "responses_field_not_supported"),
         ("parallel_tool_calls", True, "responses_tools_not_supported"),
-        ("conversation", "conv_SHOULD_NOT_APPEAR_IN_ERROR", "responses_state_not_supported"),
         ("background", True, "responses_background_not_supported"),
         ("include", ["output_text"], "responses_multimodal_not_supported"),
         ("prompt", {"id": "prompt_123"}, "responses_state_not_supported"),
