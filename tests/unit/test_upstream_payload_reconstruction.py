@@ -6,6 +6,8 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.upstream_request_contracts import (
+    normalize_conversation_items_create_upstream_request,
+    normalize_conversation_items_query_request,
     normalize_chat_completion_upstream_request,
     normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
@@ -16,6 +18,8 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.upstream_payloads import (
+    build_conversation_items_create_upstream_body,
+    build_conversation_items_query_params,
     build_chat_completion_upstream_body,
     build_responses_compact_upstream_body,
     build_responses_input_tokens_upstream_body,
@@ -1512,3 +1516,64 @@ def test_responses_builder_rejects_raw_effective_body_mapping() -> None:
             "input": "hello",
             "store": False,
         })
+
+
+def test_conversation_items_create_reconstructs_exact_body_and_deep_copies() -> None:
+    body = {
+        "items": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }
+        ]
+    }
+    normalized_request = normalize_conversation_items_create_upstream_request(body)
+    outbound = build_conversation_items_create_upstream_body(normalized_request)
+
+    body["items"][0]["content"][0]["text"] = "mutated"
+    rebuilt = build_conversation_items_create_upstream_body(normalized_request)
+
+    assert outbound == {
+        "items": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }
+        ]
+    }
+    assert rebuilt == outbound
+    assert outbound["items"] is not body["items"]
+
+
+def test_conversation_items_query_reconstructs_exact_query_and_deep_copies() -> None:
+    query = {
+        "after": "msg_1",
+        "before": "msg_9",
+        "include": ["message.input_image.image_url"],
+        "limit": 10,
+        "order": "asc",
+    }
+    normalized_request = normalize_conversation_items_query_request(query)
+    outbound = build_conversation_items_query_params(normalized_request)
+
+    query["include"].append("message.output_text.logprobs")
+    rebuilt = build_conversation_items_query_params(normalized_request)
+
+    assert outbound == {
+        "after": "msg_1",
+        "before": "msg_9",
+        "include": ["message.input_image.image_url"],
+        "limit": 10,
+        "order": "asc",
+    }
+    assert rebuilt == outbound
+    assert outbound["include"] is not query["include"]
+
+
+def test_conversation_items_builders_reject_raw_mappings() -> None:
+    with pytest.raises(TypeError, match="normalized request contract"):
+        build_conversation_items_create_upstream_body({"items": []})
+    with pytest.raises(TypeError, match="normalized request contract"):
+        build_conversation_items_query_params({"limit": 10})

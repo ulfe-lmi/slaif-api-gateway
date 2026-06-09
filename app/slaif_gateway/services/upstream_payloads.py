@@ -7,6 +7,8 @@ from typing import Any
 import copy
 
 from slaif_gateway.services.upstream_request_contracts import (
+    NormalizedConversationItemsCreateUpstreamRequest,
+    NormalizedConversationItemsQueryRequest,
     NormalizedChatCompletionUpstreamRequest,
     NormalizedResponsesCompactUpstreamRequest,
     NormalizedResponsesInputTokensUpstreamRequest,
@@ -89,6 +91,14 @@ RESPONSES_COMPACT_UPSTREAM_FIELDS: tuple[str, ...] = (
     "input",
     "instructions",
 )
+CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS: tuple[str, ...] = ("items",)
+CONVERSATION_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
+    "after",
+    "before",
+    "include",
+    "limit",
+    "order",
+)
 
 
 def build_chat_completion_upstream_body(
@@ -149,6 +159,46 @@ def build_responses_input_items_query_params(
     if unknown_fields:
         raise ValueError("Responses input-items query contains unsupported fields.")
     return {field: copy.deepcopy(query_params[field]) for field in RESPONSES_INPUT_ITEMS_QUERY_FIELDS if field in query_params}
+
+
+def build_conversation_items_create_upstream_body(
+    normalized_request: NormalizedConversationItemsCreateUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Conversation items provider payload from approved fields only."""
+
+    if not isinstance(normalized_request, NormalizedConversationItemsCreateUpstreamRequest):
+        raise TypeError(
+            "Conversation items create upstream payload must be built from a normalized request contract."
+        )
+    fields = normalized_request.as_upstream_fields()
+    unknown_fields = set(fields) - set(CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS)
+    if unknown_fields:
+        raise ValueError("Conversation items create payload contains unsupported fields.")
+    return {
+        field: copy.deepcopy(fields[field])
+        for field in CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS
+        if field in fields
+    }
+
+
+def build_conversation_items_query_params(
+    normalized_request: NormalizedConversationItemsQueryRequest,
+) -> dict[str, object]:
+    """Build fresh Conversation items provider query params from approved fields only."""
+
+    if not isinstance(normalized_request, NormalizedConversationItemsQueryRequest):
+        raise TypeError(
+            "Conversation items query params must be built from a normalized request contract."
+        )
+    fields = normalized_request.as_upstream_fields()
+    unknown_fields = set(fields) - set(CONVERSATION_ITEMS_QUERY_FIELDS)
+    if unknown_fields:
+        raise ValueError("Conversation items query contains unsupported fields.")
+    return {
+        field: copy.deepcopy(fields[field])
+        for field in CONVERSATION_ITEMS_QUERY_FIELDS
+        if field in fields
+    }
 
 
 def _build_upstream_body(

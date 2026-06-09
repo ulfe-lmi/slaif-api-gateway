@@ -18,7 +18,8 @@ active, same-key provider response references after provider/route compatibility
 checks. Input-item listing is supported only for owned locally recorded
 provider response references and is proxied without local input-item content
 storage. Conversations are supported as owned provider-side state references
-through `POST /v1/conversations`, owned retrieve/delete, and non-streaming
+through `POST /v1/conversations`, owned retrieve/delete, owned conversation
+item create/list/retrieve/delete proxying, and non-streaming
 `POST /v1/responses` with a locally recorded owned `conversation` ID; SLAIF
 stores only safe conversation reference metadata and never stores conversation
 item content.
@@ -28,7 +29,7 @@ provider-reported count endpoint for the same local input subset.
 text-focused compaction endpoint with explicit endpoint permission, route
 capability, endpoint-specific pricing, quota reservation, and provider-usage
 finalization. These slices have no hosted tools, MCP/connectors, background
-mode, conversation item endpoints, conversation update, `/v1/files` lifecycle,
+mode, conversation update, `/v1/files` lifecycle,
 audio input, audio output, image generation, file search,
 cancel/response-list routes, or multimodal output. SLAIF does not store
 compact input, output, or encrypted compaction content.
@@ -46,6 +47,10 @@ The first implemented endpoint is:
 - `POST /v1/conversations`
 - `GET /v1/conversations/{conversation_id}`
 - `DELETE /v1/conversations/{conversation_id}`
+- `POST /v1/conversations/{conversation_id}/items`
+- `GET /v1/conversations/{conversation_id}/items`
+- `GET /v1/conversations/{conversation_id}/items/{item_id}`
+- `DELETE /v1/conversations/{conversation_id}/items/{item_id}`
 
 Unsupported Responses routes remain unsupported until separate implementation
 and tests add them.
@@ -264,6 +269,20 @@ The first stateful lifecycle slice is intentionally limited:
   `previous_response_id`;
 - unknown, non-owned, deleted, provider-mismatched, or route-incompatible
   conversation IDs return an OpenAI-shaped 404 and are not proxied upstream.
+- `POST /v1/conversations/{conversation_id}/items` accepts only bounded text
+  message items and rejects hosted-tool, tool-output, media, file, audio, and
+  provider-side authority markers;
+- `GET /v1/conversations/{conversation_id}/items` supports only validated
+  `after`, `before`, `limit`, `order`, and conservative `include` query
+  parameters;
+- `GET /v1/conversations/{conversation_id}/items/{item_id}` supports only the
+  same conservative `include` query parameter, and delete supports no query
+  or body payload;
+- all conversation item endpoints first require an active local conversation
+  reference owned by the authenticated gateway key, use the provider
+  conversation ID from that reference, and return OpenAI-shaped 404 without
+  provider proxying for unknown, non-owned, deleted, or incompatible
+  conversations.
 
 The local response reference stores provider response ID, gateway key/owner
 metadata, provider, requested/upstream model, endpoint, route/status/timestamps,
@@ -283,8 +302,9 @@ Retrieve/delete/input-item listing are control-plane proxy calls: they do not
 reserve output quota or create normal generation usage ledger rows. Stored
 create and `POST /v1/responses` with `conversation` remain ordinary generation
 requests and use the existing reservation/finalization accounting path.
-Conversation create/retrieve/delete are control-plane proxy calls and do not
-reserve output quota or create normal generation usage ledger rows. If a
+Conversation create/retrieve/delete and conversation item create/list/retrieve/delete
+are control-plane proxy calls and do not reserve output quota or create normal
+generation usage ledger rows. If a
 provider returns no response ID for `store=true`, SLAIF fails safely instead of
 claiming retrievable state. If provider conversation create returns no
 conversation ID, SLAIF fails safely instead of claiming owned state.
@@ -292,7 +312,6 @@ conversation ID, SLAIF fails safely instead of claiming owned state.
 Still unsupported:
 
 - `background=true`
-- conversation item endpoints
 - conversation update
 - MCP/connectors
 - streaming `previous_response_id`
@@ -303,7 +322,8 @@ Still unsupported:
 OpenAI documents Responses as supporting background mode, response storage,
 conversation state, previous response IDs, and hosted tools. OpenRouter documents
 its Responses beta as stateless. SLAIF enables only the owned retrieve/delete,
-owned input-item listing, owned previous-response, and owned conversation slices
+owned input-item listing, owned previous-response, owned conversation, and
+owned conversation item proxy slices
 above and continues to fail closed on other stateful and background features
 until explicit ownership mapping, quota/accounting semantics, and tests exist.
 
@@ -463,13 +483,14 @@ For `/v1/responses`, a template revision may carry
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
 `input_token_count`, `stored_responses`, `previous_response_id`,
-`list_input_items`, `compact`), allowed local
+`list_input_items`, `compact`, `conversations`, `conversation_items`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
 `previous_response_id`, `list_input_items`, and `compact` are only safe
 capability
 summaries for non-streaming stored create, owned retrieve/delete/input-item
-listing, owned previous-response chaining, and bounded text-focused compact;
+listing, owned previous-response chaining, owned conversation references,
+owned conversation item proxying, and bounded text-focused compact;
 they do not permit raw response IDs from user traffic, prompts, completions,
 input items, compact input/output, encrypted compaction content, or response
 content in template metadata. Template-to-key creation copies that
@@ -603,7 +624,7 @@ The local/stored Responses foundation is implemented with:
 - endpoint allowlist and pipeline-ordering tests;
 - PostgreSQL-backed mocked official OpenAI Python client E2E coverage.
 
-Broader hosted-tool, background, conversation item/update, and streaming
+Broader hosted-tool, background, conversation update, and streaming
 stateful Responses support remains future work until these are present and
 green:
 

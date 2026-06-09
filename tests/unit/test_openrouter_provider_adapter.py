@@ -536,6 +536,99 @@ async def test_openrouter_conversation_retrieve_delete_use_provider_auth_and_exa
 
 
 @pytest.mark.asyncio
+async def test_openrouter_conversation_items_use_provider_auth_exact_paths_body_and_query(respx_mock) -> None:
+    create_route = respx_mock.post(
+        "https://openrouter.ai/api/v1/conversations/conv_123/items"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"object": "list", "data": [{"id": "msg_1", "type": "message"}]},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-conversation-items-create"},
+        )
+    )
+    list_route = respx_mock.get(
+        "https://openrouter.ai/api/v1/conversations/conv_123/items",
+        params={
+            "after": "msg_0",
+            "before": "msg_9",
+            "include": "message.input_image.image_url",
+            "limit": "10",
+            "order": "asc",
+        },
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-conversation-items-list"},
+        )
+    )
+    retrieve_route = respx_mock.get(
+        "https://openrouter.ai/api/v1/conversations/conv_123/items/msg_1",
+        params={"include": "message.input_image.image_url"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "msg_1", "type": "message", "role": "user"},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-conversation-item-retrieve"},
+        )
+    )
+    delete_route = respx_mock.delete(
+        "https://openrouter.ai/api/v1/conversations/conv_123/items/msg_1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "conv_123", "object": "conversation"},
+            headers={"X-OpenRouter-Request-ID": "req-openrouter-conversation-item-delete"},
+        )
+    )
+    adapter = OpenRouterProviderAdapter(Settings(OPENROUTER_API_KEY="openrouter-upstream-key"))
+    create_body = {"items": [{"role": "user", "content": "hello"}]}
+
+    created = await adapter.create_conversation_items(
+        _conversation_request("conversations.items.create", create_body),
+        conversation_id="conv_123",
+    )
+    listed = await adapter.list_conversation_items(
+        _conversation_request(
+            "conversations.items.list",
+            {
+                "after": "msg_0",
+                "before": "msg_9",
+                "include": ["message.input_image.image_url"],
+                "limit": 10,
+                "order": "asc",
+            },
+        ),
+        conversation_id="conv_123",
+    )
+    retrieved = await adapter.retrieve_conversation_item(
+        _conversation_request(
+            "conversations.items.retrieve",
+            {"include": ["message.input_image.image_url"]},
+        ),
+        conversation_id="conv_123",
+        item_id="msg_1",
+    )
+    deleted = await adapter.delete_conversation_item(
+        _conversation_request("conversations.items.delete"),
+        conversation_id="conv_123",
+        item_id="msg_1",
+    )
+
+    assert json.loads(create_route.calls[0].request.content) == create_body
+    for route in (create_route, list_route, retrieve_route, delete_route):
+        sent_request = route.calls[0].request
+        assert sent_request.headers["authorization"] == "Bearer openrouter-upstream-key"
+        assert "client-key" not in sent_request.headers["authorization"]
+        assert "cookie" not in sent_request.headers
+        assert sent_request.headers["accept"] == "application/json"
+    assert created.upstream_request_id == "req-openrouter-conversation-items-create"
+    assert listed.upstream_request_id == "req-openrouter-conversation-items-list"
+    assert retrieved.upstream_request_id == "req-openrouter-conversation-item-retrieve"
+    assert deleted.upstream_request_id == "req-openrouter-conversation-item-delete"
+
+
+@pytest.mark.asyncio
 async def test_openrouter_response_posts_function_tool_request(respx_mock) -> None:
     route = respx_mock.post("https://openrouter.ai/api/v1/responses").mock(
         return_value=httpx.Response(

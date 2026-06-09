@@ -120,11 +120,12 @@ non-streaming stored create when explicitly enabled.
 `POST /v1/responses/input_tokens` has a separate provider-reported count
 forwarding path for the same local input subset. `GET` and
 `DELETE /v1/responses/{response_id}` are control-plane proxy calls after local
-ownership checks. `POST`, `GET`, and `DELETE /v1/conversations` are
-control-plane proxy calls that persist only safe provider conversation
-reference metadata for ownership/routing; `POST /v1/responses` may forward a
-conversation ID only after that ID resolves to an active local reference owned
-by the authenticated gateway key and compatible with the resolved provider.
+ownership checks. `POST`, `GET`, and `DELETE /v1/conversations` plus
+`POST`/`GET`/`DELETE /v1/conversations/{conversation_id}/items` are
+control-plane proxy calls that use only safe provider conversation reference
+metadata for ownership/routing; `POST /v1/responses` may forward a conversation
+ID only after that ID resolves to an active local reference owned by the
+authenticated gateway key and compatible with the resolved provider.
 
 Responses forwarding follows the same provider-secret boundary:
 
@@ -267,7 +268,7 @@ Responses-specific rules for the current foundation:
 - future supported tool types must be explicitly allowlisted by key or key
   template;
 - MCP/connectors are excluded;
-- `background`, conversation item/update endpoints, streaming conversation, and
+- `background`, conversation update, streaming conversation, and
   streaming `previous_response_id` are rejected before provider forwarding;
 - response cancel and response listing require explicit provider response
   ownership mapping before they can be implemented;

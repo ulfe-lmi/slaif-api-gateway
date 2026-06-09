@@ -516,13 +516,17 @@ metadata allows it. It also supports non-streaming local/client-side function
 tools when route capability metadata allows them, and non-streaming
 local/client-side custom tools when route capability metadata allows them.
 Non-streaming stored create, non-streaming `previous_response_id`, input-item
-listing, and non-streaming `conversation` use in `POST /v1/responses` are
+listing, non-streaming `conversation` use in `POST /v1/responses`, and
+Conversation item resource proxying are
 available only when route capability metadata allows them and local ownership
 checks pass. `POST /v1/conversations`, `GET /v1/conversations/{id}`, and
 `DELETE /v1/conversations/{id}` are metadata/control proxy calls that require
 explicit endpoint permission and safe local conversation-reference metadata;
 they do not reserve generation quota or create normal generation usage ledger
-rows. `POST /v1/responses/compact` is a separate bounded non-streaming
+rows. `POST`/`GET`/`DELETE /v1/conversations/{id}/items` are also explicit
+endpoint-permission resource proxy calls, limited to validated safe payloads
+and safe local conversation-reference ownership. `POST /v1/responses/compact`
+is a separate bounded non-streaming
 text-focused endpoint with explicit
 `/v1/responses/compact` endpoint permission, route capability, pricing, and
 provider usage finalization. Ordinary create reuses

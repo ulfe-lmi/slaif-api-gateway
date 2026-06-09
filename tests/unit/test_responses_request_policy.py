@@ -6,7 +6,10 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.policy_errors import RequestPolicyError
-from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
+from slaif_gateway.services.responses_request_policy import (
+    ResponsesRequestPolicy,
+    validate_conversation_items_create_body,
+)
 
 
 def _body(**overrides: object) -> dict[str, object]:
@@ -1731,3 +1734,54 @@ def test_json_output_is_secret_safe_for_policy_result() -> None:
     payload = json.dumps(result.model_dump(mode="json"), sort_keys=True)
 
     assert "sk-" not in payload
+
+
+def test_conversation_item_create_accepts_text_message_items() -> None:
+    result = validate_conversation_items_create_body(
+        {
+            "items": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                }
+            ]
+        },
+        settings=Settings(),
+    )
+
+    assert result == {
+        "items": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "function_call_output", "call_id": "call_1", "output": "result"},
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": "https://example.test/image.png"}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_file", "file_url": "https://example.test/file.pdf"}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello", "server_url": "https://mcp.test"}],
+        },
+    ],
+)
+def test_conversation_item_create_rejects_tool_media_and_hosted_markers(item: dict[str, object]) -> None:
+    with pytest.raises(RequestPolicyError):
+        validate_conversation_items_create_body({"items": [item]}, settings=Settings())

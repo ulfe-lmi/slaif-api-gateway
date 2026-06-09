@@ -87,6 +87,48 @@ class ProviderAdapter(ABC):
         _ = (request, conversation_id)
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def create_conversation_items(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        """Create items in a provider-side Conversation by provider conversation ID."""
+        _ = (request, conversation_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def list_conversation_items(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+    ) -> ProviderResponse:
+        """List items in a provider-side Conversation by provider conversation ID."""
+        _ = (request, conversation_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def retrieve_conversation_item(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+        item_id: str,
+    ) -> ProviderResponse:
+        """Retrieve a provider-side Conversation item by provider IDs."""
+        _ = (request, conversation_id, item_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def delete_conversation_item(
+        self,
+        request: ProviderRequest,
+        *,
+        conversation_id: str,
+        item_id: str,
+    ) -> ProviderResponse:
+        """Delete a provider-side Conversation item by provider IDs."""
+        _ = (request, conversation_id, item_id)
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def stream_chat_completion(
         self,
         request: ProviderRequest,
