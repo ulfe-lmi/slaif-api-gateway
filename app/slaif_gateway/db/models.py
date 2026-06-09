@@ -40,6 +40,7 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
     "released",
 )
 STATUS_VALUES_RESPONSE_REFERENCES = ("active", "deleted")
+STATUS_VALUES_CONVERSATION_REFERENCES = ("active", "deleted")
 SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
@@ -290,6 +291,7 @@ class GatewayKey(Base):
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
     response_references: Mapped[list[ResponseReference]] = relationship(back_populates="gateway_key")
+    conversation_references: Mapped[list[ConversationReference]] = relationship(back_populates="gateway_key")
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="gateway_key")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
@@ -395,6 +397,62 @@ class ResponseReference(Base):
         Index("ix_response_references_route_id", "route_id"),
         Index("ix_response_references_created_at", "created_at"),
         Index("ix_response_references_expires_at", "expires_at"),
+    )
+
+
+class ConversationReference(Base):
+    __tablename__ = "conversation_references"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider_conversation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="SET NULL"), nullable=True
+    )
+    cohort_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cohorts.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    route_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    provider_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference_metadata: Mapped[dict[str, object]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="conversation_references")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_CONVERSATION_REFERENCES}",
+            name="conversation_references_status_allowed_values",
+        ),
+        UniqueConstraint(
+            "provider",
+            "provider_conversation_id",
+            name="uq_conversation_references_provider_conversation",
+        ),
+        Index("ix_conversation_references_gateway_key_id_status", "gateway_key_id", "status"),
+        Index(
+            "ix_conversation_references_provider_conversation_id",
+            "provider",
+            "provider_conversation_id",
+        ),
+        Index("ix_conversation_references_route_id", "route_id"),
+        Index("ix_conversation_references_created_at", "created_at"),
     )
 
 

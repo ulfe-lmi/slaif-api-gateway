@@ -8,6 +8,9 @@ import pytest
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.endpoint_policy import (
     CHAT_COMPLETIONS,
+    CONVERSATIONS_CREATE,
+    CONVERSATIONS_DELETE,
+    CONVERSATIONS_RETRIEVE,
     MODELS_LIST,
     RESPONSES,
     RESPONSES_COMPACT,
@@ -58,6 +61,9 @@ def test_allow_all_endpoints_allows_known_endpoints() -> None:
     service.ensure_endpoint_allowed(auth, RESPONSES_DELETE)
     service.ensure_endpoint_allowed(auth, RESPONSES_INPUT_ITEMS)
     service.ensure_endpoint_allowed(auth, RESPONSES_COMPACT)
+    service.ensure_endpoint_allowed(auth, CONVERSATIONS_CREATE)
+    service.ensure_endpoint_allowed(auth, CONVERSATIONS_RETRIEVE)
+    service.ensure_endpoint_allowed(auth, CONVERSATIONS_DELETE)
 
 
 def test_stable_endpoint_identifiers_are_enforced() -> None:
@@ -87,6 +93,18 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("responses.compact",)),
         RESPONSES_COMPACT,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("conversations.create",)),
+        CONVERSATIONS_CREATE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("conversations.retrieve",)),
+        CONVERSATIONS_RETRIEVE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("conversations.delete",)),
+        CONVERSATIONS_DELETE,
     )
 
     with pytest.raises(EndpointNotAllowedError):
@@ -118,6 +136,21 @@ def test_stable_endpoint_identifiers_are_enforced() -> None:
 
     with pytest.raises(EndpointNotAllowedError):
         service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses.input_items",)), RESPONSES_COMPACT)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(_auth(allowed_endpoints=("responses",)), CONVERSATIONS_CREATE)
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(
+            _auth(allowed_endpoints=("conversations.create",)),
+            CONVERSATIONS_RETRIEVE,
+        )
+
+    with pytest.raises(EndpointNotAllowedError):
+        service.ensure_endpoint_allowed(
+            _auth(allowed_endpoints=("conversations.retrieve",)),
+            CONVERSATIONS_DELETE,
+        )
 
 
 def test_empty_endpoint_allow_list_rejects_when_allow_all_false() -> None:
@@ -167,6 +200,22 @@ def test_literal_method_paths_and_bare_paths_are_supported() -> None:
     service.ensure_endpoint_allowed(
         _auth(allowed_endpoints=("/v1/responses/compact",)),
         RESPONSES_COMPACT,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("POST /v1/conversations",)),
+        CONVERSATIONS_CREATE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("/v1/conversations",)),
+        CONVERSATIONS_CREATE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("GET /v1/conversations/{conversation_id}",)),
+        CONVERSATIONS_RETRIEVE,
+    )
+    service.ensure_endpoint_allowed(
+        _auth(allowed_endpoints=("DELETE /v1/conversations/{conversation_id}",)),
+        CONVERSATIONS_DELETE,
     )
 
     with pytest.raises(EndpointNotAllowedError):

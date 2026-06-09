@@ -30,6 +30,7 @@ EXPECTED_TABLES = {
     "key_templates",
     "key_template_revisions",
     "response_references",
+    "conversation_references",
 }
 
 

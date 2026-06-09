@@ -24,7 +24,8 @@ from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_err
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import ResponseReference
+from slaif_gateway.db.models import ConversationReference, ResponseReference
+from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
@@ -76,6 +77,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_file_input_requested,
     responses_function_tools_requested,
     responses_image_input_requested,
+    conversation_requested,
     responses_text_format_type,
     previous_response_id_requested,
 )
@@ -108,6 +110,12 @@ RESPONSES_INPUT_ITEMS_ENDPOINT = "GET /v1/responses/{response_id}/input_items"
 RESPONSES_RETRIEVE_PROVIDER_ENDPOINT = "responses.retrieve"
 RESPONSES_DELETE_PROVIDER_ENDPOINT = "responses.delete"
 RESPONSES_INPUT_ITEMS_PROVIDER_ENDPOINT = "responses.input_items"
+CONVERSATIONS_CREATE_ENDPOINT = "/v1/conversations"
+CONVERSATIONS_RETRIEVE_ENDPOINT = "GET /v1/conversations/{conversation_id}"
+CONVERSATIONS_DELETE_ENDPOINT = "DELETE /v1/conversations/{conversation_id}"
+CONVERSATIONS_CREATE_PROVIDER_ENDPOINT = "conversations.create"
+CONVERSATIONS_RETRIEVE_PROVIDER_ENDPOINT = "conversations.retrieve"
+CONVERSATIONS_DELETE_PROVIDER_ENDPOINT = "conversations.delete"
 _RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS = frozenset({"after", "include", "include[]", "limit", "order"})
 _RESPONSES_INPUT_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
 
@@ -244,6 +252,7 @@ async def handle_response_input_tokens_count(
         stored_responses_requested=False,
         previous_response_id_requested=False,
         compact_requested=False,
+        conversations_requested=False,
         request=request,
     )
     upstream_body = _build_safe_responses_input_tokens_upstream_body(
@@ -303,6 +312,7 @@ async def handle_response_compact(
         stored_responses_requested=False,
         previous_response_id_requested=False,
         compact_requested=True,
+        conversations_requested=False,
         request=request,
     )
     upstream_body = _build_safe_responses_compact_upstream_body(
@@ -421,11 +431,19 @@ async def handle_response_create(
         stored_responses_requested=policy_result.effective_body.get("store") is True,
         previous_response_id_requested=previous_response_id_requested(policy_result.effective_body),
         compact_requested=False,
+        conversations_requested=conversation_requested(policy_result.effective_body),
         request=request,
     )
     if previous_response_id_requested(policy_result.effective_body):
         await _verify_previous_response_reference(
             previous_response_id=str(policy_result.effective_body["previous_response_id"]),
+            authenticated_key=authenticated_key,
+            route=route,
+            request=request,
+        )
+    if conversation_requested(policy_result.effective_body):
+        await _verify_conversation_reference(
+            conversation_id=str(policy_result.effective_body["conversation"]),
             authenticated_key=authenticated_key,
             route=route,
             request=request,
@@ -692,6 +710,137 @@ async def handle_response_input_items_list(
     )
 
 
+async def handle_conversation_create(
+    *,
+    payload: dict[str, object] | None,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    _validate_conversation_create_body(payload)
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_new_conversation(
+            authenticated_key=authenticated_key,
+            request=request,
+        )
+        provider_request = ProviderRequest(
+            provider=route_like.provider,
+            upstream_model="",
+            endpoint=CONVERSATIONS_CREATE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=route_like.provider,
+            endpoint=CONVERSATIONS_CREATE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.create_conversation(provider_request),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    await _persist_conversation_reference(
+        authenticated_key=authenticated_key,
+        provider=route_like.provider,
+        provider_response=provider_response,
+        request=request,
+    )
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_retrieve(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    safe_conversation_id = _validate_conversation_id(conversation_id)
+    reference = await _get_owned_active_conversation_reference(
+        conversation_id=safe_conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _conversation_not_found_error()
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATIONS_RETRIEVE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATIONS_RETRIEVE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.retrieve_conversation(
+                provider_request,
+                conversation_id=safe_conversation_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
+async def handle_conversation_delete(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None = None,
+):
+    safe_conversation_id = _validate_conversation_id(conversation_id)
+    reference = await _get_owned_active_conversation_reference(
+        conversation_id=safe_conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _conversation_not_found_error()
+
+    request_id = _request_id_from_request(request)
+    try:
+        route_like = await _provider_route_for_conversation_reference(reference, request=request)
+        provider_request = ProviderRequest(
+            provider=reference.provider,
+            upstream_model="",
+            endpoint=CONVERSATIONS_DELETE_PROVIDER_ENDPOINT,
+            body={},
+            request_id=request_id,
+        )
+        adapter = get_provider_adapter(route_like, settings)
+        provider_response = await observe_provider_call(
+            provider=reference.provider,
+            endpoint=CONVERSATIONS_DELETE_PROVIDER_ENDPOINT,
+            call=lambda: adapter.delete_conversation(
+                provider_request,
+                conversation_id=safe_conversation_id,
+            ),
+        )
+    except ProviderError as exc:
+        raise openai_error_from_provider_error(exc) from exc
+
+    await _mark_conversation_reference_deleted(reference_id=reference.id, request=request)
+    return JSONResponse(
+        status_code=provider_response.status_code,
+        content=dict(provider_response.json_body),
+    )
+
+
 async def _resolve_responses_route(
     *,
     authenticated_key: AuthenticatedGatewayKey,
@@ -707,6 +856,7 @@ async def _resolve_responses_route(
     stored_responses_requested: bool,
     previous_response_id_requested: bool,
     compact_requested: bool,
+    conversations_requested: bool,
     request: Request | None,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
@@ -740,6 +890,7 @@ async def _resolve_responses_route(
                 stored_responses_requested=stored_responses_requested,
                 previous_response_id_requested=previous_response_id_requested,
                 compact_requested=compact_requested,
+                conversations_requested=conversations_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -1335,6 +1486,79 @@ async def _persist_stored_response_reference(
         await session_iterator.aclose()
 
 
+async def _persist_conversation_reference(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    provider: str,
+    provider_response: ProviderResponse,
+    request: Request | None,
+) -> None:
+    provider_conversation_id = _provider_conversation_id(provider_response)
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        repository = ConversationReferencesRepository(session)
+        await repository.create_conversation_reference(
+            provider_conversation_id=provider_conversation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            owner_id=authenticated_key.owner_id,
+            cohort_id=authenticated_key.cohort_id,
+            provider=provider,
+            endpoint=CONVERSATIONS_CREATE_ENDPOINT,
+            provider_request_id=provider_response.upstream_request_id,
+            metadata={},
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    finally:
+        await session_iterator.aclose()
+
+
+async def _get_owned_active_conversation_reference(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    request: Request | None,
+) -> ConversationReference | None:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        repository = ConversationReferencesRepository(session)
+        return await repository.get_active_reference_for_key(
+            provider_conversation_id=conversation_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+        )
+    finally:
+        await session_iterator.aclose()
+
+
+async def _verify_conversation_reference(
+    *,
+    conversation_id: str,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    request: Request | None,
+) -> ConversationReference:
+    reference = await _get_owned_active_conversation_reference(
+        conversation_id=conversation_id,
+        authenticated_key=authenticated_key,
+        request=request,
+    )
+    if reference is None:
+        raise _conversation_not_found_error()
+    if not _conversation_reference_matches_route(reference, route):
+        raise _conversation_not_found_error()
+    return reference
+
+
 async def _get_owned_active_response_reference(
     *,
     response_id: str,
@@ -1383,6 +1607,17 @@ def _response_reference_matches_route(
     if reference.provider != route.provider:
         return False
     if reference.upstream_model and reference.upstream_model != route.resolved_model:
+        return False
+    if reference.route_id is not None and reference.route_id != route.route_id:
+        return False
+    return True
+
+
+def _conversation_reference_matches_route(
+    reference: ConversationReference,
+    route: RouteResolutionResult,
+) -> bool:
+    if reference.provider != route.provider:
         return False
     if reference.route_id is not None and reference.route_id != route.route_id:
         return False
@@ -1440,6 +1675,88 @@ async def _provider_route_for_reference(
         )
     finally:
         await session_iterator.aclose()
+
+
+async def _provider_route_for_new_conversation(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    request: Request | None,
+):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        providers = await ProviderConfigsRepository(session).list_provider_configs(enabled=True)
+        provider_config = _select_conversation_provider_config(
+            providers,
+            authenticated_key=authenticated_key,
+        )
+        if provider_config is None:
+            raise ProviderConfigurationError(
+                "Provider is not configured for Conversations.",
+                provider="openai",
+                error_code="provider_configuration_error",
+            )
+        return _route_like_for_provider_config(provider_config)
+    finally:
+        await session_iterator.aclose()
+
+
+async def _provider_route_for_conversation_reference(
+    reference: ConversationReference,
+    *,
+    request: Request | None,
+):
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        provider_config = await ProviderConfigsRepository(session).get_provider_config_by_provider(
+            reference.provider
+        )
+        if provider_config is None or provider_config.enabled is not True:
+            raise ProviderConfigurationError(
+                "Provider is not configured for this Conversation.",
+                provider=reference.provider,
+                error_code="provider_configuration_error",
+            )
+        return _route_like_for_provider_config(provider_config)
+    finally:
+        await session_iterator.aclose()
+
+
+def _select_conversation_provider_config(
+    provider_configs,
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+):
+    enabled_by_name = {config.provider: config for config in provider_configs if config.enabled}
+    if authenticated_key.allowed_providers is not None:
+        allowed = [provider for provider in authenticated_key.allowed_providers if provider in enabled_by_name]
+        if not allowed:
+            return None
+        if len(allowed) == 1:
+            return enabled_by_name[allowed[0]]
+        if "openai" in allowed:
+            return enabled_by_name["openai"]
+        return enabled_by_name[sorted(allowed)[0]]
+    return enabled_by_name.get("openai") or next(iter(sorted(enabled_by_name.values(), key=lambda item: item.provider)), None)
+
+
+def _route_like_for_provider_config(provider_config):
+    return SimpleNamespace(
+        provider=provider_config.provider,
+        provider_base_url=provider_config.base_url,
+        provider_api_key_env_var=provider_config.api_key_env_var,
+        provider_timeout_seconds=provider_config.timeout_seconds,
+        provider_max_retries=provider_config.max_retries,
+    )
 
 
 def _validate_response_input_items_query(request: Request | None) -> dict[str, object]:
@@ -1527,6 +1844,36 @@ async def _mark_response_reference_deleted(
         await session_iterator.aclose()
 
 
+async def _mark_conversation_reference_deleted(
+    *,
+    reference_id: uuid.UUID,
+    request: Request | None,
+) -> None:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        reference = await session.get(ConversationReference, reference_id)
+        if reference is None or reference.status != "active":
+            raise OpenAICompatibleError(
+                "Conversation delete could not update local reference metadata.",
+                status_code=500,
+                error_type="server_error",
+                code="conversation_reference_update_failed",
+            )
+        await ConversationReferencesRepository(session).mark_deleted(
+            reference,
+            deleted_at=datetime.now(UTC),
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+    finally:
+        await session_iterator.aclose()
+
+
 def _provider_response_id(provider_response: ProviderResponse) -> str:
     response_id = provider_response.json_body.get("id")
     if isinstance(response_id, str) and response_id:
@@ -1536,6 +1883,37 @@ def _provider_response_id(provider_response: ProviderResponse) -> str:
         status_code=502,
         error_type="server_error",
         code="provider_response_invalid",
+    )
+
+
+def _provider_conversation_id(provider_response: ProviderResponse) -> str:
+    conversation_id = provider_response.json_body.get("id")
+    if isinstance(conversation_id, str) and conversation_id:
+        return conversation_id
+    raise OpenAICompatibleError(
+        "Provider did not return a Conversation ID.",
+        status_code=502,
+        error_type="server_error",
+        code="provider_response_invalid",
+    )
+
+
+def _validate_conversation_create_body(payload: dict[str, object] | None) -> dict[str, object]:
+    if payload in (None, {}):
+        return {}
+    if not isinstance(payload, dict):
+        raise OpenAICompatibleError(
+            "Conversation create request body must be an object.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="conversation_create_body_invalid",
+        )
+    raise OpenAICompatibleError(
+        "Conversation create with initial items or metadata is not enabled by this gateway.",
+        status_code=400,
+        error_type="invalid_request_error",
+        code="conversation_create_fields_not_supported",
+        param=sorted(payload)[0] if payload else None,
     )
 
 
@@ -1552,12 +1930,29 @@ def _validate_response_id(response_id: str) -> str:
     return response_id
 
 
+def _validate_conversation_id(conversation_id: str) -> str:
+    if not conversation_id or len(conversation_id.encode("utf-8")) > 512 or any(
+        ord(char) < 32 for char in conversation_id
+    ):
+        raise _conversation_not_found_error()
+    return conversation_id
+
+
 def _response_not_found_error() -> OpenAICompatibleError:
     return OpenAICompatibleError(
         "Response not found.",
         status_code=404,
         error_type="invalid_request_error",
         code="response_not_found",
+    )
+
+
+def _conversation_not_found_error() -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "Conversation not found.",
+        status_code=404,
+        error_type="invalid_request_error",
+        code="conversation_not_found",
     )
 
 

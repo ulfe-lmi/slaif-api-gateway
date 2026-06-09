@@ -359,17 +359,18 @@ ordinary Responses token/cost accounting. Image/file bytes are not
 invoice-grade token truth.
 
 Streaming finalization uses usage from the provider's completed response event;
-missing final usage is not treated as zero cost. `store=true` and
-`previous_response_id` are non-streaming create requests and use the same
-generation reservation/finalization path as other successful Responses create
-requests. Retrieve/delete/input-item listing are ownership-checked
-control-plane proxy calls and do not reserve output quota or create normal
-generation usage ledger rows.
+missing final usage is not treated as zero cost. `store=true`,
+`previous_response_id`, and `conversation` are non-streaming create requests and
+use the same generation reservation/finalization path as other successful
+Responses create requests. Response retrieve/delete/input-item listing and
+conversation create/retrieve/delete are ownership-checked control-plane proxy
+calls and do not reserve output quota or create normal generation usage ledger
+rows.
 
-Responses hosted tools, conversations, background mode, `input_image.file_id`,
-`input_file.file_id`, file search/retrieval tools, audio inputs, image
-generation, audio output, and multimodal output are not priced or enabled in
-this foundation.
+Responses hosted tools, conversation item/update endpoints, background mode,
+`input_image.file_id`, `input_file.file_id`, file search/retrieval tools, audio
+inputs, image generation, audio output, and multimodal output are not priced or
+enabled in this foundation.
 
 `POST /v1/responses/input_tokens` is not a generation endpoint. It requires an
 explicit model route and `capabilities.responses.input_token_count=true`, but

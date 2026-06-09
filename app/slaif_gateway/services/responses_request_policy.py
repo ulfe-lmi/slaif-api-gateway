@@ -31,6 +31,7 @@ _SUPPORTED_FIELDS = frozenset(
         "tools",
         "tool_choice",
         "previous_response_id",
+        "conversation",
     }
 )
 _SUPPORTED_INPUT_TOKEN_COUNT_FIELDS = frozenset(
@@ -177,6 +178,13 @@ class ResponsesRequestPolicy:
         )
         self._validate_storage_fields(effective_body, allow_store=allow_store)
         self._validate_previous_response_id(effective_body)
+        self._validate_conversation(effective_body)
+        if "conversation" in effective_body and "previous_response_id" in effective_body:
+            _raise(
+                "conversation",
+                "responses_conversation_previous_response_not_supported",
+                "Responses conversation and previous_response_id cannot be combined in this gateway.",
+            )
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
         self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
@@ -201,6 +209,12 @@ class ResponsesRequestPolicy:
                 "previous_response_id",
                 "responses_previous_response_streaming_not_supported",
                 "Streaming Responses with previous_response_id is not enabled by this gateway.",
+            )
+        if effective_body.get("stream") is True and conversation_requested(effective_body):
+            _raise(
+                "conversation",
+                "responses_conversation_streaming_not_supported",
+                "Streaming Responses with conversation is not enabled by this gateway.",
             )
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
@@ -1385,6 +1399,29 @@ class ResponsesRequestPolicy:
                 "The 'previous_response_id' field contains unsupported characters.",
             )
 
+    def _validate_conversation(self, body: Mapping[str, Any]) -> None:
+        if "conversation" not in body:
+            return
+        value = body.get("conversation")
+        if not isinstance(value, str) or not value:
+            _raise(
+                "conversation",
+                "responses_conversation_invalid",
+                "The 'conversation' field must be a non-empty string provider conversation ID.",
+            )
+        self._validate_string_bytes(
+            value,
+            param="conversation",
+            max_bytes=self._settings.RESPONSES_MAX_CONVERSATION_ID_BYTES,
+            code="responses_conversation_too_large",
+        )
+        if any(ord(char) < 32 for char in value):
+            _raise(
+                "conversation",
+                "responses_conversation_invalid",
+                "The 'conversation' field contains unsupported characters.",
+            )
+
     def _validate_number_range(
         self,
         value: Any,
@@ -2148,6 +2185,10 @@ def responses_file_input_requested(body: Mapping[str, Any]) -> bool:
 
 def previous_response_id_requested(body: Mapping[str, Any]) -> bool:
     return "previous_response_id" in body
+
+
+def conversation_requested(body: Mapping[str, Any]) -> bool:
+    return "conversation" in body
 
 
 def _input_contains_function_call_output(value: Any) -> bool:

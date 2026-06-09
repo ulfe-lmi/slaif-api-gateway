@@ -515,10 +515,15 @@ structured `text.format` JSON object/schema output when route capability
 metadata allows it. It also supports non-streaming local/client-side function
 tools when route capability metadata allows them, and non-streaming
 local/client-side custom tools when route capability metadata allows them.
-Non-streaming stored create, non-streaming `previous_response_id`, and
-input-item listing are available only when route capability metadata allows
-them and local ownership checks pass. `POST /v1/responses/compact` is a
-separate bounded non-streaming text-focused endpoint with explicit
+Non-streaming stored create, non-streaming `previous_response_id`, input-item
+listing, and non-streaming `conversation` use in `POST /v1/responses` are
+available only when route capability metadata allows them and local ownership
+checks pass. `POST /v1/conversations`, `GET /v1/conversations/{id}`, and
+`DELETE /v1/conversations/{id}` are metadata/control proxy calls that require
+explicit endpoint permission and safe local conversation-reference metadata;
+they do not reserve generation quota or create normal generation usage ledger
+rows. `POST /v1/responses/compact` is a separate bounded non-streaming
+text-focused endpoint with explicit
 `/v1/responses/compact` endpoint permission, route capability, pricing, and
 provider usage finalization. Ordinary create reuses
 `DEFAULT_MAX_OUTPUT_TOKENS` and `HARD_MAX_OUTPUT_TOKENS` for
@@ -561,6 +566,7 @@ provider usage finalization. Ordinary create reuses
 - `RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=52428800`
 - `RESPONSES_MAX_FILE_NAME_BYTES=255`
 - `RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=256`
+- `RESPONSES_MAX_CONVERSATION_ID_BYTES=256`
 - `RESPONSES_ALLOWED_FILE_MIME_TYPES=application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,text/xml,application/xml`
 - `RESPONSES_ALLOWED_FILE_EXTENSIONS=.pdf,.txt,.md,.csv,.json,.html,.xml`
 - `RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=12000`

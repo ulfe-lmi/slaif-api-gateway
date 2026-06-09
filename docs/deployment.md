@@ -343,13 +343,15 @@ Docker and Nginx troubleshooting guidance is in
   compliance attestation, or penetration test.
 - No CI/CD system is required or added by this repository packaging.
 - Native Anthropic API, Responses hosted tools beyond owned retrieve/delete,
-  owned input-item listing, and owned previous-response chaining,
+  owned input-item listing, owned previous-response chaining, and the first
+  ownership-checked conversation reference foundation,
   embeddings, files, image generation endpoints, and audio endpoints remain
   unsupported unless separately implemented and documented. Current Responses
   support is text-output `POST /v1/responses` with URL/data URL image input,
   URL/data URL file input, local function/custom tools, non-streaming stored
   create, owned previous-response chaining, owned retrieve/delete, and owned
-  input-item listing only.
+  input-item listing plus conversation create/retrieve/delete and non-streaming
+  Responses create with an owned conversation reference only.
   `/v1/files`, file IDs, file
   search/retrieval tools, and audio input/output remain unsupported.
 - Admin bulk/import/upload workflows are application features documented in

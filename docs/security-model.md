@@ -442,7 +442,12 @@ permission, route capability, pricing, quota reservation, and provider usage
 finalization. `GET` and
 `DELETE /v1/responses/{response_id}` plus
 `GET /v1/responses/{response_id}/input_items` are ownership-checked proxy calls
-for provider-stored Responses references. It is default-off and policy-first:
+for provider-stored Responses references. `POST`, `GET`, and
+`DELETE /v1/conversations` resource calls are ownership-checked control-plane
+proxies that store only safe conversation reference metadata, and
+non-streaming `POST /v1/responses` may use an owned local conversation
+reference when the resolved route advertises conversation capability. It is
+default-off and policy-first:
 
 - Responses generation must be explicitly enabled per key through the
   `/v1/responses` endpoint allowlist. Input-token counting must be explicitly
@@ -499,15 +504,21 @@ for provider-stored Responses references. It is default-off and policy-first:
   reference owned by the same gateway key and compatible with the resolved
   provider route. Unknown, non-owned, deleted, provider-mismatched, or
   route-incompatible IDs return OpenAI-shaped 404 and are not proxied upstream.
+- Conversations require explicit conversation endpoint permission for
+  resource create/retrieve/delete and
+  `capabilities.responses.conversations=true` for non-streaming Responses
+  create requests that include `conversation`. SLAIF stores only provider
+  conversation reference metadata for ownership/routing. Conversation item
+  content is not stored, unknown/non-owned/deleted conversation IDs are not
+  proxied upstream, and provider mismatches fail closed.
 - Key-template revisions may carry a sanitized `responses_policy` summary for
   the implemented local/stored subset. Template-created keys copy only that
   safe summary as provenance metadata; they still require normal key endpoint,
   model, provider, route capability, pricing, and quota checks.
 - MCP/connectors are excluded.
-- `background`, conversation/provider-side state beyond owned
-  `previous_response_id`, cancel, response listing, and compact
-  `previous_response_id` are excluded until ownership mapping, quota,
-  accounting, and audit behavior are implemented.
+- `background`, conversation item/update endpoints, cancel, response listing,
+  and compact `previous_response_id` are excluded until ownership mapping,
+  quota, accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
 - Tool-enabled policies, when implemented later, require bounded-overrun cost
   calculations that admins can inspect before enabling the policy.
@@ -533,8 +544,8 @@ when a provider exposes them.
 Recommendations are never automatic mutations. An admin must review assumptions
 and explicitly confirm any generated template or single-key creation. The
 implemented template policy surface covers only safe local/stored Responses
-capability summaries; hosted/background/conversation/multimodal policy and bulk
-key creation from templates remain future work.
+capability summaries; hosted/background/conversation-item/multimodal policy and
+bulk key creation from templates remain future work.
 
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
@@ -828,9 +839,9 @@ never recover or send old plaintext keys.
   stateless requests, non-streaming local function/custom tools, non-streaming
   stored create, owned previous-response chaining, owned retrieve/delete, and
   owned input-item listing through safe response-reference metadata, plus
-  bounded non-streaming text-focused compact; hosted
-  Responses tools, conversation lifecycle, background mode, cancel/list routes,
-  file IDs, `/v1/files`, file
+  bounded non-streaming text-focused compact and the first ownership-checked
+  conversation reference foundation; hosted Responses tools, conversation item
+  endpoints/update, background mode, cancel/list routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.
   Embeddings API is not implemented.
