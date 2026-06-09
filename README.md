@@ -561,14 +561,18 @@ Near-term remaining work includes owner/institution/cohort delete or anonymizati
 
 For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
 
-## Maintainer
+## Maintainers
 
-Janez Perš  
+Janez Perš, Jon Muhovič  
 Faculty of Electrical Engineering, University of Ljubljana  
 Laboratory for Machine Intelligence (LMI)  
-Email: janez.pers@fe.uni-lj.si  
+Email: 
+    jon.muhovic@fe.uni-lj.si (Jon is first point of contact)
+    janez.pers@fe.uni-lj.si 
 
-- Profile: https://lmi.fe.uni-lj.si/en/janez-pers-2/
+- Profile:
+    https://lmi.fe.uni-lj.si/en/janez-pers-2/
+    https://lmi.fe.uni-lj.si/en/jon-muhovic/
 - Laboratory: https://lmi.fe.uni-lj.si/en
 
 ## Security Contact
