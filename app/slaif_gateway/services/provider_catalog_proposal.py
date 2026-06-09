@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -26,6 +27,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+from slaif_gateway.services.pricing_import import parse_pricing_import_tsv, validate_pricing_import_rows
+from slaif_gateway.services.route_import import (
+    RouteImportProviderRef,
+    parse_route_import_tsv,
+    validate_route_import_rows,
+)
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_CAPABILITY_AUDIO,
     CHAT_CAPABILITY_AUDIO_INPUTS,
@@ -100,6 +107,7 @@ SUPPORTED_OUTPUT_FILES = (
     "provider-catalog-report.md",
     "warnings.json",
 )
+PROPOSAL_TSV_VALIDATION_ERROR_CODE = "proposal_tsv_validation_failed"
 SUPPORTED_CHAT_PARAMETERS = {
     "tools",
     "tool_choice",
@@ -260,6 +268,13 @@ class ProviderCatalogProposalResult:
     low_confidence: int
 
 
+class ProviderCatalogProposalValidationError(ValueError):
+    """Raised when generated proposal TSV artifacts fail local validation."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{PROPOSAL_TSV_VALIDATION_ERROR_CODE}: {message}")
+
+
 @dataclass(frozen=True, slots=True)
 class _FetchedSource:
     provider: ProviderName
@@ -317,6 +332,7 @@ async def generate_provider_catalog_proposal(
     max_web_calls: int = 3,
     save_source_snapshots: bool = False,
     acknowledge_assisted_proposal_risk: bool = False,
+    allow_zero_prices: bool = False,
     http_client: httpx.AsyncClient | None = None,
     now: datetime | None = None,
 ) -> ProviderCatalogProposalResult:
@@ -363,6 +379,7 @@ async def generate_provider_catalog_proposal(
                     fetch_details_limit=fetch_details_limit,
                     save_source_snapshots=save_source_snapshots,
                     source_dir=source_dir,
+                    allow_zero_prices=allow_zero_prices,
                     now=now,
                 )
             else:
@@ -378,6 +395,7 @@ async def generate_provider_catalog_proposal(
                     save_source_snapshots=save_source_snapshots,
                     source_dir=source_dir,
                     acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
+                    allow_zero_prices=allow_zero_prices,
                     now=now,
                 )
             sources.extend(provider_bundle.sources)
@@ -432,6 +450,8 @@ async def generate_provider_catalog_proposal(
         ),
         encoding="utf-8",
     )
+    _validate_generated_route_tsv(routes_path, route_candidates)
+    _validate_generated_pricing_tsv(pricing_path, pricing_candidates)
 
     confidence_counts = _count_confidence(models)
     return ProviderCatalogProposalResult(
@@ -463,6 +483,7 @@ async def _propose_openrouter(
     fetch_details_limit: int,
     save_source_snapshots: bool,
     source_dir: Path,
+    allow_zero_prices: bool,
     now: datetime | None,
 ) -> ProviderCatalogProposalBundle:
     if "assisted" in source_methods:
@@ -546,6 +567,7 @@ async def _propose_openrouter(
         model_warnings = _openrouter_model_warnings(
             model_id=model_id,
             supported_parameters=supported_parameters,
+            input_modalities=input_modalities,
             output_modalities=output_modalities,
             expiration_date=_safe_text(row.get("expiration_date")),
         )
@@ -572,6 +594,7 @@ async def _propose_openrouter(
                     output_modalities=output_modalities,
                     supports_streaming="text" in output_modalities,
                     provider=OPENROUTER_PROVIDER,
+                    supports_cached_input_usage="input_cache_read" in pricing,
                 ),
                 confidence=confidence,
                 source_evidence=tuple(filter(None, (api_source.url, models_source.url))),
@@ -605,6 +628,7 @@ async def _propose_openrouter(
                         output_modalities=output_modalities,
                         supports_streaming="text" in output_modalities,
                         provider=OPENROUTER_PROVIDER,
+                        supports_cached_input_usage="input_cache_read" in pricing,
                     ),
                     notes=_route_notes(
                         provider=OPENROUTER_PROVIDER,
@@ -644,6 +668,7 @@ async def _propose_openrouter(
             unit_confirmed=unit_confirmed,
             confidence=confidence,
             model_warnings=model_warnings,
+            allow_zero_prices=allow_zero_prices,
         )
         pricing_status = "missing"
         pricing_ready = False
@@ -713,6 +738,7 @@ async def _propose_openai(
     save_source_snapshots: bool,
     source_dir: Path,
     acknowledge_assisted_proposal_risk: bool,
+    allow_zero_prices: bool,
     now: datetime | None,
 ) -> ProviderCatalogProposalBundle:
     warnings: list[ProviderCatalogWarning] = []
@@ -828,6 +854,7 @@ async def _propose_openai(
     for model_id in sorted(all_model_ids):
         docs_model = model_records.get(model_id)
         doc_prices = pricing_by_model.get(model_id, ())
+        selected_doc_pricing = _select_openai_text_pricing_record(doc_prices)
         row_warnings = _openai_model_comparison_warnings(
             model_id=model_id,
             docs_model=docs_model,
@@ -858,6 +885,8 @@ async def _propose_openai(
                         features=docs_model.features,
                         supports_streaming="streaming" in docs_model.features,
                         provider=OPENAI_PROVIDER,
+                        supports_cached_input_usage=selected_doc_pricing is not None
+                        and selected_doc_pricing.cached_input_price_per_1m is not None,
                     ),
                     confidence=confidence,
                     source_evidence=tuple(
@@ -901,6 +930,8 @@ async def _propose_openai(
                             features=docs_model.features,
                             supports_streaming="streaming" in docs_model.features,
                             provider=OPENAI_PROVIDER,
+                            supports_cached_input_usage=selected_doc_pricing is not None
+                            and selected_doc_pricing.cached_input_price_per_1m is not None,
                         ),
                         notes=_route_notes(
                             provider=OPENAI_PROVIDER,
@@ -948,6 +979,7 @@ async def _propose_openai(
             model_record=docs_model,
             assisted_pricing_rows=assisted_pricing_rows,
             sources=(pricing_source.url, models_source.url),
+            allow_zero_prices=allow_zero_prices,
         )
         if openai_pricing_candidates:
             pricing_ready = any(candidate.ready_for_import for candidate in openai_pricing_candidates)
@@ -1330,6 +1362,7 @@ def _openrouter_model_warnings(
     *,
     model_id: str,
     supported_parameters: Sequence[str],
+    input_modalities: Sequence[str],
     output_modalities: Sequence[str],
     expiration_date: str | None,
 ) -> tuple[str, ...]:
@@ -1342,6 +1375,15 @@ def _openrouter_model_warnings(
         warnings.add("hosted_tool_only")
     if "text" not in output_modalities:
         warnings.add("unsupported_modality")
+    if "file" in supported_parameters or "file" in input_modalities or "file" in output_modalities:
+        warnings.add("ambiguous_capability")
+    if (
+        "audio" in supported_parameters
+        or "audio" in input_modalities
+        or "audio" in output_modalities
+        or "audio" in model_id.lower()
+    ):
+        warnings.add("ambiguous_capability")
     return tuple(sorted(warnings))
 
 
@@ -1369,6 +1411,7 @@ def _openrouter_pricing_candidate(
     unit_confirmed: bool,
     confidence: Confidence,
     model_warnings: Sequence[str],
+    allow_zero_prices: bool,
 ) -> tuple[ProviderCatalogPricingCandidate | None, tuple[str, ...]]:
     warning_codes: set[str] = set(model_warnings)
     if not unit_confirmed:
@@ -1386,12 +1429,16 @@ def _openrouter_pricing_candidate(
         return None, tuple(sorted(warning_codes))
     if input_price is None and output_price is None:
         warning_codes.add("missing_pricing")
-    if input_price == "0" or output_price == "0":
+    zero_price_detected = input_price == "0" or output_price == "0"
+    if zero_price_detected:
         warning_codes.add("zero_price_requires_review")
     ready = not {"missing_pricing", "unit_unconfirmed", "search_specific_model"} & warning_codes
+    if zero_price_detected and not allow_zero_prices:
+        ready = False
     pricing_metadata = {
         "source_type": "openrouter_models_api",
         "operator_review_required": True,
+        "zero_price_requires_review": zero_price_detected,
         "pricing_unit": "usd_per_token",
         "conversion_factor": "1000000",
         "confidence": confidence,
@@ -1604,6 +1651,7 @@ def _openai_pricing_candidates(
     model_record: _OpenAIModelRecord | None,
     assisted_pricing_rows: Mapping[tuple[str, str], dict[str, str]],
     sources: Sequence[str],
+    allow_zero_prices: bool,
 ) -> tuple[list[ProviderCatalogPricingCandidate], list[str]]:
     warning_codes: set[str] = set()
     candidates: list[ProviderCatalogPricingCandidate] = []
@@ -1632,11 +1680,20 @@ def _openai_pricing_candidates(
             warning_codes.add("pricing_disagreement")
         if assisted is None and assisted_pricing_rows:
             warning_codes.add("model_missing_from_assisted")
+        zero_price_detected = (
+            selected.input_price_per_1m == "0"
+            or selected.output_price_per_1m == "0"
+        )
+        if zero_price_detected:
+            warning_codes.add("zero_price_requires_review")
         ready = not {"missing_pricing", "pricing_disagreement", "search_specific_model"} & warning_codes
+        if zero_price_detected and not allow_zero_prices:
+            ready = False
         confidence: Confidence = "high" if assisted is not None and "pricing_disagreement" not in warning_codes else "medium"
         metadata = {
             "source_type": "openai_pricing_docs",
             "operator_review_required": True,
+            "zero_price_requires_review": zero_price_detected,
             "source_evidence": list(sources),
             "confidence": confidence,
             "warnings": sorted(warning_codes),
@@ -1720,22 +1777,30 @@ def _build_chat_capabilities(
     output_modalities: Sequence[str],
     supports_streaming: bool,
     provider: ProviderName,
+    supports_cached_input_usage: bool,
 ) -> dict[str, object]:
+    parameter_set = {parameter.lower() for parameter in supported_parameters}
+    input_modality_set = {modality.lower() for modality in input_modalities}
+    output_modality_set = {modality.lower() for modality in output_modalities}
+    image_inputs = "image" in input_modality_set
+    file_inputs = "file" in input_modality_set and "file" in parameter_set
+    audio_inputs = "audio" in input_modality_set and "audio" in parameter_set
+    audio_outputs = "audio" in output_modality_set and "audio" in parameter_set
     chat = {
-        CHAT_CAPABILITY_TEXT: "text" in output_modalities or not output_modalities,
+        CHAT_CAPABILITY_TEXT: "text" in output_modality_set or not output_modality_set,
         CHAT_CAPABILITY_STREAMING: supports_streaming,
-        CHAT_CAPABILITY_FUNCTION_TOOLS: "tools" in supported_parameters,
+        CHAT_CAPABILITY_FUNCTION_TOOLS: "tools" in parameter_set,
         CHAT_CAPABILITY_CUSTOM_TOOLS: False,
-        CHAT_CAPABILITY_LEGACY_FUNCTIONS: "tools" in supported_parameters,
-        CHAT_CAPABILITY_STRUCTURED_OUTPUTS: "structured_outputs" in supported_parameters,
+        CHAT_CAPABILITY_LEGACY_FUNCTIONS: "tools" in parameter_set,
+        CHAT_CAPABILITY_STRUCTURED_OUTPUTS: "structured_outputs" in parameter_set,
         CHAT_CAPABILITY_JSON_MODE: (
-            "response_format" in supported_parameters or "structured_outputs" in supported_parameters
+            "response_format" in parameter_set or "structured_outputs" in parameter_set
         ),
-        CHAT_CAPABILITY_LOGPROBS: "logprobs" in supported_parameters,
+        CHAT_CAPABILITY_LOGPROBS: "logprobs" in parameter_set,
         CHAT_CAPABILITY_REASONING_USAGE: (
-            "reasoning" in supported_parameters or "include_reasoning" in supported_parameters
+            "reasoning" in parameter_set or "include_reasoning" in parameter_set
         ),
-        CHAT_CAPABILITY_CACHED_INPUT_USAGE: True,
+        CHAT_CAPABILITY_CACHED_INPUT_USAGE: supports_cached_input_usage,
         CHAT_CAPABILITY_HOSTED_WEB_SEARCH: False,
         CHAT_CAPABILITY_HOSTED_FILE_SEARCH: False,
         CHAT_CAPABILITY_HOSTED_CODE_INTERPRETER: False,
@@ -1743,12 +1808,14 @@ def _build_chat_capabilities(
         CHAT_CAPABILITY_HOSTED_IMAGE_GENERATION: False,
         CHAT_CAPABILITY_HOSTED_TOOL_SEARCH: False,
         CHAT_CAPABILITY_EXTERNAL_MCP_CONNECTORS: False,
-        CHAT_CAPABILITY_IMAGE_INPUTS: "image" in input_modalities,
-        CHAT_CAPABILITY_MULTIMODAL: any(modality != "text" for modality in input_modalities + output_modalities),
-        CHAT_CAPABILITY_AUDIO: "audio" in input_modalities or "audio" in output_modalities,
-        CHAT_CAPABILITY_FILE_INPUTS: "file" in input_modalities,
-        CHAT_CAPABILITY_AUDIO_INPUTS: "audio" in input_modalities,
-        CHAT_CAPABILITY_AUDIO_OUTPUTS: "audio" in output_modalities,
+        CHAT_CAPABILITY_IMAGE_INPUTS: image_inputs,
+        CHAT_CAPABILITY_MULTIMODAL: any(
+            modality != "text" for modality in input_modality_set | output_modality_set
+        ),
+        CHAT_CAPABILITY_AUDIO: audio_inputs or audio_outputs,
+        CHAT_CAPABILITY_FILE_INPUTS: file_inputs,
+        CHAT_CAPABILITY_AUDIO_INPUTS: audio_inputs,
+        CHAT_CAPABILITY_AUDIO_OUTPUTS: audio_outputs,
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT: False,
         CHAT_CAPABILITY_MULTIPLE_CHOICES: False,
     }
@@ -1763,6 +1830,7 @@ def _build_chat_capabilities_from_features(
     features: Sequence[str],
     supports_streaming: bool,
     provider: ProviderName,
+    supports_cached_input_usage: bool,
 ) -> dict[str, object]:
     feature_set = {feature.lower() for feature in features}
     return _build_chat_capabilities(
@@ -1771,6 +1839,7 @@ def _build_chat_capabilities_from_features(
         output_modalities=_feature_modalities(feature_set, kind="output"),
         supports_streaming=supports_streaming,
         provider=provider,
+        supports_cached_input_usage=supports_cached_input_usage,
     )
 
 
@@ -2169,6 +2238,159 @@ def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidat
                     "notes": row.notes,
                 }
             )
+
+
+def _validate_generated_route_tsv(
+    path: Path,
+    rows: Sequence[ProviderCatalogRouteCandidate],
+) -> None:
+    expected_fields = [
+        "requested_model",
+        "match_type",
+        "endpoint",
+        "provider",
+        "upstream_model",
+        "priority",
+        "enabled",
+        "visible_in_models",
+        "supports_streaming",
+        "capabilities",
+        "notes",
+    ]
+    _validate_tsv_row_shapes(path, expected_fields=expected_fields)
+    route_rows = parse_route_import_tsv(path.read_text(encoding="utf-8"))
+    provider_refs = tuple(
+        RouteImportProviderRef(
+            id=uuid.uuid5(uuid.NAMESPACE_URL, f"provider-catalog:{provider}"),
+            provider=provider,
+        )
+        for provider in sorted({row.provider for row in rows if row.ready_for_import})
+    )
+    preview = validate_route_import_rows(
+        route_rows,
+        provider_configs=provider_refs,
+        max_rows=max(len(route_rows), 1),
+    )
+    invalid = [row for row in preview.rows if row.status != "valid"]
+    if invalid:
+        raise ProviderCatalogProposalValidationError(
+            f"routes-proposal.tsv failed route import validation: {invalid[0].errors[0]}"
+        )
+
+
+def _validate_generated_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidate]) -> None:
+    expected_fields = [
+        "provider",
+        "model",
+        "endpoint",
+        "currency",
+        "input_price_per_1m",
+        "cached_input_price_per_1m",
+        "output_price_per_1m",
+        "reasoning_price_per_1m",
+        "request_price",
+        "valid_from",
+        "source_url",
+        "source_retrieved_at",
+        "pricing_metadata",
+        "notes",
+    ]
+    _validate_tsv_row_shapes(path, expected_fields=expected_fields)
+    pricing_rows = parse_pricing_import_tsv(path.read_text(encoding="utf-8"))
+    preview = validate_pricing_import_rows(
+        pricing_rows,
+        max_rows=max(len(pricing_rows), 1),
+    )
+    invalid = [row for row in preview.rows if row.status != "valid"]
+    if invalid:
+        raise ProviderCatalogProposalValidationError(
+            f"pricing-proposal.tsv failed pricing import validation: {invalid[0].errors[0]}"
+        )
+
+
+def _validate_tsv_row_shapes(path: Path, *, expected_fields: Sequence[str]) -> None:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        rows = list(reader)
+    if not rows:
+        raise ProviderCatalogProposalValidationError(f"{path.name} is empty")
+    header = rows[0]
+    if header != list(expected_fields):
+        raise ProviderCatalogProposalValidationError(
+            f"{path.name} header mismatch: expected {list(expected_fields)!r}, got {header!r}"
+        )
+    for index, row in enumerate(rows[1:], start=2):
+        if len(row) != len(header):
+            raise ProviderCatalogProposalValidationError(
+                f"{path.name} row {index} has {len(row)} columns; expected {len(header)}"
+            )
+        for field_name, value in zip(header, row, strict=True):
+            _validate_tsv_cell(
+                path_name=path.name,
+                row_number=index,
+                field_name=field_name,
+                value=value,
+            )
+
+
+def _validate_tsv_cell(*, path_name: str, row_number: int, field_name: str, value: str) -> None:
+    if "\n" in value or "\r" in value:
+        raise ProviderCatalogProposalValidationError(
+            f"{path_name} row {row_number} field {field_name} contains raw multiline content"
+        )
+    if redact_text(value) != value:
+        raise ProviderCatalogProposalValidationError(
+            f"{path_name} row {row_number} field {field_name} contains secret-looking content"
+        )
+    if field_name in {"capabilities", "pricing_metadata"} and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field {field_name} is not valid JSON"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field {field_name} must be a JSON object"
+            )
+        if redact_mapping(parsed) != parsed:
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field {field_name} contains secret-looking JSON content"
+            )
+    if field_name in {
+        "input_price_per_1m",
+        "cached_input_price_per_1m",
+        "output_price_per_1m",
+        "reasoning_price_per_1m",
+        "request_price",
+    } and value:
+        try:
+            Decimal(value)
+        except InvalidOperation as exc:
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field {field_name} is not a decimal string"
+            ) from exc
+    if field_name in {"enabled", "visible_in_models", "supports_streaming"} and value not in {"true", "false"}:
+        raise ProviderCatalogProposalValidationError(
+            f"{path_name} row {row_number} field {field_name} must be true or false"
+        )
+    if field_name == "source_url" and value:
+        if any(char.isspace() for char in value):
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field source_url must not contain whitespace"
+            )
+        parsed = urlparse(value)
+        if not parsed.scheme or not parsed.netloc:
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field source_url must be a valid absolute URL"
+            )
+    if field_name in {"source_retrieved_at", "valid_from"} and value:
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ProviderCatalogProposalValidationError(
+                f"{path_name} row {row_number} field {field_name} must be an ISO-8601 timestamp"
+            ) from exc
 
 
 def _render_report(
