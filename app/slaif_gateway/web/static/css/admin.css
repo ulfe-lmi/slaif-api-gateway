@@ -261,6 +261,66 @@ button:disabled:hover {
   color: var(--error-text);
 }
 
+.policy-selector-surface {
+  display: grid;
+  gap: 18px;
+}
+
+.policy-selector-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.policy-selector-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.policy-selector-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.policy-selector-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.policy-selector-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.policy-selector-grid select[multiple] {
+  min-height: 220px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.policy-selector-buttons {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+}
+
+.policy-selector-disabled {
+  opacity: 0.55;
+}
+
+.policy-manual-details {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.policy-manual-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
 .placeholder {
   margin: 28px;
   border-top: 1px solid var(--border);

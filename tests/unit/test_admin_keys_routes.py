@@ -19,7 +19,10 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationPreviewResult,
 )
 from slaif_gateway.services.admin_key_dashboard import AdminKeyNotFoundError
+from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
+from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy
 from slaif_gateway.services.admin_session_service import AdminSessionContext
+from tests.unit.test_admin_key_actions_routes import _login_for_actions
 
 
 class _FakeSession:
@@ -131,6 +134,7 @@ def _row() -> AdminKeyListRow:
         chat_streaming_live_burn_policy_summary="Enabled, cost margin EUR 0.000000000, token margin 0",
         created_at=datetime.now(UTC) - timedelta(days=2),
         updated_at=datetime.now(UTC) - timedelta(days=1),
+        allowed_providers=("openai",),
     )
 
 
@@ -184,6 +188,64 @@ def _login(monkeypatch, client: TestClient) -> None:
         refresh_csrf_token,
     )
     client.cookies.set("slaif_admin_session", "session-plaintext")
+
+
+async def _policy_catalog(request):
+    return {
+        "provider_choices": [
+            SimpleNamespace(
+                value="openai",
+                display_name="OpenAI",
+                kind="openai_compatible",
+                label="OpenAI | openai | openai_compatible",
+            )
+        ],
+        "endpoint_choices": [
+            SimpleNamespace(
+                value="/v1/models",
+                label="/v1/models | list visible models",
+                description="Catalog listing behaves differently from model-backed generation endpoints.",
+                is_model_backed=False,
+            ),
+            SimpleNamespace(
+                value="/v1/chat/completions",
+                label="/v1/chat/completions | Chat Completions",
+                description="Model-backed endpoint. Explicit models or allow-all-models may be required.",
+                is_model_backed=True,
+            ),
+        ],
+        "model_choices": [],
+        "model_choices_by_group": {
+            "/v1/chat/completions | OpenAI": [
+                SimpleNamespace(
+                    route_key="openai|/v1/chat/completions|gpt-test|exact|gpt-test-upstream",
+                    token="gpt-test",
+                    provider="openai",
+                    endpoint="/v1/chat/completions",
+                    label="gpt-test | openai | /v1/chat/completions | exact | gpt-test-upstream | hidden from /v1/models | streaming",
+                    visible_in_models=False,
+                    supports_streaming=True,
+                )
+            ]
+        },
+        "enabled_provider_values": ("openai",),
+    }
+
+
+async def _validate_admin_request_policy(
+    request,
+    *,
+    allowed_models,
+    allowed_endpoints,
+    allow_all_models,
+    allow_all_endpoints,
+):
+    return GatewayKeyPolicy(
+        allowed_models=list(allowed_models),
+        allowed_endpoints=list(allowed_endpoints),
+        allow_all_models=allow_all_models,
+        allow_all_endpoints=allow_all_endpoints,
+    )
 
 
 def test_admin_keys_redirects_when_unauthenticated() -> None:
@@ -264,6 +326,7 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
         "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
         get_key_detail,
     )
+    monkeypatch.setattr("slaif_gateway.api.admin._load_key_policy_catalog", _policy_catalog)
     client = TestClient(_app())
     _login(monkeypatch, client)
 
@@ -275,11 +338,65 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     assert "Plaintext keys" in response.text
     assert "Update Request Policy" in response.text
     assert f'action="/admin/keys/{key.id}/policy"' in response.text
+    assert 'data-policy-selector-surface' in response.text
+    assert "Available enabled providers" in response.text
+    assert "Available implemented endpoints" in response.text
+    assert "Available route-backed model candidates" in response.text
+    assert 'name="allowed_providers"' in response.text
+    assert 'name="allow_all_providers" value="true"' in response.text
     assert 'name="allowed_models"' in response.text
     assert 'name="allowed_endpoints"' in response.text
     assert 'name="allow_all_models" value="true"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
-    assert "Models must not start with" in response.text
+    assert "hidden from /v1/models" in response.text
+
+
+def test_admin_key_policy_update_rejects_model_backed_endpoint_without_models(monkeypatch) -> None:
+    key = _detail()
+
+    async def get_key_detail(self, gateway_key_id):
+        assert gateway_key_id == key.id
+        return key
+
+    async def reject_policy(*args, **kwargs):
+        raise InvalidGatewayKeyPolicyError(
+            "Select at least one allowed model or allow all models for model-backed endpoints."
+        )
+
+    async def update_gateway_key_policy(self, payload):
+        raise AssertionError("update_gateway_key_policy should not be called for invalid policy")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    monkeypatch.setattr("slaif_gateway.api.admin._load_key_policy_catalog", _policy_catalog)
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_request_policy",
+        reject_policy,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
+        update_gateway_key_policy,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{key.id}/policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "allowed_providers": "openai",
+            "allow_all_providers": "",
+            "allowed_endpoints": "/v1/chat/completions",
+            "allowed_models": "",
+            "reason": "invalid request policy",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Select at least one allowed model or allow all models for model-backed endpoints." in response.text
+    assert 'name="allowed_providers"' in response.text
 
 
 def test_admin_key_detail_shows_trusted_calibration_metadata(monkeypatch) -> None:

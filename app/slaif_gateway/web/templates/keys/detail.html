@@ -168,53 +168,18 @@
 
   <section class="action-panel" aria-labelledby="key-request-policy-heading">
     <h2 id="key-request-policy-heading">Update Request Policy</h2>
-    <p class="muted">Edit the key's endpoint and model allow-lists. This form updates request policy only; it does not change quotas, validity, key material, owner metadata, or usage counters.</p>
-    <div class="management-grid">
-      <div class="action-card">
-        <h3>Policy Values</h3>
-        <form method="post" action="/admin/keys/{{ key.id }}/policy">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>
-            Allowed models: model IDs such as gpt-5.2 or gpt-4o-mini
-            <textarea name="allowed_models" rows="5" autocomplete="off">{{ key.allowed_models|join('\n') }}</textarea>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" name="allow_all_models" value="true" {% if key.allow_all_models %}checked{% endif %}>
-            Allow all models backed by enabled routes
-          </label>
-          <label>
-            Allowed endpoints: API paths such as /v1/models and /v1/chat/completions
-            <textarea name="allowed_endpoints" rows="4" autocomplete="off">{{ key.allowed_endpoints|join('\n') }}</textarea>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" name="allow_all_endpoints" value="true" {% if key.allow_all_endpoints %}checked{% endif %}>
-            Allow all implemented endpoints
-          </label>
-          <label>
-            Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
-          </label>
-          <p class="warning-text">Models must not start with `/v1/`. Endpoints must start with `/v1/`. Allow `/v1/models` for `client.models.list()` and `/v1/chat/completions` for `chat.completions.create()`.</p>
-          <button type="submit">Update request policy</button>
-        </form>
-      </div>
-
-      <div class="action-card">
-        <h3>Available Route-Backed Models</h3>
-        {% if available_model_routes %}
-          {% for endpoint, routes in available_model_routes.items() %}
-          <h4>{{ endpoint }}</h4>
-          <ul class="compact-list">
-            {% for route in routes %}
-            <li><code>{{ route.requested_model }}</code>{% if not route.visible_in_models %} <span class="muted">(hidden from /v1/models)</span>{% endif %}</li>
-            {% endfor %}
-          </ul>
-          {% endfor %}
-        {% else %}
-        <p class="muted">No enabled model routes are available. Run the OpenAI Completions catalog bootstrap or create routes before restricting a key to specific models.</p>
-        {% endif %}
-      </div>
-    </div>
+    <p class="muted">Edit provider, endpoint, and model allow-lists without changing quotas, validity, key material, owner metadata, usage counters, or live-burn policy.</p>
+    <form method="post" action="/admin/keys/{{ key.id }}/policy">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% set form = policy_form %}
+      {% set selector_id_prefix = "detail-policy" %}
+      {% include "keys/_policy_selector.html" %}
+      <label>
+        Audit reason
+        <input name="reason" value="{{ policy_form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <button type="submit">Update request policy</button>
+    </form>
   </section>
 
   <section class="action-panel" aria-labelledby="key-chat-streaming-live-burn-heading" data-streaming-live-burn-surface>
@@ -509,5 +474,6 @@
     </div>
   </section>
 </section>
+<script src="/admin/static/js/policy-selector.js"></script>
 <script src="/admin/static/js/streaming-live-burn.js"></script>
 {% endblock %}

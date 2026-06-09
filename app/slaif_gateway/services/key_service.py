@@ -325,6 +325,19 @@ class KeyService:
         gateway_key.allowed_endpoints = request_policy.allowed_endpoints
         gateway_key.allow_all_models = request_policy.allow_all_models
         gateway_key.allow_all_endpoints = request_policy.allow_all_endpoints
+        if payload.update_allowed_providers:
+            new_metadata = self._metadata_with_provider_policy(
+                gateway_key.metadata_json,
+                payload.allowed_providers,
+            )
+            if new_metadata != (gateway_key.metadata_json or {}):
+                metadata_updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+                    gateway_key.id,
+                    metadata_json=new_metadata,
+                )
+                if not metadata_updated:
+                    raise GatewayKeyNotFoundError()
+                gateway_key.metadata_json = new_metadata
         self._set_updated_at(gateway_key, now)
 
         await self._audit_gateway_key_change(
@@ -1107,6 +1120,7 @@ class KeyService:
             "public_key_id": gateway_key.public_key_id,
             "allowed_models": list(gateway_key.allowed_models or []),
             "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
+            "allowed_providers": KeyService._allowed_providers_from_key(gateway_key),
             "allow_all_models": gateway_key.allow_all_models,
             "allow_all_endpoints": gateway_key.allow_all_endpoints,
         }
@@ -1203,6 +1217,18 @@ class KeyService:
             )
         except ChatStreamingLiveBurnPolicyError:
             return default_chat_streaming_live_burn_policy()
+
+    @staticmethod
+    def _allowed_providers_from_key(gateway_key: GatewayKey) -> list[str] | None:
+        metadata_json = getattr(gateway_key, "metadata_json", None)
+        if not isinstance(metadata_json, dict):
+            return None
+        providers = metadata_json.get("allowed_providers")
+        if providers is None:
+            return None
+        if isinstance(providers, list):
+            return [str(provider).strip() for provider in providers if str(provider).strip()]
+        return []
 
     @staticmethod
     def _chat_streaming_live_burn_policy_from_key_static(

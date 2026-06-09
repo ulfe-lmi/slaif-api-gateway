@@ -2,6 +2,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -10,10 +11,12 @@ from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.email_errors import EmailError
+from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
 )
+from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 
@@ -90,11 +93,116 @@ async def _fake_options(request):
                 updated_at=now,
             )
         ],
+        "policy_catalog": {
+            "provider_choices": [
+                SimpleNamespace(
+                    value="openai",
+                    display_name="OpenAI",
+                    kind="openai_compatible",
+                    label="OpenAI | openai | openai_compatible",
+                ),
+                SimpleNamespace(
+                    value="openrouter",
+                    display_name="OpenRouter",
+                    kind="openai_compatible",
+                    label="OpenRouter | openrouter | openai_compatible",
+                ),
+            ],
+            "endpoint_choices": [
+                SimpleNamespace(
+                    value="/v1/models",
+                    label="/v1/models | list visible models",
+                    description="Catalog listing behaves differently from model-backed generation endpoints.",
+                    is_model_backed=False,
+                ),
+                SimpleNamespace(
+                    value="/v1/chat/completions",
+                    label="/v1/chat/completions | Chat Completions",
+                    description="Model-backed endpoint. Explicit models or allow-all-models may be required.",
+                    is_model_backed=True,
+                ),
+            ],
+            "model_choices": [
+                SimpleNamespace(
+                    route_key="openai|/v1/chat/completions|gpt-4.1-mini|exact|gpt-4.1-mini",
+                    token="gpt-4.1-mini",
+                    provider="openai",
+                    provider_label="OpenAI",
+                    endpoint="/v1/chat/completions",
+                    match_type="exact",
+                    upstream_model="gpt-4.1-mini",
+                    label="gpt-4.1-mini | openai | /v1/chat/completions | exact | gpt-4.1-mini | visible in /v1/models | streaming",
+                    group_label="/v1/chat/completions | OpenAI",
+                    visible_in_models=True,
+                    supports_streaming=True,
+                    capability_summary=None,
+                ),
+                SimpleNamespace(
+                    route_key="openrouter|/v1/chat/completions|gpt-4o-*|glob|openrouter/gpt-4o",
+                    token="gpt-4o-*",
+                    provider="openrouter",
+                    provider_label="OpenRouter",
+                    endpoint="/v1/chat/completions",
+                    match_type="glob",
+                    upstream_model="openrouter/gpt-4o",
+                    label="gpt-4o-* | openrouter | /v1/chat/completions | glob | openrouter/gpt-4o | hidden from /v1/models | streaming",
+                    group_label="/v1/chat/completions | OpenRouter",
+                    visible_in_models=False,
+                    supports_streaming=True,
+                    capability_summary=None,
+                ),
+            ],
+            "model_choices_by_group": {
+                "/v1/chat/completions | OpenAI": [
+                    SimpleNamespace(
+                        route_key="openai|/v1/chat/completions|gpt-4.1-mini|exact|gpt-4.1-mini",
+                        token="gpt-4.1-mini",
+                        provider="openai",
+                        endpoint="/v1/chat/completions",
+                        label="gpt-4.1-mini | openai | /v1/chat/completions | exact | gpt-4.1-mini | visible in /v1/models | streaming",
+                        visible_in_models=True,
+                        supports_streaming=True,
+                    )
+                ],
+                "/v1/chat/completions | OpenRouter": [
+                    SimpleNamespace(
+                        route_key="openrouter|/v1/chat/completions|gpt-4o-*|glob|openrouter/gpt-4o",
+                        token="gpt-4o-*",
+                        provider="openrouter",
+                        endpoint="/v1/chat/completions",
+                        label="gpt-4o-* | openrouter | /v1/chat/completions | glob | openrouter/gpt-4o | hidden from /v1/models | streaming",
+                        visible_in_models=False,
+                        supports_streaming=True,
+                    )
+                ],
+            },
+            "enabled_provider_values": ("openai", "openrouter"),
+        },
     }
 
 
 def _patch_options(monkeypatch) -> None:
     monkeypatch.setattr("slaif_gateway.api.admin._load_key_create_form_options", _fake_options)
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_request_policy",
+        _validate_admin_request_policy,
+    )
+
+
+async def _validate_admin_request_policy(
+    request,
+    *,
+    allowed_models,
+    allowed_endpoints,
+    allow_all_models,
+    allow_all_endpoints,
+):
+    return GatewayKeyPolicy(
+        allowed_models=list(allowed_models),
+        allowed_endpoints=list(allowed_endpoints),
+        allow_all_models=allow_all_models,
+        allow_all_endpoints=allow_all_endpoints,
+    )
 
 
 def test_unauthenticated_create_form_redirects_to_login() -> None:
@@ -129,11 +237,20 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="valid_until"' in response.text
     assert 'name="valid_days"' in response.text
     assert 'name="cost_limit_eur"' in response.text
+    assert 'data-policy-selector-surface' in response.text
+    assert "Available enabled providers" in response.text
+    assert "Available implemented endpoints" in response.text
+    assert "Available route-backed model candidates" in response.text
+    assert 'name="allow_all_providers" value="true"' in response.text
+    assert 'name="allowed_providers"' in response.text
     assert 'name="allowed_models"' in response.text
     assert 'name="allow_all_models" value="true"' in response.text
     assert 'name="allowed_endpoints"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
-    assert "Models must not start with" in response.text
+    assert 'src="/admin/static/js/policy-selector.js"' in response.text
+    assert "OpenAI | openai | openai_compatible" in response.text
+    assert "gpt-4o-* | openrouter | /v1/chat/completions | glob" in response.text
+    assert "hidden from /v1/models" in response.text
     assert 'name="rate_limit_requests_per_minute"' in response.text
     assert "Email delivery mode" in response.text
     assert "Send-now and enqueue suppress browser plaintext display" in response.text
@@ -352,6 +469,8 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
             "cost_limit_eur": "12.50",
             "token_limit_total": "1000",
             "request_limit_total": "100",
+            "allowed_providers": "openai",
+            "allow_all_providers": "",
             "allowed_models": "gpt-4.1-mini\nopenrouter/model, gpt-4o-mini",
             "allowed_endpoints": "/v1/chat/completions, /v1/models",
             "rate_limit_requests_per_minute": "60",
@@ -385,6 +504,7 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
     assert payload.cost_limit_eur == Decimal("12.50")
     assert payload.token_limit_total == 1000
     assert payload.request_limit_total == 100
+    assert payload.allowed_providers == ["openai"]
     assert payload.allowed_models == ["gpt-4.1-mini", "openrouter/model", "gpt-4o-mini"]
     assert payload.allowed_endpoints == ["/v1/chat/completions", "/v1/models"]
     assert payload.allow_all_models is False
@@ -403,6 +523,87 @@ def test_create_calls_key_service_and_renders_one_time_plaintext(monkeypatch) ->
     }
     assert payload.key_purpose == "standard"
     assert payload.capability_policy_mode == "standard"
+
+
+def test_create_selector_round_trips_selected_policy_values_on_validation_error(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        raise InvalidGatewayKeyPolicyError("Select at least one allowed model.")
+
+    monkeypatch.setattr("slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id", get_owner_by_id)
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allowed_providers": "openai",
+            "allow_all_providers": "",
+            "allowed_endpoints": "/v1/chat/completions",
+            "allowed_models": "",
+            "reason": "invalid request policy",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Select at least one allowed model" in response.text
+    assert '<option value="openai">OpenAI | openai | openai_compatible</option>' in response.text
+    assert '<option value="/v1/chat/completions">/v1/chat/completions | Chat Completions</option>' in response.text
+
+
+def test_create_rejects_model_backed_endpoint_without_models_before_service(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+
+    async def reject_policy(*args, **kwargs):
+        raise InvalidGatewayKeyPolicyError(
+            "Select at least one allowed model or allow all models for model-backed endpoints."
+        )
+
+    async def create_gateway_key(self, payload):
+        raise AssertionError("create_gateway_key should not be called for invalid policy")
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_request_policy",
+        reject_policy,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allowed_providers": "openai",
+            "allow_all_providers": "",
+            "allowed_endpoints": "/v1/chat/completions",
+            "allowed_models": "",
+            "reason": "invalid request policy",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Select at least one allowed model or allow all models for model-backed endpoints." in response.text
 
 
 def test_create_unchecked_chat_live_burn_checkbox_disables_policy(monkeypatch) -> None:
@@ -433,6 +634,7 @@ def test_create_unchecked_chat_live_burn_checkbox_disables_policy(monkeypatch) -
             "csrf_token": "dashboard-csrf",
             "owner_id": str(owner_id),
             "valid_days": "30",
+            "allow_all_providers": "true",
             "allow_all_models": "true",
             "allow_all_endpoints": "true",
             "reason": "disable live burn",

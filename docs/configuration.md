@@ -753,6 +753,13 @@ automatically retried; rotate the key if receipt cannot be confirmed. Key detail
 CSRF-protected POST actions to suspend, activate, and permanently revoke keys,
 update validity windows, update PostgreSQL-backed hard quota limits, reset usage
 counters, and rotate keys through the existing key service and audit behavior.
+The key create page and key-detail request-policy editor now use selectable
+provider, endpoint, and route-backed model controls sourced from local enabled
+provider configs and local enabled routes only; they do not fetch upstream
+provider catalogs. Provider, endpoint, and model allow-lists remain separate
+policy dimensions, and `/v1/models` remains distinct from model-backed
+generation endpoints. Advanced manual policy strings remain available as a
+fallback.
 Usage reset preserves usage ledger rows; reserved-counter reset requires an
 additional admin repair confirmation. Hard quota limit updates are distinct from
 Redis operational rate-limit policy. Owner, institution, and

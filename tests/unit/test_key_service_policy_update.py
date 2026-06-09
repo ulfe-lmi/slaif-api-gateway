@@ -79,6 +79,57 @@ async def test_update_gateway_key_policy_requires_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_gateway_key_policy_can_update_allowed_providers_without_mutating_quotas() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={"allowed_providers": ["openai"], "rate_limit_policy": {"window_seconds": 30}},
+        cost_limit_eur=None,
+    )
+    old_tokens_used = row.tokens_used_total
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_policy(
+        UpdateGatewayKeyPolicyInput(
+            gateway_key_id=row.id,
+            allowed_providers=["openrouter"],
+            update_allowed_providers=True,
+            allowed_models=["gpt-5.2"],
+            allowed_endpoints=["/v1/chat/completions"],
+            reason="switch provider allow-list",
+        )
+    )
+
+    assert keys_repo.policy_calls == [
+        {
+            "gateway_key_id": row.id,
+            "allowed_models": ["gpt-5.2"],
+            "allowed_endpoints": ["/v1/chat/completions"],
+            "allow_all_models": False,
+            "allow_all_endpoints": False,
+        }
+    ]
+    assert keys_repo.metadata_calls == [
+        {
+            "gateway_key_id": row.id,
+            "metadata_json": {
+                "allowed_providers": ["openrouter"],
+                "rate_limit_policy": {"window_seconds": 30},
+            },
+        }
+    ]
+    assert row.tokens_used_total == old_tokens_used
+    assert row.metadata_json == {
+        "allowed_providers": ["openrouter"],
+        "rate_limit_policy": {"window_seconds": 30},
+    }
+    assert result.allowed_models == ["gpt-5.2"]
+
+    audit = audit_repo.calls[-1]
+    assert audit["old_values"]["allowed_providers"] == ["openai"]
+    assert audit["new_values"]["allowed_providers"] == ["openrouter"]
+    assert "token_hash" not in str(audit)
+
+
+@pytest.mark.asyncio
 async def test_update_chat_streaming_live_burn_policy_updates_metadata_only_and_audits() -> None:
     row = FakeGatewayKeyRow(
         metadata_json={

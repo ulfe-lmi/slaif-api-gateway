@@ -159,6 +159,7 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         ),
         created_at=row.created_at,
         updated_at=row.updated_at,
+        allowed_providers=_allowed_providers(row.metadata_json),
     )
 
 
@@ -212,6 +213,18 @@ def _allowed_providers_summary(metadata_json: dict[str, object] | None) -> str:
         cleaned = [str(provider) for provider in providers if str(provider).strip()]
         return ", ".join(cleaned) if cleaned else "None"
     return "None"
+
+
+def _allowed_providers(metadata_json: dict[str, object] | None) -> tuple[str, ...] | None:
+    if not isinstance(metadata_json, dict):
+        return None
+    providers = metadata_json.get("allowed_providers")
+    if providers is None:
+        return None
+    if isinstance(providers, list):
+        cleaned = tuple(str(provider).strip() for provider in providers if str(provider).strip())
+        return cleaned
+    return ()
 
 
 def _rate_limit_policy_summary(row: GatewayKey) -> str:

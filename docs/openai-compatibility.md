@@ -200,6 +200,13 @@ Model access follows the same key policy used by chat authorization:
 
 This avoids exposing local model catalog entries to keys that cannot use any model.
 
+Admin key create/detail pages now use the same local policy-selector surface
+for provider, endpoint, and route-backed model allow-lists. The selector reads
+enabled local provider configs and enabled local route metadata only; it does
+not fetch upstream provider catalogs. `/v1/models` stays separate from
+model-backed generation endpoints in both the UI and the existing server-side
+validation path.
+
 Operators can seed first-run OpenAI Chat Completions metadata with:
 
 ```bash
