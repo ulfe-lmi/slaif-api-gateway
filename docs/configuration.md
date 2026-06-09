@@ -109,6 +109,11 @@ startup with a safe error directing operators to `OPENAI_UPSTREAM_API_KEY`.
 Gateway-looking or placeholder `OPENAI_API_KEY` values are not copied into
 provider settings.
 
+`OPENAI_ADMIN_DISCOVERY_API_KEY` is reserved for admin-only discovery and
+proposal workflows such as `slaif-gateway provider-catalog propose openai` and
+the existing OpenAI-assisted catalog proposal commands. It must not be reused
+as a client gateway key and it must not be renamed to `OPENAI_API_KEY`.
+
 ## App And Gateway Keys
 
 - `APP_ENV` controls environment-sensitive defaults such as production readiness

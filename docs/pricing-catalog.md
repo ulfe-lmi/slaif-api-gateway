@@ -99,6 +99,21 @@ Rules:
 - price values are parsed as decimal strings, not floats;
 - unknown fields or provider-secret-looking metadata are rejected.
 
+SLAIF now includes a deterministic provider-catalog proposal workflow for this
+path. `slaif-gateway provider-catalog propose openrouter` fetches official
+OpenRouter metadata, confirms pricing-unit evidence from official docs, compares
+enrichment sources, and writes proposal artifacts only:
+
+- `source-manifest.json`
+- `provider-catalog-normalized.json`
+- `routes-proposal.tsv`
+- `pricing-proposal.tsv`
+- `provider-catalog-report.md`
+- `warnings.json`
+
+It does not execute an import, does not mutate production rows, and does not
+store raw source bodies in PostgreSQL, audit rows, sessions, or logs.
+
 ## OpenAI Pricing
 
 OpenAI publishes pricing on its pricing pages. Unless OpenAI provides a stable
@@ -108,6 +123,17 @@ preview/confirm/audit pattern.
 
 Do not scrape or silently refresh OpenAI prices into production rows without a
 separate reviewed implementation contract.
+
+`slaif-gateway provider-catalog propose openai` now provides that reviewed
+contract as a proposal-only workflow. It uses official OpenAI pricing docs as
+the primary pricing source, official models docs as the primary endpoint and
+feature source, optional `GET /v1/models` as an availability/basic model-ID
+cross-check, and optional OpenAI-assisted proposal generation as a secondary
+cross-check only.
+
+The optional OpenAI API model listing uses `OPENAI_ADMIN_DISCOVERY_API_KEY`,
+never `OPENAI_API_KEY`. `OPENAI_API_KEY` remains reserved for client-side
+gateway-issued keys.
 
 ## OpenAI Assisted Pricing And Route Proposals
 
@@ -218,6 +244,9 @@ for workshops and courses, with money limits acting as an additional guardrail.
 The proposal generator deliberately stops at reviewed TSV content. Operators
 must inspect the TSV, run the existing pricing or route import preview, and
 execute the import only with explicit confirmation and an audit reason. The web
+and CLI provider-catalog proposal workflow follows the same boundary. It
+compares source sets, emits warnings for pricing disagreements or missing
+pricing, and never silently updates production routing or pricing rows.
 UI can carry the reviewed TSV into preview without copy/paste, but it does not
 create a trusted path: unknown fields, secret-looking values, conflicts,
 duplicates, unsupported rows, and update-classified rows are handled by the same

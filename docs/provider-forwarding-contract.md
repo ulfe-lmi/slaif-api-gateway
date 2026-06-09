@@ -57,6 +57,13 @@ metadata for the currently supported request surface. Hosted search/tools,
 image/file/audio inputs, custom tools, non-default service tiers, and multiple
 choices are not enabled by that metadata.
 
+`slaif-gateway provider-catalog propose ...` is separate from bootstrap and
+from runtime forwarding. It can fetch official provider metadata to prepare
+proposal TSV/JSON/Markdown artifacts, but it does not execute imports, does not
+mutate local route/pricing rows directly, and does not change provider
+forwarding until an operator later completes the existing import
+preview/confirmation workflow.
+
 ## OpenAI Upstream Forwarding
 
 | Area | Contract |
