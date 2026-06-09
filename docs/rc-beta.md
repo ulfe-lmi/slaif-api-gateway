@@ -150,14 +150,14 @@ migrations automatically.
   `capabilities.responses.compact=true`, endpoint-specific pricing, quota
   reservation, provider usage finalization, and no compact input/output
   storage.
-  Conversation create/retrieve/delete, Conversation item
+  Conversation create/update/retrieve/delete, Conversation item
   create/list/retrieve/delete, and non-streaming Responses create with an owned
   conversation reference are supported through safe local conversation-reference
   metadata. Hosted/provider-side Responses tools,
   streaming conversation state, streaming
   previous-response state, compact `previous_response_id`, background mode,
   cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
-  search/retrieval tools, audio input, image generation, multimodal output, and
+  search/retrieval tools, audio input/output, image generation, multimodal output, and
   MCP/connectors remain future work. Current Chat
   Completions usage profiling and trusted calibration keys, available from CLI
   and admin web creation, provide safe calibration-foundation metadata. Admins

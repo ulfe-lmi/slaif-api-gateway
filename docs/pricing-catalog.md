@@ -367,10 +367,14 @@ conversation create/retrieve/delete, and Conversation item
 create/list/retrieve/delete are ownership-checked control-plane proxy calls and
 do not reserve output quota or create normal generation usage ledger rows.
 
-Responses hosted tools, conversation update endpoints, background mode,
-`input_image.file_id`, `input_file.file_id`, file search/retrieval tools, audio
-inputs, image generation, audio output, and multimodal output are not priced or
-enabled in this foundation.
+Responses hosted tools, background mode, response cancel/list, streaming
+conversation state, streaming previous-response state, compact
+`previous_response_id`, `input_image.file_id`, `input_file.file_id`,
+`/v1/files`, file search/retrieval tools, audio inputs, audio output, image
+generation, and multimodal output are not priced or enabled in this
+foundation. Conversation update and Conversation item resource endpoints are
+implemented as ownership-checked control-plane proxy calls and do not use
+generation pricing rows.
 
 `POST /v1/responses/input_tokens` is not a generation endpoint. It requires an
 explicit model route and `capabilities.responses.input_token_count=true`, but

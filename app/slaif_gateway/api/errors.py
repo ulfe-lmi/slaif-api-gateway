@@ -16,6 +16,7 @@ _DEFAULT_ERROR_TYPES_BY_STATUS = {
     401: "authentication_error",
     403: "permission_error",
     404: "invalid_request_error",
+    405: "invalid_request_error",
     422: "invalid_request_error",
     429: "rate_limit_error",
     500: "server_error",
