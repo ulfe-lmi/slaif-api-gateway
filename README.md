@@ -77,9 +77,11 @@ Not implemented yet:
   computer use, image generation, audio input/output, `/v1/files`, `file_id`
   lifecycle, response cancel/list endpoints,
   and multimodal output. The implemented Responses subset remains text-output
-  only, non-streaming for stored create, owned previous-response chaining,
-  compact, and owned retrieve/delete/input-item listing, and local/client-side
-  for tools.
+  only, with provider-reported input-token count, bounded non-streaming
+  compact, non-streaming stored create, owned previous-response chaining,
+  owned retrieve/delete/input-item listing, owned Conversations resource/item
+  lifecycle, and local/client-side tools only in the documented bounded
+  subsets.
 - Embeddings, legacy `/v1/completions`, `/v1/files`, `/v1/audio/*`, image
   generation endpoints, batch endpoints, and Realtime API.
 - Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,

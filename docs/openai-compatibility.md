@@ -612,7 +612,7 @@ Unsupported endpoints and unsupported provider adapter endpoints are explicit er
   Responses foundation includes URL/data URL image input, URL/data URL file
   input, non-streaming JSON, typed SSE streaming for stateless requests, and
   non-streaming stored create plus owned retrieve/delete/input-item listing and
-  the ownership-checked conversation reference/update foundation; see
+  the ownership-checked conversation resource/update/item foundation; see
   `docs/responses-compatibility.md`.
 - Hosted/provider-side tool support for normal participant keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration

@@ -108,7 +108,7 @@ non-empty audit reason according to the action.
 
 - Unit tests: `1134 passed, 6 warnings`.
 - Ruff: passed.
-- Alembic heads: single head, `0006_email_delivery_attempt_state`.
+- Alembic heads: single head, `0012_conversation_references`.
 - `git diff --check`: passed before edits and rerun for this PR.
 - PostgreSQL integration tests: `105 passed, 34 warnings`.
 - E2E official OpenAI client tests: `6 passed, 6 warnings`.
@@ -212,14 +212,14 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   `capabilities.responses.compact=true`, endpoint-specific pricing, quota
   reservation, provider usage finalization, and no compact input/output
   storage.
-  Conversation create/retrieve/delete, Conversation item
+  Conversation create/update/retrieve/delete, Conversation item
   create/list/retrieve/delete, and non-streaming Responses create with an owned
   conversation reference are supported through safe local conversation-reference
   metadata. Hosted/provider-side Responses tools,
   streaming conversation state, streaming
   previous-response state, compact `previous_response_id`, background mode,
   cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
-  search/retrieval tools, audio input, image generation, multimodal output, and
+  search/retrieval tools, audio input/output, image generation, multimodal output, and
   MCP/connectors remain future work. Safe Chat
   Completions usage profiling, trusted calibration keys, calibration proposal
   previews, and durable key-template snapshots now provide the first persisted

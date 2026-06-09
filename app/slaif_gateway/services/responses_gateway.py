@@ -647,6 +647,7 @@ async def handle_response_retrieve(
     request: Request | None = None,
 ):
     safe_response_id = _validate_response_id(response_id)
+    _validate_response_retrieve_query(request)
     reference = await _get_owned_active_response_reference(
         response_id=safe_response_id,
         authenticated_key=authenticated_key,
@@ -2113,6 +2114,19 @@ def _validate_response_input_items_query(request: Request | None) -> dict[str, o
             cleaned_include.append(include)
         query["include"] = cleaned_include
     return query
+
+
+def _validate_response_retrieve_query(request: Request | None) -> None:
+    if request is None:
+        return
+    if request.query_params:
+        raise OpenAICompatibleError(
+            "Responses retrieve query parameters are not supported by this gateway.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="invalid_response_retrieve_query",
+            param="query",
+        )
 
 
 def _validate_conversation_items_query(

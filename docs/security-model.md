@@ -77,12 +77,19 @@ route/model `capabilities.responses.image_input=true` metadata, are capped, and
 are counted for conservative admission estimates. SLAIF does not fetch image
 URLs, decode image pixels, rewrite data URLs, store/log raw image URLs, image
 data URLs, or base64 payloads, or treat image bytes as invoice-grade billing
-truth. String-only `function_call_output` and `custom_tool_call_output` items
-are accepted as ordinary stateless input for local-tool follow-up requests.
+truth. User-message `input_file` HTTPS `file_url` parts and safe `filename`
+plus `file_data` data URL parts require explicit
+`capabilities.responses.file_input=true` metadata, are capped, and are counted
+for conservative admission estimates. SLAIF does not fetch file URLs, parse,
+OCR, index, extract text from, store/log file URLs, filenames, data URLs, or
+base64 payloads, or treat file bytes as invoice-grade billing truth.
+String-only `function_call_output` and `custom_tool_call_output` items are
+accepted as ordinary stateless input for local-tool follow-up requests.
 Function-call/custom-tool-call items, reasoning/stateful items, hosted-tool
-items, `input_image.file_id`, file content parts, and audio content parts are
-rejected before provider forwarding. Input item text and string tool outputs
-are counted for admission estimates but are not stored or logged.
+items, `input_image.file_id`, `input_file.file_id`, and audio content parts are
+rejected before provider forwarding. Input item text, image/file payload
+material, and string tool outputs are counted for admission estimates but are
+not stored or logged.
 
 Responses local function tools follow the same boundary. They require explicit
 route/model `capabilities.responses.function_tools=true` metadata and are

@@ -855,6 +855,48 @@ def test_responses_create_with_unknown_conversation_returns_404_before_provider(
     assert provider_calls == []
 
 
+def test_responses_create_with_provider_mismatched_conversation_returns_404_before_provider(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    route = _route_result("classroom-responses", responses_conversations=True)
+    provider_calls: list[str] = []
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, requested_model, authenticated_key, endpoint)
+        return route
+
+    async def _fake_get_reference(*, conversation_id, authenticated_key, request):
+        _ = (conversation_id, authenticated_key, request)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openrouter",
+            provider_conversation_id="conv_openrouter",
+            route_id=route.route_id,
+        )
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(main_module, "_get_owned_active_conversation_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "conversation": "conv_openrouter"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "conversation_not_found"
+    assert provider_calls == []
+
+
 def test_store_true_with_previous_response_id_persists_new_response_reference(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 
@@ -1078,6 +1120,46 @@ def test_response_retrieve_missing_or_non_owned_reference_returns_404_before_pro
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "response_not_found"
+    assert provider_calls == []
+
+
+def test_response_retrieve_rejects_unsupported_query_params_before_lookup_or_proxy(
+    monkeypatch,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(allowed_endpoints=("GET /v1/responses/{response_id}",)),
+    )
+    lookup_calls: list[str] = []
+    provider_calls: list[str] = []
+
+    async def _fake_get_reference(*, response_id, authenticated_key, request):
+        _ = (authenticated_key, request)
+        lookup_calls.append(response_id)
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            provider="openai",
+            provider_response_id=response_id,
+            upstream_model="gpt-5.2",
+        )
+
+    def _fake_get_provider_adapter(route, settings):
+        _ = (route, settings)
+        provider_calls.append("provider")
+        raise AssertionError("provider adapter should not be called")
+
+    monkeypatch.setattr(main_module, "_get_owned_active_response_reference", _fake_get_reference)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
+
+    response = TestClient(app).get("/v1/responses/resp_owned?starting_after=evt_123")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_response_retrieve_query"
+    assert lookup_calls == []
     assert provider_calls == []
 
 

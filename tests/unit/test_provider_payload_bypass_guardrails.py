@@ -191,6 +191,52 @@ def test_normalized_body_is_built_before_rate_limit_and_quota_side_effects() -> 
     assert compact_build_lines[0] < _call_lines(compact_handler, "_reserve_redis_rate_limit")[0]
     assert compact_build_lines[0] < _call_lines(compact_handler, "_reserve_responses_quota")[0]
 
+    input_tokens_handler = _find_function(responses_tree, "handle_response_input_tokens_count")
+    input_tokens_build_lines = _call_lines(
+        input_tokens_handler, "_build_safe_responses_input_tokens_upstream_body"
+    )
+    assert input_tokens_build_lines, "Responses input-token handler must build the normalized upstream body"
+
+    conversation_update_handler = _find_function(responses_tree, "handle_conversation_update")
+    conversation_update_build_lines = _call_lines(
+        conversation_update_handler,
+        "_build_safe_conversation_update_upstream_body",
+    )
+    assert (
+        conversation_update_build_lines
+    ), "Conversation update handler must build the normalized upstream body"
+
+    conversation_item_create_handler = _find_function(
+        responses_tree, "handle_conversation_item_create"
+    )
+    conversation_item_create_build_lines = _call_lines(
+        conversation_item_create_handler,
+        "_build_safe_conversation_items_create_upstream_body",
+    )
+    assert (
+        conversation_item_create_build_lines
+    ), "Conversation item create handler must build the normalized upstream body"
+
+    conversation_items_list_handler = _find_function(responses_tree, "handle_conversation_items_list")
+    conversation_items_list_build_lines = _call_lines(
+        conversation_items_list_handler,
+        "_build_safe_conversation_items_query_params",
+    )
+    assert (
+        conversation_items_list_build_lines
+    ), "Conversation items list handler must build normalized upstream query params"
+
+    conversation_item_retrieve_handler = _find_function(
+        responses_tree, "handle_conversation_item_retrieve"
+    )
+    conversation_item_retrieve_build_lines = _call_lines(
+        conversation_item_retrieve_handler,
+        "_build_safe_conversation_items_query_params",
+    )
+    assert (
+        conversation_item_retrieve_build_lines
+    ), "Conversation item retrieve handler must build normalized upstream query params"
+
 
 def test_no_direct_forwarding_passthrough_names_in_provider_paths() -> None:
     suspicious: list[tuple[str, int, str]] = []
