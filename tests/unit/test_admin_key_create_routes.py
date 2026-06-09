@@ -241,6 +241,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert "Available enabled providers" in response.text
     assert "Available implemented endpoints" in response.text
     assert "Available route-backed model candidates" in response.text
+    assert "Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled." in response.text
+    assert "Catalog-only endpoints and model-backed endpoints are kept separate here on purpose." in response.text
     assert 'name="allow_all_providers" value="true"' in response.text
     assert 'name="allowed_providers"' in response.text
     assert 'name="allowed_models"' in response.text
@@ -248,6 +250,7 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="allowed_endpoints"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
     assert 'src="/admin/static/js/policy-selector.js"' in response.text
+    assert "Add selected -&gt;" in response.text
     assert "OpenAI | openai | openai_compatible" in response.text
     assert "gpt-4o-* | openrouter | /v1/chat/completions | glob" in response.text
     assert "hidden from /v1/models" in response.text
