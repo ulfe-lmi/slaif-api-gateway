@@ -267,7 +267,7 @@ def test_admin_keys_list_returns_html_and_accepts_filters(monkeypatch) -> None:
         list_keys,
     )
     client = TestClient(_app())
-    _login_for_actions(monkeypatch, client)
+    _login(monkeypatch, client)
     cohort_id = uuid.uuid4()
 
     response = client.get(
@@ -307,7 +307,7 @@ def test_admin_keys_list_marks_trusted_calibration(monkeypatch) -> None:
         list_keys,
     )
     client = TestClient(_app())
-    _login_for_actions(monkeypatch, client)
+    _login(monkeypatch, client)
 
     response = client.get("/admin/keys")
 
@@ -328,7 +328,7 @@ def test_admin_key_detail_returns_html(monkeypatch) -> None:
     )
     monkeypatch.setattr("slaif_gateway.api.admin._load_key_policy_catalog", _policy_catalog)
     client = TestClient(_app())
-    _login_for_actions(monkeypatch, client)
+    _login(monkeypatch, client)
 
     response = client.get(f"/admin/keys/{key.id}")
 
