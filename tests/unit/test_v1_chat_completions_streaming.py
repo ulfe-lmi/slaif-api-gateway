@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import replace
@@ -108,7 +109,7 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
         "finalize_calls": [],
         "recovery_failure_calls": [],
         "failure_calls": [],
-        "live_burn_estimate_calls": [],
+        "streaming_estimate_calls": [],
     }
     auth = auth or _auth()
 
@@ -174,18 +175,18 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
         state["failure_calls"].append(kwargs)
         return object()
 
-    async def _fake_live_burn_estimate(self, *args, **kwargs):
+    async def _fake_streaming_estimate(self, *args, **kwargs):
         _ = (self, args)
-        state["live_burn_estimate_calls"].append(kwargs)
+        state["streaming_estimate_calls"].append(kwargs)
         return SimpleNamespace(accounting_status="estimated")
 
     class _FakeAdapter:
         async def stream_chat_completion(self, request):
             state["stream_calls"].append(request)
-            if provider_error is not None:
-                raise provider_error
             for chunk in chunks or []:
                 yield chunk
+            if provider_error is not None:
+                raise provider_error
 
     app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
@@ -208,7 +209,12 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
     monkeypatch.setattr(
         gateway_module.AccountingService,
         "record_streaming_live_burn_interrupted_estimate",
-        _fake_live_burn_estimate,
+        _fake_streaming_estimate,
+    )
+    monkeypatch.setattr(
+        gateway_module.AccountingService,
+        "record_streaming_interrupted_estimate",
+        _fake_streaming_estimate,
     )
     monkeypatch.setattr(gateway_module, "get_provider_adapter", lambda route, settings: _FakeAdapter())
     return state
@@ -449,10 +455,11 @@ def test_streaming_live_burn_token_threshold_aborts_without_done(monkeypatch) ->
         body = "".join(response.iter_text())
 
     assert response.status_code == 200
+    assert "long streamed text" not in body
     assert "streaming_live_burn_limit_exceeded" in body
     assert "data: [DONE]" not in body
-    assert state["live_burn_estimate_calls"]
-    call = state["live_burn_estimate_calls"][0]
+    assert state["streaming_estimate_calls"]
+    call = state["streaming_estimate_calls"][0]
     assert call["estimated_input_tokens"] == 10
     assert call["estimated_total_tokens"] >= 15
     assert call["response_metadata"]["streaming_live_burn_triggered"] is True
@@ -513,9 +520,132 @@ def test_streaming_live_burn_disabled_does_not_abort(monkeypatch) -> None:
 
     assert "streaming_live_burn_limit_exceeded" not in body
     assert "data: [DONE]" in body
-    assert state["live_burn_estimate_calls"] == []
+    assert state["streaming_estimate_calls"] == []
     assert state["provider_completed_calls"]
     assert state["finalize_calls"]
+
+
+def test_streaming_missing_final_usage_after_output_records_estimated_interruption(
+    monkeypatch,
+) -> None:
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data='{"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}',
+            raw_sse_event='data: {"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}\n\n',
+            json_body={"id": "chunk-1", "choices": [{"delta": {"content": "visible output"}}]},
+        ),
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data="[DONE]",
+            raw_sse_event="data: [DONE]\n\n",
+            is_done=True,
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(monkeypatch, app, chunks=chunks)
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "visible output" in body
+    assert "stream_usage_missing" in body
+    assert "data: [DONE]" not in body
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    estimate_call = state["streaming_estimate_calls"][0]
+    assert estimate_call["estimate_reason"] == "chat_streaming_usage_missing_estimated"
+    assert estimate_call["error_type"] == "stream_usage_missing"
+    assert estimate_call["response_metadata"]["stream_interruption_reason"] == (
+        "chat_streaming_usage_missing_estimated"
+    )
+    assert "visible output" not in json.dumps(estimate_call["response_metadata"])
+
+
+def test_streaming_provider_failure_after_output_records_estimated_interruption(
+    monkeypatch,
+) -> None:
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data='{"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}',
+            raw_sse_event='data: {"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}\n\n',
+            json_body={"id": "chunk-1", "choices": [{"delta": {"content": "visible output"}}]},
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(
+        monkeypatch,
+        app,
+        chunks=chunks,
+        provider_error=ProviderTimeoutError(provider="openai"),
+    )
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "visible output" in body
+    assert "provider_timeout" in body
+    assert "data: [DONE]" not in body
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    estimate_call = state["streaming_estimate_calls"][0]
+    assert estimate_call["estimate_reason"] == "chat_streaming_provider_error_estimated"
+    assert estimate_call["error_type"] == "provider_timeout"
+
+
+def test_streaming_client_disconnect_after_output_records_estimated_interruption(
+    monkeypatch,
+) -> None:
+    chunks = [
+        ProviderStreamChunk(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            data='{"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}',
+            raw_sse_event='data: {"id":"chunk-1","choices":[{"delta":{"content":"visible output"}}]}\n\n',
+            json_body={"id": "chunk-1", "choices": [{"delta": {"content": "visible output"}}]},
+        ),
+    ]
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(
+        monkeypatch,
+        app,
+        chunks=chunks,
+        provider_error=asyncio.CancelledError(),
+    )
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        _ = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    estimate_call = state["streaming_estimate_calls"][0]
+    assert estimate_call["estimate_reason"] == "chat_streaming_client_disconnected_estimated"
+    assert estimate_call["error_type"] == "client_disconnected"
+
+
+def test_streaming_zero_output_provider_failure_still_releases_reservation(monkeypatch) -> None:
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
+    state = _wire_streaming_pipeline(
+        monkeypatch,
+        app,
+        chunks=[],
+        provider_error=ProviderTimeoutError(provider="openai"),
+    )
+
+    with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "provider_timeout" in body
+    assert len(state["failure_calls"]) == 1
+    assert state["streaming_estimate_calls"] == []
 
 
 def test_streaming_missing_final_usage_error_event_is_safe(monkeypatch) -> None:

@@ -261,6 +261,10 @@ Chat Completions text deltas and discards them; prompts, completions, streamed
 chunks, tool arguments, media payloads, raw request bodies, and raw response
 bodies must not be stored or logged.
 
+`CHAT_ALLOW_STREAMING_AUDIO_OUTPUT` must remain `false`. Current configuration
+validation rejects `true` because streaming audio output does not yet have the
+required live-burn accounting coverage.
+
 ## Provider Configuration
 
 - `OPENAI_UPSTREAM_API_KEY` supplies the OpenAI provider key.

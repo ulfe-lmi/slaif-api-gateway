@@ -7,6 +7,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from dataclasses import dataclass
+from decimal import Decimal
 from types import SimpleNamespace
 
 import anyio
@@ -78,10 +79,12 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     ResponsesStreamingLiveBurnMonitor,
     ResponsesStreamingLiveBurnPolicy,
     ResponsesStreamingLiveBurnPolicyError,
+    build_responses_streaming_estimate_monitor,
     build_responses_streaming_live_burn_budget,
     default_responses_streaming_live_burn_policy,
     pre_provider_responses_streaming_live_burn_error,
     responses_streaming_live_burn_policy_from_metadata,
+    safe_responses_streaming_interrupted_estimate_metadata,
 )
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.responses_request_policy import (
@@ -154,6 +157,13 @@ _CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
     {"after", "before", "include", "include[]", "limit", "order"}
 )
 _CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
+_ALLOWED_RESPONSES_STREAM_EVENT_TYPES = frozenset(
+    {
+        "response.created",
+        "response.in_progress",
+        "response.output_text.delta",
+    }
+)
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -1357,10 +1367,10 @@ def _streaming_responses_response(
         terminal_done_event: str | None = None
         completed = False
         provider_status = "error"
-        live_burn_monitor = (
-            ResponsesStreamingLiveBurnMonitor(live_burn_budget)
-            if live_burn_budget is not None
-            else None
+        stream_estimate_monitor = build_responses_streaming_estimate_monitor(
+            cost_estimate=cost_estimate,
+            estimate_multiplier=settings.RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER,
+            budget=live_burn_budget,
         )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = _start_rate_limit_heartbeat(
@@ -1379,12 +1389,35 @@ def _streaming_responses_response(
                 if chunk.is_done:
                     terminal_done_event = chunk.raw_sse_event
                     continue
-                yield chunk.raw_sse_event
-                live_burn_estimate = (
-                    live_burn_monitor.observe_chunk(chunk.json_body)
-                    if live_burn_monitor is not None
-                    else None
-                )
+                if not _is_supported_responses_stream_chunk(chunk):
+                    await _finalize_responses_stream_interruption_after_output(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        provider_error=ProviderError(
+                            "Provider emitted a Responses streaming event that is not supported by this gateway.",
+                            provider=route.provider,
+                            upstream_status_code=200,
+                            error_code="responses_stream_event_not_supported",
+                        ),
+                        request=request,
+                        estimate_reason="responses_streaming_provider_error_estimated",
+                        stream_estimate_monitor=stream_estimate_monitor,
+                    )
+                    provider_status = "incomplete"
+                    yield format_responses_error_event(
+                        message=(
+                            "Provider emitted a Responses streaming event that is not supported by "
+                            "this gateway."
+                        ),
+                        code="responses_stream_event_not_supported",
+                        request_id=request_id,
+                    )
+                    return
+                live_burn_estimate = stream_estimate_monitor.observe_chunk(chunk.json_body)
                 if live_burn_estimate is not None:
                     await _record_streaming_live_burn_abort_estimate(
                         reservation=reservation,
@@ -1402,6 +1435,7 @@ def _streaming_responses_response(
                         request_id=request_id,
                     )
                     return
+                yield chunk.raw_sse_event
 
             if completed and completed_chunk is not None and completed_chunk.usage is not None:
                 provider_response = _provider_response_from_response_stream(
@@ -1459,7 +1493,7 @@ def _streaming_responses_response(
                 if terminal_done_event is not None:
                     yield terminal_done_event
             else:
-                await _record_provider_failure_and_release(
+                await _finalize_responses_stream_interruption_after_output(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
                     route=route,
@@ -1473,7 +1507,8 @@ def _streaming_responses_response(
                         error_code="responses_stream_usage_missing",
                     ),
                     request=request,
-                    streaming=True,
+                    estimate_reason="responses_streaming_usage_missing_estimated",
+                    stream_estimate_monitor=stream_estimate_monitor,
                 )
                 provider_status = "incomplete"
                 yield format_responses_error_event(
@@ -1486,7 +1521,7 @@ def _streaming_responses_response(
                 )
         except asyncio.CancelledError:
             with anyio.CancelScope(shield=True):
-                await _release_streaming_reservation_after_error(
+                await _finalize_responses_stream_interruption_after_output(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
                     route=route,
@@ -1499,10 +1534,12 @@ def _streaming_responses_response(
                         error_code="client_disconnected",
                     ),
                     request=request,
+                    estimate_reason="responses_streaming_client_disconnected_estimated",
+                    stream_estimate_monitor=stream_estimate_monitor,
                 )
             raise
         except ProviderError as exc:
-            await _release_streaming_reservation_after_error(
+            await _finalize_responses_stream_interruption_after_output(
                 reservation=reservation,
                 authenticated_key=authenticated_key,
                 route=route,
@@ -1511,6 +1548,8 @@ def _streaming_responses_response(
                 request_id=request_id,
                 provider_error=exc,
                 request=request,
+                estimate_reason="responses_streaming_provider_error_estimated",
+                stream_estimate_monitor=stream_estimate_monitor,
             )
             yield format_responses_error_event(
                 message=exc.safe_message,
@@ -1701,7 +1740,7 @@ async def _record_provider_failure_and_release(
         await session_iterator.aclose()
 
 
-async def _release_streaming_reservation_after_error(
+async def _finalize_responses_stream_interruption_after_output(
     *,
     reservation: QuotaReservationResult,
     authenticated_key: AuthenticatedGatewayKey,
@@ -1711,25 +1750,107 @@ async def _release_streaming_reservation_after_error(
     request_id: str,
     provider_error: ProviderError,
     request: Request | None,
+    estimate_reason: str,
+    stream_estimate_monitor: ResponsesStreamingLiveBurnMonitor,
 ) -> None:
     try:
-        await _record_provider_failure_and_release(
-            reservation=reservation,
-            authenticated_key=authenticated_key,
-            route=route,
-            policy_result=policy_result,
-            cost_estimate=cost_estimate,
-            request_id=request_id,
-            provider_error=provider_error,
-            request=request,
-            streaming=True,
-        )
+        if stream_estimate_monitor.estimated_output_tokens > 0:
+            await _record_responses_streaming_interrupted_estimate(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                response_metadata=safe_responses_streaming_interrupted_estimate_metadata(
+                    estimated_input_tokens=cost_estimate.estimated_input_tokens,
+                    estimated_output_tokens=stream_estimate_monitor.estimated_output_tokens,
+                    estimated_total_tokens=stream_estimate_monitor.estimated_request_tokens,
+                    estimated_cost_eur=stream_estimate_monitor.estimated_cost_eur,
+                    interruption_reason=estimate_reason,
+                    final_provider_usage_available=False,
+                ),
+                estimated_output_tokens=stream_estimate_monitor.estimated_output_tokens,
+                estimated_total_tokens=stream_estimate_monitor.estimated_request_tokens,
+                estimated_cost_eur=stream_estimate_monitor.estimated_cost_eur,
+                endpoint=RESPONSES_PROVIDER_ENDPOINT,
+                error_type=provider_error.error_code or "responses_stream_interrupted",
+                error_message=provider_error.error_code or "responses_stream_interrupted",
+                status_code=provider_error.upstream_status_code,
+                estimate_reason=estimate_reason,
+                request=request,
+            )
+        else:
+            await _record_provider_failure_and_release(
+                reservation=reservation,
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                cost_estimate=cost_estimate,
+                request_id=request_id,
+                provider_error=provider_error,
+                request=request,
+                streaming=True,
+            )
     except AccountingError as accounting_exc:
         increment_accounting_failure(accounting_exc.error_code)
         raise
     except QuotaError as quota_exc:
         increment_quota_rejection(quota_exc.error_code)
         raise
+
+
+async def _record_responses_streaming_interrupted_estimate(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    cost_estimate: ChatCostEstimate,
+    request_id: str,
+    response_metadata: dict[str, object],
+    estimated_output_tokens: int,
+    estimated_total_tokens: int,
+    estimated_cost_eur: Decimal,
+    endpoint: str,
+    error_type: str,
+    error_message: str,
+    status_code: int | None,
+    estimate_reason: str,
+    request: Request | None,
+) -> FinalizedAccountingResult:
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        result = await accounting_service.record_streaming_interrupted_estimate(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            request_id,
+            estimated_input_tokens=cost_estimate.estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            estimated_total_tokens=estimated_total_tokens,
+            estimated_cost_eur=estimated_cost_eur,
+            response_metadata=response_metadata,
+            endpoint=endpoint,
+            estimate_reason=estimate_reason,
+            error_type=error_type,
+            error_message=error_message,
+            status_code=status_code,
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return result
+    finally:
+        await session_iterator.aclose()
 
 
 async def _record_streaming_live_burn_abort_estimate(
@@ -2662,6 +2783,18 @@ def _provider_response_from_response_stream(
 def _is_responses_completed_chunk(chunk: ProviderStreamChunk) -> bool:
     payload = chunk.json_body
     return isinstance(payload, dict) and payload.get("type") == "response.completed"
+
+
+def _is_supported_responses_stream_chunk(chunk: ProviderStreamChunk) -> bool:
+    payload = chunk.json_body
+    if not isinstance(payload, dict):
+        return False
+    event_type = payload.get("type")
+    if event_type not in _ALLOWED_RESPONSES_STREAM_EVENT_TYPES:
+        return False
+    if event_type == "response.output_text.delta":
+        return isinstance(payload.get("delta"), str)
+    return True
 
 
 class _RateLimitReservation:

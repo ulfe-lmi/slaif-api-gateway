@@ -290,6 +290,17 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.ADMIN_LOGIN_LOCKOUT_SECONDS == 900
 
 
+def test_streaming_audio_output_toggle_is_rejected_until_live_burn_exists(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("CHAT_ALLOW_STREAMING_AUDIO_OUTPUT", "true")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc_info:
+        get_settings()
+
+    assert "CHAT_ALLOW_STREAMING_AUDIO_OUTPUT is not supported" in str(exc_info.value)
+
+
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:
     _clear_env(monkeypatch)
     _set_required_production_env(monkeypatch)

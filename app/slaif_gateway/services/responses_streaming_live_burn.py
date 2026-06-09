@@ -11,12 +11,14 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnBudget,
     ChatStreamingLiveBurnEstimate,
+    build_chat_streaming_estimate_monitor,
     ChatStreamingLiveBurnPolicy,
     ChatStreamingLiveBurnPolicyError,
     build_chat_streaming_live_burn_budget,
     default_chat_streaming_live_burn_policy,
     estimate_chat_streaming_output_delta_tokens,
     normalize_chat_streaming_live_burn_policy,
+    safe_chat_streaming_interrupted_estimate_metadata,
 )
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
@@ -235,3 +237,38 @@ def pre_provider_responses_streaming_live_burn_error(
         return None
     monitor = ResponsesStreamingLiveBurnMonitor(budget)
     return monitor.check()
+
+
+def build_responses_streaming_estimate_monitor(
+    *,
+    cost_estimate: ChatCostEstimate,
+    estimate_multiplier: Decimal,
+    budget: ResponsesStreamingLiveBurnBudget | None = None,
+) -> ResponsesStreamingLiveBurnMonitor:
+    chat_monitor = build_chat_streaming_estimate_monitor(
+        cost_estimate=cost_estimate,
+        estimate_multiplier=estimate_multiplier,
+        budget=budget,
+    )
+    monitor = ResponsesStreamingLiveBurnMonitor(chat_monitor._budget)
+    monitor._estimated_output_tokens = chat_monitor.estimated_output_tokens
+    return monitor
+
+
+def safe_responses_streaming_interrupted_estimate_metadata(
+    *,
+    estimated_input_tokens: int,
+    estimated_output_tokens: int,
+    estimated_total_tokens: int,
+    estimated_cost_eur: Decimal,
+    interruption_reason: str,
+    final_provider_usage_available: bool,
+) -> dict[str, object]:
+    return safe_chat_streaming_interrupted_estimate_metadata(
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_output_tokens=estimated_output_tokens,
+        estimated_total_tokens=estimated_total_tokens,
+        estimated_cost_eur=estimated_cost_eur,
+        interruption_reason=interruption_reason,
+        final_provider_usage_available=final_provider_usage_available,
+    )

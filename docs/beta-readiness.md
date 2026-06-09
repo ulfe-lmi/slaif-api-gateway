@@ -60,8 +60,10 @@ operational guidance, not a production certification.
 - Chat Completions streaming live-burn monitoring is implemented for
   `POST /v1/chat/completions` with `stream=true`. The milestone in
   [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) documents
-  the current Chat slice and the future Responses slice. The Chat feature is a
-  per-key provisional interruption brake and does not change provider-final
+  the current Chat and Responses slices. The Chat feature is a
+  per-key provisional interruption brake, with threshold-crossing chunks
+  withheld and post-output interruption paths finalized as safe estimates
+  instead of zero-cost success. It does not change provider-final
   usage/cost authority. Admin usage pages, usage CSV export, and
   `slaif-gateway usage live-burn-summary` report only safe Chat live-burn
   metadata from PostgreSQL usage ledger rows.

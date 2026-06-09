@@ -56,13 +56,16 @@ but are not a production certification.
 - Chat Completions streaming live-burn monitoring is implemented for
   `POST /v1/chat/completions` with `stream=true`. It is a per-key,
   gateway-side provisional interruption brake with enabled/zero-margin defaults;
-  final provider usage/cost remains authoritative.
+  threshold-crossing chunks are withheld, post-output interruption paths are
+  finalized as safe estimates instead of zero-cost success, and final provider
+  usage/cost remains authoritative.
 - Responses streaming live-burn monitoring is implemented for the supported
   stateless text-output `POST /v1/responses` streaming subset. It is a
   gateway-side provisional interruption brake that estimates visible
-  `response.output_text.delta` text only, emits a safe typed error on stop, and
-  does not enable background mode, cancel, response listing, Responses audio,
-  or stateful streaming. Admin usage pages, usage CSV export, and
+  `response.output_text.delta` text only, withholds threshold-crossing deltas,
+  emits a safe typed error on stop, and does not enable background mode,
+  cancel, response listing, Responses audio, or stateful streaming. Admin usage
+  pages, usage CSV export, and
   `slaif-gateway usage live-burn-summary` remain Chat-focused safe reporting
   over PostgreSQL usage ledger metadata.
 - Optional Redis operational rate limiting for request, estimated-token, and

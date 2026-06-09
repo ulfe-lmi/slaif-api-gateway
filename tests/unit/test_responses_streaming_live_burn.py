@@ -9,6 +9,7 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     RESPONSES_STREAMING_LIVE_BURN_METADATA_KEY,
     ResponsesStreamingLiveBurnMonitor,
     ResponsesStreamingLiveBurnPolicyError,
+    safe_responses_streaming_interrupted_estimate_metadata,
     build_responses_streaming_live_burn_budget,
     generated_responses_streaming_delta_text,
     metadata_with_responses_streaming_live_burn_policy,
@@ -121,6 +122,47 @@ def test_responses_delta_extractor_counts_only_output_text_delta() -> None:
     assert generated_responses_streaming_delta_text(
         {"type": "response.output_text.delta", "delta": {"nested": "nope"}}
     ) == ""
+
+
+def test_safe_lifecycle_events_do_not_change_accounting() -> None:
+    policy = normalize_responses_streaming_live_burn_policy(
+        {"enabled": True, "cost_margin_eur": "0", "token_margin": 0},
+        max_abs_cost_margin_eur=Decimal("10"),
+        max_abs_token_margin=1000,
+    )
+    budget = build_responses_streaming_live_burn_budget(
+        policy=policy,
+        cost_limit_eur=None,
+        token_limit_total=50,
+        cost_used_eur=Decimal("0"),
+        tokens_used_total=0,
+        cost_reserved_eur=Decimal("0"),
+        tokens_reserved_total=0,
+        current_reserved_cost_eur=Decimal("0"),
+        current_reserved_tokens=0,
+        cost_estimate=_estimate(),
+        estimate_multiplier=Decimal("1"),
+    )
+    assert budget is not None
+    monitor = ResponsesStreamingLiveBurnMonitor(budget)
+
+    assert monitor.observe_chunk({"type": "response.created", "response": {"id": "resp"}}) is None
+    assert monitor.estimated_output_tokens == 0
+
+
+def test_interrupted_estimate_metadata_never_contains_streamed_text() -> None:
+    metadata = safe_responses_streaming_interrupted_estimate_metadata(
+        estimated_input_tokens=10,
+        estimated_output_tokens=5,
+        estimated_total_tokens=15,
+        estimated_cost_eur=Decimal("0.000015000"),
+        interruption_reason="responses_streaming_provider_error_estimated",
+        final_provider_usage_available=False,
+    )
+
+    assert metadata["estimate_is_invoice_grade"] is False
+    assert metadata["stream_interruption_reason"] == "responses_streaming_provider_error_estimated"
+    assert "secret streamed text" not in str(metadata)
 
 
 def test_monitor_stays_below_threshold_until_delta_crosses_it() -> None:

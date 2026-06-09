@@ -407,8 +407,9 @@ event is held until usage-backed finalization succeeds. If an upstream provider
 also emits `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization; it is emitted only after the completed event on successful
 finalization. Missing completed-event usage is not treated as zero cost; the
-reservation is released through the streaming failure path and the client
-receives a safe typed `error` event instead of a normal terminal success marker.
+request is finalized as estimated interrupted usage when token-bearing output
+was already observed, and the client receives a safe typed `error` event
+instead of a normal terminal success marker.
 
 Streaming live-burn margin for Responses typed SSE is implemented for the
 currently supported stateless text-output streaming subset. The governance
@@ -416,11 +417,13 @@ milestone is [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 SLAIF estimates visible `response.output_text.delta` text only, discards the
 text after counting, and may intentionally stop the upstream stream when the
 estimated request cost or token burn crosses the configured Responses
-streaming live-burn cutoff. Provider final usage remains authoritative when it
-arrives before an abort. Missing usage remains a failure/incomplete path rather
-than normal success, and this feature does not enable background mode, cancel,
-response listing, Responses audio, or stateful streaming with `store=true`,
-`previous_response_id`, or `conversation`.
+streaming live-burn cutoff. The threshold-crossing delta is withheld rather
+than forwarded. Provider final usage remains authoritative when it arrives
+before an abort. Missing usage, provider error after observed output, and
+client disconnect after observed output finalize as estimated interrupted usage
+rather than normal success, and this feature does not enable background mode,
+cancel, response listing, Responses audio, or stateful streaming with
+`store=true`, `previous_response_id`, or `conversation`.
 
 Current Chat Completions already uses admission-time budget checks plus
 post-call spend accounting. Successful Chat Completions calls finalize actual

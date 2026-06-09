@@ -8,6 +8,7 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnMonitor,
     ChatStreamingLiveBurnPolicyError,
+    safe_chat_streaming_interrupted_estimate_metadata,
     build_chat_streaming_live_burn_budget,
     generated_chat_streaming_delta_text,
     metadata_with_chat_streaming_live_burn_policy,
@@ -209,6 +210,66 @@ def test_monitor_records_safe_stop_metadata_without_chunk_text() -> None:
     serialized = str(result.metadata)
     assert "secret streamed text" not in serialized
     assert result.metadata["estimate_is_invoice_grade"] is False
+
+
+def test_function_tool_call_arguments_are_counted() -> None:
+    policy = normalize_chat_streaming_live_burn_policy(
+        {"enabled": True, "cost_margin_eur": "0", "token_margin": 0},
+        max_abs_cost_margin_eur=Decimal("10"),
+        max_abs_token_margin=1000,
+    )
+    budget = build_chat_streaming_live_burn_budget(
+        policy=policy,
+        cost_limit_eur=None,
+        token_limit_total=12,
+        cost_used_eur=Decimal("0"),
+        tokens_used_total=0,
+        cost_reserved_eur=Decimal("0"),
+        tokens_reserved_total=0,
+        current_reserved_cost_eur=Decimal("0"),
+        current_reserved_tokens=0,
+        cost_estimate=_estimate(),
+        estimate_multiplier=Decimal("1"),
+    )
+    assert budget is not None
+
+    monitor = ChatStreamingLiveBurnMonitor(budget)
+    result = monitor.observe_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "lookup",
+                                    "arguments": '{"query":"secret streamed text"}',
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+    assert result is not None
+    assert "secret streamed text" not in str(result.metadata)
+
+
+def test_interrupted_estimate_metadata_drops_streamed_content() -> None:
+    metadata = safe_chat_streaming_interrupted_estimate_metadata(
+        estimated_input_tokens=10,
+        estimated_output_tokens=5,
+        estimated_total_tokens=15,
+        estimated_cost_eur=Decimal("0.000015000"),
+        interruption_reason="chat_streaming_provider_error_estimated",
+        final_provider_usage_available=False,
+    )
+
+    assert metadata["estimate_is_invoice_grade"] is False
+    assert metadata["stream_interruption_reason"] == "chat_streaming_provider_error_estimated"
+    assert "secret streamed text" not in str(metadata)
 
 
 def test_chat_surface_is_only_active_streaming_live_burn_surface() -> None:

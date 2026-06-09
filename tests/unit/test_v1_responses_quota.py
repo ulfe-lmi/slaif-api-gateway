@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -3459,7 +3460,7 @@ def _wire_streaming_gateway(
         "finalize_calls": [],
         "recovery_failure_calls": [],
         "failure_calls": [],
-        "live_burn_estimate_calls": [],
+        "streaming_estimate_calls": [],
         "rate_release_calls": [],
     }
     completed_record_id = uuid.uuid4()
@@ -3582,9 +3583,9 @@ def _wire_streaming_gateway(
         _ = (self, args)
         state["failure_calls"].append(kwargs)
 
-    async def _fake_live_burn_estimate(self, *args, **kwargs):
+    async def _fake_streaming_estimate(self, *args, **kwargs):
         _ = (self, args)
-        state["live_burn_estimate_calls"].append(kwargs)
+        state["streaming_estimate_calls"].append(kwargs)
         return SimpleNamespace(accounting_status="estimated")
 
     monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _fake_reserve_rate_limit)
@@ -3613,7 +3614,12 @@ def _wire_streaming_gateway(
     monkeypatch.setattr(
         main_module.AccountingService,
         "record_streaming_live_burn_interrupted_estimate",
-        _fake_live_burn_estimate,
+        _fake_streaming_estimate,
+    )
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "record_streaming_interrupted_estimate",
+        _fake_streaming_estimate,
     )
     return state, completed_record_id, rate_reservation
 
@@ -3735,9 +3741,12 @@ def test_streaming_responses_missing_usage_emits_error_without_success_done(monk
     assert "data: [DONE]" not in body
     assert body.count("response.completed") == 0
     assert state["finalize_calls"] == []
-    assert len(state["failure_calls"]) == 1
-    assert state["failure_calls"][0]["streaming"] is True
-    assert state["failure_calls"][0]["error_code"] == "responses_stream_usage_missing"
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    assert state["streaming_estimate_calls"][0]["estimate_reason"] == (
+        "responses_streaming_usage_missing_estimated"
+    )
+    assert state["streaming_estimate_calls"][0]["error_type"] == "responses_stream_usage_missing"
     assert state["rate_release_calls"] == [(rate_reservation, True)]
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
@@ -3785,7 +3794,7 @@ def test_streaming_responses_finalization_failure_records_recovery_and_no_succes
     assert state["rate_release_calls"] == [(rate_reservation, True)]
 
 
-def test_streaming_responses_provider_error_after_partial_output_releases_reservation(
+def test_streaming_responses_provider_error_after_partial_output_records_estimated_interruption(
     monkeypatch,
 ) -> None:
     app = create_app()
@@ -3815,9 +3824,12 @@ def test_streaming_responses_provider_error_after_partial_output_releases_reserv
     assert "hello" not in body
     assert state["finalize_calls"] == []
     assert state["provider_completed_calls"] == []
-    assert len(state["failure_calls"]) == 1
-    assert state["failure_calls"][0]["streaming"] is True
-    assert state["failure_calls"][0]["error_code"] == "provider_timeout"
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    assert state["streaming_estimate_calls"][0]["estimate_reason"] == (
+        "responses_streaming_provider_error_estimated"
+    )
+    assert state["streaming_estimate_calls"][0]["error_type"] == "provider_timeout"
     assert state["rate_release_calls"] == [(rate_reservation, True)]
 
 
@@ -3860,18 +3872,81 @@ def test_streaming_responses_live_burn_abort_emits_safe_error_without_success(
 
     assert response.status_code == 200
     body = response.text
-    assert "response.output_text.delta" in body
+    assert "secret streamed text" not in body
     assert "streaming_live_burn_limit_exceeded" in body
     assert "response.completed" not in body
     assert "data: [DONE]" not in body
     assert state["provider_completed_calls"] == []
     assert state["finalize_calls"] == []
     assert state["failure_calls"] == []
-    assert len(state["live_burn_estimate_calls"]) == 1
-    response_metadata = state["live_burn_estimate_calls"][0]["response_metadata"]
+    assert len(state["streaming_estimate_calls"]) == 1
+    response_metadata = state["streaming_estimate_calls"][0]["response_metadata"]
     assert response_metadata["streaming_live_burn_triggered"] is True
     assert response_metadata["streaming_live_burn_stop_reason"] == "tokens"
     assert "secret streamed text" not in json.dumps(response_metadata)
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+
+
+def test_streaming_responses_unknown_generated_event_is_not_forwarded_unmetered(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_audio.delta", "delta": "secret audio"}),
+    ]
+    state, _completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "response.created" in body
+    assert "response.output_audio.delta" not in body
+    assert "responses_stream_event_not_supported" in body
+    assert state["failure_calls"]
+    assert state["streaming_estimate_calls"] == []
+    assert state["rate_release_calls"] == [(rate_reservation, True)]
+
+
+def test_streaming_responses_client_disconnect_after_output_records_estimated_interruption(
+    monkeypatch,
+) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_streaming_route(monkeypatch)
+    chunks = [
+        _response_stream_chunk({"type": "response.created", "response": {"id": "resp_test"}}),
+        _response_stream_chunk({"type": "response.output_text.delta", "delta": "visible"}),
+    ]
+    state, _completed_record_id, rate_reservation = _wire_streaming_gateway(
+        monkeypatch,
+        chunks=chunks,
+        provider_error=asyncio.CancelledError(),
+    )
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={**_responses_request(), "stream": True},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "visible" in body
+    assert state["failure_calls"] == []
+    assert len(state["streaming_estimate_calls"]) == 1
+    assert state["streaming_estimate_calls"][0]["estimate_reason"] == (
+        "responses_streaming_client_disconnected_estimated"
+    )
+    assert state["streaming_estimate_calls"][0]["error_type"] == "client_disconnected"
     assert state["rate_release_calls"] == [(rate_reservation, True)]
 
 

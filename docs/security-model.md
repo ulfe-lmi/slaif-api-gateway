@@ -420,6 +420,13 @@ provider secrets. Background mode, cancel, response listing, Responses audio,
 and stateful streaming remain separate work under
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 
+If token-bearing output was already observed and the stream then ends through
+live-burn cutoff, client disconnect, provider/network error, or missing final
+usage, SLAIF records only safe estimated interrupted accounting metadata such
+as counters, stop reason, and final-provider-usage availability. It must not
+store streamed text, raw SSE events, tool payloads, media payloads, or raw
+bodies for those interrupted paths.
+
 Admin and CLI Chat live-burn reporting reads only sanitized PostgreSQL usage
 ledger metadata. Usage list/detail pages, usage CSV exports, and
 `slaif-gateway usage live-burn-summary` may display safe counters, stop

@@ -482,6 +482,9 @@ data: {"error":{"type":"insufficient_quota","code":"streaming_live_burn_limit_ex
 
 Then close the stream.
 
+The threshold-crossing token-bearing chunk is counted first and then withheld.
+It is not forwarded to the client as bounded overrun.
+
 Do not emit normal successful:
 
 ```text
@@ -500,6 +503,9 @@ data: {"error":{"type":"insufficient_quota","code":"streaming_live_burn_limit_ex
 ```
 
 Then close the stream.
+
+The threshold-crossing `response.output_text.delta` is counted first and then
+withheld. It is not forwarded to the client as bounded overrun.
 
 Do not emit normal successful:
 
@@ -977,7 +983,11 @@ Live-burn interruption must integrate with that model:
    - if a threshold is crossed, stop upstream stream and emit safe typed error event;
    - suppress normal successful `response.completed` and `[DONE]` unless usage-backed finalization succeeds.
 4. If provider final usage arrives, provider usage wins.
-5. If usage is missing, use existing incomplete/reconciliation behavior plus safe live-burn metadata.
+5. If usage is missing after observed output, finalize as estimated interrupted
+   usage with safe metadata instead of zero-cost success.
+6. If provider/network error or client disconnect happens after observed
+   output, finalize as estimated interrupted usage with safe metadata instead
+   of full reservation release.
 
 ### 14.3 Required tests
 
@@ -998,7 +1008,9 @@ Provider/streaming tests:
 - OpenRouter native Responses typed SSE does the same when explicitly configured.
 - Provider error before threshold follows existing provider-error behavior.
 - Response completed with usage before threshold finalizes normally.
-- Response completed with missing usage remains incomplete/failure.
+- Response completed with missing usage after observed output finalizes as
+  estimated interrupted usage.
+- Client disconnect after observed output finalizes as estimated interrupted usage.
 
 Official-client E2E:
 

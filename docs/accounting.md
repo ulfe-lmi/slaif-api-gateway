@@ -63,6 +63,10 @@ The feature is an operational stream interruption control, not billing truth:
 - Missing provider usage after an intentional streaming live-burn interruption
   is recorded as estimated interrupted accounting; it is not normal zero-cost
   success.
+- If a Chat or Responses stream has already emitted token-bearing output and
+  then ends with client disconnect, provider/network error, or missing final
+  usage, SLAIF records estimated interrupted accounting instead of fully
+  releasing the reservation. Only safe counters and stop reasons are stored.
 
 The persisted safe key metadata shape is:
 

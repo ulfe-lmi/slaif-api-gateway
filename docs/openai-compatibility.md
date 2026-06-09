@@ -133,8 +133,11 @@ text-output Responses streaming subset. As documented in
 safe `response.output_text.delta` text only, discards the text after counting,
 and may intentionally stop the upstream stream when the estimated request cost
 or token burn crosses the key's configured Responses streaming live-burn
-cutoff. Provider final usage remains authoritative when it arrives before an
-abort; missing final usage is still not normal success. This does not enable
+cutoff. The threshold-crossing delta is withheld rather than forwarded as
+unmetered overrun. Provider final usage remains authoritative when it arrives
+before an abort; missing final usage, provider error after observed output, and
+client disconnect after observed output are finalized as estimated interrupted
+usage instead of zero-cost success. This does not enable
 background mode, cancel, response listing, Responses audio, or stateful
 streaming with `store=true`, `previous_response_id`, or `conversation`.
 

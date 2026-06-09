@@ -567,7 +567,7 @@ class AccountingService:
             error_code=error_code,
         )
 
-    async def record_streaming_live_burn_interrupted_estimate(
+    async def record_streaming_interrupted_estimate(
         self,
         reservation_id: uuid.UUID,
         authenticated_key: AuthenticatedGatewayKey,
@@ -582,10 +582,13 @@ class AccountingService:
         response_metadata: Mapping[str, object],
         endpoint: str = "chat.completions",
         estimate_reason: str = "chat_streaming_live_burn_interrupted",
+        error_type: str = "streaming_live_burn_limit_exceeded",
+        error_message: str | None = None,
+        status_code: int | None = 200,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> FinalizedAccountingResult:
-        """Finalize an intentional streaming live-burn abort with safe estimates."""
+        """Finalize an interrupted streaming request with safe estimates."""
         finished = _aware_now(finished_at)
         reservation = await self._locked_pending_reservation(
             reservation_id,
@@ -655,9 +658,9 @@ class AccountingService:
                 streaming=True,
                 success=False,
                 accounting_status="estimated",
-                http_status=200,
-                error_type="streaming_live_burn_limit_exceeded",
-                error_message="streaming_live_burn_limit_exceeded",
+                http_status=status_code,
+                error_type=error_type,
+                error_message=error_message or error_type,
                 prompt_tokens=input_tokens,
                 completion_tokens=output_tokens,
                 input_tokens=input_tokens,
@@ -689,6 +692,45 @@ class AccountingService:
             completion_tokens=output_tokens,
             total_tokens=total_tokens,
             accounting_status=ledger.accounting_status,
+        )
+
+    async def record_streaming_live_burn_interrupted_estimate(
+        self,
+        reservation_id: uuid.UUID,
+        authenticated_key: AuthenticatedGatewayKey,
+        route: RouteResolutionResult,
+        pricing_estimate: ChatCostEstimate,
+        request_id: str,
+        *,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+        estimated_total_tokens: int,
+        estimated_cost_eur: Decimal,
+        response_metadata: Mapping[str, object],
+        endpoint: str = "chat.completions",
+        estimate_reason: str = "chat_streaming_live_burn_interrupted",
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> FinalizedAccountingResult:
+        """Finalize an intentional streaming live-burn abort with safe estimates."""
+        return await self.record_streaming_interrupted_estimate(
+            reservation_id,
+            authenticated_key,
+            route,
+            pricing_estimate,
+            request_id,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            estimated_total_tokens=estimated_total_tokens,
+            estimated_cost_eur=estimated_cost_eur,
+            response_metadata=response_metadata,
+            endpoint=endpoint,
+            estimate_reason=estimate_reason,
+            error_type="streaming_live_burn_limit_exceeded",
+            error_message="streaming_live_burn_limit_exceeded",
+            status_code=200,
+            started_at=started_at,
+            finished_at=finished_at,
         )
 
     async def _locked_pending_reservation(

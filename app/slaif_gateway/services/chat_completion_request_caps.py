@@ -879,11 +879,11 @@ def _validate_audio_output(payload: Mapping[str, Any], *, settings: Settings) ->
     if not audio_requested:
         return
 
-    if payload.get("stream") is True and not settings.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT:
+    if payload.get("stream") is True:
         _raise(
             "stream",
             "chat_streaming_audio_output_not_supported",
-            "Streaming Chat Completions audio output is not enabled by this gateway.",
+            "Streaming Chat Completions audio output is not supported by this gateway.",
         )
 
     n = payload.get("n")
