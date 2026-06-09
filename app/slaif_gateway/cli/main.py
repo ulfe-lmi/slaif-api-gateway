@@ -21,6 +21,7 @@ from slaif_gateway.cli.keys import app as keys_app
 from slaif_gateway.cli.openai_assisted import app as openai_assisted_app
 from slaif_gateway.cli.owners import app as owners_app
 from slaif_gateway.cli.pricing import app as pricing_app
+from slaif_gateway.cli.provider_catalog import app as provider_catalog_app
 from slaif_gateway.cli.quota import app as quota_app
 from slaif_gateway.cli.providers import app as providers_app
 from slaif_gateway.cli.routes import app as routes_app
@@ -43,6 +44,7 @@ app.add_typer(keys_app, name="keys")
 app.add_typer(providers_app, name="providers")
 app.add_typer(routes_app, name="routes")
 app.add_typer(pricing_app, name="pricing")
+app.add_typer(provider_catalog_app, name="provider-catalog")
 app.add_typer(fx_app, name="fx")
 app.add_typer(usage_app, name="usage")
 app.add_typer(quota_app, name="quota")

@@ -43,6 +43,12 @@ display provider key values.
 Admin key policy selectors use only local provider-config metadata and local
 route metadata. They do not display provider key values, plaintext gateway
 keys, token hashes, prompts, completions, or raw request/response bodies.
+Provider catalog proposal tooling follows the same rule: it reads official
+provider docs/APIs and writes proposal artifacts to the operator's output
+directory only. It does not write raw provider pages/responses to PostgreSQL,
+audit rows, cookies, sessions, or logs, and it uses
+`OPENAI_ADMIN_DISCOVERY_API_KEY` for optional OpenAI admin discovery instead of
+`OPENAI_API_KEY`.
 
 In production, enabled built-in OpenAI/OpenRouter providers require configured,
 non-placeholder upstream provider secrets. The server treats `OPENAI_API_KEY` as

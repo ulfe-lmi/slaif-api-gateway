@@ -95,6 +95,10 @@ non-empty audit reason according to the action.
   records, key lifecycle operations, provider/route/pricing/FX metadata,
   usage reporting/export, reconciliation, email testing/pending delivery, and
   database migration helpers.
+- Proposal-only provider catalog tooling now compares official OpenAI and
+  OpenRouter sources, emits route/pricing TSV proposal files plus normalized
+  JSON/report artifacts, and preserves the existing import preview/confirm/audit
+  boundary for any local catalog mutation.
 - Docker Compose packages API, worker, scheduler, PostgreSQL, Redis, and
   Mailpit. Migrations remain explicit operator actions.
 - Nginx configuration is present for reverse proxy guidance with streaming-safe

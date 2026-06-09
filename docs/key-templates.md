@@ -57,6 +57,10 @@ share the same selectable local provider/endpoint/model policy builder.
 Template provenance remains immutable metadata only: using those admin pages to
 create or edit a normal gateway key does not mutate existing template
 revisions.
+The provider-catalog proposal workflow follows the same boundary: generated
+route/pricing proposal files do not mutate templates or revisions and must go
+through the reviewed local import preview/confirmation workflow before they can
+affect future template-created keys.
 
 Current Chat Completions requests persist safe `usage_profiles` rows after
 successful accounting finalization. Those rows provide the first source table

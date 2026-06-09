@@ -220,6 +220,14 @@ only. It does not call OpenAI for discovery, does not fetch pricing, and does
 not store provider key values. Legacy `/v1/completions` remains unsupported in
 this repository state, so the command rejects `--include-legacy-completions`.
 Responses API work is separate and out of scope for this command.
+
+For current provider catalog refresh proposals, use the separate proposal-only
+workflow in [`provider-catalog-proposals.md`](provider-catalog-proposals.md).
+It compares official OpenAI docs, optional `GET /v1/models` availability, and
+optional OpenAI-assisted cross-checks, then writes reviewed TSV proposal files
+for the existing import preview commands. It uses
+`OPENAI_ADMIN_DISCOVERY_API_KEY`, never `OPENAI_API_KEY`, and does not silently
+update local route or pricing rows.
 Seeded Chat Completions route rows include explicit `model_routes.capabilities`
 metadata under the `chat_completions` key for text chat, streaming, local
 function tools, local custom tools, legacy functions, JSON mode, structured outputs, logprobs, and

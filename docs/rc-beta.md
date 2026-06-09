@@ -71,6 +71,11 @@ but are not a production certification.
 - Bulk key import execution for `none`, `pending`, and `enqueue` email modes.
 - CLI administration commands for the implemented metadata, key, usage, email,
   reconciliation, and migration workflows.
+- Proposal-only provider catalog tooling for OpenAI and OpenRouter:
+  `slaif-gateway provider-catalog propose ...` compares official provider
+  sources, writes route/pricing TSV proposal files plus normalized JSON/report
+  artifacts, and still requires the existing import preview/confirm/audit
+  workflow before any local catalog mutation.
 - Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis, and
   Mailpit.
 - Nginx reverse-proxy example with streaming-safe proxy settings.
