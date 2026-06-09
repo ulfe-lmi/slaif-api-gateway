@@ -87,6 +87,13 @@ def propose_catalog(
             help="Save fetched raw source snapshots in the output directory.",
         ),
     ] = False,
+    allow_zero_prices: Annotated[
+        bool,
+        typer.Option(
+            "--allow-zero-prices",
+            help="Mark zero-price pricing rows as import-ready; they still require operator review.",
+        ),
+    ] = False,
     acknowledge_assisted_proposal_risk: Annotated[
         bool,
         typer.Option(
@@ -113,6 +120,7 @@ def propose_catalog(
                 max_web_calls=max_web_calls,
                 save_source_snapshots=save_source_snapshots,
                 acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
+                allow_zero_prices=allow_zero_prices,
             )
         )
     except Exception as exc:  # noqa: BLE001

@@ -17,11 +17,15 @@ from slaif_gateway.services.provider_catalog_proposal import (
     OPENAI_PRICING_DOCS_URL,
     OPENROUTER_MODELS_API_URL,
     OPENROUTER_MODELS_DOCS_MARKDOWN_URL,
+    ProviderCatalogProposalValidationError,
     ProviderCatalogProposalResult,
+    _build_chat_capabilities,
+    _openrouter_model_warnings,
     _confirm_openrouter_pricing_unit,
     _openrouter_pricing_candidate,
     _parse_openai_models_docs,
     _parse_openai_pricing_docs,
+    _validate_generated_pricing_tsv,
     generate_provider_catalog_proposal,
 )
 from slaif_gateway.services.route_import import (
@@ -124,6 +128,7 @@ def test_openrouter_pricing_unit_confirmation_and_conversion() -> None:
         unit_confirmed=True,
         confidence="high",
         model_warnings=(),
+        allow_zero_prices=False,
     )
 
     assert candidate is not None
@@ -133,6 +138,121 @@ def test_openrouter_pricing_unit_confirmation_and_conversion() -> None:
     assert candidate.reasoning_price_per_1m == "3"
     assert candidate.ready_for_import is True
     assert warnings == ()
+
+
+def test_openrouter_zero_price_rows_are_report_only_by_default_and_opt_in_ready() -> None:
+    candidate, warnings = _openrouter_pricing_candidate(
+        model_id="openrouter/owl-alpha",
+        pricing={
+            "prompt": "0",
+            "completion": "0",
+        },
+        currency="USD",
+        source_url=OPENROUTER_MODELS_API_URL,
+        source_retrieved_at="2026-06-09T00:00:00Z",
+        unit_confirmed=True,
+        confidence="high",
+        model_warnings=(),
+        allow_zero_prices=False,
+    )
+
+    assert candidate is not None
+    assert candidate.ready_for_import is False
+    assert candidate.pricing_metadata["zero_price_requires_review"] is True
+    assert "zero_price_requires_review" in warnings
+
+    opt_in_candidate, _ = _openrouter_pricing_candidate(
+        model_id="openrouter/owl-alpha",
+        pricing={
+            "prompt": "0",
+            "completion": "0",
+        },
+        currency="USD",
+        source_url=OPENROUTER_MODELS_API_URL,
+        source_retrieved_at="2026-06-09T00:00:00Z",
+        unit_confirmed=True,
+        confidence="high",
+        model_warnings=(),
+        allow_zero_prices=True,
+    )
+
+    assert opt_in_candidate is not None
+    assert opt_in_candidate.ready_for_import is True
+    assert opt_in_candidate.pricing_metadata["operator_review_required"] is True
+
+
+def test_openrouter_negative_price_rows_remain_not_ready() -> None:
+    candidate, warnings = _openrouter_pricing_candidate(
+        model_id="openrouter/fusion",
+        pricing={
+            "prompt": "-0.000001",
+            "completion": "0.000001",
+        },
+        currency="USD",
+        source_url=OPENROUTER_MODELS_API_URL,
+        source_retrieved_at="2026-06-09T00:00:00Z",
+        unit_confirmed=True,
+        confidence="high",
+        model_warnings=(),
+        allow_zero_prices=False,
+    )
+
+    assert candidate is None
+    assert "negative_or_invalid_price" in warnings
+
+
+def test_generated_pricing_tsv_validation_rejects_joined_source_url_and_timestamp(tmp_path: Path) -> None:
+    path = tmp_path / "pricing-proposal.tsv"
+    path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\tcached_input_price_per_1m\t"
+        "output_price_per_1m\treasoning_price_per_1m\trequest_price\tvalid_from\tsource_url\t"
+        "source_retrieved_at\tpricing_metadata\tnotes\n"
+        "openrouter\topenai/gpt-test-mini\t/v1/chat/completions\tUSD\t2\t1\t8\t3\t0\t"
+        "2026-06-09T00:00:00Z\thttps://openrouter.ai/api/v1/models 2026-06-09T00:00:00Z\t"
+        "2026-06-09T00:00:00Z\t{\"operator_review_required\":true}\tsafe\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCatalogProposalValidationError, match="source_url"):
+        _validate_generated_pricing_tsv(path, ())
+
+
+def test_chat_capability_mapping_stays_conservative_for_ambiguous_modalities() -> None:
+    capabilities = _build_chat_capabilities(
+        supported_parameters=("tools", "structured_outputs"),
+        input_modalities=("text", "image", "file", "audio"),
+        output_modalities=("text", "audio"),
+        supports_streaming=True,
+        provider="openrouter",
+        supports_cached_input_usage=False,
+    )
+    chat = capabilities["chat_completions"]
+
+    assert chat["chat_function_tools"] is True
+    assert chat["chat_structured_outputs"] is True
+    assert chat["chat_image_inputs"] is True
+    assert chat["chat_file_inputs"] is False
+    assert chat["chat_audio_inputs"] is False
+    assert chat["chat_audio_outputs"] is False
+    assert chat["hosted_web_search"] is False
+    assert chat["hosted_file_search"] is False
+    assert chat["hosted_code_interpreter"] is False
+    assert chat["hosted_computer_use"] is False
+    assert chat["hosted_image_generation"] is False
+    assert chat["hosted_tool_search"] is False
+    assert chat["external_mcp_connectors"] is False
+
+
+def test_openrouter_model_warnings_flag_ambiguous_file_audio_capabilities() -> None:
+    warnings = _openrouter_model_warnings(
+        model_id="openrouter/audio-file-test",
+        supported_parameters=("tools",),
+        input_modalities=("text", "file", "audio"),
+        output_modalities=("text",),
+        expiration_date=None,
+    )
+
+    assert "ambiguous_capability" in warnings
 
 
 def test_openai_docs_parsers_extract_pricing_and_model_features() -> None:

@@ -114,6 +114,20 @@ enrichment sources, and writes proposal artifacts only:
 It does not execute an import, does not mutate production rows, and does not
 store raw source bodies in PostgreSQL, audit rows, sessions, or logs.
 
+Operators should run a bounded OpenRouter smoke before any import preview, then
+inspect `provider-catalog-report.md` and `warnings.json` before deciding
+whether the generated TSV is even worth previewing.
+
+Generated proposal TSV files are self-validated before the command reports
+success. Malformed rows, invalid JSON cells, invalid decimals, broken
+`source_url` / `source_retrieved_at` column splits, or suspicious secret-like
+content fail the proposal run with `proposal_tsv_validation_failed`.
+
+Zero-price OpenRouter pricing rows are report-only by default. They remain
+non-ready for pricing import unless the operator explicitly passes
+`--allow-zero-prices`, and even then they still carry review-required warning
+metadata.
+
 ## OpenAI Pricing
 
 OpenAI publishes pricing on its pricing pages. Unless OpenAI provides a stable
@@ -246,7 +260,8 @@ must inspect the TSV, run the existing pricing or route import preview, and
 execute the import only with explicit confirmation and an audit reason. The web
 and CLI provider-catalog proposal workflow follows the same boundary. It
 compares source sets, emits warnings for pricing disagreements or missing
-pricing, and never silently updates production routing or pricing rows.
+pricing, treats zero-price rows as review-required by default, and never
+silently updates production routing or pricing rows.
 UI can carry the reviewed TSV into preview without copy/paste, but it does not
 create a trusted path: unknown fields, secret-looking values, conflicts,
 duplicates, unsupported rows, and update-classified rows are handled by the same

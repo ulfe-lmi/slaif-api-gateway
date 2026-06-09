@@ -65,6 +65,18 @@ slaif-gateway provider-catalog propose openai --output-dir /tmp/openai-catalog -
 slaif-gateway provider-catalog propose all --output-dir /tmp/provider-catalog
 ```
 
+Before any import preview, run a bounded OpenRouter smoke first. Keep the scope
+small enough to inspect manually:
+
+```bash
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir /tmp/openrouter-catalog-smoke \
+  --max-models 50 \
+  --fetch-details-limit 10 \
+  --no-save-source-snapshots \
+  --json
+```
+
 2. Review:
 
 - `source-manifest.json`
@@ -74,12 +86,18 @@ slaif-gateway provider-catalog propose all --output-dir /tmp/provider-catalog
 - `routes-proposal.tsv`
 - `pricing-proposal.tsv`
 
+Generated TSV files are self-validated before the command reports success.
+Malformed TSV output, invalid JSON cells, invalid booleans, bad decimal fields,
+or suspicious cell content must fail the proposal command with
+`proposal_tsv_validation_failed`.
+
 3. Compare source sets:
 
 - models present in docs but missing from API
 - models present in API but missing from docs
 - pricing disagreements
 - missing pricing
+- zero-price rows
 - ambiguous capabilities
 - deprecated/expiring models
 - hosted/search-only models
@@ -100,6 +118,11 @@ slaif-gateway pricing import --input pricing-proposal.tsv --dry-run
 
 6. Only after operator review and explicit confirmation should any import be
    executed through the existing audited workflows.
+
+Zero-price pricing rows are report-only by default. They must not be treated as
+ready for pricing import unless the operator explicitly opts in with
+`--allow-zero-prices`, and even then they remain review-required rows with
+warning metadata.
 
 ## Output Contract
 
