@@ -402,8 +402,17 @@ bodies, provider keys, gateway plaintext keys, Authorization headers, cookies,
 CSRF/session tokens, encrypted payloads, or nonces. PostgreSQL remains
 authoritative for hard quota/accounting, Redis and in-memory live state remain
 temporary operational state only, and provider final usage/cost remains
-authoritative when available. Responses live-burn monitoring remains future
-work under [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
+authoritative when available.
+
+Responses streaming live-burn monitoring is implemented for the supported
+stateless text-output `POST /v1/responses` streaming subset. It estimates
+visible `response.output_text.delta` text only, discards the text after
+counting, and may store only safe provisional counters and low-cardinality
+metadata. It does not store prompts, completions, streamed chunk text, raw SSE
+events, tool payloads, media payloads, raw request/response bodies, or
+provider secrets. Background mode, cancel, response listing, Responses audio,
+and stateful streaming remain separate work under
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 
 Admin and CLI Chat live-burn reporting reads only sanitized PostgreSQL usage
 ledger metadata. Usage list/detail pages, usage CSV exports, and

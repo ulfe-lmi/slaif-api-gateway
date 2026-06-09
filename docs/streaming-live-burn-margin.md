@@ -1,7 +1,7 @@
 # Streaming Live-Burn Margin Milestone
 
 **Project:** SLAIF API Gateway
-**Status:** Chat Completions streaming implemented; Responses live-burn remains future work
+**Status:** Chat Completions streaming implemented; Responses live-burn implemented for the supported stateless text-output streaming subset
 **Implementation order:** Chat Completions first, Responses second
 **Primary intent:** reduce streaming quota-overrun risk by interrupting active streams when live output estimates cross a per-key margin
 **Non-goal:** replacing final provider-usage accounting or turning chunk estimates into invoice-grade billing truth
@@ -492,8 +492,7 @@ unless usage-backed finalization genuinely reaches the existing success path.
 
 ### 8.3 Responses SSE behavior
 
-Responses live-burn interruption is not implemented yet. A future Responses PR
-must emit a safe Responses-compatible error event:
+Responses live-burn interruption emits a safe Responses-compatible error event:
 
 ```text
 event: error
@@ -741,7 +740,9 @@ scope = /v1/chat/completions stream=true
 ```
 
 Additional endpoint streaming live-burn surfaces can register another spec
-later, but this implementation exposes and persists only the Chat policy.
+later. The current operator surfaces still expose and persist only the Chat
+policy, while Responses live-burn uses the same runtime safety model for the
+supported streaming subset.
 
 ### 12.3 Templates
 
@@ -1157,6 +1158,7 @@ It must not add:
 ## 20. Milestone status note
 
 This document now records both the implemented Chat Completions streaming
-live-burn slice and the remaining Responses future milestone. Runtime support
-is strictly limited to `POST /v1/chat/completions` with `stream=true`;
-Responses live-burn monitoring must happen through a separate scoped PR.
+live-burn slice and the implemented Responses streaming slice for the
+supported stateless text-output subset. Runtime support is not a blanket
+stateful streaming feature: background mode, cancel, response listing,
+Responses audio, and stateful Responses streaming remain separate work.

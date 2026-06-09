@@ -312,6 +312,11 @@ def test_admin_key_create_form_postgres(migrated_postgres_url: str) -> None:
                 "version": 1,
                 "enabled": True,
                 "cost_margin_eur": "0.000000000",
+            },
+            "responses_streaming_live_burn": {
+                "version": 1,
+                "enabled": True,
+                "cost_margin_eur": "0.000000000",
                 "token_margin": 0,
             },
         }

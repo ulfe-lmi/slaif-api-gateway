@@ -56,10 +56,15 @@ but are not a production certification.
 - Chat Completions streaming live-burn monitoring is implemented for
   `POST /v1/chat/completions` with `stream=true`. It is a per-key,
   gateway-side provisional interruption brake with enabled/zero-margin defaults;
-  final provider usage/cost remains authoritative. Responses live-burn
-  monitoring remains future work. Admin usage pages, usage CSV export, and
-  `slaif-gateway usage live-burn-summary` report only safe Chat live-burn
-  metadata from PostgreSQL usage ledger rows.
+  final provider usage/cost remains authoritative.
+- Responses streaming live-burn monitoring is implemented for the supported
+  stateless text-output `POST /v1/responses` streaming subset. It is a
+  gateway-side provisional interruption brake that estimates visible
+  `response.output_text.delta` text only, emits a safe typed error on stop, and
+  does not enable background mode, cancel, response listing, Responses audio,
+  or stateful streaming. Admin usage pages, usage CSV export, and
+  `slaif-gateway usage live-burn-summary` remain Chat-focused safe reporting
+  over PostgreSQL usage ledger metadata.
 - Optional Redis operational rate limiting for request, estimated-token, and
   concurrency throttles.
 - Admin dashboard for keys, records, providers, routes, pricing, FX, usage,
@@ -126,10 +131,9 @@ migrations automatically.
 ## Known Limitations
 
 - Bulk synchronous `send-now` key import execution is not implemented.
-- Responses streaming live-burn margin is not implemented. Chat Completions
-  streaming live-burn is implemented and must preserve final provider
-  usage/cost authority, PostgreSQL hard quota truth, Redis temporary-state-only
-  boundaries, and no streamed-content storage.
+- Responses streaming live-burn is implemented only for the supported
+  stateless text-output streaming subset. Background mode, cancel, response
+  listing, Responses audio, and stateful streaming remain separate work.
 - Native Anthropic API is not implemented; Anthropic-family models can be routed
   through OpenRouter's OpenAI-compatible interface.
 - Responses API support is limited to text-output

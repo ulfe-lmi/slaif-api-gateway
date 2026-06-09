@@ -133,6 +133,11 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
             "version": 1,
             "enabled": True,
             "cost_margin_eur": "0.000000000",
+        },
+        "responses_streaming_live_burn": {
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
             "token_margin": 0,
         },
         "rate_limit_policy": {"window_seconds": 30},
@@ -197,6 +202,11 @@ async def test_create_gateway_key_can_persist_allowed_providers_in_metadata() ->
     assert keys_repo.calls[0]["metadata_json"] == {
         "allowed_providers": ["openai"],
         "chat_streaming_live_burn": {
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0.000000000",
+        },
+        "responses_streaming_live_burn": {
             "version": 1,
             "enabled": True,
             "cost_margin_eur": "0.000000000",

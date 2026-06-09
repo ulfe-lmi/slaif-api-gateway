@@ -261,13 +261,12 @@ proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
-Chat Completions Streaming Live-Burn Margin behavior in
-[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) is active only
-for `POST /v1/chat/completions` with `stream=true`. It remains a gateway-side
-provisional interruption control and must not require Nginx buffering, raw
-stream capture, prompt/completion logging, Redis-only quota accounting, or
-provider-final-usage bypasses. Responses live-burn monitoring remains future
-work.
+Chat Completions and the supported stateless text-output Responses streaming
+live-burn behavior in
+[`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) remain
+gateway-side provisional interruption controls. They must not require Nginx
+buffering, raw stream capture, prompt/completion logging, Redis-only quota
+accounting, or provider-final-usage bypasses.
 
 TLS certificates, real domains, request-size limits, access logs, and network
 allowlists are deployment-specific and must be reviewed by the operator.

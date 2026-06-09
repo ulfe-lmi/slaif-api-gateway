@@ -60,6 +60,11 @@ from slaif_gateway.services.key_modes import (
     is_trusted_calibration_key,
 )
 from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy, validate_gateway_key_policy
+from slaif_gateway.services.responses_streaming_live_burn import (
+    default_responses_streaming_live_burn_policy,
+    metadata_with_responses_streaming_live_burn_policy,
+    ResponsesStreamingLiveBurnPolicyError,
+)
 from slaif_gateway.utils.crypto import generate_gateway_key, hmac_sha256_token
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.secrets import encrypt_secret
@@ -162,12 +167,15 @@ class KeyService:
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
             metadata_json=self._metadata_with_rate_limit_window(
-                self._metadata_with_chat_streaming_live_burn_policy(
-                    self._metadata_with_responses_policy(
-                        self._metadata_with_provider_policy({}, payload.allowed_providers),
-                        payload.responses_policy,
+                self._metadata_with_responses_streaming_live_burn_policy(
+                    self._metadata_with_chat_streaming_live_burn_policy(
+                        self._metadata_with_responses_policy(
+                            self._metadata_with_provider_policy({}, payload.allowed_providers),
+                            payload.responses_policy,
+                        ),
+                        chat_live_burn_policy,
                     ),
-                    chat_live_burn_policy,
+                    default_responses_streaming_live_burn_policy(),
                 ),
                 rate_limit_policy,
             ),
@@ -656,13 +664,16 @@ class KeyService:
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
             ),
             metadata_json=self._metadata_with_chat_streaming_live_burn_policy(
-                (
-                    self._metadata_with_rate_limit_window(
-                        {},
-                        self._rate_limit_policy_from_key(old_key) or {},
-                    )
-                    if payload.preserve_rate_limit_policy
-                    else {}
+                self._metadata_with_responses_streaming_live_burn_policy(
+                    (
+                        self._metadata_with_rate_limit_window(
+                            {},
+                            self._rate_limit_policy_from_key(old_key) or {},
+                        )
+                        if payload.preserve_rate_limit_policy
+                        else {}
+                    ),
+                    default_responses_streaming_live_burn_policy(),
                 ),
                 self._chat_streaming_live_burn_policy_from_key(old_key),
             ),
@@ -1015,6 +1026,25 @@ class KeyService:
                 max_abs_token_margin=self._settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN,
             )
         except ChatStreamingLiveBurnPolicyError as exc:
+            raise InvalidGatewayKeyPolicyError(str(exc), param=exc.param) from exc
+
+    def _metadata_with_responses_streaming_live_burn_policy(
+        self,
+        metadata_json: dict[str, object] | None,
+        policy: dict[str, object] | None,
+    ) -> dict[str, object]:
+        try:
+            return metadata_with_responses_streaming_live_burn_policy(
+                metadata_json,
+                policy,
+                max_abs_cost_margin_eur=(
+                    self._settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+                ),
+                max_abs_token_margin=(
+                    self._settings.RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
+                ),
+            )
+        except ResponsesStreamingLiveBurnPolicyError as exc:
             raise InvalidGatewayKeyPolicyError(str(exc), param=exc.param) from exc
 
     @staticmethod

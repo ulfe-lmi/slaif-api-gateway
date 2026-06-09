@@ -207,9 +207,11 @@ are operational throttles; PostgreSQL quota and accounting remain authoritative.
 
 ## Chat Completions Streaming Live-Burn Settings
 
-Streaming live-burn margin settings apply only to
-`POST /v1/chat/completions` with `stream=true`. Responses live-burn monitoring
-remains future work.
+Streaming live-burn margin settings apply to the implemented Chat Completions
+and Responses streaming subsets. Chat uses `/v1/chat/completions` with
+`stream=true`; Responses uses the stateless text-output `/v1/responses`
+streaming subset only. These settings do not enable background mode, cancel,
+response listing, Responses audio, or stateful Responses streaming.
 
 Per-key metadata defaults to enabled monitoring with zero margins:
 
@@ -242,6 +244,9 @@ ignored at runtime. Cost and token thresholds are enforced independently.
 | `CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER` | `1.15` | Multiplier applied to provisional visible-output token estimates. |
 | `CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR` | `1000000` | Absolute bound for per-key positive or negative cost margins. |
 | `CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN` | `1000000000` | Absolute bound for per-key positive or negative token margins. |
+| `RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER` | `1.15` | Multiplier applied to provisional visible-output token estimates for the supported Responses typed-SSE streaming subset. |
+| `RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR` | `1000000` | Absolute bound for per-key positive or negative Responses streaming cost margins. |
+| `RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN` | `1000000000` | Absolute bound for per-key positive or negative Responses streaming token margins. |
 
 Live estimates are provisional only and are not invoice-grade billing truth.
 PostgreSQL remains authoritative for hard quota/accounting, Redis or in-memory
