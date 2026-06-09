@@ -242,9 +242,28 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
     seen = {}
     gateway_key_id = uuid.uuid4()
 
+    async def validate_admin_request_policy(
+        request,
+        *,
+        allowed_models,
+        allowed_endpoints,
+        allow_all_models,
+        allow_all_endpoints,
+    ):
+        return SimpleNamespace(
+            allowed_models=list(allowed_models),
+            allowed_endpoints=list(allowed_endpoints),
+            allow_all_models=allow_all_models,
+            allow_all_endpoints=allow_all_endpoints,
+        )
+
     async def update_gateway_key_policy(self, payload):
         seen["payload"] = payload
 
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_request_policy",
+        validate_admin_request_policy,
+    )
     monkeypatch.setattr(
         "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
         update_gateway_key_policy,
