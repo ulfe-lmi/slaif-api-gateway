@@ -94,6 +94,23 @@ def propose_catalog(
             help="Mark zero-price pricing rows as import-ready; they still require operator review.",
         ),
     ] = False,
+    paired_ready_only: Annotated[
+        bool,
+        typer.Option(
+            "--paired-ready-only",
+            help="Emit import TSV rows only when both route and pricing proposals are import-ready.",
+        ),
+    ] = False,
+    ordinary_chat_only: Annotated[
+        bool,
+        typer.Option(
+            "--ordinary-chat-only/--include-multimodal-chat-candidates",
+            help=(
+                "For chat.completions proposals, emit only ordinary text-safe chat rows by default; "
+                "opt in to multimodal candidates explicitly."
+            ),
+        ),
+    ] = True,
     acknowledge_assisted_proposal_risk: Annotated[
         bool,
         typer.Option(
@@ -121,6 +138,8 @@ def propose_catalog(
                 save_source_snapshots=save_source_snapshots,
                 acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
                 allow_zero_prices=allow_zero_prices,
+                paired_ready_only=paired_ready_only,
+                ordinary_chat_only=ordinary_chat_only,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -147,6 +166,8 @@ def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) ->
             "source_manifest_json": str(result.manifest_path),
         },
         "mutated_metadata": False,
+        "paired_ready_only": result.paired_ready_only,
+        "ordinary_chat_only": result.ordinary_chat_only,
     }
     if json_output:
         emit_json(payload)
@@ -160,6 +181,8 @@ def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) ->
     typer.echo(f"high_confidence={result.high_confidence}")
     typer.echo(f"medium_confidence={result.medium_confidence}")
     typer.echo(f"low_confidence={result.low_confidence}")
+    typer.echo(f"paired_ready_only={result.paired_ready_only}")
+    typer.echo(f"ordinary_chat_only={result.ordinary_chat_only}")
     typer.echo("files:")
     typer.echo(f"- {result.routes_proposal_path}")
     typer.echo(f"- {result.pricing_proposal_path}")

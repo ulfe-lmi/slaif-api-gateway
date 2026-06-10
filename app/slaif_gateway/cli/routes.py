@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -17,8 +18,19 @@ from slaif_gateway.cli.common import (
 )
 from slaif_gateway.db.models import ModelRoute
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.route_import import (
+    classify_route_import_preview,
+    detect_route_import_format,
+    parse_route_import_csv,
+    parse_route_import_json,
+    parse_route_import_tsv,
+    provider_refs_from_rows,
+    route_import_preview_to_dict,
+    validate_route_import_rows,
+)
 
 app = typer.Typer(help="Manage model routes")
 
@@ -101,6 +113,34 @@ async def _set_route_enabled(route_id: str, *, enabled: bool) -> ModelRoute:
     parsed_route_id = parse_uuid(route_id, field_name="route_id")
     async with cli_db_session() as (_, session):
         return await _service(session).set_model_route_enabled(parsed_route_id, enabled=enabled)
+
+
+async def _preview_route_import(
+    *,
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    async with cli_db_session() as (_, session):
+        providers = await ProviderConfigsRepository(session).list_provider_configs(limit=1000)
+        preview = validate_route_import_rows(
+            rows,
+            provider_configs=provider_refs_from_rows(providers),
+            max_rows=max(len(rows), 1),
+        )
+        valid_rows = [row for row in preview.rows if row.status == "valid"]
+        if not valid_rows:
+            return route_import_preview_to_dict(preview)
+
+        route_repository = ModelRoutesRepository(session)
+        existing_by_row: dict[int, list[object]] = {}
+        for row in valid_rows:
+            if not row.requested_model or not row.match_type or not row.endpoint:
+                continue
+            existing_by_row[row.row_number] = await route_repository.list_model_routes(
+                endpoint=row.endpoint,
+                limit=1000,
+            )
+        classified = classify_route_import_preview(preview, existing_routes_by_row=existing_by_row)
+        return route_import_preview_to_dict(classified)
 
 
 @app.callback()
@@ -244,3 +284,61 @@ def disable(
         emit_json(payload)
         return
     echo_kv(payload)
+
+
+@app.command("import")
+def import_routes(
+    file: Annotated[Path, typer.Option("--file", help="Local JSON, CSV, or TSV route file")],
+    input_format: Annotated[
+        str | None,
+        typer.Option("--format", help="json, csv, or tsv; auto-detected from file extension if omitted"),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate without writing rows")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Preview route imports from a local JSON, CSV, or TSV file."""
+    try:
+        if not dry_run:
+            raise ValueError("Route CLI import is preview-only; pass --dry-run.")
+        rows = _load_import_file(file, input_format=input_format)
+        payload = run_async(_preview_route_import(rows=rows))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+
+    wrapped = {
+        "dry_run": True,
+        "total_rows": payload["total_rows"],
+        "valid_count": payload["valid_count"],
+        "invalid_count": payload["invalid_count"],
+        "rows": payload["rows"],
+    }
+    if json_output:
+        emit_json(wrapped)
+        return
+    echo_kv(
+        {
+            "dry_run": True,
+            "total_rows": payload["total_rows"],
+            "valid_count": payload["valid_count"],
+            "invalid_count": payload["invalid_count"],
+        }
+    )
+
+
+def _load_import_file(path: Path, *, input_format: str | None) -> list[dict[str, object]]:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Route import file does not exist")
+    text = path.read_text(encoding="utf-8")
+    file_format = detect_route_import_format(
+        filename=path.name,
+        requested_format=(input_format or "auto"),
+        text=text,
+    )
+    if file_format == "json":
+        return parse_route_import_json(text)
+    if file_format == "tsv":
+        return parse_route_import_tsv(text)
+    if file_format == "csv":
+        return parse_route_import_csv(text)
+    raise ValueError("Route import format must be auto, csv, json, or tsv")

@@ -109,3 +109,56 @@ def test_provider_catalog_cli_forwards_allow_zero_prices_flag(tmp_path: Path, mo
 
     assert result.exit_code == 0
     assert captured["allow_zero_prices"] is True
+
+
+def test_provider_catalog_cli_forwards_paired_and_ordinary_chat_flags(tmp_path: Path, monkeypatch) -> None:
+    output_dir = tmp_path / "catalog"
+    output_dir.mkdir()
+    captured: dict[str, object] = {}
+    result_payload = ProviderCatalogProposalResult(
+        output_dir=output_dir,
+        routes_proposal_path=output_dir / "routes-proposal.tsv",
+        pricing_proposal_path=output_dir / "pricing-proposal.tsv",
+        normalized_path=output_dir / "provider-catalog-normalized.json",
+        report_path=output_dir / "provider-catalog-report.md",
+        warnings_path=output_dir / "warnings.json",
+        manifest_path=output_dir / "source-manifest.json",
+        route_rows_ready=1,
+        pricing_rows_ready=1,
+        warnings_count=0,
+        high_confidence=1,
+        medium_confidence=0,
+        low_confidence=0,
+        paired_ready_only=True,
+        ordinary_chat_only=True,
+    )
+
+    async def fake_generate(**kwargs) -> ProviderCatalogProposalResult:  # noqa: ANN003
+        captured.update(kwargs)
+        return result_payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.cli.provider_catalog.generate_provider_catalog_proposal",
+        fake_generate,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "provider-catalog",
+            "propose",
+            "openrouter",
+            "--output-dir",
+            str(output_dir),
+            "--paired-ready-only",
+            "--ordinary-chat-only",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["paired_ready_only"] is True
+    assert captured["ordinary_chat_only"] is True
+    payload = json.loads(result.stdout)
+    assert payload["paired_ready_only"] is True
+    assert payload["ordinary_chat_only"] is True

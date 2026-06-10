@@ -18,7 +18,9 @@ pricing rows, FX rows, keys, quotas, or usage rows.
 
 ```bash
 slaif-gateway provider-catalog propose openrouter \
-  --output-dir /tmp/slaif-provider-catalog-openrouter
+  --output-dir /tmp/slaif-provider-catalog-openrouter \
+  --paired-ready-only \
+  --ordinary-chat-only
 
 slaif-gateway provider-catalog propose openai \
   --output-dir /tmp/slaif-provider-catalog-openai \
@@ -39,6 +41,9 @@ Optional comparison flags:
 - `--save-source-snapshots`
 - `--json`
 - `--allow-zero-prices`
+- `--paired-ready-only`
+- `--ordinary-chat-only`
+- `--include-multimodal-chat-candidates`
 
 OpenAI assisted cross-checks are optional and require explicit operator
 acknowledgement. They use `OPENAI_ADMIN_DISCOVERY_API_KEY`, never
@@ -52,7 +57,34 @@ slaif-gateway provider-catalog propose openrouter \
   --output-dir /tmp/slaif-provider-catalog-openrouter-smoke \
   --max-models 50 \
   --fetch-details-limit 10 \
+  --paired-ready-only \
+  --ordinary-chat-only \
   --no-save-source-snapshots \
+  --json
+```
+
+For an actual import-preview preparation run, the recommended safe sequence is:
+
+```bash
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir "$OUT" \
+  --max-models 500 \
+  --fetch-details-limit 50 \
+  --paired-ready-only \
+  --ordinary-chat-only \
+  --no-save-source-snapshots \
+  --json
+
+slaif-gateway pricing import \
+  --format tsv \
+  --file "$OUT/pricing-proposal.tsv" \
+  --dry-run \
+  --json
+
+slaif-gateway routes import \
+  --format tsv \
+  --file "$OUT/routes-proposal.tsv" \
+  --dry-run \
   --json
 ```
 
@@ -92,6 +124,10 @@ Every run writes:
 The generated TSV files are input to the existing SLAIF import preview flows.
 They are not imports by themselves.
 
+`routes-proposal.tsv` and `pricing-proposal.tsv` are written in the same column
+shapes accepted by the actual route/pricing dry-run import validators on
+current `main`.
+
 The proposal command self-validates the generated TSV artifacts before it
 reports success. If a TSV has malformed rows, invalid JSON cells, invalid
 boolean or decimal fields, suspicious secret-like content, or a broken
@@ -108,6 +144,11 @@ For OpenAI docs-only proposals, readiness additionally requires:
 Unsupported modality rows such as image-only, audio-only, embeddings-only,
 files, moderation, search-specific, or other non-chat categories remain
 report-only and must not appear in Chat Completions import TSV rows.
+
+For OpenRouter and OpenAI Chat Completions import preparation, ordinary text
+chat rows are the default. Ambiguous multimodal, image, audio, VL, realtime,
+music, and similar rows remain report-only unless the operator explicitly opts
+into multimodal chat candidates.
 
 ## Comparison, Confidence, And Warnings
 
@@ -145,6 +186,10 @@ Zero-price pricing rows are report-only by default. They are not pricing-import
 ready unless the operator explicitly passes `--allow-zero-prices`. Even with
 that flag, the generated row metadata still records
 `operator_review_required=true` and `zero_price_requires_review=true`.
+
+`--paired-ready-only` removes route-only and pricing-only mismatches from the
+generated import TSVs. This is the safest default before any real preview or
+eventual audited import execution.
 
 ## Safety
 

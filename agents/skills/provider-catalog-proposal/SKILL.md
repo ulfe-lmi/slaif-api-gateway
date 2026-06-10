@@ -69,7 +69,11 @@ OpenAI docs extraction must stay conservative:
 1. Generate proposal artifacts with:
 
 ```bash
-slaif-gateway provider-catalog propose openrouter --output-dir /tmp/openrouter-catalog
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir /tmp/openrouter-catalog \
+  --paired-ready-only \
+  --ordinary-chat-only
+
 slaif-gateway provider-catalog propose openai --output-dir /tmp/openai-catalog --include-api-models
 slaif-gateway provider-catalog propose all --output-dir /tmp/provider-catalog
 ```
@@ -82,6 +86,8 @@ slaif-gateway provider-catalog propose openrouter \
   --output-dir /tmp/openrouter-catalog-smoke \
   --max-models 50 \
   --fetch-details-limit 10 \
+  --paired-ready-only \
+  --ordinary-chat-only \
   --no-save-source-snapshots \
   --json
 ```
@@ -122,8 +128,8 @@ or suspicious cell content must fail the proposal command with
 5. Run existing import previews:
 
 ```bash
-slaif-gateway routes import --input routes-proposal.tsv --dry-run
-slaif-gateway pricing import --input pricing-proposal.tsv --dry-run
+slaif-gateway pricing import --format tsv --file pricing-proposal.tsv --dry-run
+slaif-gateway routes import --format tsv --file routes-proposal.tsv --dry-run
 ```
 
 6. Only after operator review and explicit confirmation should any import be
@@ -133,6 +139,14 @@ Zero-price pricing rows are report-only by default. They must not be treated as
 ready for pricing import unless the operator explicitly opts in with
 `--allow-zero-prices`, and even then they remain review-required rows with
 warning metadata.
+
+`--paired-ready-only` is the safe default for real import preparation because it
+excludes route-only and pricing-only mismatches from the generated TSV files.
+
+`--ordinary-chat-only` is the safe default for Chat Completions import
+preparation because it excludes ambiguous multimodal, audio, image, VL,
+realtime, and similar rows from import-ready TSV output unless the operator
+explicitly opts into multimodal proposal candidates.
 
 ## Output Contract
 

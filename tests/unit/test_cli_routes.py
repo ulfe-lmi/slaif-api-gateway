@@ -37,7 +37,7 @@ def test_routes_help_registers_commands() -> None:
     result = runner.invoke(app, ["routes", "--help"])
 
     assert result.exit_code == 0
-    for command in ("add", "list", "show", "enable", "disable"):
+    for command in ("add", "list", "show", "enable", "disable", "import"):
         assert command in result.stdout
 
 
@@ -156,3 +156,85 @@ def test_routes_list_show_and_toggle_output_safe(monkeypatch) -> None:
     assert json.loads(disable_result.stdout)["enabled"] is False
     assert json.loads(enable_result.stdout)["enabled"] is True
     assert "token_hash" not in list_result.stdout
+
+
+def test_routes_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
+    import_path = tmp_path / "routes.tsv"
+    import_path.write_text(
+        "requested_model\tmatch_type\tendpoint\tprovider\tupstream_model\tpriority\t"
+        "enabled\tvisible_in_models\tsupports_streaming\tcapabilities\tnotes\n"
+        'gpt-test-mini\texact\tchat.completions\topenrouter\topenai/gpt-test-mini\t100\t'
+        'true\ttrue\ttrue\t{"chat_completions":{"chat_text":true}}\tsafe\n',
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_preview_route_import(*, rows: list[dict[str, object]]) -> dict[str, object]:
+        seen["rows"] = rows
+        return {
+            "total_rows": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "rows": [
+                {
+                    "row_number": 1,
+                    "status": "valid",
+                    "classification": "create",
+                    "requested_model": "gpt-test-mini",
+                    "match_type": "exact",
+                    "endpoint": "/v1/chat/completions",
+                    "provider": "openrouter",
+                    "provider_config_id": None,
+                    "upstream_model": "openai/gpt-test-mini",
+                    "priority": 100,
+                    "enabled": True,
+                    "visible_in_models": True,
+                    "supports_streaming": True,
+                    "capabilities": {"chat_completions": {"chat_text": True}},
+                    "notes": "safe",
+                    "errors": [],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(routes_cli, "_preview_route_import", fake_preview_route_import)
+
+    result = runner.invoke(
+        app,
+        ["routes", "import", "--file", str(import_path), "--format", "tsv", "--dry-run", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert seen["rows"] == [
+        {
+            "requested_model": "gpt-test-mini",
+            "match_type": "exact",
+            "endpoint": "chat.completions",
+            "provider": "openrouter",
+            "upstream_model": "openai/gpt-test-mini",
+            "priority": "100",
+            "enabled": "true",
+            "visible_in_models": "true",
+            "supports_streaming": "true",
+            "capabilities": '{"chat_completions":{"chat_text":true}}',
+            "notes": "safe",
+        }
+    ]
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["valid_count"] == 1
+    assert payload["invalid_count"] == 0
+
+
+def test_routes_import_requires_dry_run(tmp_path) -> None:
+    import_path = tmp_path / "routes.tsv"
+    import_path.write_text(
+        "requested_model\tmatch_type\tprovider\tupstream_model\n"
+        "gpt-test-mini\texact\topenrouter\topenai/gpt-test-mini\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["routes", "import", "--file", str(import_path)])
+
+    assert result.exit_code != 0
+    assert "preview-only" in result.stderr
