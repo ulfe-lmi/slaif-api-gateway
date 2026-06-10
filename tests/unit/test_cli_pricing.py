@@ -270,6 +270,38 @@ def test_pricing_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
     ]
 
 
+def test_pricing_import_accepts_provider_catalog_tsv_fields(tmp_path, monkeypatch) -> None:
+    import_path = tmp_path / "pricing.tsv"
+    import_path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\tcached_input_price_per_1m\t"
+        "output_price_per_1m\treasoning_price_per_1m\trequest_price\tvalid_from\tsource_url\t"
+        "source_retrieved_at\tpricing_metadata\tnotes\n"
+        'openrouter\topenai/gpt-test-mini\t/v1/chat/completions\tUSD\t2\t1\t8\t3\t0\t'
+        '2026-01-01T00:00:00Z\thttps://openrouter.ai/api/v1/models\t2026-01-01T00:00:00Z\t'
+        '{"operator_review_required":true}\treviewed local assumption\n',
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_import_pricing_rules(*, rows: list[dict[str, object]], dry_run: bool) -> PricingImportResult:
+        seen["rows"] = rows
+        seen["dry_run"] = dry_run
+        return PricingImportResult(imported_count=0, dry_run=True, rows=tuple(rows))
+
+    monkeypatch.setattr(pricing_cli, "_import_pricing_rules", fake_import_pricing_rules)
+
+    result = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(import_path), "--format", "tsv", "--dry-run", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert seen["dry_run"] is True
+    assert seen["rows"][0]["pricing_metadata"] == '{"operator_review_required":true}'
+    assert seen["rows"][0]["request_price"] == "0"
+    assert seen["rows"][0]["source_retrieved_at"] == "2026-01-01T00:00:00Z"
+
+
 def test_pricing_import_invalid_file_fails_cleanly(tmp_path) -> None:
     import_path = tmp_path / "bad.json"
     import_path.write_text("{not-json", encoding="utf-8")

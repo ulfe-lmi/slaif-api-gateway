@@ -277,6 +277,8 @@ class ProviderCatalogProposalResult:
     high_confidence: int
     medium_confidence: int
     low_confidence: int
+    paired_ready_only: bool = False
+    ordinary_chat_only: bool = True
 
 
 class ProviderCatalogProposalValidationError(ValueError):
@@ -344,6 +346,8 @@ async def generate_provider_catalog_proposal(
     save_source_snapshots: bool = False,
     acknowledge_assisted_proposal_risk: bool = False,
     allow_zero_prices: bool = False,
+    paired_ready_only: bool = False,
+    ordinary_chat_only: bool = True,
     http_client: httpx.AsyncClient | None = None,
     now: datetime | None = None,
 ) -> ProviderCatalogProposalResult:
@@ -391,6 +395,7 @@ async def generate_provider_catalog_proposal(
                     save_source_snapshots=save_source_snapshots,
                     source_dir=source_dir,
                     allow_zero_prices=allow_zero_prices,
+                    ordinary_chat_only=ordinary_chat_only,
                     now=now,
                 )
             else:
@@ -407,6 +412,7 @@ async def generate_provider_catalog_proposal(
                     source_dir=source_dir,
                     acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
                     allow_zero_prices=allow_zero_prices,
+                    ordinary_chat_only=ordinary_chat_only,
                     now=now,
                 )
             sources.extend(provider_bundle.sources)
@@ -426,10 +432,24 @@ async def generate_provider_catalog_proposal(
     routes_path = output_dir / "routes-proposal.tsv"
     pricing_path = output_dir / "pricing-proposal.tsv"
 
+    exported_route_candidates, exported_pricing_candidates = _select_export_candidates(
+        route_candidates,
+        pricing_candidates,
+        paired_ready_only=paired_ready_only,
+    )
+
     _write_json(
         normalized_path,
         {
             "providers": list(providers),
+            "export_filters": {
+                "paired_ready_only": paired_ready_only,
+                "ordinary_chat_only": ordinary_chat_only,
+            },
+            "export_row_counts": {
+                "routes": len(exported_route_candidates),
+                "pricing": len(exported_pricing_candidates),
+            },
             "models": [_jsonify_dataclass(item) for item in models],
             "pricing_candidates": [_jsonify_dataclass(item) for item in pricing_candidates],
             "route_candidates": [_jsonify_dataclass(item) for item in route_candidates],
@@ -449,8 +469,8 @@ async def generate_provider_catalog_proposal(
             "extractor_version": "provider_catalog_proposal_v1",
         },
     )
-    _write_route_tsv(routes_path, route_candidates)
-    _write_pricing_tsv(pricing_path, pricing_candidates)
+    _write_route_tsv(routes_path, exported_route_candidates, ordinary_chat_only=ordinary_chat_only)
+    _write_pricing_tsv(pricing_path, exported_pricing_candidates)
     report_path.write_text(
         _render_report(
             providers=providers,
@@ -458,11 +478,15 @@ async def generate_provider_catalog_proposal(
             warnings=bundle_warnings,
             route_candidates=route_candidates,
             pricing_candidates=pricing_candidates,
+            exported_route_candidates=exported_route_candidates,
+            exported_pricing_candidates=exported_pricing_candidates,
+            paired_ready_only=paired_ready_only,
+            ordinary_chat_only=ordinary_chat_only,
         ),
         encoding="utf-8",
     )
-    _validate_generated_route_tsv(routes_path, route_candidates)
-    _validate_generated_pricing_tsv(pricing_path, pricing_candidates)
+    _validate_generated_route_tsv(routes_path, exported_route_candidates)
+    _validate_generated_pricing_tsv(pricing_path, exported_pricing_candidates)
 
     confidence_counts = _count_confidence(models)
     return ProviderCatalogProposalResult(
@@ -473,12 +497,14 @@ async def generate_provider_catalog_proposal(
         report_path=report_path,
         warnings_path=warnings_path,
         manifest_path=manifest_path,
-        route_rows_ready=sum(1 for row in route_candidates if row.ready_for_import),
-        pricing_rows_ready=sum(1 for row in pricing_candidates if row.ready_for_import),
+        route_rows_ready=len(exported_route_candidates),
+        pricing_rows_ready=len(exported_pricing_candidates),
         warnings_count=len(bundle_warnings),
         high_confidence=confidence_counts["high"],
         medium_confidence=confidence_counts["medium"],
         low_confidence=confidence_counts["low"],
+        paired_ready_only=paired_ready_only,
+        ordinary_chat_only=ordinary_chat_only,
     )
 
 
@@ -495,6 +521,7 @@ async def _propose_openrouter(
     save_source_snapshots: bool,
     source_dir: Path,
     allow_zero_prices: bool,
+    ordinary_chat_only: bool,
     now: datetime | None,
 ) -> ProviderCatalogProposalBundle:
     if "assisted" in source_methods:
@@ -581,6 +608,7 @@ async def _propose_openrouter(
             input_modalities=input_modalities,
             output_modalities=output_modalities,
             expiration_date=_safe_text(row.get("expiration_date")),
+            ordinary_chat_only=ordinary_chat_only,
         )
         confidence: Confidence = "high" if unit_confirmed else "medium"
         model_candidates.append(
@@ -750,6 +778,7 @@ async def _propose_openai(
     source_dir: Path,
     acknowledge_assisted_proposal_risk: bool,
     allow_zero_prices: bool,
+    ordinary_chat_only: bool,
     now: datetime | None,
 ) -> ProviderCatalogProposalBundle:
     warnings: list[ProviderCatalogWarning] = []
@@ -871,6 +900,7 @@ async def _propose_openai(
             docs_model=docs_model,
             has_pricing=bool(doc_prices),
             api_model_ids=api_model_ids if (include_api_models or "api" in source_methods) else None,
+            ordinary_chat_only=ordinary_chat_only,
         )
         if "chat_completions" in endpoint_scopes and not _is_openai_chat_completions_model_id(model_id):
             row_warnings = tuple(sorted(set(row_warnings + ("unsupported_modality",))))
@@ -931,7 +961,11 @@ async def _propose_openai(
                 route_row_warnings = list(row_warnings)
                 if "assisted" in source_methods and route_rows_match is None:
                     route_row_warnings.append("model_missing_from_assisted")
-                route_ready = "search_specific_model" not in route_row_warnings
+                route_ready = (
+                    "search_specific_model" not in route_row_warnings
+                    and "unsupported_modality" not in route_row_warnings
+                    and "hosted_tool_only" not in route_row_warnings
+                )
                 route_status = "ready" if route_ready else "report-only"
                 route_candidates.append(
                     ProviderCatalogRouteCandidate(
@@ -1383,6 +1417,7 @@ def _openrouter_model_warnings(
     input_modalities: Sequence[str],
     output_modalities: Sequence[str],
     expiration_date: str | None,
+    ordinary_chat_only: bool,
 ) -> tuple[str, ...]:
     warnings: set[str] = set()
     if is_search_specific_chat_completion_model(model_id) or "search" in model_id.lower():
@@ -1402,6 +1437,12 @@ def _openrouter_model_warnings(
         or "audio" in model_id.lower()
     ):
         warnings.add("ambiguous_capability")
+    if ordinary_chat_only and _ordinary_chat_candidate_requires_review(
+        model_id=model_id,
+        input_modalities=input_modalities,
+        output_modalities=output_modalities,
+    ):
+        warnings.add("unsupported_modality")
     return tuple(sorted(warnings))
 
 
@@ -1450,7 +1491,13 @@ def _openrouter_pricing_candidate(
     zero_price_detected = input_price == "0" or output_price == "0"
     if zero_price_detected:
         warning_codes.add("zero_price_requires_review")
-    ready = not {"missing_pricing", "unit_unconfirmed", "search_specific_model"} & warning_codes
+    ready = not {
+        "missing_pricing",
+        "unit_unconfirmed",
+        "search_specific_model",
+        "unsupported_modality",
+        "hosted_tool_only",
+    } & warning_codes
     if zero_price_detected and not allow_zero_prices:
         ready = False
     pricing_metadata = {
@@ -1649,6 +1696,7 @@ def _openai_model_comparison_warnings(
     docs_model: _OpenAIModelRecord | None,
     has_pricing: bool,
     api_model_ids: set[str] | None,
+    ordinary_chat_only: bool,
 ) -> tuple[str, ...]:
     warnings: set[str] = set()
     if docs_model is None:
@@ -1659,7 +1707,44 @@ def _openai_model_comparison_warnings(
         warnings.add("model_missing_from_api")
     if docs_model is not None:
         warnings.update(docs_model.warnings)
+        if ordinary_chat_only and _ordinary_chat_candidate_requires_review(
+            model_id=model_id,
+            input_modalities=_feature_modalities(docs_model.features, kind="input"),
+            output_modalities=_feature_modalities(docs_model.features, kind="output"),
+        ):
+            warnings.add("unsupported_modality")
     return tuple(sorted(warnings))
+
+
+def _ordinary_chat_candidate_requires_review(
+    *,
+    model_id: str,
+    input_modalities: Sequence[str],
+    output_modalities: Sequence[str],
+) -> bool:
+    lowered_model = model_id.lower()
+    blocked_tokens = (
+        "image",
+        "audio",
+        "speech",
+        "tts",
+        "whisper",
+        "realtime",
+        "video",
+        "lyria",
+        "music",
+        "vl-",
+        "-vl",
+    )
+    if any(token in lowered_model for token in blocked_tokens):
+        return True
+    input_set = {value.lower() for value in input_modalities}
+    output_set = {value.lower() for value in output_modalities}
+    if "text" not in input_set or "text" not in output_set:
+        return True
+    if any(value != "text" for value in input_set | output_set):
+        return True
+    return False
 
 
 def _openai_pricing_candidates(
@@ -2216,7 +2301,31 @@ def _dedupe_warning_objects(
     return tuple(result)
 
 
-def _write_route_tsv(path: Path, rows: Sequence[ProviderCatalogRouteCandidate]) -> None:
+def _select_export_candidates(
+    route_candidates: Sequence[ProviderCatalogRouteCandidate],
+    pricing_candidates: Sequence[ProviderCatalogPricingCandidate],
+    *,
+    paired_ready_only: bool,
+) -> tuple[tuple[ProviderCatalogRouteCandidate, ...], tuple[ProviderCatalogPricingCandidate, ...]]:
+    ready_routes = [row for row in route_candidates if row.ready_for_import]
+    ready_pricing = [row for row in pricing_candidates if row.ready_for_import]
+    if not paired_ready_only:
+        return tuple(ready_routes), tuple(ready_pricing)
+
+    route_keys = {(row.provider, row.upstream_model, row.endpoint) for row in ready_routes}
+    pricing_keys = {(row.provider, row.model_id, row.endpoint) for row in ready_pricing}
+    paired_keys = route_keys & pricing_keys
+    filtered_routes = [row for row in ready_routes if (row.provider, row.upstream_model, row.endpoint) in paired_keys]
+    filtered_pricing = [row for row in ready_pricing if (row.provider, row.model_id, row.endpoint) in paired_keys]
+    return tuple(filtered_routes), tuple(filtered_pricing)
+
+
+def _write_route_tsv(
+    path: Path,
+    rows: Sequence[ProviderCatalogRouteCandidate],
+    *,
+    ordinary_chat_only: bool,
+) -> None:
     fieldnames = [
         "requested_model",
         "match_type",
@@ -2247,7 +2356,11 @@ def _write_route_tsv(path: Path, rows: Sequence[ProviderCatalogRouteCandidate]) 
                     "enabled": str(row.enabled).lower(),
                     "visible_in_models": str(row.visible_in_models).lower(),
                     "supports_streaming": str(row.supports_streaming).lower(),
-                    "capabilities": json.dumps(row.capabilities, separators=(",", ":"), sort_keys=True),
+                    "capabilities": json.dumps(
+                        _export_route_capabilities(row.capabilities, ordinary_chat_only=ordinary_chat_only),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
                     "notes": row.notes,
                 }
             )
@@ -2332,6 +2445,38 @@ def _validate_generated_route_tsv(
         raise ProviderCatalogProposalValidationError(
             f"routes-proposal.tsv failed route import validation: {invalid[0].errors[0]}"
         )
+
+
+def _export_route_capabilities(
+    capabilities: Mapping[str, object],
+    *,
+    ordinary_chat_only: bool,
+) -> dict[str, object]:
+    exported = dict(capabilities)
+    if not ordinary_chat_only:
+        return exported
+    chat = exported.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
+    if not isinstance(chat, Mapping):
+        return exported
+    allowed_chat_keys = {
+        CHAT_CAPABILITY_TEXT,
+        CHAT_CAPABILITY_STREAMING,
+        CHAT_CAPABILITY_FUNCTION_TOOLS,
+        CHAT_CAPABILITY_LEGACY_FUNCTIONS,
+        CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
+        CHAT_CAPABILITY_JSON_MODE,
+        CHAT_CAPABILITY_LOGPROBS,
+        CHAT_CAPABILITY_REASONING_USAGE,
+        CHAT_CAPABILITY_CACHED_INPUT_USAGE,
+    }
+    compact_chat = {
+        key: value
+        for key, value in chat.items()
+        if key in allowed_chat_keys and bool(value)
+    }
+    compact_chat.setdefault(CHAT_CAPABILITY_TEXT, True)
+    exported[CHAT_COMPLETIONS_CAPABILITIES_KEY] = compact_chat
+    return exported
 
 
 def _validate_generated_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidate]) -> None:
@@ -2456,15 +2601,23 @@ def _render_report(
     warnings: Sequence[ProviderCatalogWarning],
     route_candidates: Sequence[ProviderCatalogRouteCandidate],
     pricing_candidates: Sequence[ProviderCatalogPricingCandidate],
+    exported_route_candidates: Sequence[ProviderCatalogRouteCandidate],
+    exported_pricing_candidates: Sequence[ProviderCatalogPricingCandidate],
+    paired_ready_only: bool,
+    ordinary_chat_only: bool,
 ) -> str:
     lines = [
         "# Provider Catalog Proposal Report",
         "",
         f"Providers: {', '.join(providers)}",
         "",
-        f"Route rows ready: {sum(1 for row in route_candidates if row.ready_for_import)}",
-        f"Pricing rows ready: {sum(1 for row in pricing_candidates if row.ready_for_import)}",
+        f"Route rows ready: {len(exported_route_candidates)}",
+        f"Pricing rows ready: {len(exported_pricing_candidates)}",
         f"Warnings: {len(warnings)}",
+        f"Paired ready only: {'yes' if paired_ready_only else 'no'}",
+        f"Ordinary chat only: {'yes' if ordinary_chat_only else 'no'}",
+        f"Raw ready route rows: {sum(1 for row in route_candidates if row.ready_for_import)}",
+        f"Raw ready pricing rows: {sum(1 for row in pricing_candidates if row.ready_for_import)}",
         "",
         "| model | provider | pricing_status | route_status | sources_seen | confidence | warnings | ready_for_route_import | ready_for_pricing_import |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",

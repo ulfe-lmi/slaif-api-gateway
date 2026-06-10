@@ -44,7 +44,7 @@ OPENROUTER_MODELS_FIXTURE = {
             "description": "Safe text model",
             "context_length": 128000,
             "architecture": {
-                "input_modalities": ["text", "image"],
+                "input_modalities": ["text"],
                 "output_modalities": ["text"],
             },
             "pricing": {
@@ -64,6 +64,49 @@ OPENROUTER_MODELS_FIXTURE = {
             "knowledge_cutoff": "2025-01",
             "expiration_date": None,
             "links": {"details": "/api/v1/models/openai/gpt-test-mini/endpoints"},
+        },
+        {
+            "id": "openai/gpt-test-image",
+            "canonical_slug": "openai/gpt-test-image",
+            "name": "GPT Test Image",
+            "description": "Image-capable model that should be report-only in ordinary chat mode",
+            "context_length": 128000,
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {
+                "prompt": "0.000004",
+                "completion": "0.000010",
+            },
+            "top_provider": {"context_length": 128000, "max_completion_tokens": 8192},
+            "supported_parameters": [
+                "tools",
+                "response_format",
+            ],
+            "knowledge_cutoff": "2025-01",
+            "expiration_date": None,
+            "links": {},
+        },
+        {
+            "id": "openrouter/owl-alpha",
+            "canonical_slug": "openrouter/owl-alpha",
+            "name": "OWL Alpha",
+            "description": "Zero-price text model",
+            "context_length": 128000,
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {
+                "prompt": "0",
+                "completion": "0",
+            },
+            "top_provider": {"context_length": 128000, "max_completion_tokens": 8192},
+            "supported_parameters": ["tools"],
+            "knowledge_cutoff": "2025-01",
+            "expiration_date": None,
+            "links": {},
         },
         {
             "id": "openai/gpt-search-test",
@@ -300,6 +343,7 @@ def test_openrouter_model_warnings_flag_ambiguous_file_audio_capabilities() -> N
         input_modalities=("text", "file", "audio"),
         output_modalities=("text",),
         expiration_date=None,
+        ordinary_chat_only=True,
     )
 
     assert "ambiguous_capability" in warnings
@@ -379,7 +423,7 @@ async def test_generate_openrouter_catalog_proposal_outputs_safe_tsv_files(
     )
 
     assert isinstance(result, ProviderCatalogProposalResult)
-    assert result.route_rows_ready == 1
+    assert result.route_rows_ready == 2
     assert result.pricing_rows_ready == 1
     assert result.manifest_path.exists()
     assert result.normalized_path.exists()
@@ -396,11 +440,11 @@ async def test_generate_openrouter_catalog_proposal_outputs_safe_tsv_files(
         max_rows=10,
     )
 
-    assert route_preview.valid_count == 1
+    assert route_preview.valid_count == 2
     assert pricing_preview.valid_count == 1
-    route_row = route_preview.rows[0]
-    assert route_row.requested_model == "openai/gpt-test-mini"
-    assert route_row.endpoint == CHAT_COMPLETIONS_ENDPOINT
+    route_models = {row.requested_model for row in route_preview.rows}
+    assert route_models == {"openai/gpt-test-mini", "openrouter/owl-alpha"}
+    assert all(row.endpoint == CHAT_COMPLETIONS_ENDPOINT for row in route_preview.rows)
     pricing_row = pricing_preview.rows[0]
     assert pricing_row.model == "openai/gpt-test-mini"
     assert pricing_row.input_price_per_1m == "2"
@@ -409,6 +453,89 @@ async def test_generate_openrouter_catalog_proposal_outputs_safe_tsv_files(
     warnings_payload = json.loads(result.warnings_path.read_text(encoding="utf-8"))
     warning_codes = {item["code"] for item in warnings_payload["warnings"]}
     assert "search_specific_model" in warning_codes
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_paired_ready_and_ordinary_chat_only(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENROUTER_MODELS_DOCS_MARKDOWN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="All pricing values are in USD per token/request/unit.",
+            headers={"content-type": "text/markdown"},
+        )
+    )
+    respx_mock.get(OPENROUTER_MODELS_API_URL).mock(
+        return_value=httpx.Response(200, json=OPENROUTER_MODELS_FIXTURE)
+    )
+    respx_mock.get("https://openrouter.ai/api/v1/models/openai/gpt-test-mini/endpoints").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"max_completion_tokens": 8192}},
+        )
+    )
+
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+        paired_ready_only=True,
+        ordinary_chat_only=True,
+    )
+
+    assert result.route_rows_ready == 1
+    assert result.pricing_rows_ready == 1
+
+    route_tsv = result.routes_proposal_path.read_text(encoding="utf-8")
+    pricing_tsv = result.pricing_proposal_path.read_text(encoding="utf-8")
+
+    assert "openai/gpt-test-mini" in route_tsv
+    assert "openai/gpt-test-mini" in pricing_tsv
+    assert "openai/gpt-test-image" not in route_tsv
+    assert "openai/gpt-test-image" not in pricing_tsv
+    assert "openrouter/owl-alpha" not in route_tsv
+    assert "openrouter/owl-alpha" not in pricing_tsv
+
+    report_text = result.report_path.read_text(encoding="utf-8")
+    assert "Paired ready only: yes" in report_text
+    assert "Ordinary chat only: yes" in report_text
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_can_opt_into_multimodal_candidates(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENROUTER_MODELS_DOCS_MARKDOWN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="All pricing values are in USD per token/request/unit.",
+            headers={"content-type": "text/markdown"},
+        )
+    )
+    respx_mock.get(OPENROUTER_MODELS_API_URL).mock(
+        return_value=httpx.Response(200, json=OPENROUTER_MODELS_FIXTURE)
+    )
+    respx_mock.get("https://openrouter.ai/api/v1/models/openai/gpt-test-mini/endpoints").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"max_completion_tokens": 8192}},
+        )
+    )
+
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+        ordinary_chat_only=False,
+    )
+
+    route_tsv = result.routes_proposal_path.read_text(encoding="utf-8")
+    pricing_tsv = result.pricing_proposal_path.read_text(encoding="utf-8")
+    assert "openai/gpt-test-image" in route_tsv
+    assert "openai/gpt-test-image" in pricing_tsv
 
 
 @pytest.mark.asyncio
@@ -480,7 +607,7 @@ async def test_generate_openai_catalog_proposal_compares_docs_api_and_assisted_s
     assert "model_missing_from_api" in warning_codes
     assert "search_specific_model" in warning_codes
     assert result.pricing_rows_ready == 0
-    assert result.route_rows_ready == 1
+    assert result.route_rows_ready == 0
     assert "admin-discovery-key" not in result.manifest_path.read_text(encoding="utf-8")
 
 
@@ -503,7 +630,7 @@ async def test_generate_openai_docs_only_catalog_skips_noise_and_incomplete_chat
         endpoint_scopes=("chat_completions",),
     )
 
-    assert result.route_rows_ready == 2
+    assert result.route_rows_ready == 1
     assert result.pricing_rows_ready == 1
 
     route_tsv = result.routes_proposal_path.read_text(encoding="utf-8")
@@ -527,7 +654,7 @@ async def test_generate_openai_docs_only_catalog_skips_noise_and_incomplete_chat
         assert bad_token not in route_tsv
         assert bad_token not in pricing_tsv
 
-    assert "gpt-5.5" in route_tsv
+    assert "gpt-5.5" not in route_tsv
     assert "gpt-5.6" in route_tsv
     assert "gpt-5.5" in pricing_tsv
     assert "gpt-5.6" not in pricing_tsv

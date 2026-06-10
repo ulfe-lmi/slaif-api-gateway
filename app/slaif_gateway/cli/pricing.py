@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -24,6 +22,12 @@ from slaif_gateway.cli.common import (
 from slaif_gateway.db.models import PricingRule
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+from slaif_gateway.services.pricing_import import (
+    detect_pricing_import_format,
+    parse_pricing_import_csv,
+    parse_pricing_import_json,
+    parse_pricing_import_tsv,
+)
 from slaif_gateway.services.pricing_rule_service import PricingImportResult, PricingRuleService
 
 app = typer.Typer(help="Manage pricing rules")
@@ -348,31 +352,16 @@ def import_pricing(
 def _load_import_file(path: Path, *, input_format: str | None) -> list[dict[str, object]]:
     if not path.exists() or not path.is_file():
         raise ValueError("Pricing import file does not exist")
-    file_format = _detect_format(path, input_format)
+    text = path.read_text(encoding="utf-8")
+    file_format = detect_pricing_import_format(
+        filename=path.name,
+        requested_format=(input_format or "auto"),
+        text=text,
+    )
     if file_format == "json":
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError("Pricing import file is not valid JSON") from exc
-        if not isinstance(loaded, list):
-            raise ValueError("Pricing JSON import must be a list of objects")
-        if not all(isinstance(item, dict) for item in loaded):
-            raise ValueError("Pricing JSON import must contain only objects")
-        return loaded
+        return parse_pricing_import_json(text)
     if file_format == "csv":
-        with path.open("r", encoding="utf-8", newline="") as handle:
-            return [dict(row) for row in csv.DictReader(handle)]
+        return parse_pricing_import_csv(text)
     if file_format == "tsv":
-        with path.open("r", encoding="utf-8", newline="") as handle:
-            return [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
-    raise ValueError("--format must be json, csv, or tsv")
-
-
-def _detect_format(path: Path, input_format: str | None) -> str:
-    if input_format:
-        normalized = input_format.strip().lower()
-    else:
-        normalized = path.suffix.lower().removeprefix(".")
-    if normalized not in {"json", "csv", "tsv"}:
-        raise ValueError("--format must be json, csv, or tsv")
-    return normalized
+        return parse_pricing_import_tsv(text)
+    raise ValueError("Pricing import format must be auto, csv, json, or tsv")

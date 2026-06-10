@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -25,9 +26,12 @@ _ALLOWED_IMPORT_FIELDS = {
     "output_price_per_1m",
     "cached_input_price_per_1m",
     "reasoning_price_per_1m",
+    "request_price",
+    "pricing_metadata",
     "valid_from",
     "valid_until",
     "source_url",
+    "source_retrieved_at",
     "notes",
     "enabled",
 }
@@ -314,6 +318,16 @@ def _prepare_import_row(row: Mapping[str, object], *, index: int) -> dict[str, o
             index=index,
             field_name="reasoning_price_per_1m",
         ),
+        "request_price": _optional_import_decimal(
+            row.get("request_price"),
+            index=index,
+            field_name="request_price",
+        ),
+        "pricing_metadata": _optional_import_metadata(
+            row.get("pricing_metadata"),
+            row.get("source_retrieved_at"),
+            index=index,
+        ),
         "valid_from": _optional_import_datetime(row.get("valid_from"), index=index, field_name="valid_from")
         or datetime.now(UTC),
         "valid_until": _optional_import_datetime(
@@ -433,6 +447,40 @@ def _optional_import_datetime(value: object, *, index: int, field_name: str) -> 
             f"Pricing import row {index} field {field_name} must be an ISO datetime"
         ) from exc
     return _aware_time(parsed)
+
+
+def _optional_import_metadata(
+    value: object,
+    source_retrieved_at: object,
+    *,
+    index: int,
+) -> dict[str, object]:
+    if value is None or value == "":
+        metadata: dict[str, object] = {}
+    elif isinstance(value, Mapping):
+        metadata = dict(value)
+    elif isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Pricing import row {index} field pricing_metadata must be a JSON object"
+            ) from exc
+        if not isinstance(loaded, Mapping):
+            raise ValueError(f"Pricing import row {index} field pricing_metadata must be a JSON object")
+        metadata = dict(loaded)
+    else:
+        raise ValueError(f"Pricing import row {index} field pricing_metadata must be a JSON object")
+
+    retrieved_at = _optional_import_text(
+        source_retrieved_at,
+        index=index,
+        field_name="source_retrieved_at",
+    )
+    if retrieved_at is not None:
+        _optional_import_datetime(retrieved_at, index=index, field_name="source_retrieved_at")
+        metadata.setdefault("source_retrieved_at", retrieved_at)
+    return metadata
 
 
 def _optional_import_bool(

@@ -118,6 +118,37 @@ Operators should run a bounded OpenRouter smoke before any import preview, then
 inspect `provider-catalog-report.md` and `warnings.json` before deciding
 whether the generated TSV is even worth previewing.
 
+For actual import-preview preparation, the safe default is:
+
+```bash
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir "$OUT" \
+  --max-models 500 \
+  --fetch-details-limit 50 \
+  --paired-ready-only \
+  --ordinary-chat-only \
+  --no-save-source-snapshots \
+  --json
+
+slaif-gateway pricing import \
+  --format tsv \
+  --file "$OUT/pricing-proposal.tsv" \
+  --dry-run \
+  --json
+
+slaif-gateway routes import \
+  --format tsv \
+  --file "$OUT/routes-proposal.tsv" \
+  --dry-run \
+  --json
+```
+
+`--paired-ready-only` excludes route-only and pricing-only mismatches from the
+generated import TSVs. `--ordinary-chat-only` excludes ambiguous multimodal,
+audio, image, VL, realtime, and similar rows from ordinary Chat Completions
+import preparation unless an operator explicitly opts into multimodal chat
+candidates.
+
 Generated proposal TSV files are self-validated before the command reports
 success. Malformed rows, invalid JSON cells, invalid decimals, broken
 `source_url` / `source_retrieved_at` column splits, or suspicious secret-like
