@@ -61,13 +61,21 @@ Core invariants:
   instead of zero-cost success. Input strings, token arrays, embedding vectors,
   raw request bodies, and raw provider response bodies are never stored.
 - `POST /v1/realtime/client_secrets` now uses its own endpoint permission,
-  route, pricing, and bounded admission finalization path. PostgreSQL remains
-  authoritative. Provider usage stays authoritative when present. When provider
-  usage is absent, SLAIF finalizes a bounded admission estimate with the safe
-  reason `realtime_client_secret_issued` instead of creating an unbounded
-  zero-cost path. Ephemeral client secrets, instructions, raw session config,
-  audio payloads, transcripts, raw SDP, raw events, and raw provider bodies
-  are never stored.
+  route, pricing, and admission finalization path. PostgreSQL remains
+  authoritative for the issued control-plane request. OpenAI's current Realtime
+  docs/SDK state that a client secret can create multiple sessions until it
+  expires, that a started session can outlive expiry, and that clients can send
+  later session/response overrides. SLAIF therefore does not claim hard actual
+  session-usage accounting from client-secret issuance alone. Quota-limited keys
+  fail closed unless the route explicitly sets
+  `realtime.client_secret_direct_provider_exposure_accepted=true` and the
+  pricing row provides a non-refundable `request_price` admission charge.
+  Provider usage stays authoritative when present. When provider usage is
+  absent, SLAIF finalizes issuance with the safe reason
+  `realtime_client_secret_issued`, marks `estimate_is_invoice_grade=false`, and
+  records only safe admission metadata. Ephemeral client secrets, instructions,
+  raw session config, audio payloads, transcripts, raw SDP, raw events, and
+  raw provider bodies are never stored.
 
 ## Chat Completions Streaming Live-Burn Margin
 

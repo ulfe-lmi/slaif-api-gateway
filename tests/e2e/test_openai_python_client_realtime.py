@@ -120,6 +120,7 @@ async def _create_realtime_test_data(database_url: str):
                         "audio": True,
                         "webrtc_client_secrets": True,
                         "transcription": False,
+                        "client_secret_direct_provider_exposure_accepted": True,
                     }
                 },
                 notes="Realtime E2E route",

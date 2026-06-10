@@ -99,6 +99,7 @@ def _realtime_capabilities() -> dict[str, object]:
             "audio": True,
             "webrtc_client_secrets": True,
             "transcription": False,
+            "client_secret_direct_provider_exposure_accepted": False,
         }
     }
 
@@ -109,6 +110,7 @@ def _wire_realtime_pipeline(
     *,
     provider: str = "openai",
     auth: AuthenticatedGatewayKey | None = None,
+    capabilities: dict[str, object] | None = None,
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.realtime_gateway as realtime_module
@@ -119,9 +121,10 @@ def _wire_realtime_pipeline(
         "finalize_calls": [],
         "custom_finalize_calls": [],
         "failure_release_calls": [],
+        "estimate_kwargs": [],
     }
     authenticated_key = auth or _auth()
-    route_result = _route(provider=provider, capabilities=_realtime_capabilities())
+    route_result = _route(provider=provider, capabilities=capabilities or _realtime_capabilities())
     estimate = _estimate()
 
     async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
@@ -136,8 +139,13 @@ def _wire_realtime_pipeline(
         assert endpoint == "/v1/realtime/client_secrets"
         return route_result
 
-    async def _fake_estimate(self, *, route, policy, endpoint, at=None):
+    async def _fake_estimate(self, *, route, policy, endpoint, admission_pricing_only=False, at=None):
         _ = (self, route, policy, endpoint, at)
+        state["estimate_kwargs"].append(
+            {
+                "admission_pricing_only": admission_pricing_only,
+            }
+        )
         return estimate
 
     async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, endpoint, now=None):
@@ -304,10 +312,61 @@ def test_model_permission_alone_does_not_allow_realtime(monkeypatch) -> None:
     assert response.json()["error"]["code"] == "endpoint_not_allowed"
 
 
+def test_quota_limited_key_requires_direct_provider_exposure_acceptance(monkeypatch) -> None:
+    client, app = _app()
+    auth = replace(_auth(), cost_limit_eur=Decimal("5.000000000"))
+    state = _wire_realtime_pipeline(monkeypatch, app, auth=auth)
+
+    response = client.post("/v1/realtime/client_secrets", json=_request_body())
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "realtime_direct_provider_exposure_not_accepted"
+    assert state["reserve_calls"] == []
+
+
+@respx.mock
+def test_unlimited_key_can_issue_realtime_client_secret_without_direct_provider_exposure_acceptance(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    client, app = _app()
+    state = _wire_realtime_pipeline(monkeypatch, app)
+
+    upstream_route = respx_mock.post("https://api.openai.com/v1/realtime/client_secrets").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": "rtcs_unlimited",
+                "expires_at": 1893456000,
+                "session": {
+                    "id": "sess_unlimited",
+                    "object": "realtime.session",
+                    "type": "realtime",
+                    "model": "gpt-realtime-mini",
+                    "output_modalities": ["audio"],
+                    "audio": {
+                        "output": {"voice": "cedar", "format": {"type": "audio/pcmu"}}
+                    },
+                },
+            },
+            headers={"content-type": "application/json"},
+        )
+    )
+
+    response = client.post("/v1/realtime/client_secrets", json=_request_body())
+
+    assert response.status_code == 200
+    assert len(upstream_route.calls) == 1
+    assert state["estimate_kwargs"] == [{"admission_pricing_only": False}]
+
+
 @respx.mock
 def test_openai_realtime_client_secret_forwarding_uses_resolved_model_and_safe_headers(monkeypatch, respx_mock) -> None:
     client, app = _app()
-    state = _wire_realtime_pipeline(monkeypatch, app)
+    capabilities = _realtime_capabilities()
+    capabilities["realtime"]["client_secret_direct_provider_exposure_accepted"] = True
+    auth = replace(_auth(), cost_limit_eur=Decimal("5.000000000"))
+    state = _wire_realtime_pipeline(monkeypatch, app, auth=auth, capabilities=capabilities)
 
     upstream_route = respx_mock.post("https://api.openai.com/v1/realtime/client_secrets").mock(
         return_value=httpx.Response(
@@ -356,8 +415,13 @@ def test_openai_realtime_client_secret_forwarding_uses_resolved_model_and_safe_h
     _, kwargs = state["custom_finalize_calls"][0]
     metadata = kwargs["response_metadata_extra"]
     assert metadata["realtime_estimate_reason"] == "realtime_client_secret_issued"
+    assert metadata["realtime_direct_provider_exposure_admission"] is True
+    assert metadata["estimate_is_invoice_grade"] is False
     assert metadata["audio_output_voice"] == "cedar"
+    assert "instructions" not in metadata
+    assert "session" not in metadata
     assert "value" not in json.dumps(metadata)
+    assert state["estimate_kwargs"] == [{"admission_pricing_only": True}]
 
 
 def test_realtime_transcription_session_is_rejected(monkeypatch) -> None:

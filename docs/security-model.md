@@ -228,7 +228,12 @@ flags. Chat, Responses, standalone audio, or embeddings permissions/capabilities
 do not imply Realtime support. The gateway returns the provider-issued
 ephemeral client secret to the caller for browser/mobile WebRTC use, but it
 does not store or log the secret value, instructions text, raw session config,
-audio payloads, transcripts, raw SDP, or raw event bodies. `/v1/realtime/calls`,
+audio payloads, transcripts, raw SDP, or raw event bodies. OpenAI's current
+Realtime docs/SDK describe the secret as reusable until expiry and later
+session behavior as client-updatable, so SLAIF does not treat issuance as a
+hard actual-usage bound. Quota-limited keys fail closed unless the route also
+sets `realtime.client_secret_direct_provider_exposure_accepted=true` and
+admission pricing is configured. `/v1/realtime/calls`,
 server-side WebSocket proxying, transcription sessions, translation, SIP,
 tools, and MCP remain deferred in this first slice.
 Multiple choices are only allowed with `chat_multiple_choices=true`;

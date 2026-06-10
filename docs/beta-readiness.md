@@ -74,7 +74,10 @@ operational guidance, not a production certification.
   capability checks, canonical OpenAI provider forwarding, OpenRouter
   fail-closed behavior, PostgreSQL admission reservation/finalization, and no
   local storage/logging of ephemeral client secrets, instructions text, raw
-  session config, audio, transcripts, raw SDP, or raw events.
+  session config, audio, transcripts, raw SDP, or raw events. Because OpenAI
+  client secrets are reusable until expiry and later session behavior is
+  client-updatable, quota-limited keys fail closed unless the route explicitly
+  accepts direct-provider exposure and provides admission pricing.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.

@@ -84,11 +84,15 @@ def test_rc2_scope_doc_moves_standalone_audio_to_implemented_and_keeps_remaining
         "| `POST /v1/audio/translations` | Implemented for bounded multipart translation subset |"
         in content
     )
-    assert "| Realtime audio | Implemented for bounded WebRTC client-secret admission foundation |" in content
+    assert (
+        "| Realtime audio | Implemented for bounded WebRTC client-secret admission foundation "
+        "with explicit direct-provider-exposure gating for quota-limited keys |"
+    ) in content
     assert "| `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset |" in content
     assert "| `RC2_REQUIRED_MISSING` | 0 |" in content
     assert "| `POST /v1/realtime/calls` | Not implemented |" in content
     assert "`feature/realtime-audio-foundation` — completed for the bounded first slice" in content
+    assert "client_secret_direct_provider_exposure_accepted=true" in content
 
 
 def test_rc_beta_docs_no_longer_read_as_feature_full_rc2() -> None:
