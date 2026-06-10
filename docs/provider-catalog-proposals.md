@@ -44,6 +44,10 @@ Optional comparison flags:
 - `--paired-ready-only`
 - `--ordinary-chat-only`
 - `--include-multimodal-chat-candidates`
+- `--package`
+- `--all-packages`
+- `--include-deprecated`
+- `--include-ambiguous-capabilities`
 
 OpenAI assisted cross-checks are optional and require explicit operator
 acknowledgement. They use `OPENAI_ADMIN_DISCOVERY_API_KEY`, never
@@ -104,6 +108,34 @@ slaif-gateway routes import \
   --json
 ```
 
+For OpenRouter reviewed import preparation, package presets are preferred over a
+single flat catalog. The default safe import candidate is
+`openrouter-chat-text`:
+
+```bash
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir "$OUT" \
+  --max-models 500 \
+  --fetch-details-limit 50 \
+  --package openrouter-chat-text \
+  --package openrouter-chat-image \
+  --package openrouter-chat-audio \
+  --package openrouter-chat-multimodal \
+  --package openrouter-responses-text \
+  --no-save-source-snapshots \
+  --json
+```
+
+Package aliases are also accepted:
+
+- `chat-text`
+- `chat-image`
+- `chat-audio`
+- `chat-multimodal`
+- `responses-text`
+
+`--all-packages` emits every current OpenRouter package preset.
+
 ## Source Methods
 
 OpenRouter:
@@ -136,6 +168,37 @@ Every run writes:
 - `pricing-proposal.tsv`
 - `provider-catalog-report.md`
 - `warnings.json`
+
+When package presets are requested, the run also writes:
+
+- `packages/package-index.md`
+- `packages/package-index.json`
+- `packages/<package>/package-manifest.json`
+- `packages/<package>/routes-proposal.tsv`
+- `packages/<package>/pricing-proposal.tsv`
+- `packages/<package>/model-review.md`
+- `packages/<package>/package-report.md`
+
+Package presets are capability supersets within an endpoint family:
+
+- `openrouter-chat-text`: baseline ordinary text Chat Completions package
+- `openrouter-chat-image`: superset of `openrouter-chat-text`, adding
+  image-input to text-output rows only
+- `openrouter-chat-audio`: superset of `openrouter-chat-image`, adding only
+  safe audio-capable Chat rows that current SLAIF chat capability and pricing
+  metadata can represent
+- `openrouter-chat-multimodal`: broader staged review package for safe chat
+  multimodal rows
+- `openrouter-responses-text`: separate `/v1/responses` endpoint family, not a
+  Chat superset
+
+Responses package names beyond `openrouter-responses-text` remain future/report
+only until current `main` has explicit route/pricing capability evidence for
+them.
+
+`openrouter-chat-text` is the default safe import candidate. Image, audio, and
+Responses packages are separate review surfaces, not mixed into the ordinary
+text package.
 
 The generated TSV files are input to the existing SLAIF import preview flows.
 They are not imports by themselves.
@@ -207,6 +270,11 @@ Import execution mutates local route/pricing metadata only after explicit
 confirmation. It does not call providers, does not fetch new proposal data, and
 should be rehearsed against a disposable local database before any real local
 deployment import.
+
+Package review files are generated for human review. `model-review.md` uses a
+compact HTML table with short columns, `—` for missing values, and separate
+reasoning-capable vs separately priced reasoning presentation. These review
+files are for operators; they are not import sources by themselves.
 
 Zero-price pricing rows are report-only by default. They are not pricing-import
 ready unless the operator explicitly passes `--allow-zero-prices`. Even with
