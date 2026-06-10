@@ -13,6 +13,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_conversation_items_query_request,
     normalize_conversation_update_upstream_request,
     normalize_chat_completion_upstream_request,
+    normalize_embeddings_upstream_request,
     normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
@@ -29,6 +30,7 @@ from slaif_gateway.services.upstream_payloads import (
     build_conversation_items_query_params,
     build_conversation_update_upstream_body,
     build_chat_completion_upstream_body,
+    build_embeddings_upstream_body,
     build_responses_compact_upstream_body,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
@@ -153,6 +155,21 @@ def _normalize_audio_translation_body(
     )
 
 
+def _normalize_embeddings_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "text-embedding-3-small",
+):
+    from slaif_gateway.services.embeddings_request_policy import EmbeddingsRequestPolicy
+
+    policy_result = EmbeddingsRequestPolicy(_settings()).apply(body)
+    return normalize_embeddings_upstream_request(
+        policy_result.effective_body,
+        requested_model=str(policy_result.effective_body["model"]),
+        upstream_model=resolved_model,
+    )
+
+
 def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-alias",
@@ -250,6 +267,30 @@ def test_audio_translation_request_reconstructs_exact_upstream_body() -> None:
         "prompt": "Keep named entities intact",
         "response_format": "text",
         "temperature": 0.3,
+    }
+    assert inbound == original
+    assert outbound is not inbound
+
+
+def test_embeddings_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-embedding",
+        "input": ["hello", "world"],
+        "encoding_format": "base64",
+        "dimensions": 8,
+        "user": "learner-1",
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_embeddings_body(inbound)
+    outbound = build_embeddings_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "text-embedding-3-small",
+        "input": ["hello", "world"],
+        "encoding_format": "base64",
+        "dimensions": 8,
+        "user": "learner-1",
     }
     assert inbound == original
     assert outbound is not inbound

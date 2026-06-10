@@ -20,7 +20,7 @@ def test_unimplemented_responses_rc2_routes_keep_openai_error_shape() -> None:
     for method, path, expected_status, expected_type in (
         ("get", "/v1/responses", 405, "invalid_request_error"),
         ("post", "/v1/responses/resp_123/cancel", 404, "invalid_request_error"),
-        ("post", "/v1/embeddings", 404, "invalid_request_error"),
+        ("post", "/v1/embeddings", 401, "authentication_error"),
         ("post", "/v1/files", 404, "invalid_request_error"),
         ("get", "/v1/files/file_123", 404, "invalid_request_error"),
         ("get", "/v1/files/file_123/content", 404, "invalid_request_error"),

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.schemas.audio import AudioPolicyResult
+from slaif_gateway.schemas.embeddings import EmbeddingsPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing import PricingService
@@ -658,3 +659,87 @@ async def test_audio_speech_can_fallback_to_input_pricing_without_request_price(
 
     assert estimate.request_price is None
     assert estimate.estimated_input_cost_native == Decimal("0.000020000000")
+
+
+@pytest.mark.asyncio
+async def test_embeddings_estimate_uses_input_pricing_only() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="text-embedding-3-small",
+                endpoint="/v1/embeddings",
+                input_price_per_1m=Decimal("0.100000000"),
+                cached_input_price_per_1m=Decimal("0.050000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+            )
+        ],
+        fx_rows=[_fx_rate()],
+    )
+
+    estimate = await service.estimate_embeddings_cost(
+        route=_route(
+            requested_model="classroom-embedding",
+            resolved_model="text-embedding-3-small",
+        ),
+        policy=EmbeddingsPolicyResult(
+            effective_body={"model": "classroom-embedding", "input": ["hello", "world"]},
+            estimated_input_tokens=12,
+        ),
+        endpoint="/v1/embeddings",
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.request_price is None
+    assert estimate.estimated_input_tokens == 12
+    assert estimate.estimated_output_tokens == 0
+    assert estimate.estimated_input_cost_native == Decimal("0.000001200000")
+    assert estimate.estimated_total_cost_native == Decimal("0.000001200000")
+
+
+@pytest.mark.asyncio
+async def test_embeddings_estimate_requires_pricing_rule() -> None:
+    service = _service(fx_rows=[_fx_rate()])
+
+    with pytest.raises(PricingRuleNotFoundError):
+        await service.estimate_embeddings_cost(
+            route=_route(
+                requested_model="classroom-embedding",
+                resolved_model="text-embedding-3-small",
+            ),
+            policy=EmbeddingsPolicyResult(
+                effective_body={"model": "classroom-embedding", "input": "hello"},
+                estimated_input_tokens=4,
+            ),
+            endpoint="/v1/embeddings",
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_embeddings_estimate_requires_fx_rate_for_non_eur_pricing() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="text-embedding-3-small",
+                endpoint="/v1/embeddings",
+                currency="USD",
+                input_price_per_1m=Decimal("0.100000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+            )
+        ],
+        fx_rows=[],
+    )
+
+    with pytest.raises(FxRateNotFoundError):
+        await service.estimate_embeddings_cost(
+            route=_route(
+                requested_model="classroom-embedding",
+                resolved_model="text-embedding-3-small",
+            ),
+            policy=EmbeddingsPolicyResult(
+                effective_body={"model": "classroom-embedding", "input": "hello"},
+                estimated_input_tokens=4,
+            ),
+            endpoint="/v1/embeddings",
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )

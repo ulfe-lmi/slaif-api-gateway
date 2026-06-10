@@ -217,6 +217,10 @@ endpoint permissions plus explicit route/model `audio_endpoints` capability
 flags. Chat endpoint permission or Chat audio capability does not imply
 standalone audio endpoint permission, and standalone audio does not imply Chat,
 Responses, Realtime, `/v1/files`, or provider file-ID lifecycle support.
+Standalone embeddings are separate too: `POST /v1/embeddings` requires its own
+key endpoint permission plus explicit route/model `embeddings` capability, and
+optional `dimensions` require `embeddings_dimensions=true`. Chat, Responses, or
+standalone audio permissions/capabilities do not imply embeddings support.
 Multiple choices are only allowed with `chat_multiple_choices=true`;
 that flag does not imply hosted tools, custom tools, multimodal support, audio
 output, non-default service tiers, or Responses support. Route capability checks
@@ -238,6 +242,13 @@ PostgreSQL quota reservation, usage-profile insertion, or provider forwarding.
 The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
+
+Standalone embeddings requests follow the same no-storage boundary. The gateway
+does not persist embedding input strings, token arrays, embedding vectors, raw
+request bodies, raw provider response bodies, provider keys, or client keys.
+Only safe aggregate metadata such as endpoint, provider, resolved model,
+dimensions, encoding format, aggregate usage, and cost may reach accounting
+metadata.
 
 Trusted calibration keys are the narrow exception for discovery. They are real
 gateway keys, created through the CLI or admin key creation page only with

@@ -85,8 +85,8 @@ def test_rc2_scope_doc_moves_standalone_audio_to_implemented_and_keeps_remaining
         in content
     )
     assert "| Realtime audio | Not implemented |" in content
-    assert "| `POST /v1/embeddings` | Not implemented |" in content
-    assert "| `RC2_REQUIRED_MISSING` | 2 |" in content
+    assert "| `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset |" in content
+    assert "| `RC2_REQUIRED_MISSING` | 1 |" in content
 
 
 def test_rc_beta_docs_no_longer_read_as_feature_full_rc2() -> None:

@@ -502,6 +502,31 @@ text fields documented above. URLs, provider file IDs, custom voices,
 remain unsupported. Uploaded audio bytes, generated speech bytes, transcripts,
 prompt text, and raw multipart/JSON bodies are not stored or logged.
 
+Standalone embeddings support is separate again. Current RC2 support implements
+bounded `POST /v1/embeddings` behind its own endpoint permission plus explicit
+route/model `embeddings` capability flags.
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `EMBEDDINGS_MAX_INPUT_ITEMS` | `128` | Maximum number of top-level embedding inputs |
+| `EMBEDDINGS_MAX_TEXT_ITEM_BYTES` | `262144` | Maximum UTF-8 bytes for one text input item |
+| `EMBEDDINGS_MAX_TOTAL_INPUT_BYTES` | `1048576` | Maximum total UTF-8/serialized input bytes |
+| `EMBEDDINGS_MAX_TOKEN_ARRAY_LENGTH` | `32768` | Maximum token count in one token-array item |
+| `EMBEDDINGS_MAX_TOTAL_ESTIMATED_TOKENS` | `262144` | Maximum conservative total estimated input tokens |
+| `EMBEDDINGS_MAX_DIMENSIONS` | `3072` | Maximum requested dimensions when route capability allows them |
+| `EMBEDDINGS_MAX_USER_BYTES` | `1024` | Maximum UTF-8 bytes for the optional `user` field |
+
+Standalone embeddings accepts only validated JSON fields `model`, `input`,
+`encoding_format`, `dimensions`, and `user`. Supported `encoding_format`
+values are `float` and `base64`. Supported `input` shapes are a non-empty
+string, a non-empty array of strings, a non-empty array of integer tokens, or a
+non-empty array of token arrays. Empty strings, empty arrays, mixed arrays,
+nested non-token arrays, unknown fields, unsupported encoding formats, and
+dimensions/user values outside the configured bounds are rejected before route
+resolution, pricing, quota reservation, or provider forwarding. Input strings,
+token arrays, embedding vectors, and raw request/response bodies are not stored
+or logged.
+
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
 penalties between `-2` and `2`, `top_logprobs` between `0` and `20` and only

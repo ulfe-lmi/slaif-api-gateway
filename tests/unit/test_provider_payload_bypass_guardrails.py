@@ -8,6 +8,7 @@ ALLOWED_UPSTREAM_BUILDERS = {
     "build_audio_speech_upstream_body",
     "build_audio_transcription_upstream_body",
     "build_audio_translation_upstream_body",
+    "build_embeddings_upstream_body",
     "build_conversation_update_upstream_body",
     "build_conversation_items_create_upstream_body",
     "build_conversation_items_query_params",
@@ -23,12 +24,14 @@ ALLOWED_UPSTREAM_BUILDERS = {
     "_build_safe_responses_compact_upstream_body",
     "_build_safe_responses_input_tokens_upstream_body",
     "_build_safe_responses_upstream_body",
+    "_build_safe_embeddings_upstream_body",
 }
 
 ALLOWED_UPSTREAM_BODY_PARAMETERS = {
     ("app/slaif_gateway/services/chat_completion_gateway.py", "_streaming_chat_completion_response", "upstream_body"),
     ("app/slaif_gateway/services/responses_gateway.py", "_streaming_responses_response", "upstream_body"),
     ("app/slaif_gateway/services/audio_gateway.py", "_handle_audio_operation", "provider_request_body"),
+    ("app/slaif_gateway/services/embeddings_gateway.py", "handle_embeddings_create", "upstream_body"),
 }
 
 
@@ -274,6 +277,19 @@ def test_normalized_body_is_built_before_rate_limit_and_quota_side_effects() -> 
     ), "Audio translation handler must build the normalized upstream body"
     assert audio_translation_build_lines[0] < _call_lines(
         audio_translation_handler, "_handle_audio_operation"
+    )[0]
+
+    embeddings_tree = ast.parse(
+        Path("app/slaif_gateway/services/embeddings_gateway.py").read_text(encoding="utf-8")
+    )
+    embeddings_handler = _find_function(embeddings_tree, "handle_embeddings_create")
+    embeddings_build_lines = _call_lines(
+        embeddings_handler,
+        "_build_safe_embeddings_upstream_body",
+    )
+    assert embeddings_build_lines, "Embeddings handler must build the normalized upstream body"
+    assert embeddings_build_lines[0] < _call_lines(
+        embeddings_handler, "_reserve_embeddings_quota"
     )[0]
 
 
