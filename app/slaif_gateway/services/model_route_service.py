@@ -10,6 +10,9 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.chat_completion_route_capabilities import (
     ensure_default_chat_completion_capabilities,
 )
+from slaif_gateway.services.audio_route_capabilities import (
+    ensure_default_audio_endpoint_capabilities,
+)
 from slaif_gateway.services.responses_route_capabilities import (
     ensure_default_responses_capabilities,
 )
@@ -17,6 +20,9 @@ from slaif_gateway.services.record_errors import RecordNotFoundError
 
 
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
+AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
+AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 
 
 class ModelRouteService:
@@ -194,6 +200,12 @@ def normalize_endpoint(value: str) -> str:
     endpoint = _required_text(value, "Endpoint")
     if endpoint == "chat.completions":
         return CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "audio.speech":
+        return AUDIO_SPEECH_ENDPOINT
+    if endpoint == "audio.transcriptions":
+        return AUDIO_TRANSCRIPTIONS_ENDPOINT
+    if endpoint == "audio.translations":
+        return AUDIO_TRANSLATIONS_ENDPOINT
     if endpoint == "responses":
         return "/v1/responses"
     return endpoint
@@ -208,6 +220,10 @@ def _ensure_default_capabilities(
     normalized = ensure_default_chat_completion_capabilities(
         capabilities,
         supports_streaming=supports_streaming,
+        endpoint=endpoint,
+    )
+    normalized = ensure_default_audio_endpoint_capabilities(
+        normalized,
         endpoint=endpoint,
     )
     return ensure_default_responses_capabilities(normalized, endpoint=endpoint)

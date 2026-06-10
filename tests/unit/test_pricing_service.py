@@ -9,11 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from slaif_gateway.schemas.audio import AudioPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import (
     AudioOutputPricingNotSupportedError,
+    AudioRequestPricingNotSupportedError,
     FxRateNotFoundError,
     InvalidFxRateError,
     InvalidPricingDataError,
@@ -83,6 +85,7 @@ def _pricing_rule(
     cached_input_price_per_1m: Decimal | None = Decimal("0.075000000"),
     output_price_per_1m: Decimal | None = Decimal("0.600000000"),
     reasoning_price_per_1m: Decimal | None = None,
+    request_price: Decimal | None = None,
     pricing_metadata: dict[str, object] | None = None,
     valid_from: datetime | None = None,
     valid_until: datetime | None = None,
@@ -98,6 +101,7 @@ def _pricing_rule(
         cached_input_price_per_1m=cached_input_price_per_1m,
         output_price_per_1m=output_price_per_1m,
         reasoning_price_per_1m=reasoning_price_per_1m,
+        request_price=request_price,
         pricing_metadata=pricing_metadata or {},
         valid_from=valid_from or datetime(2026, 1, 1, tzinfo=UTC),
         valid_until=valid_until,
@@ -569,3 +573,88 @@ def test_pricing_service_safety_constraints() -> None:
 
     assert ".commit(" not in source
     assert "reserve" not in source.lower()
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_estimate_uses_request_price_when_configured() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="tts-1",
+                endpoint="/v1/audio/speech",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+                request_price=Decimal("0.020000000"),
+            )
+        ],
+        fx_rows=[_fx_rate()],
+    )
+
+    estimate = await service.estimate_audio_operation_cost(
+        route=_route(requested_model="classroom-audio", resolved_model="tts-1"),
+        policy=AudioPolicyResult(
+            effective_body={"model": "classroom-audio", "input": "hello", "voice": "alloy"},
+            estimated_input_tokens=12,
+        ),
+        endpoint="/v1/audio/speech",
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.request_price == Decimal("0.020000000")
+    assert estimate.estimated_total_cost_native == Decimal("0.020000000")
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_requires_request_pricing_without_usage_model() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="whisper-1",
+                endpoint="/v1/audio/transcriptions",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+                request_price=None,
+            )
+        ],
+        fx_rows=[_fx_rate()],
+    )
+
+    with pytest.raises(AudioRequestPricingNotSupportedError):
+        await service.estimate_audio_operation_cost(
+            route=_route(requested_model="classroom-audio", resolved_model="whisper-1"),
+            policy=AudioPolicyResult(
+                effective_body={"model": "classroom-audio"},
+                estimated_input_tokens=120,
+                uploaded_file_bytes=1024,
+            ),
+            endpoint="/v1/audio/transcriptions",
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_can_fallback_to_input_pricing_without_request_price() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="tts-1",
+                endpoint="/v1/audio/speech",
+                input_price_per_1m=Decimal("2.000000000"),
+                output_price_per_1m=Decimal("0.000000000"),
+            )
+        ],
+        fx_rows=[_fx_rate()],
+    )
+
+    estimate = await service.estimate_audio_operation_cost(
+        route=_route(requested_model="classroom-audio", resolved_model="tts-1"),
+        policy=AudioPolicyResult(
+            effective_body={"model": "classroom-audio", "input": "hello", "voice": "alloy"},
+            estimated_input_tokens=10,
+        ),
+        endpoint="/v1/audio/speech",
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.request_price is None
+    assert estimate.estimated_input_cost_native == Decimal("0.000020000000")

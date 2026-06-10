@@ -28,6 +28,50 @@ _SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS = frozenset({"wav", "aac", "mp3", "flac", "
 _SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES = frozenset(
     {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "marin", "cedar"}
 )
+_SUPPORTED_AUDIO_SPEECH_RESPONSE_FORMATS = frozenset({"mp3", "opus", "aac", "flac", "wav", "pcm"})
+_SUPPORTED_AUDIO_SPEECH_VOICES = frozenset(
+    {
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "nova",
+        "onyx",
+        "sage",
+        "shimmer",
+        "verse",
+        "marin",
+        "cedar",
+    }
+)
+_SUPPORTED_AUDIO_UPLOAD_EXTENSIONS = frozenset(
+    {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
+)
+_SUPPORTED_AUDIO_UPLOAD_MIME_TYPES = frozenset(
+    {
+        "audio/flac",
+        "audio/m4a",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/mpga",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "application/octet-stream",
+        "video/mp4",
+    }
+)
+_SUPPORTED_AUDIO_TRANSCRIPTION_RESPONSE_FORMATS = frozenset(
+    {"json", "text", "srt", "verbose_json", "vtt"}
+)
+_SUPPORTED_AUDIO_TRANSLATION_RESPONSE_FORMATS = frozenset(
+    {"json", "text", "srt", "verbose_json", "vtt"}
+)
+_SUPPORTED_AUDIO_TRANSCRIPTION_INCLUDE_VALUES = frozenset({"logprobs"})
+_SUPPORTED_AUDIO_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
 
 
 class Settings(BaseSettings):
@@ -162,6 +206,23 @@ class Settings(BaseSettings):
     CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES: bool = False
     CHAT_ALLOW_STREAMING_AUDIO_OUTPUT: bool = False
     CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES: bool = False
+    AUDIO_SPEECH_ALLOWED_MODELS: str = "tts-1,tts-1-hd,gpt-4o-mini-tts,gpt-4o-mini-tts-2025-12-15"
+    AUDIO_SPEECH_ALLOWED_RESPONSE_FORMATS: str = "mp3,opus,aac,flac,wav,pcm"
+    AUDIO_SPEECH_ALLOWED_VOICES: str = "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,verse,marin,cedar"
+    AUDIO_SPEECH_MAX_INPUT_CHARS: int = 4096
+    AUDIO_SPEECH_MAX_INSTRUCTIONS_BYTES: int = 8192
+    AUDIO_TRANSCRIPTION_ALLOWED_MODELS: str = "gpt-4o-transcribe,gpt-4o-mini-transcribe,gpt-4o-mini-transcribe-2025-12-15,whisper-1,gpt-4o-transcribe-diarize"
+    AUDIO_TRANSLATION_ALLOWED_MODELS: str = "whisper-1"
+    AUDIO_UPLOAD_MAX_FILE_BYTES: int = 26214400
+    AUDIO_UPLOAD_ALLOWED_EXTENSIONS: str = ".flac,.mp3,.mp4,.mpeg,.mpga,.m4a,.ogg,.wav,.webm"
+    AUDIO_UPLOAD_ALLOWED_MIME_TYPES: str = "audio/flac,audio/m4a,audio/mp3,audio/mp4,audio/mpeg,audio/mpga,audio/ogg,audio/wav,audio/webm,application/octet-stream,video/mp4"
+    AUDIO_UPLOAD_MAX_FILENAME_BYTES: int = 255
+    AUDIO_TRANSCRIPTION_ALLOWED_RESPONSE_FORMATS: str = "json,text,srt,verbose_json,vtt"
+    AUDIO_TRANSLATION_ALLOWED_RESPONSE_FORMATS: str = "json,text,srt,verbose_json,vtt"
+    AUDIO_TRANSCRIPTION_ALLOWED_INCLUDE_VALUES: str = "logprobs"
+    AUDIO_ALLOWED_TIMESTAMP_GRANULARITIES: str = "word,segment"
+    AUDIO_TRANSCRIPTION_MAX_PROMPT_BYTES: int = 8192
+    AUDIO_TRANSLATION_MAX_PROMPT_BYTES: int = 8192
     CHAT_MAX_TOOLS_PER_REQUEST: int = 64
     CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST: int = 16
     CHAT_MAX_FUNCTIONS_PER_REQUEST: int = 64
@@ -440,6 +501,12 @@ class Settings(BaseSettings):
             "CHAT_MAX_AUDIO_INPUTS_PER_REQUEST",
             "CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE",
             "CHAT_MAX_AUDIO_INPUT_DATA_BYTES",
+            "AUDIO_SPEECH_MAX_INPUT_CHARS",
+            "AUDIO_SPEECH_MAX_INSTRUCTIONS_BYTES",
+            "AUDIO_UPLOAD_MAX_FILE_BYTES",
+            "AUDIO_UPLOAD_MAX_FILENAME_BYTES",
+            "AUDIO_TRANSCRIPTION_MAX_PROMPT_BYTES",
+            "AUDIO_TRANSLATION_MAX_PROMPT_BYTES",
             "CHAT_MAX_TOOLS_PER_REQUEST",
             "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
             "CHAT_MAX_FUNCTIONS_PER_REQUEST",
@@ -530,6 +597,55 @@ class Settings(BaseSettings):
             self.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES,
             allowed_values=_SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES,
             field_name="CHAT_ALLOWED_AUDIO_OUTPUT_VOICES",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_SPEECH_ALLOWED_RESPONSE_FORMATS,
+            allowed_values=_SUPPORTED_AUDIO_SPEECH_RESPONSE_FORMATS,
+            field_name="AUDIO_SPEECH_ALLOWED_RESPONSE_FORMATS",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_SPEECH_ALLOWED_VOICES,
+            allowed_values=_SUPPORTED_AUDIO_SPEECH_VOICES,
+            field_name="AUDIO_SPEECH_ALLOWED_VOICES",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_UPLOAD_ALLOWED_EXTENSIONS,
+            allowed_values=_SUPPORTED_AUDIO_UPLOAD_EXTENSIONS,
+            field_name="AUDIO_UPLOAD_ALLOWED_EXTENSIONS",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_UPLOAD_ALLOWED_MIME_TYPES,
+            allowed_values=_SUPPORTED_AUDIO_UPLOAD_MIME_TYPES,
+            field_name="AUDIO_UPLOAD_ALLOWED_MIME_TYPES",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_TRANSCRIPTION_ALLOWED_RESPONSE_FORMATS,
+            allowed_values=_SUPPORTED_AUDIO_TRANSCRIPTION_RESPONSE_FORMATS,
+            field_name="AUDIO_TRANSCRIPTION_ALLOWED_RESPONSE_FORMATS",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_TRANSLATION_ALLOWED_RESPONSE_FORMATS,
+            allowed_values=_SUPPORTED_AUDIO_TRANSLATION_RESPONSE_FORMATS,
+            field_name="AUDIO_TRANSLATION_ALLOWED_RESPONSE_FORMATS",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_TRANSCRIPTION_ALLOWED_INCLUDE_VALUES,
+            allowed_values=_SUPPORTED_AUDIO_TRANSCRIPTION_INCLUDE_VALUES,
+            field_name="AUDIO_TRANSCRIPTION_ALLOWED_INCLUDE_VALUES",
+        )
+        _validate_audio_option_set(
+            self.AUDIO_ALLOWED_TIMESTAMP_GRANULARITIES,
+            allowed_values=_SUPPORTED_AUDIO_TIMESTAMP_GRANULARITIES,
+            field_name="AUDIO_ALLOWED_TIMESTAMP_GRANULARITIES",
+        )
+        _validate_nonempty_csv(self.AUDIO_SPEECH_ALLOWED_MODELS, field_name="AUDIO_SPEECH_ALLOWED_MODELS")
+        _validate_nonempty_csv(
+            self.AUDIO_TRANSCRIPTION_ALLOWED_MODELS,
+            field_name="AUDIO_TRANSCRIPTION_ALLOWED_MODELS",
+        )
+        _validate_nonempty_csv(
+            self.AUDIO_TRANSLATION_ALLOWED_MODELS,
+            field_name="AUDIO_TRANSLATION_ALLOWED_MODELS",
         )
         if self.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS:
             raise ValueError(
@@ -789,6 +905,12 @@ def _validate_audio_option_set(
     if unsupported:
         joined = ", ".join(unsupported)
         raise ValueError(f"{field_name} contains unsupported values: {joined}")
+
+
+def _validate_nonempty_csv(raw_value: str, *, field_name: str) -> None:
+    parsed = [item.strip() for item in raw_value.split(",") if item.strip()]
+    if not parsed:
+        raise ValueError(f"{field_name} must contain at least one supported value")
 
 
 def looks_like_real_upstream_openai_key(

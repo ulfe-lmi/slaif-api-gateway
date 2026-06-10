@@ -21,6 +21,7 @@ class PricingLookupResult:
     output_price_per_1m: Decimal
     reasoning_price_per_1m: Decimal | None
     audio_output_price_per_1m: Decimal | None
+    request_price: Decimal | None
     pricing_rule_id: uuid.UUID | None
     valid_from: datetime
     valid_until: datetime | None
@@ -57,4 +58,5 @@ class ChatCostEstimate:
     output_price_per_1m: Decimal | None = None
     reasoning_price_per_1m: Decimal | None = None
     audio_output_price_per_1m: Decimal | None = None
+    request_price: Decimal | None = None
     fx_rate: Decimal | None = None

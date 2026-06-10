@@ -53,6 +53,7 @@ Implemented:
 - Authenticated `GET /v1/models` backed by local provider and route metadata, filtered by the gateway key's effective model allow-list.
 - Non-streaming and SSE streaming `POST /v1/chat/completions` with request field registry checks, scalar/request caps, route/model capability metadata, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
 - Current Chat Completions support includes text chat, streaming text, local function tools, non-streaming local custom tools, bounded `n > 1` multiple choices, image input to text output, inline file input to text output, audio input to text output, and non-streaming audio output when the resolved route/model explicitly enables the matching capability.
+- Standalone Audio API support is implemented for bounded `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` with separate endpoint permission, route/model capability checks, PostgreSQL quota reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of uploaded audio, transcripts, generated speech bytes, or raw multipart/JSON bodies.
 - Chat Completions streaming live-burn monitoring is implemented per key for
   `POST /v1/chat/completions` with `stream=true`. Defaults are enabled with
   zero cost/token margins; positive margins stop early, zero margins stop near
@@ -86,8 +87,8 @@ Not implemented yet:
   owned retrieve/delete/input-item listing, owned Conversations resource/item
   lifecycle, and local/client-side tools only in the documented bounded
   subsets.
-- Embeddings, legacy `/v1/completions`, `/v1/files`, `/v1/audio/*`, image
-  generation endpoints, batch endpoints, and Realtime API.
+- Embeddings, legacy `/v1/completions`, `/v1/files`, image generation
+  endpoints, batch endpoints, and Realtime API.
 - Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,
   provider-side file lifecycle, streaming custom tools, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with

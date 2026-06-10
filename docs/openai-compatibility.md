@@ -2,8 +2,8 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
-For the maintainer-locked RC2 target, including the still-missing standalone
-audio endpoints, Realtime audio, and embeddings, see
+For the maintainer-locked RC2 target, including the still-missing Realtime
+audio and embeddings work after the standalone Audio API foundation, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). A green verification harness
 proves the implemented surface is clean; it does not prove feature-full RC2.
 
@@ -29,13 +29,23 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `GET /v1/responses/{response_id}/input_items` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for input items from provider-stored Responses created through SLAIF. Requires explicit endpoint permission, an owned active local response reference, compatible provider/route metadata, and `capabilities.responses.list_input_items=true`. Input-item content is not stored locally |
 | `POST /v1/conversations` / `POST /v1/conversations/{conversation_id}` / `GET /v1/conversations/{conversation_id}` / `DELETE /v1/conversations/{conversation_id}` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked provider conversation reference foundation. Create persists only safe provider conversation reference metadata after a provider conversation object with an ID is returned. Update accepts metadata only, rebuilds a canonical provider payload from validated fields, and does not store or log metadata values locally. Retrieve/delete proxy only owned active local references |
 | `POST /v1/conversations/{conversation_id}/items` / `GET /v1/conversations/{conversation_id}/items` / `GET /v1/conversations/{conversation_id}/items/{item_id}` / `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked provider Conversation item proxying. Requires explicit item endpoint permission and an active same-key local conversation reference. Item create accepts bounded text message items only; list/retrieve support validated safe query params. SLAIF does not store or inspect item content |
+| `POST /v1/audio/speech` | Implemented for bounded standalone speech subset | Required | PostgreSQL reservation before provider call; request-priced or bounded input-estimated finalization when provider usage is absent | Binary audio response; no SSE/Realtimes here | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
+| `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
+| `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
-| Audio endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
+| Realtime audio | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Native Anthropic API | Not implemented | Not applicable | Not implemented | Not implemented | Anthropic-family model names are covered only through OpenRouter routes |
 
 Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error handlers. The gateway does not claim 100% OpenAI platform compatibility outside the rows marked implemented.
+
+Standalone Audio API support is separate from Chat request-body audio. Current
+RC2 support includes standalone `POST /v1/audio/speech`,
+`POST /v1/audio/transcriptions`, and `POST /v1/audio/translations`, plus Chat
+request-body audio input and non-streaming Chat audio output. Realtime audio,
+Responses audio, `/v1/files`, provider file IDs, and streaming Chat audio
+remain unsupported.
 
 ## Responses API Scope
 

@@ -11,8 +11,16 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest, OpenAIModelList, ResponsesCreateRequest
+from slaif_gateway.services.audio_gateway import (
+    handle_audio_speech,
+    handle_audio_transcription,
+    handle_audio_translation,
+)
 from slaif_gateway.services.chat_completion_gateway import handle_chat_completion
 from slaif_gateway.services.endpoint_policy import (
+    AUDIO_SPEECH,
+    AUDIO_TRANSCRIPTIONS,
+    AUDIO_TRANSLATIONS,
     CHAT_COMPLETIONS,
     CONVERSATION_ITEMS_CREATE,
     CONVERSATION_ITEMS_DELETE,
@@ -88,6 +96,47 @@ async def validate_chat_completions(
         kwargs["request"] = request
     return await handle_chat_completion(
         **kwargs,
+    )
+
+
+@router.post("/v1/audio/speech")
+async def create_audio_speech(
+    request: Request,
+    payload: dict[str, object],
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, AUDIO_SPEECH)
+    return await handle_audio_speech(
+        payload=payload,
+        authenticated_key=authenticated_key,
+        settings=request.app.state.settings,
+        request=request,
+    )
+
+
+@router.post("/v1/audio/transcriptions")
+async def create_audio_transcription(
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, AUDIO_TRANSCRIPTIONS)
+    return await handle_audio_transcription(
+        authenticated_key=authenticated_key,
+        settings=request.app.state.settings,
+        request=request,
+    )
+
+
+@router.post("/v1/audio/translations")
+async def create_audio_translation(
+    request: Request,
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, AUDIO_TRANSLATIONS)
+    return await handle_audio_translation(
+        authenticated_key=authenticated_key,
+        settings=request.app.state.settings,
+        request=request,
     )
 
 

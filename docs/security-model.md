@@ -211,6 +211,12 @@ support. Non-streaming audio output is allowed only with
 flag does not imply audio input, `/v1/audio/*`, Realtime, streaming audio
 output, custom voices, previous-audio references, hosted tools, custom tools,
 function tools, `n > 1`, non-default service tiers, or Responses support.
+Standalone Audio API routes are separate again: `/v1/audio/speech`,
+`/v1/audio/transcriptions`, and `/v1/audio/translations` require their own key
+endpoint permissions plus explicit route/model `audio_endpoints` capability
+flags. Chat endpoint permission or Chat audio capability does not imply
+standalone audio endpoint permission, and standalone audio does not imply Chat,
+Responses, Realtime, `/v1/files`, or provider file-ID lifecycle support.
 Multiple choices are only allowed with `chat_multiple_choices=true`;
 that flag does not imply hosted tools, custom tools, multimodal support, audio
 output, non-default service tiers, or Responses support. Route capability checks

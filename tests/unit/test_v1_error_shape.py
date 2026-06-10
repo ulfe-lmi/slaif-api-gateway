@@ -16,25 +16,26 @@ def test_unknown_v1_route_has_openai_error_shape() -> None:
     assert body["error"]["type"] == "invalid_request_error"
 
 
-def test_unimplemented_responses_rc2_routes_keep_openai_404_error_shape() -> None:
-    for method, path, expected_status in (
-        ("get", "/v1/responses", 405),
-        ("post", "/v1/responses/resp_123/cancel", 404),
-        ("post", "/v1/embeddings", 404),
-        ("post", "/v1/files", 404),
-        ("get", "/v1/files/file_123", 404),
-        ("get", "/v1/files/file_123/content", 404),
-        ("post", "/v1/uploads", 404),
-        ("post", "/v1/uploads/upload_123/parts", 404),
-        ("post", "/v1/audio/speech", 404),
-        ("post", "/v1/audio/transcriptions", 404),
-        ("post", "/v1/audio/translations", 404),
-        ("post", "/v1/images/generations", 404),
-        ("post", "/v1/moderations", 404),
-        ("post", "/v1/vector_stores", 404),
-        ("post", "/v1/batches", 404),
-        ("post", "/v1/completions", 404),
-        ("post", "/v1/realtime/sessions", 404),
+def test_unimplemented_responses_rc2_routes_keep_openai_error_shape() -> None:
+    for method, path, expected_status, expected_type in (
+        ("get", "/v1/responses", 405, "invalid_request_error"),
+        ("post", "/v1/responses/resp_123/cancel", 404, "invalid_request_error"),
+        ("post", "/v1/embeddings", 404, "invalid_request_error"),
+        ("post", "/v1/files", 404, "invalid_request_error"),
+        ("get", "/v1/files/file_123", 404, "invalid_request_error"),
+        ("get", "/v1/files/file_123/content", 404, "invalid_request_error"),
+        ("post", "/v1/uploads", 404, "invalid_request_error"),
+        ("post", "/v1/uploads/upload_123/parts", 404, "invalid_request_error"),
+        ("post", "/v1/audio/speech", 401, "authentication_error"),
+        ("post", "/v1/audio/transcriptions", 401, "authentication_error"),
+        ("post", "/v1/audio/translations", 401, "authentication_error"),
+        ("post", "/v1/audio/voices", 404, "invalid_request_error"),
+        ("post", "/v1/images/generations", 404, "invalid_request_error"),
+        ("post", "/v1/moderations", 404, "invalid_request_error"),
+        ("post", "/v1/vector_stores", 404, "invalid_request_error"),
+        ("post", "/v1/batches", 404, "invalid_request_error"),
+        ("post", "/v1/completions", 404, "invalid_request_error"),
+        ("post", "/v1/realtime/sessions", 404, "invalid_request_error"),
     ):
         response = getattr(client, method)(path)
 
@@ -42,7 +43,7 @@ def test_unimplemented_responses_rc2_routes_keep_openai_404_error_shape() -> Non
         body = response.json()
         assert "error" in body
         assert set(body["error"].keys()) == {"message", "type", "param", "code"}
-        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["type"] == expected_type
 
 
 def test_healthz_shape_unchanged() -> None:

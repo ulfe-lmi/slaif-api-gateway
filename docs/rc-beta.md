@@ -10,8 +10,9 @@ compliance attestation, or penetration-test report.
 
 It is also not a feature-full RC2 approval. A green harness means
 verification-clean for the implemented scope only. The maintainer-locked RC2
-target still requires standalone `/v1/audio/*`, Realtime audio, and
-`POST /v1/embeddings`; see [`rc2-feature-scope.md`](rc2-feature-scope.md).
+target still requires Realtime audio and `POST /v1/embeddings`; standalone
+`/v1/audio/*` is now implemented. See
+[`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 Tag-specific release notes for the first release candidate are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).
@@ -50,6 +51,12 @@ but are not a production certification.
   with generated audio/transcripts forwarded to the client but not stored or
   logged. Supported output formats are `wav`, `aac`, `mp3`, `flac`, `opus`,
   and `pcm16` with built-in voices only.
+- Standalone `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and
+  `POST /v1/audio/translations` behind separate endpoint permission, explicit
+  `audio_endpoints` route capability, canonical OpenAI provider forwarding,
+  OpenRouter fail-closed behavior, PostgreSQL reservation/finalization, and no
+  local storage/logging of uploaded audio, transcripts, generated speech
+  bytes, or raw multipart/JSON bodies.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - Explicit Chat Completions route/model capability metadata, enforced
   separately from gateway-key endpoint/model/provider allowlists.
@@ -188,7 +195,7 @@ migrations automatically.
   template policy remain future work.
   See `responses-compatibility.md`.
 - Embeddings API is not implemented.
-- File, image, and audio endpoints are not implemented.
+- File endpoints and image-generation endpoints are not implemented.
 - Chat Completions file IDs, file URLs, audio URLs, audio data URLs, streaming
   audio output, custom audio-output voices, previous-audio references, and
   `n > 1` with audio output are not implemented. Non-streaming Chat

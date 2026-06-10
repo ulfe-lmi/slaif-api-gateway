@@ -7,6 +7,9 @@ from typing import Any
 import copy
 
 from slaif_gateway.services.upstream_request_contracts import (
+    NormalizedAudioSpeechUpstreamRequest,
+    NormalizedAudioTranscriptionUpstreamRequest,
+    NormalizedAudioTranslationUpstreamRequest,
     NormalizedConversationItemsCreateUpstreamRequest,
     NormalizedConversationItemsQueryRequest,
     NormalizedConversationUpdateUpstreamRequest,
@@ -92,6 +95,29 @@ RESPONSES_COMPACT_UPSTREAM_FIELDS: tuple[str, ...] = (
     "input",
     "instructions",
 )
+SPEECH_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "input",
+    "voice",
+    "response_format",
+    "speed",
+    "instructions",
+)
+TRANSCRIPTION_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "language",
+    "prompt",
+    "response_format",
+    "temperature",
+    "timestamp_granularities",
+    "include",
+)
+TRANSLATION_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "prompt",
+    "response_format",
+    "temperature",
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS: tuple[str, ...] = ("items",)
 CONVERSATION_UPDATE_UPSTREAM_FIELDS: tuple[str, ...] = ("metadata",)
 CONVERSATION_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
@@ -148,6 +174,42 @@ def build_responses_compact_upstream_body(
         normalized_request,
         allowed_fields=frozenset(RESPONSES_COMPACT_UPSTREAM_FIELDS),
         endpoint_label="Responses compact",
+    )
+
+
+def build_audio_speech_upstream_body(
+    normalized_request: NormalizedAudioSpeechUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Audio speech provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(SPEECH_UPSTREAM_FIELDS),
+        endpoint_label="Audio speech",
+    )
+
+
+def build_audio_transcription_upstream_body(
+    normalized_request: NormalizedAudioTranscriptionUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Audio transcription provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(TRANSCRIPTION_UPSTREAM_FIELDS),
+        endpoint_label="Audio transcription",
+    )
+
+
+def build_audio_translation_upstream_body(
+    normalized_request: NormalizedAudioTranslationUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Audio translation provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(TRANSLATION_UPSTREAM_FIELDS),
+        endpoint_label="Audio translation",
     )
 
 
@@ -227,7 +289,10 @@ def _build_upstream_body(
     normalized_request: NormalizedChatCompletionUpstreamRequest
     | NormalizedResponsesUpstreamRequest
     | NormalizedResponsesInputTokensUpstreamRequest
-    | NormalizedResponsesCompactUpstreamRequest,
+    | NormalizedResponsesCompactUpstreamRequest
+    | NormalizedAudioSpeechUpstreamRequest
+    | NormalizedAudioTranscriptionUpstreamRequest
+    | NormalizedAudioTranslationUpstreamRequest,
     *,
     allowed_fields: frozenset[str],
     endpoint_label: str,
@@ -239,6 +304,9 @@ def _build_upstream_body(
             NormalizedResponsesUpstreamRequest,
             NormalizedResponsesInputTokensUpstreamRequest,
             NormalizedResponsesCompactUpstreamRequest,
+            NormalizedAudioSpeechUpstreamRequest,
+            NormalizedAudioTranscriptionUpstreamRequest,
+            NormalizedAudioTranslationUpstreamRequest,
         ),
     ):
         raise TypeError(

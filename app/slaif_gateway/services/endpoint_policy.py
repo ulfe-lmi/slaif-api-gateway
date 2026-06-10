@@ -10,6 +10,9 @@ from slaif_gateway.services.key_modes import is_trusted_calibration_key
 
 MODELS_LIST: Final[str] = "models.list"
 CHAT_COMPLETIONS: Final[str] = "chat.completions"
+AUDIO_SPEECH: Final[str] = "audio.speech"
+AUDIO_TRANSCRIPTIONS: Final[str] = "audio.transcriptions"
+AUDIO_TRANSLATIONS: Final[str] = "audio.translations"
 RESPONSES: Final[str] = "responses"
 RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
 RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
@@ -38,6 +41,27 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "chat.completions",
             "post /v1/chat/completions",
             "/v1/chat/completions",
+        }
+    ),
+    AUDIO_SPEECH: frozenset(
+        {
+            "audio.speech",
+            "post /v1/audio/speech",
+            "/v1/audio/speech",
+        }
+    ),
+    AUDIO_TRANSCRIPTIONS: frozenset(
+        {
+            "audio.transcriptions",
+            "post /v1/audio/transcriptions",
+            "/v1/audio/transcriptions",
+        }
+    ),
+    AUDIO_TRANSLATIONS: frozenset(
+        {
+            "audio.translations",
+            "post /v1/audio/translations",
+            "/v1/audio/translations",
         }
     ),
     RESPONSES: frozenset(

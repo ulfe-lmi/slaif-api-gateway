@@ -9,6 +9,7 @@ from slaif_gateway.utils.redaction import redact_mapping
 _SAFE_EXTRA_HEADERS = {
     "accept": "Accept",
     "content-type": "Content-Type",
+    "content-length": "Content-Length",
     "x-request-id": "X-Request-ID",
 }
 
@@ -34,19 +35,23 @@ def build_provider_headers(
     request_id: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
     accept: str = "application/json",
+    content_type: str | None = "application/json",
 ) -> dict[str, str]:
     """Build safe outbound headers for an upstream provider request."""
     _ = provider
     headers: dict[str, str] = {
         "Authorization": f"Bearer {provider_api_key}",
-        "Content-Type": "application/json",
         "Accept": accept,
     }
+    if content_type is not None:
+        headers["Content-Type"] = content_type
 
     if extra_headers:
         for raw_name, value in extra_headers.items():
             normalized_name = raw_name.strip().lower()
             if not normalized_name or _is_forbidden_header(normalized_name):
+                continue
+            if normalized_name == "content-type" and content_type is None:
                 continue
             canonical_name = _SAFE_EXTRA_HEADERS.get(normalized_name)
             if canonical_name is None:

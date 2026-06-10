@@ -6,6 +6,9 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.upstream_request_contracts import (
+    normalize_audio_speech_upstream_request,
+    normalize_audio_transcription_upstream_request,
+    normalize_audio_translation_upstream_request,
     normalize_conversation_items_create_upstream_request,
     normalize_conversation_items_query_request,
     normalize_conversation_update_upstream_request,
@@ -19,6 +22,9 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.upstream_payloads import (
+    build_audio_speech_upstream_body,
+    build_audio_transcription_upstream_body,
+    build_audio_translation_upstream_body,
     build_conversation_items_create_upstream_body,
     build_conversation_items_query_params,
     build_conversation_update_upstream_body,
@@ -108,6 +114,45 @@ def _normalize_responses_compact_body(
     )
 
 
+def _normalize_audio_speech_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "gpt-4o-mini-tts",
+):
+    from slaif_gateway.services.audio_request_policy import AudioRequestPolicy
+
+    policy_result = AudioRequestPolicy(_settings()).apply_speech(body)
+    return normalize_audio_speech_upstream_request(
+        policy_result.effective_body,
+        requested_model=policy_result.effective_body["model"],
+        upstream_model=resolved_model,
+    )
+
+
+def _normalize_audio_transcription_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "gpt-4o-transcribe",
+):
+    return normalize_audio_transcription_upstream_request(
+        body,
+        requested_model=str(body["model"]),
+        upstream_model=resolved_model,
+    )
+
+
+def _normalize_audio_translation_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "whisper-1",
+):
+    return normalize_audio_translation_upstream_request(
+        body,
+        requested_model=str(body["model"]),
+        upstream_model=resolved_model,
+    )
+
+
 def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-alias",
@@ -132,6 +177,82 @@ def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     before_outbound_mutation = copy.deepcopy(inbound)
     outbound["messages"][0]["content"] = "mutated"
     assert inbound == before_outbound_mutation
+
+
+def test_audio_speech_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-audio",
+        "input": "Speak this sentence",
+        "voice": "alloy",
+        "response_format": "aac",
+        "speed": 1.25,
+        "instructions": "Calm voice",
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_audio_speech_body(inbound)
+    outbound = build_audio_speech_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-4o-mini-tts",
+        "input": "Speak this sentence",
+        "voice": "alloy",
+        "response_format": "aac",
+        "speed": 1.25,
+        "instructions": "Calm voice",
+    }
+    assert inbound == original
+    assert outbound is not inbound
+
+
+def test_audio_transcription_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-audio",
+        "language": "sl",
+        "prompt": "Short safe hint",
+        "response_format": "verbose_json",
+        "temperature": 0.2,
+        "timestamp_granularities": ["segment"],
+        "include": ["logprobs"],
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_audio_transcription_body(inbound)
+    outbound = build_audio_transcription_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "gpt-4o-transcribe",
+        "language": "sl",
+        "prompt": "Short safe hint",
+        "response_format": "verbose_json",
+        "temperature": 0.2,
+        "timestamp_granularities": ["segment"],
+        "include": ["logprobs"],
+    }
+    assert inbound == original
+    assert outbound is not inbound
+
+
+def test_audio_translation_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "model": "classroom-audio",
+        "prompt": "Keep named entities intact",
+        "response_format": "text",
+        "temperature": 0.3,
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_audio_translation_body(inbound)
+    outbound = build_audio_translation_upstream_body(normalized_request)
+
+    assert outbound == {
+        "model": "whisper-1",
+        "prompt": "Keep named entities intact",
+        "response_format": "text",
+        "temperature": 0.3,
+    }
+    assert inbound == original
+    assert outbound is not inbound
 
 
 def test_chat_scalar_function_and_response_format_fields_are_reconstructed_exactly() -> None:

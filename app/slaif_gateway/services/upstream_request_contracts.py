@@ -87,6 +87,35 @@ RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "instructions",
     }
 )
+SPEECH_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "voice",
+        "response_format",
+        "speed",
+        "instructions",
+    }
+)
+TRANSCRIPTION_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "language",
+        "prompt",
+        "response_format",
+        "temperature",
+        "timestamp_granularities",
+        "include",
+    }
+)
+TRANSLATION_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "prompt",
+        "response_format",
+        "temperature",
+    }
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"items"})
 CONVERSATION_UPDATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"metadata"})
 CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS = frozenset(
@@ -273,6 +302,77 @@ class NormalizedResponsesCompactUpstreamRequest:
         fields: dict[str, Any] = {"input": input_value}
         if _is_set(self.instructions):
             fields["instructions"] = _select_field(self.instructions)
+        return fields
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedAudioSpeechUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+    input: str
+    voice: str
+
+    response_format: object = _UNSET
+    speed: object = _UNSET
+    instructions: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {
+            "input": self.input,
+            "voice": self.voice,
+        }
+        for name in self.__dataclass_fields__:
+            if name in {"requested_model", "upstream_model", "input", "voice"}:
+                continue
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
+        return fields
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedAudioTranscriptionUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+
+    language: object = _UNSET
+    prompt: object = _UNSET
+    response_format: object = _UNSET
+    temperature: object = _UNSET
+    timestamp_granularities: object = _UNSET
+    include: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for name in self.__dataclass_fields__:
+            if name in {"requested_model", "upstream_model"}:
+                continue
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
+        return fields
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedAudioTranslationUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+
+    prompt: object = _UNSET
+    response_format: object = _UNSET
+    temperature: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for name in self.__dataclass_fields__:
+            if name in {"requested_model", "upstream_model"}:
+                continue
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
         return fields
 
 
@@ -476,6 +576,95 @@ def normalize_responses_compact_upstream_request(
             else copy.deepcopy(body["input"])
         ),
         instructions=_select_field(body.get("instructions", _UNSET)),
+    )
+
+
+def normalize_audio_speech_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedAudioSpeechUpstreamRequest:
+    """Build a normalized Audio speech contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Audio speech",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(body, allowed_fields=SPEECH_UPSTREAM_ALLOWED_FIELDS)
+    input_text = body.get("input")
+    voice = body.get("voice")
+    if not isinstance(input_text, str) or not input_text.strip():
+        raise ValueError("Audio speech request is missing input.")
+    if not isinstance(voice, str) or not voice.strip():
+        raise ValueError("Audio speech request is missing voice.")
+    return NormalizedAudioSpeechUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        input=copy.deepcopy(input_text),
+        voice=copy.deepcopy(voice),
+        response_format=_select_field(body.get("response_format", _UNSET)),
+        speed=_select_field(body.get("speed", _UNSET)),
+        instructions=_select_field(body.get("instructions", _UNSET)),
+    )
+
+
+def normalize_audio_transcription_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedAudioTranscriptionUpstreamRequest:
+    """Build a normalized Audio transcription contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Audio transcription",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(body, allowed_fields=TRANSCRIPTION_UPSTREAM_ALLOWED_FIELDS)
+    return NormalizedAudioTranscriptionUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        language=_select_field(body.get("language", _UNSET)),
+        prompt=_select_field(body.get("prompt", _UNSET)),
+        response_format=_select_field(body.get("response_format", _UNSET)),
+        temperature=_select_field(body.get("temperature", _UNSET)),
+        timestamp_granularities=_select_field(body.get("timestamp_granularities", _UNSET)),
+        include=_select_field(body.get("include", _UNSET)),
+    )
+
+
+def normalize_audio_translation_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedAudioTranslationUpstreamRequest:
+    """Build a normalized Audio translation contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Audio translation",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(body, allowed_fields=TRANSLATION_UPSTREAM_ALLOWED_FIELDS)
+    return NormalizedAudioTranslationUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        prompt=_select_field(body.get("prompt", _UNSET)),
+        response_format=_select_field(body.get("response_format", _UNSET)),
+        temperature=_select_field(body.get("temperature", _UNSET)),
     )
 
 

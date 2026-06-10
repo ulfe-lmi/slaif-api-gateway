@@ -51,6 +51,11 @@ class AudioOutputPricingNotSupportedError(PricingError):
     message = "Chat Completions audio-output pricing is not configured for the resolved model"
 
 
+class AudioRequestPricingNotSupportedError(PricingError):
+    error_code = "audio_request_pricing_not_supported"
+    message = "Standalone Audio API pricing is not configured for the resolved model"
+
+
 class InvalidFxRateError(PricingError):
     status_code = 500
     error_type = "server_error"
