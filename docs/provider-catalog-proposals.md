@@ -86,6 +86,22 @@ slaif-gateway routes import \
   --file "$OUT/routes-proposal.tsv" \
   --dry-run \
   --json
+
+slaif-gateway pricing import \
+  --format tsv \
+  --file "$OUT/pricing-proposal.tsv" \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed pricing import" \
+  --json
+
+slaif-gateway routes import \
+  --format tsv \
+  --file "$OUT/routes-proposal.tsv" \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed route import" \
+  --json
 ```
 
 ## Source Methods
@@ -176,11 +192,21 @@ Confidence is conservative:
 Generated proposals do not change runtime behavior until an operator:
 
 1. previews the TSV with the existing pricing/route import validators
-2. confirms the import
-3. supplies an audit reason
+2. executes the import with `--execute`
+3. confirms the import with `--confirm-import`
+4. supplies a non-empty audit reason with `--reason`
 
 Pricing remains a reviewed local accounting assumption until imported. It is
 important for quota/accounting, but it is not invoice-grade truth by itself.
+
+Dry-run remains the default safety checkpoint. The CLI import commands reject
+implicit writes; without `--dry-run` or the full
+`--execute --confirm-import --reason ...` sequence, they exit non-zero.
+
+Import execution mutates local route/pricing metadata only after explicit
+confirmation. It does not call providers, does not fetch new proposal data, and
+should be rehearsed against a disposable local database before any real local
+deployment import.
 
 Zero-price pricing rows are report-only by default. They are not pricing-import
 ready unless the operator explicitly passes `--allow-zero-prices`. Even with

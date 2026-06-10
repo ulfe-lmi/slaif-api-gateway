@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli import pricing as pricing_cli
 from slaif_gateway.cli.main import app
-from slaif_gateway.services.pricing_rule_service import PricingImportResult, PricingRuleService
+from slaif_gateway.services.pricing_rule_service import PricingRuleService
 
 runner = CliRunner()
 PRICING_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
@@ -214,12 +214,16 @@ def test_pricing_import_supports_json_and_dry_run(tmp_path, monkeypatch) -> None
     )
     seen: dict[str, object] = {}
 
-    async def fake_import_pricing_rules(*, rows: list[dict[str, object]], dry_run: bool) -> PricingImportResult:
+    async def fake_preview_pricing_import(*, rows: list[dict[str, object]]) -> dict[str, object]:
         seen["rows"] = rows
-        seen["dry_run"] = dry_run
-        return PricingImportResult(imported_count=0, dry_run=True, rows=tuple(rows))
+        return {
+            "total_rows": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "rows": [],
+        }
 
-    monkeypatch.setattr(pricing_cli, "_import_pricing_rules", fake_import_pricing_rules)
+    monkeypatch.setattr(pricing_cli, "_preview_pricing_import", fake_preview_pricing_import)
 
     result = runner.invoke(
         app,
@@ -227,12 +231,12 @@ def test_pricing_import_supports_json_and_dry_run(tmp_path, monkeypatch) -> None
     )
 
     assert result.exit_code == 0
-    assert seen["dry_run"] is True
     assert len(seen["rows"]) == 1
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
     assert payload["imported_count"] == 0
     assert payload["validated_count"] == 1
+    assert payload["invalid_count"] == 0
 
 
 def test_pricing_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
@@ -244,12 +248,16 @@ def test_pricing_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
     )
     seen: dict[str, object] = {}
 
-    async def fake_import_pricing_rules(*, rows: list[dict[str, object]], dry_run: bool) -> PricingImportResult:
+    async def fake_preview_pricing_import(*, rows: list[dict[str, object]]) -> dict[str, object]:
         seen["rows"] = rows
-        seen["dry_run"] = dry_run
-        return PricingImportResult(imported_count=0, dry_run=True, rows=tuple(rows))
+        return {
+            "total_rows": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "rows": [],
+        }
 
-    monkeypatch.setattr(pricing_cli, "_import_pricing_rules", fake_import_pricing_rules)
+    monkeypatch.setattr(pricing_cli, "_preview_pricing_import", fake_preview_pricing_import)
 
     result = runner.invoke(
         app,
@@ -257,7 +265,6 @@ def test_pricing_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert seen["dry_run"] is True
     assert seen["rows"] == [
         {
             "provider": "openai",
@@ -283,12 +290,16 @@ def test_pricing_import_accepts_provider_catalog_tsv_fields(tmp_path, monkeypatc
     )
     seen: dict[str, object] = {}
 
-    async def fake_import_pricing_rules(*, rows: list[dict[str, object]], dry_run: bool) -> PricingImportResult:
+    async def fake_preview_pricing_import(*, rows: list[dict[str, object]]) -> dict[str, object]:
         seen["rows"] = rows
-        seen["dry_run"] = dry_run
-        return PricingImportResult(imported_count=0, dry_run=True, rows=tuple(rows))
+        return {
+            "total_rows": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "rows": [],
+        }
 
-    monkeypatch.setattr(pricing_cli, "_import_pricing_rules", fake_import_pricing_rules)
+    monkeypatch.setattr(pricing_cli, "_preview_pricing_import", fake_preview_pricing_import)
 
     result = runner.invoke(
         app,
@@ -296,7 +307,6 @@ def test_pricing_import_accepts_provider_catalog_tsv_fields(tmp_path, monkeypatc
     )
 
     assert result.exit_code == 0
-    assert seen["dry_run"] is True
     assert seen["rows"][0]["pricing_metadata"] == '{"operator_review_required":true}'
     assert seen["rows"][0]["request_price"] == "0"
     assert seen["rows"][0]["source_retrieved_at"] == "2026-01-01T00:00:00Z"
@@ -306,8 +316,110 @@ def test_pricing_import_invalid_file_fails_cleanly(tmp_path) -> None:
     import_path = tmp_path / "bad.json"
     import_path.write_text("{not-json", encoding="utf-8")
 
-    result = runner.invoke(app, ["pricing", "import", "--file", str(import_path)])
+    result = runner.invoke(app, ["pricing", "import", "--file", str(import_path), "--dry-run"])
 
     assert result.exit_code != 0
     assert "Error:" in result.stderr
     assert "Traceback" not in result.output
+
+
+def test_pricing_import_requires_explicit_mode(tmp_path) -> None:
+    import_path = tmp_path / "pricing.tsv"
+    import_path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\toutput_price_per_1m\n"
+        "openai\tgpt-test-mini\tchat.completions\tEUR\t0.10\t0.20\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pricing", "import", "--file", str(import_path)])
+
+    assert result.exit_code != 0
+    assert "Pass --dry-run for preview or --execute --confirm-import --reason to write rows." in result.stderr
+
+
+def test_pricing_import_execute_requires_confirm_and_reason(tmp_path) -> None:
+    import_path = tmp_path / "pricing.tsv"
+    import_path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\toutput_price_per_1m\n"
+        "openai\tgpt-test-mini\tchat.completions\tEUR\t0.10\t0.20\n",
+        encoding="utf-8",
+    )
+
+    missing_confirm = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(import_path), "--execute", "--reason", "reviewed import"],
+    )
+    missing_reason = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(import_path), "--execute", "--confirm-import"],
+    )
+    confirm_without_execute = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(import_path), "--confirm-import"],
+    )
+
+    assert missing_confirm.exit_code != 0
+    assert "--execute requires --confirm-import." in missing_confirm.stderr
+    assert missing_reason.exit_code != 0
+    assert "--reason is required with --execute." in missing_reason.stderr
+    assert confirm_without_execute.exit_code != 0
+    assert "--confirm-import requires --execute." in confirm_without_execute.stderr
+
+
+def test_pricing_import_execute_calls_execution_helper(tmp_path, monkeypatch) -> None:
+    import_path = tmp_path / "pricing.tsv"
+    import_path.write_text(
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\toutput_price_per_1m\n"
+        "openai\tgpt-test-mini\tchat.completions\tEUR\t0.10\t0.20\n",
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_execute_pricing_import(
+        *,
+        rows: list[dict[str, object]],
+        actor_admin_id: str | None,
+        reason: str,
+    ) -> dict[str, object]:
+        seen["rows"] = rows
+        seen["actor_admin_id"] = actor_admin_id
+        seen["reason"] = reason
+        return {
+            "dry_run": False,
+            "validated_count": 1,
+            "invalid_count": 0,
+            "imported_count": 1,
+            "created_count": 1,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "error_count": 0,
+            "rows": [],
+        }
+
+    monkeypatch.setattr(pricing_cli, "_execute_pricing_import", fake_execute_pricing_import)
+
+    result = runner.invoke(
+        app,
+        [
+            "pricing",
+            "import",
+            "--file",
+            str(import_path),
+            "--execute",
+            "--confirm-import",
+            "--reason",
+            "operator-reviewed pricing import",
+            "--actor-admin-id",
+            str(PRICING_ID),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["actor_admin_id"] == str(PRICING_ID)
+    assert seen["reason"] == "operator-reviewed pricing import"
+    assert len(seen["rows"]) == 1
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is False
+    assert payload["imported_count"] == 1
+    assert payload["created_count"] == 1

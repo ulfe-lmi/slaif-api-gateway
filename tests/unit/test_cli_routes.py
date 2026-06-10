@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from slaif_gateway.cli import routes as routes_cli
 from slaif_gateway.cli.main import app
 from slaif_gateway.services.model_route_service import ModelRouteService
+from slaif_gateway.services.route_import import RouteImportProviderRef, validate_route_import_rows
 
 runner = CliRunner()
 ROUTE_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -169,33 +170,13 @@ def test_routes_import_supports_tsv_and_dry_run(tmp_path, monkeypatch) -> None:
     )
     seen: dict[str, object] = {}
 
-    async def fake_preview_route_import(*, rows: list[dict[str, object]]) -> dict[str, object]:
+    async def fake_preview_route_import(*, rows: list[dict[str, object]]):
         seen["rows"] = rows
-        return {
-            "total_rows": 1,
-            "valid_count": 1,
-            "invalid_count": 0,
-            "rows": [
-                {
-                    "row_number": 1,
-                    "status": "valid",
-                    "classification": "create",
-                    "requested_model": "gpt-test-mini",
-                    "match_type": "exact",
-                    "endpoint": "/v1/chat/completions",
-                    "provider": "openrouter",
-                    "provider_config_id": None,
-                    "upstream_model": "openai/gpt-test-mini",
-                    "priority": 100,
-                    "enabled": True,
-                    "visible_in_models": True,
-                    "supports_streaming": True,
-                    "capabilities": {"chat_completions": {"chat_text": True}},
-                    "notes": "safe",
-                    "errors": [],
-                }
-            ],
-        }
+        return validate_route_import_rows(
+            rows,
+            provider_configs=(RouteImportProviderRef(id=uuid.uuid4(), provider="openrouter"),),
+            max_rows=10,
+        )
 
     monkeypatch.setattr(routes_cli, "_preview_route_import", fake_preview_route_import)
 
@@ -237,4 +218,91 @@ def test_routes_import_requires_dry_run(tmp_path) -> None:
     result = runner.invoke(app, ["routes", "import", "--file", str(import_path)])
 
     assert result.exit_code != 0
-    assert "preview-only" in result.stderr
+    assert "Pass --dry-run for preview or --execute --confirm-import --reason to write rows." in result.stderr
+
+
+def test_routes_import_execute_requires_confirm_and_reason(tmp_path) -> None:
+    import_path = tmp_path / "routes.tsv"
+    import_path.write_text(
+        "requested_model\tmatch_type\tprovider\tupstream_model\n"
+        "gpt-test-mini\texact\topenrouter\topenai/gpt-test-mini\n",
+        encoding="utf-8",
+    )
+
+    missing_confirm = runner.invoke(
+        app,
+        ["routes", "import", "--file", str(import_path), "--execute", "--reason", "reviewed import"],
+    )
+    missing_reason = runner.invoke(
+        app,
+        ["routes", "import", "--file", str(import_path), "--execute", "--confirm-import"],
+    )
+    confirm_without_execute = runner.invoke(
+        app,
+        ["routes", "import", "--file", str(import_path), "--confirm-import"],
+    )
+
+    assert missing_confirm.exit_code != 0
+    assert "--execute requires --confirm-import." in missing_confirm.stderr
+    assert missing_reason.exit_code != 0
+    assert "--reason is required with --execute." in missing_reason.stderr
+    assert confirm_without_execute.exit_code != 0
+    assert "--confirm-import requires --execute." in confirm_without_execute.stderr
+
+
+def test_routes_import_execute_calls_execution_helper(tmp_path, monkeypatch) -> None:
+    import_path = tmp_path / "routes.tsv"
+    import_path.write_text(
+        "requested_model\tmatch_type\tprovider\tupstream_model\n"
+        "gpt-test-mini\texact\topenrouter\topenai/gpt-test-mini\n",
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_execute_route_import(
+        *,
+        rows: list[dict[str, object]],
+        actor_admin_id: str | None,
+        reason: str,
+    ) -> dict[str, object]:
+        seen["rows"] = rows
+        seen["actor_admin_id"] = actor_admin_id
+        seen["reason"] = reason
+        return {
+            "dry_run": False,
+            "total_rows": 1,
+            "valid_count": 1,
+            "invalid_count": 0,
+            "created_count": 1,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "error_count": 0,
+            "rows": [],
+        }
+
+    monkeypatch.setattr(routes_cli, "_execute_route_import", fake_execute_route_import)
+
+    result = runner.invoke(
+        app,
+        [
+            "routes",
+            "import",
+            "--file",
+            str(import_path),
+            "--execute",
+            "--confirm-import",
+            "--reason",
+            "operator-reviewed route import",
+            "--actor-admin-id",
+            str(ROUTE_ID),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["actor_admin_id"] == str(ROUTE_ID)
+    assert seen["reason"] == "operator-reviewed route import"
+    assert len(seen["rows"]) == 1
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is False
+    assert payload["created_count"] == 1
