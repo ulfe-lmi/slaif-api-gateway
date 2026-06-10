@@ -776,7 +776,14 @@ def test_pricing_cli_commands_and_import_persist_and_are_safe(
         ),
         encoding="utf-8",
     )
-    _invoke_fail(runner, ["pricing", "import", "--file", str(invalid_file), "--dry-run"])
+    invalid_preview = _invoke_ok(
+        runner,
+        ["pricing", "import", "--file", str(invalid_file), "--dry-run", "--json"],
+    )
+    assert invalid_preview["dry_run"] is True
+    assert invalid_preview["validated_count"] == 0
+    assert invalid_preview["invalid_count"] == 1
+    assert invalid_preview["imported_count"] == 0
 
 
 def test_fx_cli_commands_persist_and_are_safe(
