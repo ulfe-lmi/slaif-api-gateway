@@ -290,3 +290,29 @@ def test_pricing_import_execution_plan_executes_create_only_rows_without_raw_con
     assert "encrypted_payload" not in str(payload)
     assert "nonce" not in str(payload)
     assert "password_hash" not in str(payload)
+
+
+def test_pricing_import_execution_plan_allows_null_actor_admin_id() -> None:
+    class FakePricingService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_pricing_rule(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    preview = validate_pricing_import_rows([_valid_row()], max_rows=10, now=datetime(2026, 1, 1, tzinfo=UTC))
+    plan = build_pricing_import_execution_plan(preview)
+    service = FakePricingService()
+
+    result = asyncio.run(
+        execute_pricing_import_plan(
+            plan,
+            pricing_rule_service=service,
+            actor_admin_id=None,
+            reason="pricing import",
+        )
+    )
+
+    assert result.created_count == 1
+    assert service.calls[0]["actor_admin_id"] is None

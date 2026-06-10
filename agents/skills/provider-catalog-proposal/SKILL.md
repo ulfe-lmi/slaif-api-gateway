@@ -133,7 +133,27 @@ slaif-gateway routes import --format tsv --file routes-proposal.tsv --dry-run
 ```
 
 6. Only after operator review and explicit confirmation should any import be
-   executed through the existing audited workflows.
+   executed through the existing audited CLI workflows:
+
+```bash
+slaif-gateway pricing import \
+  --format tsv \
+  --file pricing-proposal.tsv \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed pricing import"
+
+slaif-gateway routes import \
+  --format tsv \
+  --file routes-proposal.tsv \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed route import"
+```
+
+Dry-run is the default safety checkpoint. The CLI import surfaces reject
+implicit writes; execution requires `--execute`, `--confirm-import`, and a
+non-empty `--reason`.
 
 Zero-price pricing rows are report-only by default. They must not be treated as
 ready for pricing import unless the operator explicitly opts in with

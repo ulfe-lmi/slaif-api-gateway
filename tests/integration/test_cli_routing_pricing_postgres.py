@@ -718,7 +718,20 @@ def test_pricing_cli_commands_and_import_persist_and_are_safe(
         ),
         encoding="utf-8",
     )
-    imported = _invoke_ok(runner, ["pricing", "import", "--file", str(import_file), "--json"])
+    imported = _invoke_ok(
+        runner,
+        [
+            "pricing",
+            "import",
+            "--file",
+            str(import_file),
+            "--execute",
+            "--confirm-import",
+            "--reason",
+            "integration pricing import",
+            "--json",
+        ],
+    )
     assert imported["imported_count"] == 1
     assert _run(_count_pricing_rows(cli_env, provider="openai", model=import_model)) == 1
 
@@ -763,7 +776,7 @@ def test_pricing_cli_commands_and_import_persist_and_are_safe(
         ),
         encoding="utf-8",
     )
-    _invoke_fail(runner, ["pricing", "import", "--file", str(invalid_file)])
+    _invoke_fail(runner, ["pricing", "import", "--file", str(invalid_file), "--dry-run"])
 
 
 def test_fx_cli_commands_persist_and_are_safe(

@@ -143,6 +143,26 @@ slaif-gateway routes import \
   --json
 ```
 
+Only after that preview succeeds should operators consider confirmed execution:
+
+```bash
+slaif-gateway pricing import \
+  --format tsv \
+  --file "$OUT/pricing-proposal.tsv" \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed pricing import" \
+  --json
+
+slaif-gateway routes import \
+  --format tsv \
+  --file "$OUT/routes-proposal.tsv" \
+  --execute \
+  --confirm-import \
+  --reason "operator-reviewed route import" \
+  --json
+```
+
 `--paired-ready-only` excludes route-only and pricing-only mismatches from the
 generated import TSVs. `--ordinary-chat-only` excludes ambiguous multimodal,
 audio, image, VL, realtime, and similar rows from ordinary Chat Completions
@@ -158,6 +178,11 @@ Zero-price OpenRouter pricing rows are report-only by default. They remain
 non-ready for pricing import unless the operator explicitly passes
 `--allow-zero-prices`, and even then they still carry review-required warning
 metadata.
+
+Dry-run is the default safety checkpoint. The CLI import surfaces reject
+implicit writes; execution requires `--execute`, `--confirm-import`, and a
+non-empty `--reason`. Import execution mutates only local metadata rows and
+does not call providers during the import itself.
 
 ## OpenAI Pricing
 

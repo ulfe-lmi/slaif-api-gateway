@@ -345,7 +345,7 @@ async def execute_route_import_plan(
     plan: RouteImportExecutionPlan,
     *,
     model_route_service: ModelRouteService,
-    actor_admin_id: uuid.UUID,
+    actor_admin_id: uuid.UUID | None,
     reason: str,
 ) -> RouteImportExecutionResult:
     """Apply a validated create-only route import plan using the route service."""

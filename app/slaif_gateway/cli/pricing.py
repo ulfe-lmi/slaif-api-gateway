@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from slaif_gateway.cli.common import (
+    CliDatabaseConfigError,
     cli_db_session,
     echo_kv,
     emit_json,
@@ -23,12 +24,18 @@ from slaif_gateway.db.models import PricingRule
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.services.pricing_import import (
+    build_pricing_import_execution_plan,
+    classify_pricing_import_preview,
     detect_pricing_import_format,
+    execute_pricing_import_plan,
     parse_pricing_import_csv,
     parse_pricing_import_json,
     parse_pricing_import_tsv,
+    pricing_import_execution_result_to_dict,
+    pricing_import_preview_to_dict,
+    validate_pricing_import_rows,
 )
-from slaif_gateway.services.pricing_rule_service import PricingImportResult, PricingRuleService
+from slaif_gateway.services.pricing_rule_service import PricingRuleService
 
 app = typer.Typer(help="Manage pricing rules")
 
@@ -149,19 +156,95 @@ async def _disable_model(
         )
 
 
-async def _import_pricing_rules(
+async def _classify_pricing_import(
     *,
     rows: list[dict[str, object]],
-    dry_run: bool,
-) -> PricingImportResult:
-    if dry_run:
-        service = PricingRuleService(
-            pricing_rules_repository=object(),
-            audit_repository=object(),
+) -> object:
+    preview = validate_pricing_import_rows(rows, max_rows=max(len(rows), 1))
+    if preview.valid_count == 0:
+        return preview
+
+    try:
+        async with cli_db_session() as (_, session):
+            repository = PricingRulesRepository(session)
+            existing_by_row: dict[int, list[object]] = {}
+            for row in preview.rows:
+                if row.status != "valid" or not row.provider or not row.model or not row.endpoint:
+                    continue
+                existing_by_row[row.row_number] = await repository.list_pricing_rules_for_provider_model(
+                    provider=row.provider,
+                    upstream_model=row.model,
+                    endpoint=row.endpoint,
+                )
+    except CliDatabaseConfigError:
+        return preview
+
+    return classify_pricing_import_preview(preview, existing_rules_by_row=existing_by_row)
+
+
+async def _preview_pricing_import(
+    *,
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    preview = await _classify_pricing_import(rows=rows)
+    return pricing_import_preview_to_dict(preview)
+
+
+async def _execute_pricing_import(
+    *,
+    rows: list[dict[str, object]],
+    actor_admin_id: str | None,
+    reason: str,
+) -> dict[str, object]:
+    preview = await _classify_pricing_import(rows=rows)
+    plan = build_pricing_import_execution_plan(preview)
+    if not plan.executable:
+        raise ValueError(
+            "Pricing import execution is blocked; "
+            f"{plan.blocked_count} of {plan.total_rows} rows are not executable. "
+            "Run --dry-run to inspect invalid, duplicate, or overlapping rows."
         )
-        return await service.import_pricing_rules(rows, dry_run=True)
+
+    parsed_actor_id = parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
     async with cli_db_session() as (_, session):
-        return await _service(session).import_pricing_rules(rows, dry_run=dry_run)
+        result = await execute_pricing_import_plan(
+            plan,
+            pricing_rule_service=_service(session),
+            actor_admin_id=parsed_actor_id,
+            reason=reason,
+        )
+    payload = pricing_import_execution_result_to_dict(result)
+    payload.update(
+        {
+            "dry_run": False,
+            "validated_count": preview.valid_count,
+            "invalid_count": preview.invalid_count,
+            "imported_count": result.created_count + result.updated_count,
+        }
+    )
+    return payload
+
+
+def _resolve_import_mode(
+    *,
+    dry_run: bool,
+    execute: bool,
+    confirm_import: bool,
+    reason: str | None,
+) -> str:
+    if dry_run and execute:
+        raise ValueError("Pass either --dry-run or --execute, not both.")
+    if confirm_import and not execute:
+        raise ValueError("--confirm-import requires --execute.")
+    if execute and not confirm_import:
+        raise ValueError("--execute requires --confirm-import.")
+    if execute and not (reason or "").strip():
+        raise ValueError("--reason is required with --execute.")
+    if not dry_run and not execute:
+        raise ValueError(
+            "Pass --dry-run for preview or --execute --confirm-import --reason to write rows."
+        )
+    return "execute" if execute else "dry_run"
 
 
 @app.callback()
@@ -321,30 +404,65 @@ def import_pricing(
         typer.Option("--format", help="json, csv, or tsv; auto-detected from file extension if omitted"),
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate without writing rows")] = False,
+    execute: Annotated[bool, typer.Option("--execute", help="Write validated rows")] = False,
+    confirm_import: Annotated[
+        bool,
+        typer.Option("--confirm-import", help="Acknowledge that confirmed import will write rows"),
+    ] = False,
+    reason: Annotated[str | None, typer.Option("--reason", help="Audit reason for confirmed import")] = None,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Admin actor UUID for audit"),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Import pricing rules from a local JSON, CSV, or TSV file."""
+    """Preview or execute pricing imports from a local JSON, CSV, or TSV file."""
     try:
+        mode = _resolve_import_mode(
+            dry_run=dry_run,
+            execute=execute,
+            confirm_import=confirm_import,
+            reason=reason,
+        )
         rows = _load_import_file(file, input_format=input_format)
-        result = run_async(_import_pricing_rules(rows=rows, dry_run=dry_run))
+        if mode == "dry_run":
+            payload = run_async(_preview_pricing_import(rows=rows))
+            payload.update(
+                {
+                    "dry_run": True,
+                    "imported_count": 0,
+                    "created_count": 0,
+                    "updated_count": 0,
+                    "skipped_count": 0,
+                    "error_count": 0,
+                    "validated_count": payload.get("valid_count", 0),
+                }
+            )
+        else:
+            payload = run_async(
+                _execute_pricing_import(
+                    rows=rows,
+                    actor_admin_id=actor_admin_id,
+                    reason=reason or "",
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)
         return
 
-    payload = {
-        "dry_run": result.dry_run,
-        "imported_count": result.imported_count,
-        "validated_count": len(result.rows),
-        "pricing_rules": [_safe_pricing_dict(row) for row in result.rows],
-    }
     if json_output:
         emit_json(payload)
         return
     echo_kv(
         {
-            "dry_run": result.dry_run,
-            "imported_count": result.imported_count,
-            "validated_count": len(result.rows),
+            "dry_run": payload["dry_run"],
+            "validated_count": payload.get("validated_count", 0),
+            "invalid_count": payload.get("invalid_count", 0),
+            "imported_count": payload.get("imported_count", 0),
+            "created_count": payload.get("created_count", 0),
+            "updated_count": payload.get("updated_count", 0),
+            "skipped_count": payload.get("skipped_count", 0),
+            "error_count": payload.get("error_count", 0),
         }
     )
 

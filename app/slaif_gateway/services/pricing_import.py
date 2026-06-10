@@ -327,7 +327,7 @@ async def execute_pricing_import_plan(
     plan: PricingImportExecutionPlan,
     *,
     pricing_rule_service: PricingRuleService,
-    actor_admin_id: uuid.UUID,
+    actor_admin_id: uuid.UUID | None,
     reason: str,
 ) -> PricingImportExecutionResult:
     """Apply a validated create-only pricing import plan using the pricing service."""

@@ -354,3 +354,29 @@ def test_route_import_execution_plan_executes_create_only_rows_without_raw_conte
     assert "encrypted_payload" not in str(payload)
     assert "nonce" not in str(payload)
     assert "password_hash" not in str(payload)
+
+
+def test_route_import_execution_plan_allows_null_actor_admin_id() -> None:
+    class FakeRouteService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_model_route(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    preview = _preview([_valid_row()])
+    plan = build_route_import_execution_plan(preview)
+    service = FakeRouteService()
+
+    result = asyncio.run(
+        execute_route_import_plan(
+            plan,
+            model_route_service=service,
+            actor_admin_id=None,
+            reason="route import",
+        )
+    )
+
+    assert result.created_count == 1
+    assert service.calls[0]["actor_admin_id"] is None

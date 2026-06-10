@@ -22,12 +22,15 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
 from slaif_gateway.services.route_import import (
+    build_route_import_execution_plan,
     classify_route_import_preview,
     detect_route_import_format,
+    execute_route_import_plan,
     parse_route_import_csv,
     parse_route_import_json,
     parse_route_import_tsv,
     provider_refs_from_rows,
+    route_import_execution_result_to_dict,
     route_import_preview_to_dict,
     validate_route_import_rows,
 )
@@ -118,7 +121,7 @@ async def _set_route_enabled(route_id: str, *, enabled: bool) -> ModelRoute:
 async def _preview_route_import(
     *,
     rows: list[dict[str, object]],
-) -> dict[str, object]:
+) -> object:
     async with cli_db_session() as (_, session):
         providers = await ProviderConfigsRepository(session).list_provider_configs(limit=1000)
         preview = validate_route_import_rows(
@@ -139,8 +142,63 @@ async def _preview_route_import(
                 endpoint=row.endpoint,
                 limit=1000,
             )
-        classified = classify_route_import_preview(preview, existing_routes_by_row=existing_by_row)
-        return route_import_preview_to_dict(classified)
+        return classify_route_import_preview(preview, existing_routes_by_row=existing_by_row)
+
+
+async def _execute_route_import(
+    *,
+    rows: list[dict[str, object]],
+    actor_admin_id: str | None,
+    reason: str,
+) -> dict[str, object]:
+    preview = await _preview_route_import(rows=rows)
+    plan = build_route_import_execution_plan(preview)
+    if not plan.executable:
+        raise ValueError(
+            "Route import execution is blocked; "
+            f"{plan.blocked_count} of {plan.total_rows} rows are not executable. "
+            "Run --dry-run to inspect invalid, duplicate, update, or conflict rows."
+        )
+
+    parsed_actor_id = parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
+    async with cli_db_session() as (_, session):
+        result = await execute_route_import_plan(
+            plan,
+            model_route_service=_service(session),
+            actor_admin_id=parsed_actor_id,
+            reason=reason,
+        )
+    payload = route_import_execution_result_to_dict(result)
+    payload.update(
+        {
+            "dry_run": False,
+            "valid_count": preview.valid_count,
+            "invalid_count": preview.invalid_count,
+        }
+    )
+    return payload
+
+
+def _resolve_import_mode(
+    *,
+    dry_run: bool,
+    execute: bool,
+    confirm_import: bool,
+    reason: str | None,
+) -> str:
+    if dry_run and execute:
+        raise ValueError("Pass either --dry-run or --execute, not both.")
+    if confirm_import and not execute:
+        raise ValueError("--confirm-import requires --execute.")
+    if execute and not confirm_import:
+        raise ValueError("--execute requires --confirm-import.")
+    if execute and not (reason or "").strip():
+        raise ValueError("--reason is required with --execute.")
+    if not dry_run and not execute:
+        raise ValueError(
+            "Pass --dry-run for preview or --execute --confirm-import --reason to write rows."
+        )
+    return "execute" if execute else "dry_run"
 
 
 @app.callback()
@@ -294,34 +352,56 @@ def import_routes(
         typer.Option("--format", help="json, csv, or tsv; auto-detected from file extension if omitted"),
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate without writing rows")] = False,
+    execute: Annotated[bool, typer.Option("--execute", help="Write validated rows")] = False,
+    confirm_import: Annotated[
+        bool,
+        typer.Option("--confirm-import", help="Acknowledge that confirmed import will write rows"),
+    ] = False,
+    reason: Annotated[str | None, typer.Option("--reason", help="Audit reason for confirmed import")] = None,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Admin actor UUID for audit"),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Preview route imports from a local JSON, CSV, or TSV file."""
+    """Preview or execute route imports from a local JSON, CSV, or TSV file."""
     try:
-        if not dry_run:
-            raise ValueError("Route CLI import is preview-only; pass --dry-run.")
+        mode = _resolve_import_mode(
+            dry_run=dry_run,
+            execute=execute,
+            confirm_import=confirm_import,
+            reason=reason,
+        )
         rows = _load_import_file(file, input_format=input_format)
-        payload = run_async(_preview_route_import(rows=rows))
+        if mode == "dry_run":
+            preview = run_async(_preview_route_import(rows=rows))
+            payload = route_import_preview_to_dict(preview)
+            payload["dry_run"] = True
+        else:
+            payload = run_async(
+                _execute_route_import(
+                    rows=rows,
+                    actor_admin_id=actor_admin_id,
+                    reason=reason or "",
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)
         return
 
-    wrapped = {
-        "dry_run": True,
-        "total_rows": payload["total_rows"],
-        "valid_count": payload["valid_count"],
-        "invalid_count": payload["invalid_count"],
-        "rows": payload["rows"],
-    }
     if json_output:
-        emit_json(wrapped)
+        emit_json(payload)
         return
     echo_kv(
         {
-            "dry_run": True,
+            "dry_run": payload["dry_run"],
             "total_rows": payload["total_rows"],
             "valid_count": payload["valid_count"],
             "invalid_count": payload["invalid_count"],
+            "created_count": payload.get("created_count", 0),
+            "updated_count": payload.get("updated_count", 0),
+            "skipped_count": payload.get("skipped_count", 0),
+            "error_count": payload.get("error_count", 0),
         }
     )
 
