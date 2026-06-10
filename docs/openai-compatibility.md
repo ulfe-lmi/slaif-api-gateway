@@ -3,7 +3,7 @@
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
 For the maintainer-locked RC2 target, including the still-missing Realtime
-audio and embeddings work after the standalone Audio API foundation, see
+audio work after the standalone Audio API and embeddings foundation, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). A green verification harness
 proves the implemented surface is clean; it does not prove feature-full RC2.
 
@@ -32,7 +32,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `POST /v1/audio/speech` | Implemented for bounded standalone speech subset | Required | PostgreSQL reservation before provider call; request-priced or bounded input-estimated finalization when provider usage is absent | Binary audio response; no SSE/Realtimes here | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
-| `POST /v1/embeddings` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
+| `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe estimated fallback when usage is absent | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Realtime audio | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -45,7 +45,8 @@ RC2 support includes standalone `POST /v1/audio/speech`,
 `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations`, plus Chat
 request-body audio input and non-streaming Chat audio output. Realtime audio,
 Responses audio, `/v1/files`, provider file IDs, and streaming Chat audio
-remain unsupported.
+remain unsupported. Embeddings input strings, token arrays, and vectors are not
+stored or logged.
 
 ## Responses API Scope
 

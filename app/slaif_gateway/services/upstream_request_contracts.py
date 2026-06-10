@@ -116,6 +116,15 @@ TRANSLATION_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "temperature",
     }
 )
+EMBEDDINGS_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "encoding_format",
+        "dimensions",
+        "user",
+    }
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"items"})
 CONVERSATION_UPDATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"metadata"})
 CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS = frozenset(
@@ -368,6 +377,28 @@ class NormalizedAudioTranslationUpstreamRequest:
         fields: dict[str, Any] = {}
         for name in self.__dataclass_fields__:
             if name in {"requested_model", "upstream_model"}:
+                continue
+            value = getattr(self, name)
+            if not _is_set(value):
+                continue
+            fields[name] = _select_field(value)
+        return fields
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedEmbeddingsUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+    input: object
+
+    encoding_format: object = _UNSET
+    dimensions: object = _UNSET
+    user: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {"input": copy.deepcopy(self.input)}
+        for name in self.__dataclass_fields__:
+            if name in {"requested_model", "upstream_model", "input"}:
                 continue
             value = getattr(self, name)
             if not _is_set(value):
@@ -665,6 +696,35 @@ def normalize_audio_translation_upstream_request(
         prompt=_select_field(body.get("prompt", _UNSET)),
         response_format=_select_field(body.get("response_format", _UNSET)),
         temperature=_select_field(body.get("temperature", _UNSET)),
+    )
+
+
+def normalize_embeddings_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedEmbeddingsUpstreamRequest:
+    """Build a normalized Embeddings contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Embeddings",
+    )
+    body = dict(effective_body)
+    if body.get("model") != requested_model:
+        raise ValueError("Requested model must match policy-effective model.")
+    _ensure_no_unknown_fields(body, allowed_fields=EMBEDDINGS_UPSTREAM_ALLOWED_FIELDS)
+    if "input" not in body:
+        raise ValueError("Embeddings request is missing input.")
+    return NormalizedEmbeddingsUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        input=copy.deepcopy(body["input"]),
+        encoding_format=_select_field(body.get("encoding_format", _UNSET)),
+        dimensions=_select_field(body.get("dimensions", _UNSET)),
+        user=_select_field(body.get("user", _UNSET)),
     )
 
 

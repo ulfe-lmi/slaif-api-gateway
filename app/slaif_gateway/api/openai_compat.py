@@ -17,11 +17,13 @@ from slaif_gateway.services.audio_gateway import (
     handle_audio_translation,
 )
 from slaif_gateway.services.chat_completion_gateway import handle_chat_completion
+from slaif_gateway.services.embeddings_gateway import handle_embeddings_create
 from slaif_gateway.services.endpoint_policy import (
     AUDIO_SPEECH,
     AUDIO_TRANSCRIPTIONS,
     AUDIO_TRANSLATIONS,
     CHAT_COMPLETIONS,
+    EMBEDDINGS,
     CONVERSATION_ITEMS_CREATE,
     CONVERSATION_ITEMS_DELETE,
     CONVERSATION_ITEMS_LIST,
@@ -134,6 +136,21 @@ async def create_audio_translation(
 ):
     _ensure_endpoint_allowed(authenticated_key, AUDIO_TRANSLATIONS)
     return await handle_audio_translation(
+        authenticated_key=authenticated_key,
+        settings=request.app.state.settings,
+        request=request,
+    )
+
+
+@router.post("/v1/embeddings")
+async def create_embeddings(
+    request: Request,
+    payload: dict[str, object],
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, EMBEDDINGS)
+    return await handle_embeddings_create(
+        payload=payload,
         authenticated_key=authenticated_key,
         settings=request.app.state.settings,
         request=request,

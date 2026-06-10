@@ -13,6 +13,7 @@ CHAT_COMPLETIONS: Final[str] = "chat.completions"
 AUDIO_SPEECH: Final[str] = "audio.speech"
 AUDIO_TRANSCRIPTIONS: Final[str] = "audio.transcriptions"
 AUDIO_TRANSLATIONS: Final[str] = "audio.translations"
+EMBEDDINGS: Final[str] = "embeddings"
 RESPONSES: Final[str] = "responses"
 RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
 RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
@@ -62,6 +63,13 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "audio.translations",
             "post /v1/audio/translations",
             "/v1/audio/translations",
+        }
+    ),
+    EMBEDDINGS: frozenset(
+        {
+            "embeddings",
+            "post /v1/embeddings",
+            "/v1/embeddings",
         }
     ),
     RESPONSES: frozenset(

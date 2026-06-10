@@ -5,8 +5,8 @@ implementation work. It does not add runtime behavior or schema fields.
 
 For RC2 feature-fullness versus implemented-scope verification status, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). Current accounting docs describe
-implemented paths only; they do not mean Realtime audio or embeddings are
-already implemented.
+implemented paths only; they do not mean Realtime audio is already
+implemented.
 
 Current authoritative contracts:
 
@@ -54,6 +54,12 @@ Core invariants:
   request-pricing fallback; missing required usage does not become zero-cost
   success. Uploaded audio bytes, transcripts, prompt/input text, and generated
   speech bytes are never stored.
+- Standalone `POST /v1/embeddings` now uses its own endpoint permission, route,
+  pricing, and finalization path. PostgreSQL remains authoritative. Provider
+  `prompt_tokens`/`total_tokens` stay authoritative when present. If provider
+  usage is absent, SLAIF finalizes through a bounded input-estimated fallback
+  instead of zero-cost success. Input strings, token arrays, embedding vectors,
+  raw request bodies, and raw provider response bodies are never stored.
 
 ## Chat Completions Streaming Live-Burn Margin
 

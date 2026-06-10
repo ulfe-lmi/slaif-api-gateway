@@ -69,3 +69,19 @@ class AudioUnsupportedOptionError(RequestPolicyError):
 
 class AudioInvalidMultipartError(RequestPolicyError):
     error_code = "audio_invalid_multipart"
+
+
+class EmbeddingsInputInvalidError(RequestPolicyError):
+    error_code = "embeddings_input_invalid"
+
+
+class EmbeddingsInputLimitExceededError(RequestPolicyError):
+    error_code = "embeddings_input_limit_exceeded"
+
+
+class EmbeddingsUnsupportedFieldError(RequestPolicyError):
+    error_code = "embeddings_field_not_supported"
+
+
+class EmbeddingsUnsupportedOptionError(RequestPolicyError):
+    error_code = "embeddings_option_not_supported"

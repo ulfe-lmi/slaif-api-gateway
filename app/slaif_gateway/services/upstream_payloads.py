@@ -10,6 +10,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     NormalizedAudioSpeechUpstreamRequest,
     NormalizedAudioTranscriptionUpstreamRequest,
     NormalizedAudioTranslationUpstreamRequest,
+    NormalizedEmbeddingsUpstreamRequest,
     NormalizedConversationItemsCreateUpstreamRequest,
     NormalizedConversationItemsQueryRequest,
     NormalizedConversationUpdateUpstreamRequest,
@@ -118,6 +119,13 @@ TRANSLATION_UPSTREAM_FIELDS: tuple[str, ...] = (
     "response_format",
     "temperature",
 )
+EMBEDDINGS_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "model",
+    "input",
+    "encoding_format",
+    "dimensions",
+    "user",
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS: tuple[str, ...] = ("items",)
 CONVERSATION_UPDATE_UPSTREAM_FIELDS: tuple[str, ...] = ("metadata",)
 CONVERSATION_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
@@ -213,6 +221,18 @@ def build_audio_translation_upstream_body(
     )
 
 
+def build_embeddings_upstream_body(
+    normalized_request: NormalizedEmbeddingsUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Embeddings provider payload from approved fields only."""
+
+    return _build_upstream_body(
+        normalized_request,
+        allowed_fields=frozenset(EMBEDDINGS_UPSTREAM_FIELDS),
+        endpoint_label="Embeddings",
+    )
+
+
 def build_responses_input_items_query_params(
     query_params: dict[str, object],
 ) -> dict[str, object]:
@@ -292,7 +312,8 @@ def _build_upstream_body(
     | NormalizedResponsesCompactUpstreamRequest
     | NormalizedAudioSpeechUpstreamRequest
     | NormalizedAudioTranscriptionUpstreamRequest
-    | NormalizedAudioTranslationUpstreamRequest,
+    | NormalizedAudioTranslationUpstreamRequest
+    | NormalizedEmbeddingsUpstreamRequest,
     *,
     allowed_fields: frozenset[str],
     endpoint_label: str,
@@ -303,12 +324,13 @@ def _build_upstream_body(
             NormalizedChatCompletionUpstreamRequest,
             NormalizedResponsesUpstreamRequest,
             NormalizedResponsesInputTokensUpstreamRequest,
-            NormalizedResponsesCompactUpstreamRequest,
-            NormalizedAudioSpeechUpstreamRequest,
-            NormalizedAudioTranscriptionUpstreamRequest,
-            NormalizedAudioTranslationUpstreamRequest,
-        ),
-    ):
+                NormalizedResponsesCompactUpstreamRequest,
+                NormalizedAudioSpeechUpstreamRequest,
+                NormalizedAudioTranscriptionUpstreamRequest,
+                NormalizedAudioTranslationUpstreamRequest,
+                NormalizedEmbeddingsUpstreamRequest,
+            ),
+        ):
         raise TypeError(
             f"{endpoint_label} upstream payload must be built from a normalized request contract."
         )

@@ -13,6 +13,9 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
 from slaif_gateway.services.audio_route_capabilities import (
     ensure_default_audio_endpoint_capabilities,
 )
+from slaif_gateway.services.embeddings_route_capabilities import (
+    ensure_default_embeddings_capabilities,
+)
 from slaif_gateway.services.responses_route_capabilities import (
     ensure_default_responses_capabilities,
 )
@@ -23,6 +26,7 @@ CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
+EMBEDDINGS_ENDPOINT = "/v1/embeddings"
 
 
 class ModelRouteService:
@@ -206,6 +210,8 @@ def normalize_endpoint(value: str) -> str:
         return AUDIO_TRANSCRIPTIONS_ENDPOINT
     if endpoint == "audio.translations":
         return AUDIO_TRANSLATIONS_ENDPOINT
+    if endpoint == "embeddings":
+        return EMBEDDINGS_ENDPOINT
     if endpoint == "responses":
         return "/v1/responses"
     return endpoint
@@ -223,6 +229,10 @@ def _ensure_default_capabilities(
         endpoint=endpoint,
     )
     normalized = ensure_default_audio_endpoint_capabilities(
+        normalized,
+        endpoint=endpoint,
+    )
+    normalized = ensure_default_embeddings_capabilities(
         normalized,
         endpoint=endpoint,
     )
