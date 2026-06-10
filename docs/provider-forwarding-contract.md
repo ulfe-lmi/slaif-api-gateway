@@ -1,15 +1,15 @@
 # Provider Forwarding Contract
 
 This document describes exactly how implemented `/v1/chat/completions`,
-standalone `/v1/audio/*`, `/v1/embeddings`, and the current `/v1/responses`
-subset are forwarded to upstream providers. It is intended for code reviewers
-and operators verifying implementation claims. Legacy `/v1/completions` is not
-implemented in the current gateway.
+standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
+and the current `/v1/responses` subset are forwarded to upstream providers. It
+is intended for code reviewers and operators verifying implementation claims.
+Legacy `/v1/completions` is not implemented in the current gateway.
 
-For the maintainer-locked RC2 target, including the still-missing Realtime
-audio work after the standalone Audio API and embeddings foundation, see
-[`rc2-feature-scope.md`](rc2-feature-scope.md). This document describes
-implemented forwarding behavior only.
+For the maintainer-locked RC2 target, including the bounded Realtime
+client-secret slice that is now implemented and the remaining deferred
+Realtime sub-surfaces, see [`rc2-feature-scope.md`](rc2-feature-scope.md).
+This document describes implemented forwarding behavior only.
 
 ## Provider Adapters
 
@@ -20,9 +20,11 @@ implemented forwarding behavior only.
 | OpenAI | `OpenAIProviderAdapter` | OpenAI Audio transcriptions | `POST /audio/transcriptions` |
 | OpenAI | `OpenAIProviderAdapter` | OpenAI Audio translations | `POST /audio/translations` |
 | OpenAI | `OpenAIProviderAdapter` | OpenAI Embeddings | `POST /embeddings` |
+| OpenAI | `OpenAIProviderAdapter` | OpenAI Realtime client secrets | `POST /realtime/client_secrets` |
 | OpenRouter | `OpenRouterProviderAdapter` | OpenRouter OpenAI-compatible Chat Completions | `POST /chat/completions` |
 | OpenRouter | `OpenRouterProviderAdapter` | Standalone Audio API | Fail-closed in current RC2 slice |
 | OpenRouter | `OpenRouterProviderAdapter` | Standalone Embeddings API | Fail-closed in current RC2 slice |
+| OpenRouter | `OpenRouterProviderAdapter` | Realtime client secrets | Fail-closed in current RC2 slice |
 
 Anthropic-family, Google, Meta, Mistral, Qwen, and other non-OpenAI model names are supported only when a route sends them to OpenRouter's OpenAI-compatible interface. There is no native Anthropic adapter in this implementation.
 
@@ -44,6 +46,18 @@ capability, allows `dimensions` only when the route also sets
 `embeddings_dimensions=true`, and never forwards client `Authorization`,
 cookies, CSRF, admin-session, or internal gateway headers upstream. Input
 strings, token arrays, and embedding vectors are not stored or logged locally.
+
+Realtime forwarding is separate again: `POST /v1/realtime/client_secrets`
+rebuilds a canonical OpenAI JSON body from a validated normalized GA Realtime
+client-secret contract, requires separate endpoint permission plus explicit
+`realtime.audio=true` and `realtime.webrtc_client_secrets=true` route
+capabilities, replaces the nested `session.model` with the resolved upstream
+model, and never forwards client `Authorization`, cookies, CSRF,
+admin-session, or internal gateway headers upstream. The gateway returns the
+provider-issued ephemeral secret response to the caller but does not store or
+log the secret value, instructions text, raw session config, audio, raw SDP,
+or raw event bodies. `/v1/realtime/calls`, Realtime WebSocket proxying,
+transcription sessions, translation, SIP, tools, and MCP remain deferred.
 
 Provider config rows, model route rows, pricing rows, and FX rows are local
 metadata used by the existing provider factory, route resolver, pricing, and FX
@@ -76,6 +90,8 @@ runtime lookup:
 | `/v1/chat/completions` | `/v1/chat/completions` | Implemented |
 | `embeddings` | `/v1/embeddings` | Implemented |
 | `/v1/embeddings` | `/v1/embeddings` | Implemented |
+| `realtime.client_secrets` | `/v1/realtime/client_secrets` | Implemented |
+| `/v1/realtime/client_secrets` | `/v1/realtime/client_secrets` | Implemented |
 | `completions` | `/v1/completions` only after a future implementation adds normalization | Not implemented |
 | `/v1/completions` | `/v1/completions` | Not implemented |
 

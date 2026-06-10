@@ -73,6 +73,10 @@ _SUPPORTED_AUDIO_TRANSLATION_RESPONSE_FORMATS = frozenset(
 _SUPPORTED_AUDIO_TRANSCRIPTION_INCLUDE_VALUES = frozenset({"logprobs"})
 _SUPPORTED_AUDIO_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
 _SUPPORTED_EMBEDDINGS_ENCODING_FORMATS = frozenset({"float", "base64"})
+_SUPPORTED_REALTIME_AUDIO_FORMAT_TYPES = frozenset({"audio/pcm", "audio/pcmu", "audio/pcma"})
+_SUPPORTED_REALTIME_AUDIO_VOICES = frozenset(
+    {"alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"}
+)
 
 
 class Settings(BaseSettings):
@@ -231,6 +235,15 @@ class Settings(BaseSettings):
     EMBEDDINGS_MAX_TOTAL_ESTIMATED_TOKENS: int = 262144
     EMBEDDINGS_MAX_DIMENSIONS: int = 3072
     EMBEDDINGS_MAX_USER_BYTES: int = 1024
+    REALTIME_ALLOWED_AUDIO_FORMAT_TYPES: str = "audio/pcm,audio/pcmu,audio/pcma"
+    REALTIME_ALLOWED_VOICES: str = "alloy,ash,ballad,coral,echo,sage,shimmer,verse,marin,cedar"
+    REALTIME_PCM_AUDIO_RATE: int = 24000
+    REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS: int = 10
+    REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS: int = 600
+    REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS: int = 7200
+    REALTIME_MAX_INSTRUCTIONS_BYTES: int = 8192
+    REALTIME_DEFAULT_MAX_OUTPUT_TOKENS: int = 1024
+    REALTIME_MAX_OUTPUT_TOKENS: int = 4096
     CHAT_MAX_TOOLS_PER_REQUEST: int = 64
     CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST: int = 16
     CHAT_MAX_FUNCTIONS_PER_REQUEST: int = 64
@@ -522,6 +535,13 @@ class Settings(BaseSettings):
             "EMBEDDINGS_MAX_TOTAL_ESTIMATED_TOKENS",
             "EMBEDDINGS_MAX_DIMENSIONS",
             "EMBEDDINGS_MAX_USER_BYTES",
+            "REALTIME_PCM_AUDIO_RATE",
+            "REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS",
+            "REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS",
+            "REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS",
+            "REALTIME_MAX_INSTRUCTIONS_BYTES",
+            "REALTIME_DEFAULT_MAX_OUTPUT_TOKENS",
+            "REALTIME_MAX_OUTPUT_TOKENS",
             "CHAT_MAX_TOOLS_PER_REQUEST",
             "CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST",
             "CHAT_MAX_FUNCTIONS_PER_REQUEST",
@@ -662,6 +682,30 @@ class Settings(BaseSettings):
             self.AUDIO_TRANSLATION_ALLOWED_MODELS,
             field_name="AUDIO_TRANSLATION_ALLOWED_MODELS",
         )
+        _validate_audio_option_set(
+            self.REALTIME_ALLOWED_AUDIO_FORMAT_TYPES,
+            allowed_values=_SUPPORTED_REALTIME_AUDIO_FORMAT_TYPES,
+            field_name="REALTIME_ALLOWED_AUDIO_FORMAT_TYPES",
+        )
+        _validate_audio_option_set(
+            self.REALTIME_ALLOWED_VOICES,
+            allowed_values=_SUPPORTED_REALTIME_AUDIO_VOICES,
+            field_name="REALTIME_ALLOWED_VOICES",
+        )
+        if self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS < self.REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS:
+            raise ValueError(
+                "REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS must be >= REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS"
+            )
+        if self.REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS < self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS:
+            raise ValueError(
+                "REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS must be >= REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS"
+            )
+        if self.REALTIME_MAX_OUTPUT_TOKENS > 4096:
+            raise ValueError("REALTIME_MAX_OUTPUT_TOKENS must be <= 4096 for the current GA subset")
+        if self.REALTIME_DEFAULT_MAX_OUTPUT_TOKENS > self.REALTIME_MAX_OUTPUT_TOKENS:
+            raise ValueError(
+                "REALTIME_DEFAULT_MAX_OUTPUT_TOKENS must be <= REALTIME_MAX_OUTPUT_TOKENS"
+            )
         if self.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS:
             raise ValueError(
                 "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is not supported until explicit Chat audio "

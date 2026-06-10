@@ -85,3 +85,15 @@ class EmbeddingsUnsupportedFieldError(RequestPolicyError):
 
 class EmbeddingsUnsupportedOptionError(RequestPolicyError):
     error_code = "embeddings_option_not_supported"
+
+
+class RealtimeInputLimitExceededError(RequestPolicyError):
+    error_code = "realtime_input_limit_exceeded"
+
+
+class RealtimeUnsupportedFieldError(RequestPolicyError):
+    error_code = "realtime_field_not_supported"
+
+
+class RealtimeUnsupportedOptionError(RequestPolicyError):
+    error_code = "realtime_option_not_supported"

@@ -37,6 +37,7 @@ _AUDIO_SPEECH_PATH = "/audio/speech"
 _AUDIO_TRANSCRIPTIONS_PATH = "/audio/transcriptions"
 _AUDIO_TRANSLATIONS_PATH = "/audio/translations"
 _EMBEDDINGS_PATH = "/embeddings"
+_REALTIME_CLIENT_SECRETS_PATH = "/realtime/client_secrets"
 _RESPONSES_PATH = "/responses"
 _RESPONSES_INPUT_TOKENS_PATH = "/responses/input_tokens"
 _RESPONSES_COMPACT_PATH = "/responses/compact"
@@ -174,6 +175,28 @@ class OpenAIProviderAdapter(ProviderAdapter):
             accept="application/json",
         )
         response = await self._post_json(_EMBEDDINGS_PATH, json=body, headers=headers)
+        return self._provider_response(request, response)
+
+    async def create_realtime_client_secret(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/realtime/client_secrets", "realtime.client_secrets"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json",
+        )
+        response = await self._post_json(
+            _REALTIME_CLIENT_SECRETS_PATH,
+            json=dict(request.body),
+            headers=headers,
+        )
         return self._provider_response(request, response)
 
     async def stream_chat_completion(

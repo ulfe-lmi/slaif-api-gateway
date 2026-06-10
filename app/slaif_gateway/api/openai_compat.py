@@ -33,6 +33,7 @@ from slaif_gateway.services.endpoint_policy import (
     CONVERSATIONS_DELETE,
     CONVERSATIONS_RETRIEVE,
     MODELS_LIST,
+    REALTIME_CLIENT_SECRETS,
     RESPONSES,
     RESPONSES_COMPACT,
     RESPONSES_DELETE,
@@ -43,6 +44,7 @@ from slaif_gateway.services.endpoint_policy import (
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.model_catalog import ModelCatalogService
+from slaif_gateway.services.realtime_gateway import handle_realtime_client_secret_create
 from slaif_gateway.services.responses_gateway import (
     handle_conversation_item_create,
     handle_conversation_item_delete,
@@ -150,6 +152,21 @@ async def create_embeddings(
 ):
     _ensure_endpoint_allowed(authenticated_key, EMBEDDINGS)
     return await handle_embeddings_create(
+        payload=payload,
+        authenticated_key=authenticated_key,
+        settings=request.app.state.settings,
+        request=request,
+    )
+
+
+@router.post("/v1/realtime/client_secrets")
+async def create_realtime_client_secret(
+    request: Request,
+    payload: dict[str, object],
+    authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
+):
+    _ensure_endpoint_allowed(authenticated_key, REALTIME_CLIENT_SECRETS)
+    return await handle_realtime_client_secret_create(
         payload=payload,
         authenticated_key=authenticated_key,
         settings=request.app.state.settings,

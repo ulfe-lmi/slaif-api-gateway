@@ -14,6 +14,7 @@ AUDIO_SPEECH: Final[str] = "audio.speech"
 AUDIO_TRANSCRIPTIONS: Final[str] = "audio.transcriptions"
 AUDIO_TRANSLATIONS: Final[str] = "audio.translations"
 EMBEDDINGS: Final[str] = "embeddings"
+REALTIME_CLIENT_SECRETS: Final[str] = "realtime.client_secrets"
 RESPONSES: Final[str] = "responses"
 RESPONSES_INPUT_TOKENS: Final[str] = "responses.input_tokens"
 RESPONSES_RETRIEVE: Final[str] = "responses.retrieve"
@@ -70,6 +71,13 @@ _ENDPOINT_ALIASES: Final[dict[str, frozenset[str]]] = {
             "embeddings",
             "post /v1/embeddings",
             "/v1/embeddings",
+        }
+    ),
+    REALTIME_CLIENT_SECRETS: frozenset(
+        {
+            "realtime.client_secrets",
+            "post /v1/realtime/client_secrets",
+            "/v1/realtime/client_secrets",
         }
     ),
     RESPONSES: frozenset(

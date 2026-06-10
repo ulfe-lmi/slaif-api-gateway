@@ -55,6 +55,7 @@ Implemented:
 - Current Chat Completions support includes text chat, streaming text, local function tools, non-streaming local custom tools, bounded `n > 1` multiple choices, image input to text output, inline file input to text output, audio input to text output, and non-streaming audio output when the resolved route/model explicitly enables the matching capability.
 - Standalone Audio API support is implemented for bounded `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` with separate endpoint permission, route/model capability checks, PostgreSQL quota reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of uploaded audio, transcripts, generated speech bytes, or raw multipart/JSON bodies.
 - Standalone `POST /v1/embeddings` is implemented for a bounded RC2-safe subset with separate endpoint permission, route/model capability checks, PostgreSQL quota reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of embedding inputs, token arrays, vectors, or raw JSON/provider bodies.
+- Realtime audio now has a bounded RC2 foundation through `POST /v1/realtime/client_secrets` for browser/mobile WebRTC session admission with separate endpoint permission, explicit route/model `realtime` capability checks, PostgreSQL admission reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of ephemeral client secrets, instructions, raw session config, audio, transcripts, raw SDP, or raw events.
 - Chat Completions streaming live-burn monitoring is implemented per key for
   `POST /v1/chat/completions` with `stream=true`. Defaults are enabled with
   zero cost/token margins; positive margins stop early, zero margins stop near
@@ -89,7 +90,8 @@ Not implemented yet:
   lifecycle, and local/client-side tools only in the documented bounded
   subsets.
 - Legacy `/v1/completions`, `/v1/files`, image generation endpoints, batch
-  endpoints, and Realtime API.
+  endpoints, and Realtime call/WebSocket/SIP surfaces beyond
+  `POST /v1/realtime/client_secrets`.
 - Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,
   provider-side file lifecycle, streaming custom tools, streaming audio output,
   custom audio-output voices, previous-audio references, and `n > 1` with

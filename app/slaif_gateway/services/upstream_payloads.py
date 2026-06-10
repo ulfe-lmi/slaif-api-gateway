@@ -11,6 +11,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     NormalizedAudioTranscriptionUpstreamRequest,
     NormalizedAudioTranslationUpstreamRequest,
     NormalizedEmbeddingsUpstreamRequest,
+    NormalizedRealtimeClientSecretUpstreamRequest,
     NormalizedConversationItemsCreateUpstreamRequest,
     NormalizedConversationItemsQueryRequest,
     NormalizedConversationUpdateUpstreamRequest,
@@ -126,6 +127,10 @@ EMBEDDINGS_UPSTREAM_FIELDS: tuple[str, ...] = (
     "dimensions",
     "user",
 )
+REALTIME_CLIENT_SECRET_UPSTREAM_FIELDS: tuple[str, ...] = (
+    "expires_after",
+    "session",
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_FIELDS: tuple[str, ...] = ("items",)
 CONVERSATION_UPDATE_UPSTREAM_FIELDS: tuple[str, ...] = ("metadata",)
 CONVERSATION_ITEMS_QUERY_FIELDS: tuple[str, ...] = (
@@ -231,6 +236,27 @@ def build_embeddings_upstream_body(
         allowed_fields=frozenset(EMBEDDINGS_UPSTREAM_FIELDS),
         endpoint_label="Embeddings",
     )
+
+
+def build_realtime_client_secret_upstream_body(
+    normalized_request: NormalizedRealtimeClientSecretUpstreamRequest,
+) -> dict[str, Any]:
+    """Build a fresh Realtime client-secret payload from approved fields only."""
+
+    if not isinstance(normalized_request, NormalizedRealtimeClientSecretUpstreamRequest):
+        raise TypeError(
+            "Realtime client-secret upstream payload must be built from a normalized request contract."
+        )
+    fields = normalized_request.as_upstream_fields()
+    unknown_fields = set(fields) - set(REALTIME_CLIENT_SECRET_UPSTREAM_FIELDS)
+    if unknown_fields:
+        raise ValueError("Realtime client-secret payload contains unsupported fields.")
+    session = copy.deepcopy(dict(fields["session"]))
+    session["model"] = normalized_request.upstream_model
+    outbound: dict[str, Any] = {"session": session}
+    if "expires_after" in fields:
+        outbound["expires_after"] = copy.deepcopy(fields["expires_after"])
+    return outbound
 
 
 def build_responses_input_items_query_params(

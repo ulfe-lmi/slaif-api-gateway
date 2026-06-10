@@ -18,6 +18,7 @@ from slaif_gateway.schemas.pricing import (
     FxConversionResult,
     PricingLookupResult,
 )
+from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import (
     AudioOutputPricingNotSupportedError,
@@ -244,6 +245,52 @@ class PricingService:
             fx_rate=fx.rate,
         )
 
+    async def estimate_realtime_client_secret_cost(
+        self,
+        *,
+        route: RouteResolutionResult,
+        policy: RealtimePolicyResult,
+        endpoint: str = "/v1/realtime/client_secrets",
+        at: datetime | None = None,
+    ) -> ChatCostEstimate:
+        pricing = await self.find_active_pricing_rule(
+            provider=route.provider,
+            model=route.resolved_model,
+            endpoint=endpoint,
+            at=at,
+        )
+
+        input_tokens = policy.estimated_input_tokens
+        output_tokens = policy.effective_output_tokens
+        input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
+        output_cost_native = Decimal(output_tokens) / _ONE_MILLION * pricing.output_price_per_1m
+        total_native = input_cost_native + output_cost_native
+        if pricing.request_price is not None:
+            total_native = max(total_native, pricing.request_price)
+        total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+
+        return ChatCostEstimate(
+            provider=route.provider,
+            requested_model=route.requested_model,
+            resolved_model=route.resolved_model,
+            native_currency=pricing.currency,
+            estimated_input_tokens=input_tokens,
+            estimated_output_tokens=output_tokens,
+            estimated_input_cost_native=input_cost_native,
+            estimated_output_cost_native=output_cost_native,
+            estimated_total_cost_native=total_native,
+            estimated_total_cost_eur=total_eur,
+            pricing_rule_id=pricing.pricing_rule_id,
+            fx_rate_id=fx.fx_rate_id,
+            input_price_per_1m=pricing.input_price_per_1m,
+            cached_input_price_per_1m=pricing.cached_input_price_per_1m,
+            output_price_per_1m=pricing.output_price_per_1m,
+            reasoning_price_per_1m=pricing.reasoning_price_per_1m,
+            audio_output_price_per_1m=None,
+            request_price=pricing.request_price,
+            fx_rate=fx.rate,
+        )
+
 
 def _aware_time(value: datetime | None) -> datetime:
     if value is None:
@@ -272,6 +319,8 @@ def _normalize_endpoint(value: str) -> str:
         return "/v1/audio/translations"
     if endpoint == "embeddings":
         return "/v1/embeddings"
+    if endpoint == "realtime.client_secrets":
+        return "/v1/realtime/client_secrets"
     if endpoint == "responses":
         return "/v1/responses"
     return endpoint

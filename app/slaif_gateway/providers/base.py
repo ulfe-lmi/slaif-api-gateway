@@ -52,6 +52,11 @@ class ProviderAdapter(ABC):
         _ = request
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def create_realtime_client_secret(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a Realtime client-secret request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def forward_response_input_tokens(self, request: ProviderRequest) -> ProviderResponse:
         """Forward a Responses input-token count request."""
         _ = request

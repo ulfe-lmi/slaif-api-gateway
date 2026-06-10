@@ -498,9 +498,11 @@ Standalone speech accepts only validated JSON fields `model`, `input`, `voice`,
 `response_format`, `speed`, and `instructions`. Standalone transcription and
 translation accept only validated multipart uploads plus the explicitly allowed
 text fields documented above. URLs, provider file IDs, custom voices,
-`/v1/audio/voices`, Realtime audio, `/v1/files`, and raw payload passthrough
-remain unsupported. Uploaded audio bytes, generated speech bytes, transcripts,
-prompt text, and raw multipart/JSON bodies are not stored or logged.
+`/v1/audio/voices`, `/v1/files`, and raw payload passthrough remain
+unsupported. Realtime support is separate and limited to the bounded
+`POST /v1/realtime/client_secrets` slice documented below. Uploaded audio
+bytes, generated speech bytes, transcripts, prompt text, and raw
+multipart/JSON bodies are not stored or logged.
 
 Standalone embeddings support is separate again. Current RC2 support implements
 bounded `POST /v1/embeddings` behind its own endpoint permission plus explicit
@@ -526,6 +528,40 @@ dimensions/user values outside the configured bounds are rejected before route
 resolution, pricing, quota reservation, or provider forwarding. Input strings,
 token arrays, embedding vectors, and raw request/response bodies are not stored
 or logged.
+
+Realtime client-secret support is separate again. Current RC2 support
+implements bounded `POST /v1/realtime/client_secrets` only for the browser/mobile
+WebRTC admission flow. It requires its own endpoint permission plus explicit
+route/model `realtime.audio=true` and `realtime.webrtc_client_secrets=true`
+capability flags.
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `REALTIME_ALLOWED_AUDIO_FORMAT_TYPES` | `audio/pcm,audio/pcmu,audio/pcma` | Allowed GA Realtime audio format `type` values for `session.audio.input.format` and `session.audio.output.format` |
+| `REALTIME_ALLOWED_VOICES` | `alloy,ash,ballad,coral,echo,sage,shimmer,verse,marin,cedar` | Allowed built-in Realtime output voices |
+| `REALTIME_PCM_AUDIO_RATE` | `24000` | Required PCM sample rate when format `type` is `audio/pcm` |
+| `REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS` | `10` | Minimum allowed `expires_after.seconds` |
+| `REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS` | `600` | Injected default TTL when `expires_after` is omitted |
+| `REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS` | `7200` | Maximum allowed `expires_after.seconds` |
+| `REALTIME_MAX_INSTRUCTIONS_BYTES` | `8192` | Maximum UTF-8 bytes for bounded `session.instructions` |
+| `REALTIME_DEFAULT_MAX_OUTPUT_TOKENS` | `1024` | Injected default `session.max_output_tokens` when omitted |
+| `REALTIME_MAX_OUTPUT_TOKENS` | `4096` | Maximum allowed `session.max_output_tokens` |
+
+Realtime client-secret requests accept only validated top-level
+`expires_after` and `session` fields. The current safe subset supports only
+`session.type="realtime"`, `session.output_modalities=["audio"]`, bounded
+`session.instructions`, bounded integer `session.max_output_tokens`, optional
+`session.audio.input.format`, required `session.audio.output.format`, and a
+built-in string `session.audio.output.voice`. `expires_after.anchor` must be
+`created_at`, and `expires_after.seconds` must remain within the configured
+TTL bounds. Unknown fields, transcription sessions, translation, tools,
+`tool_choice`, MCP/connectors, tracing, prompt templates, arbitrary metadata,
+URLs, file IDs, custom voices, unsupported audio formats, and `"inf"`
+`max_output_tokens` are rejected before route resolution, pricing, quota
+reservation, or provider forwarding. `/v1/realtime/calls`, server-side
+WebSocket proxying, SIP, and Realtime tools remain deferred. Ephemeral client
+secrets, instructions text, audio payloads, transcripts, raw session config,
+raw SDP, and raw event bodies are not stored or logged.
 
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency

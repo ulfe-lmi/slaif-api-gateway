@@ -221,6 +221,16 @@ Standalone embeddings are separate too: `POST /v1/embeddings` requires its own
 key endpoint permission plus explicit route/model `embeddings` capability, and
 optional `dimensions` require `embeddings_dimensions=true`. Chat, Responses, or
 standalone audio permissions/capabilities do not imply embeddings support.
+Realtime client-secret issuance is separate again: `POST /v1/realtime/client_secrets`
+requires its own key endpoint permission plus explicit route/model
+`realtime.audio=true` and `realtime.webrtc_client_secrets=true` capability
+flags. Chat, Responses, standalone audio, or embeddings permissions/capabilities
+do not imply Realtime support. The gateway returns the provider-issued
+ephemeral client secret to the caller for browser/mobile WebRTC use, but it
+does not store or log the secret value, instructions text, raw session config,
+audio payloads, transcripts, raw SDP, or raw event bodies. `/v1/realtime/calls`,
+server-side WebSocket proxying, transcription sessions, translation, SIP,
+tools, and MCP remain deferred in this first slice.
 Multiple choices are only allowed with `chat_multiple_choices=true`;
 that flag does not imply hosted tools, custom tools, multimodal support, audio
 output, non-default service tiers, or Responses support. Route capability checks
