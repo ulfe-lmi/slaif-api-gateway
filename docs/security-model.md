@@ -3,6 +3,10 @@
 This document summarizes the implemented security architecture. It is not a
 formal certification, compliance audit, or penetration-test report.
 
+For the locked RC2 target versus the currently implemented scope, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md). This document covers security
+boundaries for implemented behavior only.
+
 For operational response procedures, see the
 [`runbooks`](runbooks/README.md), especially provider key rotation, gateway key
 leak response, HMAC secret rotation, one-time-secret encryption key handling,

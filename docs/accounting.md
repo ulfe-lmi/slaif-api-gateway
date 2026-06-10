@@ -3,6 +3,11 @@
 This document is the accounting documentation index for reviewers and future
 implementation work. It does not add runtime behavior or schema fields.
 
+For RC2 feature-fullness versus implemented-scope verification status, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md). Current accounting docs describe
+implemented paths only; they do not mean standalone audio endpoints,
+Realtime audio, or embeddings are already implemented.
+
 Current authoritative contracts:
 
 - [`provider-forwarding-contract.md`](provider-forwarding-contract.md) defines

@@ -2,7 +2,9 @@
 
 For first-time local setup, see [`quickstart.md`](quickstart.md). For RC-beta
 release scope and the verification checklist, see [`rc-beta.md`](rc-beta.md)
-and [`beta-readiness.md`](beta-readiness.md).
+and [`beta-readiness.md`](beta-readiness.md). For the canonical RC2 target and
+the still-missing endpoint families, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 This gateway is configured with environment variables. Secrets should come from
 environment variables, a deployment secret manager, or Docker secrets. The root

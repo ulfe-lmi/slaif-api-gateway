@@ -6,6 +6,11 @@ constraints for future Responses API work. It is intended for code reviewers and
 operators verifying implementation claims. Legacy `/v1/completions` is not
 implemented in the current gateway.
 
+For the maintainer-locked RC2 target, including the still-missing standalone
+audio endpoints, Realtime audio, and embeddings, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md). This document describes
+implemented forwarding behavior only.
+
 ## Provider Adapters
 
 | Provider | Adapter | Upstream API shape | Implemented endpoint |

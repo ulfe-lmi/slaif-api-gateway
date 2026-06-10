@@ -3,6 +3,9 @@
 Status: limited foundation implemented on current `main`.
 
 This document defines the RC2-beta support boundary for Responses API work.
+It does not define feature-full RC2 by itself; standalone `/v1/audio/*`,
+Realtime audio, and `POST /v1/embeddings` are tracked separately in
+[`rc2-feature-scope.md`](rc2-feature-scope.md).
 Current support is deliberately narrow: `POST /v1/responses` with text output,
 string input or bounded input item arrays, optional user-message `input_image`
 content parts for image input to text output, optional user-message

@@ -2,6 +2,11 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
+For the maintainer-locked RC2 target, including the still-missing standalone
+audio endpoints, Realtime audio, and embeddings, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md). A green verification harness
+proves the implemented surface is clean; it does not prove feature-full RC2.
+
 Clients use standard OpenAI client configuration only:
 
 ```bash

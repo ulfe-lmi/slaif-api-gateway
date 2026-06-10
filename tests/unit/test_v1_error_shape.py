@@ -20,10 +20,21 @@ def test_unimplemented_responses_rc2_routes_keep_openai_404_error_shape() -> Non
     for method, path, expected_status in (
         ("get", "/v1/responses", 405),
         ("post", "/v1/responses/resp_123/cancel", 404),
+        ("post", "/v1/embeddings", 404),
         ("post", "/v1/files", 404),
+        ("get", "/v1/files/file_123", 404),
+        ("get", "/v1/files/file_123/content", 404),
+        ("post", "/v1/uploads", 404),
+        ("post", "/v1/uploads/upload_123/parts", 404),
         ("post", "/v1/audio/speech", 404),
         ("post", "/v1/audio/transcriptions", 404),
         ("post", "/v1/audio/translations", 404),
+        ("post", "/v1/images/generations", 404),
+        ("post", "/v1/moderations", 404),
+        ("post", "/v1/vector_stores", 404),
+        ("post", "/v1/batches", 404),
+        ("post", "/v1/completions", 404),
+        ("post", "/v1/realtime/sessions", 404),
     ):
         response = getattr(client, method)(path)
 
