@@ -179,6 +179,34 @@ The skill should leave the operator with:
 - `provider-catalog-report.md`
 - `warnings.json`
 
+For OpenRouter reviewed imports, package presets are preferred over one flat
+catalog when the operator wants staged review surfaces:
+
+- `openrouter-chat-text`: default safe import candidate for ordinary text Chat
+- `openrouter-chat-image`: superset of text chat adding image-input to
+  text-output rows
+- `openrouter-chat-audio`: superset of image chat adding only safe
+  audio-capable Chat rows when current SLAIF capability/pricing evidence is
+  strong enough
+- `openrouter-chat-multimodal`: broader staged review package for safe chat
+  multimodal rows
+- `openrouter-responses-text`: separate Responses endpoint family; it may
+  legitimately emit zero TSV rows when current evidence is insufficient
+
+When packages are requested, the run should also leave:
+
+- `packages/package-index.md`
+- `packages/package-index.json`
+- `packages/<package>/package-manifest.json`
+- `packages/<package>/routes-proposal.tsv`
+- `packages/<package>/pricing-proposal.tsv`
+- `packages/<package>/model-review.md`
+- `packages/<package>/package-report.md`
+
+Review artifacts must stay readable in strict Markdown viewers. Prefer a compact
+HTML table in `model-review.md` with short columns and `—` for missing values.
+Do not emit wide long-note pipe tables.
+
 ## Reporting Requirements
 
 Report:

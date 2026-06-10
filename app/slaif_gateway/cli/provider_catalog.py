@@ -111,6 +111,36 @@ def propose_catalog(
             ),
         ),
     ] = True,
+    package: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--package",
+            help=(
+                "OpenRouter package preset to emit under packages/. Repeatable. "
+                "Known values: openrouter-chat-text, openrouter-chat-image, "
+                "openrouter-chat-audio, openrouter-chat-multimodal, openrouter-responses-text, "
+                "chat-text, chat-image, chat-audio, chat-multimodal, responses-text, all."
+            ),
+        ),
+    ] = None,
+    all_packages: Annotated[
+        bool,
+        typer.Option("--all-packages", help="Emit all known OpenRouter package presets."),
+    ] = False,
+    include_deprecated: Annotated[
+        bool,
+        typer.Option(
+            "--include-deprecated",
+            help="Include deprecated/expiring rows in package outputs when otherwise eligible.",
+        ),
+    ] = False,
+    include_ambiguous_capabilities: Annotated[
+        bool,
+        typer.Option(
+            "--include-ambiguous-capabilities",
+            help="Include otherwise eligible package rows with ambiguous capability warnings.",
+        ),
+    ] = False,
     acknowledge_assisted_proposal_risk: Annotated[
         bool,
         typer.Option(
@@ -140,6 +170,10 @@ def propose_catalog(
                 allow_zero_prices=allow_zero_prices,
                 paired_ready_only=paired_ready_only,
                 ordinary_chat_only=ordinary_chat_only,
+                package_names=tuple(package or ()),
+                all_packages=all_packages,
+                include_deprecated=include_deprecated,
+                include_ambiguous_capabilities=include_ambiguous_capabilities,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -168,7 +202,12 @@ def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) ->
         "mutated_metadata": False,
         "paired_ready_only": result.paired_ready_only,
         "ordinary_chat_only": result.ordinary_chat_only,
+        "package_names": list(result.package_names),
     }
+    if result.package_index_path is not None:
+        payload["files"]["package_index_json"] = str(result.package_index_path)
+    if result.package_index_markdown_path is not None:
+        payload["files"]["package_index_markdown"] = str(result.package_index_markdown_path)
     if json_output:
         emit_json(payload)
         return
@@ -183,6 +222,8 @@ def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) ->
     typer.echo(f"low_confidence={result.low_confidence}")
     typer.echo(f"paired_ready_only={result.paired_ready_only}")
     typer.echo(f"ordinary_chat_only={result.ordinary_chat_only}")
+    if result.package_names:
+        typer.echo("packages=" + ",".join(result.package_names))
     typer.echo("files:")
     typer.echo(f"- {result.routes_proposal_path}")
     typer.echo(f"- {result.pricing_proposal_path}")
@@ -190,3 +231,7 @@ def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) ->
     typer.echo(f"- {result.report_path}")
     typer.echo(f"- {result.warnings_path}")
     typer.echo(f"- {result.manifest_path}")
+    if result.package_index_path is not None:
+        typer.echo(f"- {result.package_index_path}")
+    if result.package_index_markdown_path is not None:
+        typer.echo(f"- {result.package_index_markdown_path}")

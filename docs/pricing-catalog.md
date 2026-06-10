@@ -143,6 +143,29 @@ slaif-gateway routes import \
   --json
 ```
 
+For OpenRouter reviewed imports, operators can now emit package presets instead
+of one flat proposal. `openrouter-chat-text` is the default safe import
+candidate; image, audio, multimodal, and Responses surfaces are emitted as
+separate package directories for review:
+
+```bash
+slaif-gateway provider-catalog propose openrouter \
+  --output-dir "$OUT" \
+  --max-models 500 \
+  --fetch-details-limit 50 \
+  --package openrouter-chat-text \
+  --package openrouter-chat-image \
+  --package openrouter-chat-audio \
+  --package openrouter-chat-multimodal \
+  --package openrouter-responses-text \
+  --no-save-source-snapshots \
+  --json
+```
+
+Each requested package writes paired-ready, import-compatible TSV files under
+`packages/<package>/` plus `package-manifest.json`, `package-report.md`, and a
+compact human-review `model-review.md`.
+
 Only after that preview succeeds should operators consider confirmed execution:
 
 ```bash
@@ -168,6 +191,20 @@ generated import TSVs. `--ordinary-chat-only` excludes ambiguous multimodal,
 audio, image, VL, realtime, and similar rows from ordinary Chat Completions
 import preparation unless an operator explicitly opts into multimodal chat
 candidates.
+
+Package presets apply that same idea as staged import surfaces:
+
+- `openrouter-chat-text`: ordinary text Chat
+- `openrouter-chat-image`: text package plus safe image-input rows
+- `openrouter-chat-audio`: image package plus safe audio-capable Chat rows only
+  when current SLAIF capability and pricing evidence can represent them
+- `openrouter-chat-multimodal`: broader staged review package
+- `openrouter-responses-text`: separate `/v1/responses` family, which may
+  legitimately emit zero rows when evidence is insufficient
+
+No package should be executed blindly. Review the package report, run import
+dry-runs, and rehearse the exact package against a disposable database before
+any real local deployment import.
 
 Generated proposal TSV files are self-validated before the command reports
 success. Malformed rows, invalid JSON cells, invalid decimals, broken

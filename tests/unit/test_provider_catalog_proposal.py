@@ -109,6 +109,46 @@ OPENROUTER_MODELS_FIXTURE = {
             "links": {},
         },
         {
+            "id": "openai/gpt-test-audio-in",
+            "canonical_slug": "openai/gpt-test-audio-in",
+            "name": "GPT Test Audio In",
+            "description": "Audio-input to text-output model",
+            "context_length": 64000,
+            "architecture": {
+                "input_modalities": ["text", "audio"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {
+                "prompt": "0.000003",
+                "completion": "0.000009",
+            },
+            "top_provider": {"context_length": 64000, "max_completion_tokens": 4096},
+            "supported_parameters": ["tools", "audio"],
+            "knowledge_cutoff": "2025-01",
+            "expiration_date": None,
+            "links": {},
+        },
+        {
+            "id": "openai/gpt-test-realtime",
+            "canonical_slug": "openai/gpt-test-realtime",
+            "name": "GPT Test Realtime",
+            "description": "Realtime family model that should stay out of safe packages",
+            "context_length": 64000,
+            "architecture": {
+                "input_modalities": ["text", "audio"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {
+                "prompt": "0.000003",
+                "completion": "0.000009",
+            },
+            "top_provider": {"context_length": 64000, "max_completion_tokens": 4096},
+            "supported_parameters": ["tools", "audio"],
+            "knowledge_cutoff": "2025-01",
+            "expiration_date": None,
+            "links": {},
+        },
+        {
             "id": "openai/gpt-search-test",
             "canonical_slug": "openai/gpt-search-test",
             "name": "GPT Search Test",
@@ -536,6 +576,137 @@ async def test_generate_openrouter_catalog_proposal_can_opt_into_multimodal_cand
     pricing_tsv = result.pricing_proposal_path.read_text(encoding="utf-8")
     assert "openai/gpt-test-image" in route_tsv
     assert "openai/gpt-test-image" in pricing_tsv
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_writes_package_presets(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENROUTER_MODELS_DOCS_MARKDOWN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="All pricing values are in USD per token/request/unit.",
+            headers={"content-type": "text/markdown"},
+        )
+    )
+    respx_mock.get(OPENROUTER_MODELS_API_URL).mock(
+        return_value=httpx.Response(200, json=OPENROUTER_MODELS_FIXTURE)
+    )
+    respx_mock.get("https://openrouter.ai/api/v1/models/openai/gpt-test-mini/endpoints").mock(
+        return_value=httpx.Response(200, json={"data": {"max_completion_tokens": 8192}})
+    )
+
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+        package_names=(
+            "openrouter-chat-text",
+            "openrouter-chat-image",
+            "openrouter-chat-audio",
+            "openrouter-chat-multimodal",
+            "openrouter-responses-text",
+        ),
+    )
+
+    assert result.package_index_path is not None
+    assert result.package_index_markdown_path is not None
+    assert result.package_index_path.exists()
+    assert result.package_index_markdown_path.exists()
+
+    packages_dir = tmp_path / "packages"
+    chat_text = packages_dir / "openrouter-chat-text"
+    chat_image = packages_dir / "openrouter-chat-image"
+    chat_audio = packages_dir / "openrouter-chat-audio"
+    chat_multimodal = packages_dir / "openrouter-chat-multimodal"
+    responses_text = packages_dir / "openrouter-responses-text"
+
+    for package_dir in (chat_text, chat_image, chat_audio, chat_multimodal, responses_text):
+        assert (package_dir / "package-manifest.json").exists()
+        assert (package_dir / "routes-proposal.tsv").exists()
+        assert (package_dir / "pricing-proposal.tsv").exists()
+        assert (package_dir / "model-review.md").exists()
+        assert (package_dir / "package-report.md").exists()
+
+    def route_keys(path: Path) -> set[tuple[str, str, str]]:
+        rows = parse_route_import_tsv(path.read_text(encoding="utf-8"))
+        return {(row["provider"], row["upstream_model"], row["endpoint"]) for row in rows}
+
+    def pricing_keys(path: Path) -> set[tuple[str, str, str]]:
+        rows = parse_pricing_import_tsv(path.read_text(encoding="utf-8"))
+        return {(row["provider"], row["model"], row["endpoint"]) for row in rows}
+
+    text_route_keys = route_keys(chat_text / "routes-proposal.tsv")
+    image_route_keys = route_keys(chat_image / "routes-proposal.tsv")
+    audio_route_keys = route_keys(chat_audio / "routes-proposal.tsv")
+    multimodal_route_keys = route_keys(chat_multimodal / "routes-proposal.tsv")
+    responses_route_keys = route_keys(responses_text / "routes-proposal.tsv")
+
+    assert text_route_keys == pricing_keys(chat_text / "pricing-proposal.tsv")
+    assert image_route_keys == pricing_keys(chat_image / "pricing-proposal.tsv")
+    assert audio_route_keys == pricing_keys(chat_audio / "pricing-proposal.tsv")
+    assert multimodal_route_keys == pricing_keys(chat_multimodal / "pricing-proposal.tsv")
+    assert responses_route_keys == pricing_keys(responses_text / "pricing-proposal.tsv")
+
+    assert text_route_keys <= image_route_keys
+    assert image_route_keys <= audio_route_keys
+    assert audio_route_keys <= multimodal_route_keys
+    assert not text_route_keys <= responses_route_keys
+
+    assert ("openrouter", "openai/gpt-test-mini", CHAT_COMPLETIONS_ENDPOINT) in text_route_keys
+    assert ("openrouter", "openai/gpt-test-image", CHAT_COMPLETIONS_ENDPOINT) not in text_route_keys
+    assert ("openrouter", "openai/gpt-test-image", CHAT_COMPLETIONS_ENDPOINT) in image_route_keys
+    assert ("openrouter", "openai/gpt-test-audio-in", CHAT_COMPLETIONS_ENDPOINT) not in audio_route_keys
+    assert ("openrouter", "openai/gpt-test-realtime", CHAT_COMPLETIONS_ENDPOINT) not in audio_route_keys
+    assert len(responses_route_keys) == 0
+
+    review_text = (chat_text / "model-review.md").read_text(encoding="utf-8")
+    assert "<table>" in review_text
+    assert "input USD per 1M" in review_text
+    assert "—" in review_text
+    assert "Authorization" not in review_text
+    assert "sk-" not in review_text
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_can_include_ambiguous_audio_package_rows(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENROUTER_MODELS_DOCS_MARKDOWN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="All pricing values are in USD per token/request/unit.",
+            headers={"content-type": "text/markdown"},
+        )
+    )
+    respx_mock.get(OPENROUTER_MODELS_API_URL).mock(
+        return_value=httpx.Response(200, json=OPENROUTER_MODELS_FIXTURE)
+    )
+    respx_mock.get("https://openrouter.ai/api/v1/models/openai/gpt-test-mini/endpoints").mock(
+        return_value=httpx.Response(200, json={"data": {"max_completion_tokens": 8192}})
+    )
+
+    await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+        package_names=("openrouter-chat-audio",),
+        include_ambiguous_capabilities=True,
+    )
+
+    audio_keys = {
+        (row["provider"], row["upstream_model"], row["endpoint"])
+        for row in parse_route_import_tsv(
+            (tmp_path / "packages" / "openrouter-chat-audio" / "routes-proposal.tsv").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    assert ("openrouter", "openai/gpt-test-audio-in", CHAT_COMPLETIONS_ENDPOINT) in audio_keys
+    assert ("openrouter", "openai/gpt-test-realtime", CHAT_COMPLETIONS_ENDPOINT) not in audio_keys
 
 
 @pytest.mark.asyncio

@@ -107,6 +107,8 @@ SUPPORTED_OUTPUT_FILES = (
     "provider-catalog-report.md",
     "warnings.json",
 )
+PACKAGE_INDEX_FILENAME = "packages/package-index.json"
+PACKAGE_INDEX_MARKDOWN_FILENAME = "packages/package-index.md"
 PROPOSAL_TSV_VALIDATION_ERROR_CODE = "proposal_tsv_validation_failed"
 SUPPORTED_CHAT_PARAMETERS = {
     "tools",
@@ -155,6 +157,40 @@ _OPENAI_MODEL_IDENTIFIER_PATTERN = re.compile(
 )
 _NUMERIC_PATTERN = re.compile(r"^[0-9][0-9,]*$")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+_ROUTE_CONTEXT_PATTERN = re.compile(r"(?:^|[| ])context=(?P<value>[0-9]+)")
+_ROUTE_MAX_OUTPUT_PATTERN = re.compile(r"(?:^|[| ])max_output_tokens=(?P<value>[0-9]+)")
+
+OPENROUTER_CHAT_TEXT_PACKAGE = "openrouter-chat-text"
+OPENROUTER_CHAT_IMAGE_PACKAGE = "openrouter-chat-image"
+OPENROUTER_CHAT_AUDIO_PACKAGE = "openrouter-chat-audio"
+OPENROUTER_CHAT_MULTIMODAL_PACKAGE = "openrouter-chat-multimodal"
+OPENROUTER_RESPONSES_TEXT_PACKAGE = "openrouter-responses-text"
+
+OPENROUTER_PACKAGE_ORDER = (
+    OPENROUTER_CHAT_TEXT_PACKAGE,
+    OPENROUTER_CHAT_IMAGE_PACKAGE,
+    OPENROUTER_CHAT_AUDIO_PACKAGE,
+    OPENROUTER_CHAT_MULTIMODAL_PACKAGE,
+    OPENROUTER_RESPONSES_TEXT_PACKAGE,
+)
+OPENROUTER_PACKAGE_ALIASES = {
+    "all": OPENROUTER_CHAT_MULTIMODAL_PACKAGE,
+    "chat-text": OPENROUTER_CHAT_TEXT_PACKAGE,
+    "chat-image": OPENROUTER_CHAT_IMAGE_PACKAGE,
+    "chat-audio": OPENROUTER_CHAT_AUDIO_PACKAGE,
+    "chat-multimodal": OPENROUTER_CHAT_MULTIMODAL_PACKAGE,
+    "responses-text": OPENROUTER_RESPONSES_TEXT_PACKAGE,
+}
+PACKAGE_EXCLUDED_WARNING_CODES = (
+    "missing_pricing",
+    "zero_price_requires_review",
+    "negative_or_invalid_price",
+    "unsupported_modality",
+    "search_specific_model",
+    "hosted_tool_only",
+    "deprecated_or_expiring",
+    "ambiguous_capability",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +315,24 @@ class ProviderCatalogProposalResult:
     low_confidence: int
     paired_ready_only: bool = False
     ordinary_chat_only: bool = True
+    package_index_path: Path | None = None
+    package_index_markdown_path: Path | None = None
+    package_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCatalogPackageResult:
+    package_name: str
+    package_dir: Path
+    endpoint_family: str
+    endpoint: str
+    route_rows: int
+    pricing_rows: int
+    superset_of: tuple[str, ...]
+    includes_packages: tuple[str, ...]
+    recommendation: str
+    warning_counts: Mapping[str, int]
+    excluded_counts: Mapping[str, int]
 
 
 class ProviderCatalogProposalValidationError(ValueError):
@@ -348,6 +402,10 @@ async def generate_provider_catalog_proposal(
     allow_zero_prices: bool = False,
     paired_ready_only: bool = False,
     ordinary_chat_only: bool = True,
+    package_names: Sequence[str] = (),
+    all_packages: bool = False,
+    include_deprecated: bool = False,
+    include_ambiguous_capabilities: bool = False,
     http_client: httpx.AsyncClient | None = None,
     now: datetime | None = None,
 ) -> ProviderCatalogProposalResult:
@@ -361,6 +419,11 @@ async def generate_provider_catalog_proposal(
         include_api_models=include_api_models,
     )
     normalized_currency = _normalize_currency(currency)
+    normalized_package_names = _normalize_openrouter_package_names(
+        provider_scope=provider_scope,
+        package_names=package_names,
+        all_packages=all_packages,
+    )
     _require_positive(max_models, label="max_models")
     _require_non_negative(fetch_details_limit, label="fetch_details_limit")
     _require_positive(max_web_calls, label="max_web_calls")
@@ -421,91 +484,123 @@ async def generate_provider_catalog_proposal(
             route_candidates.extend(provider_bundle.route_candidates)
             comparison_rows.extend(provider_bundle.comparison_rows)
             bundle_warnings.extend(provider_bundle.warnings)
+
+        normalized_path = output_dir / "provider-catalog-normalized.json"
+        report_path = output_dir / "provider-catalog-report.md"
+        warnings_path = output_dir / "warnings.json"
+        manifest_path = output_dir / "source-manifest.json"
+        routes_path = output_dir / "routes-proposal.tsv"
+        pricing_path = output_dir / "pricing-proposal.tsv"
+        package_index_path: Path | None = None
+        package_index_markdown_path: Path | None = None
+
+        exported_route_candidates, exported_pricing_candidates = _select_export_candidates(
+            route_candidates,
+            pricing_candidates,
+            paired_ready_only=paired_ready_only,
+        )
+
+        _write_json(
+            normalized_path,
+            {
+                "providers": list(providers),
+                "export_filters": {
+                    "paired_ready_only": paired_ready_only,
+                    "ordinary_chat_only": ordinary_chat_only,
+                },
+                "export_row_counts": {
+                    "routes": len(exported_route_candidates),
+                    "pricing": len(exported_pricing_candidates),
+                },
+                "models": [_jsonify_dataclass(item) for item in models],
+                "pricing_candidates": [_jsonify_dataclass(item) for item in pricing_candidates],
+                "route_candidates": [_jsonify_dataclass(item) for item in route_candidates],
+                "comparison_rows": [_jsonify_dataclass(item) for item in comparison_rows],
+            },
+        )
+        _write_json(
+            warnings_path,
+            {"warnings": [_jsonify_dataclass(item) for item in bundle_warnings]},
+        )
+        _write_json(
+            manifest_path,
+            {
+                "sources": [_jsonify_dataclass(item) for item in sources],
+                "output_files": list(SUPPORTED_OUTPUT_FILES),
+                "generated_at": _timestamp(now),
+                "extractor_version": "provider_catalog_proposal_v1",
+            },
+        )
+        _write_route_tsv(routes_path, exported_route_candidates, ordinary_chat_only=ordinary_chat_only)
+        _write_pricing_tsv(pricing_path, exported_pricing_candidates)
+        report_path.write_text(
+            _render_report(
+                providers=providers,
+                comparison_rows=comparison_rows,
+                warnings=bundle_warnings,
+                route_candidates=route_candidates,
+                pricing_candidates=pricing_candidates,
+                exported_route_candidates=exported_route_candidates,
+                exported_pricing_candidates=exported_pricing_candidates,
+                paired_ready_only=paired_ready_only,
+                ordinary_chat_only=ordinary_chat_only,
+            ),
+            encoding="utf-8",
+        )
+        _validate_generated_route_tsv(routes_path, exported_route_candidates)
+        _validate_generated_pricing_tsv(pricing_path, exported_pricing_candidates)
+
+        if normalized_package_names:
+            package_results = await _generate_openrouter_package_outputs(
+                client=client,
+                output_dir=output_dir,
+                package_names=normalized_package_names,
+                include_models=include_models,
+                exclude_models=exclude_models,
+                currency=normalized_currency,
+                source_methods=source_method_values,
+                max_models=max_models,
+                fetch_details_limit=fetch_details_limit,
+                save_source_snapshots=save_source_snapshots,
+                source_dir=source_dir,
+                allow_zero_prices=allow_zero_prices,
+                include_deprecated=include_deprecated,
+                include_ambiguous_capabilities=include_ambiguous_capabilities,
+                now=now,
+                source_manifest_path=manifest_path,
+            )
+            package_index_path = output_dir / PACKAGE_INDEX_FILENAME
+            package_index_markdown_path = output_dir / PACKAGE_INDEX_MARKDOWN_FILENAME
+            _write_package_indexes(
+                package_index_path=package_index_path,
+                package_index_markdown_path=package_index_markdown_path,
+                package_results=package_results,
+            )
+
+        confidence_counts = _count_confidence(models)
+        return ProviderCatalogProposalResult(
+            output_dir=output_dir,
+            routes_proposal_path=routes_path,
+            pricing_proposal_path=pricing_path,
+            normalized_path=normalized_path,
+            report_path=report_path,
+            warnings_path=warnings_path,
+            manifest_path=manifest_path,
+            route_rows_ready=len(exported_route_candidates),
+            pricing_rows_ready=len(exported_pricing_candidates),
+            warnings_count=len(bundle_warnings),
+            high_confidence=confidence_counts["high"],
+            medium_confidence=confidence_counts["medium"],
+            low_confidence=confidence_counts["low"],
+            paired_ready_only=paired_ready_only,
+            ordinary_chat_only=ordinary_chat_only,
+            package_index_path=package_index_path,
+            package_index_markdown_path=package_index_markdown_path,
+            package_names=normalized_package_names,
+        )
     finally:
         if owns_client:
             await client.aclose()
-
-    normalized_path = output_dir / "provider-catalog-normalized.json"
-    report_path = output_dir / "provider-catalog-report.md"
-    warnings_path = output_dir / "warnings.json"
-    manifest_path = output_dir / "source-manifest.json"
-    routes_path = output_dir / "routes-proposal.tsv"
-    pricing_path = output_dir / "pricing-proposal.tsv"
-
-    exported_route_candidates, exported_pricing_candidates = _select_export_candidates(
-        route_candidates,
-        pricing_candidates,
-        paired_ready_only=paired_ready_only,
-    )
-
-    _write_json(
-        normalized_path,
-        {
-            "providers": list(providers),
-            "export_filters": {
-                "paired_ready_only": paired_ready_only,
-                "ordinary_chat_only": ordinary_chat_only,
-            },
-            "export_row_counts": {
-                "routes": len(exported_route_candidates),
-                "pricing": len(exported_pricing_candidates),
-            },
-            "models": [_jsonify_dataclass(item) for item in models],
-            "pricing_candidates": [_jsonify_dataclass(item) for item in pricing_candidates],
-            "route_candidates": [_jsonify_dataclass(item) for item in route_candidates],
-            "comparison_rows": [_jsonify_dataclass(item) for item in comparison_rows],
-        },
-    )
-    _write_json(
-        warnings_path,
-        {"warnings": [_jsonify_dataclass(item) for item in bundle_warnings]},
-    )
-    _write_json(
-        manifest_path,
-        {
-            "sources": [_jsonify_dataclass(item) for item in sources],
-            "output_files": list(SUPPORTED_OUTPUT_FILES),
-            "generated_at": _timestamp(now),
-            "extractor_version": "provider_catalog_proposal_v1",
-        },
-    )
-    _write_route_tsv(routes_path, exported_route_candidates, ordinary_chat_only=ordinary_chat_only)
-    _write_pricing_tsv(pricing_path, exported_pricing_candidates)
-    report_path.write_text(
-        _render_report(
-            providers=providers,
-            comparison_rows=comparison_rows,
-            warnings=bundle_warnings,
-            route_candidates=route_candidates,
-            pricing_candidates=pricing_candidates,
-            exported_route_candidates=exported_route_candidates,
-            exported_pricing_candidates=exported_pricing_candidates,
-            paired_ready_only=paired_ready_only,
-            ordinary_chat_only=ordinary_chat_only,
-        ),
-        encoding="utf-8",
-    )
-    _validate_generated_route_tsv(routes_path, exported_route_candidates)
-    _validate_generated_pricing_tsv(pricing_path, exported_pricing_candidates)
-
-    confidence_counts = _count_confidence(models)
-    return ProviderCatalogProposalResult(
-        output_dir=output_dir,
-        routes_proposal_path=routes_path,
-        pricing_proposal_path=pricing_path,
-        normalized_path=normalized_path,
-        report_path=report_path,
-        warnings_path=warnings_path,
-        manifest_path=manifest_path,
-        route_rows_ready=len(exported_route_candidates),
-        pricing_rows_ready=len(exported_pricing_candidates),
-        warnings_count=len(bundle_warnings),
-        high_confidence=confidence_counts["high"],
-        medium_confidence=confidence_counts["medium"],
-        low_confidence=confidence_counts["low"],
-        paired_ready_only=paired_ready_only,
-        ordinary_chat_only=ordinary_chat_only,
-    )
 
 
 async def _propose_openrouter(
@@ -1136,6 +1231,30 @@ def _normalize_currency(currency: str) -> str:
     if not re.fullmatch(r"[A-Z]{3}", normalized):
         raise ValueError("currency must be a 3-letter ISO code")
     return normalized
+
+
+def _normalize_openrouter_package_names(
+    *,
+    provider_scope: ProviderName | Literal["all"],
+    package_names: Sequence[str],
+    all_packages: bool,
+) -> tuple[str, ...]:
+    requested = [value.strip().lower() for value in package_names if value.strip()]
+    if all_packages or "all" in requested:
+        requested = list(OPENROUTER_PACKAGE_ORDER)
+    if not requested:
+        return ()
+    if provider_scope != OPENROUTER_PROVIDER:
+        raise ValueError("provider catalog package presets are implemented only for openrouter")
+    normalized: list[str] = []
+    for value in requested:
+        canonical = OPENROUTER_PACKAGE_ALIASES.get(value, value)
+        if canonical not in OPENROUTER_PACKAGE_ORDER:
+            allowed = ", ".join(OPENROUTER_PACKAGE_ORDER)
+            raise ValueError(f"unknown package name {value!r}; allowed values: {allowed}")
+        if canonical not in normalized:
+            normalized.append(canonical)
+    return tuple(normalized)
 
 
 def _require_positive(value: int, *, label: str) -> None:
@@ -2318,6 +2437,774 @@ def _select_export_candidates(
     filtered_routes = [row for row in ready_routes if (row.provider, row.upstream_model, row.endpoint) in paired_keys]
     filtered_pricing = [row for row in ready_pricing if (row.provider, row.model_id, row.endpoint) in paired_keys]
     return tuple(filtered_routes), tuple(filtered_pricing)
+
+
+async def _generate_openrouter_package_outputs(
+    *,
+    client: httpx.AsyncClient,
+    output_dir: Path,
+    package_names: Sequence[str],
+    include_models: Sequence[str],
+    exclude_models: Sequence[str],
+    currency: str,
+    source_methods: Sequence[ProposalSourceMethod],
+    max_models: int,
+    fetch_details_limit: int,
+    save_source_snapshots: bool,
+    source_dir: Path,
+    allow_zero_prices: bool,
+    include_deprecated: bool,
+    include_ambiguous_capabilities: bool,
+    now: datetime | None,
+    source_manifest_path: Path,
+) -> tuple[ProviderCatalogPackageResult, ...]:
+    package_bundle = await _propose_openrouter(
+        client=client,
+        endpoint_scopes=("chat_completions", "responses"),
+        include_models=include_models,
+        exclude_models=exclude_models,
+        currency=currency,
+        source_methods=source_methods,
+        max_models=max_models,
+        fetch_details_limit=fetch_details_limit,
+        save_source_snapshots=save_source_snapshots,
+        source_dir=source_dir,
+        allow_zero_prices=allow_zero_prices,
+        ordinary_chat_only=False,
+        now=now,
+    )
+    model_by_id = {row.model_id: row for row in package_bundle.models}
+    paired_routes, paired_pricing = _select_export_candidates(
+        package_bundle.route_candidates,
+        package_bundle.pricing_candidates,
+        paired_ready_only=True,
+    )
+    routes_by_key = {
+        (row.provider, row.upstream_model, row.endpoint): row
+        for row in paired_routes
+    }
+    pricing_by_key = {
+        (row.provider, row.model_id, row.endpoint): row
+        for row in paired_pricing
+    }
+    base_keys = sorted(routes_by_key.keys() & pricing_by_key.keys())
+    comparison_by_model = {
+        row.model_id: row
+        for row in package_bundle.comparison_rows
+        if row.provider == OPENROUTER_PROVIDER
+    }
+
+    package_results: list[ProviderCatalogPackageResult] = []
+    packages_dir = output_dir / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+
+    package_keys: dict[str, set[tuple[str, str, str]]] = {}
+    for package_name in OPENROUTER_PACKAGE_ORDER:
+        selected_keys = _select_package_keys(
+            package_name=package_name,
+            base_keys=base_keys,
+            package_keys=package_keys,
+            routes_by_key=routes_by_key,
+            pricing_by_key=pricing_by_key,
+            model_by_id=model_by_id,
+            include_deprecated=include_deprecated,
+            include_ambiguous_capabilities=include_ambiguous_capabilities,
+        )
+        package_keys[package_name] = selected_keys
+        if package_name not in package_names:
+            continue
+        package_result = _write_openrouter_package(
+            output_dir=packages_dir / package_name,
+            package_name=package_name,
+            selected_keys=selected_keys,
+            routes_by_key=routes_by_key,
+            pricing_by_key=pricing_by_key,
+            model_by_id=model_by_id,
+            comparison_by_model=comparison_by_model,
+            include_deprecated=include_deprecated,
+            include_ambiguous_capabilities=include_ambiguous_capabilities,
+            source_manifest_path=source_manifest_path,
+            generated_at=_timestamp(now),
+        )
+        package_results.append(package_result)
+    return tuple(package_results)
+
+
+def _select_package_keys(
+    *,
+    package_name: str,
+    base_keys: Sequence[tuple[str, str, str]],
+    package_keys: Mapping[str, set[tuple[str, str, str]]],
+    routes_by_key: Mapping[tuple[str, str, str], ProviderCatalogRouteCandidate],
+    pricing_by_key: Mapping[tuple[str, str, str], ProviderCatalogPricingCandidate],
+    model_by_id: Mapping[str, ProviderCatalogModelCandidate],
+    include_deprecated: bool,
+    include_ambiguous_capabilities: bool,
+) -> set[tuple[str, str, str]]:
+    if package_name == OPENROUTER_RESPONSES_TEXT_PACKAGE:
+        return set()
+
+    selected: set[tuple[str, str, str]] = set()
+    for key in base_keys:
+        route = routes_by_key[key]
+        pricing = pricing_by_key[key]
+        model = model_by_id.get(route.upstream_model)
+        if model is None:
+            continue
+        if not _package_common_route_allowed(
+            route=route,
+            pricing=pricing,
+            model=model,
+            include_deprecated=include_deprecated,
+        ):
+            continue
+        if package_name == OPENROUTER_CHAT_TEXT_PACKAGE and _qualifies_chat_text(model=model):
+            selected.add(key)
+        elif package_name == OPENROUTER_CHAT_IMAGE_PACKAGE:
+            if key in package_keys.get(OPENROUTER_CHAT_TEXT_PACKAGE, set()) or _qualifies_chat_image(
+                model=model,
+                route=route,
+                include_ambiguous_capabilities=include_ambiguous_capabilities,
+            ):
+                selected.add(key)
+        elif package_name == OPENROUTER_CHAT_AUDIO_PACKAGE:
+            if key in package_keys.get(OPENROUTER_CHAT_IMAGE_PACKAGE, set()) or _qualifies_chat_audio(
+                model=model,
+                route=route,
+                include_ambiguous_capabilities=include_ambiguous_capabilities,
+            ):
+                selected.add(key)
+        elif package_name == OPENROUTER_CHAT_MULTIMODAL_PACKAGE:
+            if key in package_keys.get(OPENROUTER_CHAT_AUDIO_PACKAGE, set()) or _qualifies_chat_multimodal(
+                model=model,
+                route=route,
+                include_ambiguous_capabilities=include_ambiguous_capabilities,
+            ):
+                selected.add(key)
+    return selected
+
+
+def _package_common_route_allowed(
+    *,
+    route: ProviderCatalogRouteCandidate,
+    pricing: ProviderCatalogPricingCandidate,
+    model: ProviderCatalogModelCandidate,
+    include_deprecated: bool,
+) -> bool:
+    if route.endpoint != CHAT_COMPLETIONS_ENDPOINT or pricing.endpoint != CHAT_COMPLETIONS_ENDPOINT:
+        return False
+    if "search_specific_model" in route.warnings or "hosted_tool_only" in route.warnings:
+        return False
+    if _looks_like_globally_excluded_package_family(model.model_id):
+        return False
+    if not include_deprecated and "deprecated_or_expiring" in model.warnings:
+        return False
+    return True
+
+
+def _qualifies_chat_text(*, model: ProviderCatalogModelCandidate) -> bool:
+    return not _ordinary_chat_candidate_requires_review(
+        model_id=model.model_id,
+        input_modalities=model.input_modalities,
+        output_modalities=model.output_modalities,
+    )
+
+
+def _qualifies_chat_image(
+    *,
+    model: ProviderCatalogModelCandidate,
+    route: ProviderCatalogRouteCandidate,
+    include_ambiguous_capabilities: bool,
+) -> bool:
+    chat = _chat_capabilities_map(route.capabilities)
+    if not (chat.get(CHAT_CAPABILITY_IMAGE_INPUTS) and chat.get(CHAT_CAPABILITY_TEXT)):
+        return False
+    if chat.get(CHAT_CAPABILITY_AUDIO_OUTPUTS):
+        return False
+    if _looks_like_generation_only_or_excluded(model.model_id):
+        return False
+    if "ambiguous_capability" in model.warnings and not include_ambiguous_capabilities:
+        return False
+    return True
+
+
+def _qualifies_chat_audio(
+    *,
+    model: ProviderCatalogModelCandidate,
+    route: ProviderCatalogRouteCandidate,
+    include_ambiguous_capabilities: bool,
+) -> bool:
+    chat = _chat_capabilities_map(route.capabilities)
+    if not chat.get(CHAT_CAPABILITY_TEXT):
+        return False
+    if not chat.get(CHAT_CAPABILITY_AUDIO_INPUTS):
+        return False
+    if chat.get(CHAT_CAPABILITY_AUDIO_OUTPUTS):
+        return False
+    if _looks_like_audio_excluded_family(model.model_id):
+        return False
+    if "ambiguous_capability" in model.warnings and not include_ambiguous_capabilities:
+        return False
+    return True
+
+
+def _qualifies_chat_multimodal(
+    *,
+    model: ProviderCatalogModelCandidate,
+    route: ProviderCatalogRouteCandidate,
+    include_ambiguous_capabilities: bool,
+) -> bool:
+    chat = _chat_capabilities_map(route.capabilities)
+    if not chat.get(CHAT_CAPABILITY_TEXT):
+        return False
+    if not (
+        chat.get(CHAT_CAPABILITY_IMAGE_INPUTS)
+        or chat.get(CHAT_CAPABILITY_AUDIO_INPUTS)
+        or chat.get(CHAT_CAPABILITY_FILE_INPUTS)
+    ):
+        return False
+    if chat.get(CHAT_CAPABILITY_AUDIO_OUTPUTS):
+        return False
+    if _looks_like_generation_only_or_excluded(model.model_id):
+        return False
+    if "ambiguous_capability" in model.warnings and not include_ambiguous_capabilities:
+        return False
+    return True
+
+
+def _looks_like_excluded_ordinary_chat_family(model_id: str) -> bool:
+    lowered = model_id.lower()
+    blocked = (
+        "image",
+        "audio",
+        "speech",
+        "tts",
+        "whisper",
+        "realtime",
+        "video",
+        "lyria",
+        "music",
+        "vl-",
+        "-vl",
+        "deep-research",
+        "sonar-pro-search",
+    )
+    return any(token in lowered for token in blocked)
+
+
+def _looks_like_globally_excluded_package_family(model_id: str) -> bool:
+    lowered = model_id.lower()
+    blocked = (
+        "realtime",
+        "video",
+        "lyria",
+        "music",
+        "deep-research",
+        "sonar-pro-search",
+    )
+    return any(token in lowered for token in blocked)
+
+
+def _looks_like_generation_only_or_excluded(model_id: str) -> bool:
+    lowered = model_id.lower()
+    blocked = (
+        "realtime",
+        "video",
+        "lyria",
+        "music",
+        "deep-research",
+        "sonar-pro-search",
+    )
+    return any(token in lowered for token in blocked)
+
+
+def _looks_like_audio_excluded_family(model_id: str) -> bool:
+    lowered = model_id.lower()
+    blocked = (
+        "realtime",
+        "tts",
+        "whisper",
+        "speech",
+        "lyria",
+        "music",
+        "stt",
+    )
+    return any(token in lowered for token in blocked)
+
+
+def _chat_capabilities_map(capabilities: Mapping[str, object]) -> Mapping[str, object]:
+    chat = capabilities.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
+    return chat if isinstance(chat, Mapping) else {}
+
+
+def _write_openrouter_package(
+    *,
+    output_dir: Path,
+    package_name: str,
+    selected_keys: set[tuple[str, str, str]],
+    routes_by_key: Mapping[tuple[str, str, str], ProviderCatalogRouteCandidate],
+    pricing_by_key: Mapping[tuple[str, str, str], ProviderCatalogPricingCandidate],
+    model_by_id: Mapping[str, ProviderCatalogModelCandidate],
+    comparison_by_model: Mapping[str, ProviderCatalogModelStatus],
+    include_deprecated: bool,
+    include_ambiguous_capabilities: bool,
+    source_manifest_path: Path,
+    generated_at: str,
+) -> ProviderCatalogPackageResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    routes = tuple(routes_by_key[key] for key in sorted(selected_keys))
+    pricing = tuple(pricing_by_key[key] for key in sorted(selected_keys))
+    route_path = output_dir / "routes-proposal.tsv"
+    pricing_path = output_dir / "pricing-proposal.tsv"
+    report_path = output_dir / "package-report.md"
+    review_path = output_dir / "model-review.md"
+    manifest_path = output_dir / "package-manifest.json"
+
+    _write_route_tsv(route_path, routes, ordinary_chat_only=False)
+    _write_pricing_tsv(pricing_path, pricing)
+    _validate_generated_route_tsv(route_path, routes)
+    _validate_generated_pricing_tsv(pricing_path, pricing)
+
+    endpoint_family, endpoint, superset_of, includes_packages, recommendation, safety_mode = _package_metadata(
+        package_name
+    )
+    warning_counts = _count_warning_codes_for_models(
+        comparison_by_model.get(route.upstream_model)
+        for route in routes
+    )
+    excluded_counts = _count_package_excluded_warnings(
+        comparison_by_model=comparison_by_model,
+        included_model_ids={route.upstream_model for route in routes},
+    )
+    manifest = {
+        "package_name": package_name,
+        "provider": OPENROUTER_PROVIDER,
+        "endpoint_family": endpoint_family,
+        "endpoint": endpoint,
+        "superset_of": list(superset_of),
+        "includes_packages": list(includes_packages),
+        "mode": "paired-ready",
+        "ordinary_chat_only": package_name == OPENROUTER_CHAT_TEXT_PACKAGE,
+        "route_rows": len(routes),
+        "pricing_rows": len(pricing),
+        "warnings": warning_counts,
+        "excluded_counts": excluded_counts,
+        "generated_at": generated_at,
+        "source_manifest": os.path.relpath(source_manifest_path, output_dir),
+        "include_deprecated": include_deprecated,
+        "include_ambiguous_capabilities": include_ambiguous_capabilities,
+        "recommendation": recommendation,
+        "safety_mode": safety_mode,
+        "audio_input_rows": _count_capability(routes, CHAT_CAPABILITY_AUDIO_INPUTS),
+        "audio_output_rows": _count_capability(routes, CHAT_CAPABILITY_AUDIO_OUTPUTS),
+        "image_input_rows": _count_capability(routes, CHAT_CAPABILITY_IMAGE_INPUTS),
+        "file_input_rows": _count_capability(routes, CHAT_CAPABILITY_FILE_INPUTS),
+    }
+    _write_json(manifest_path, manifest)
+    review_path.write_text(
+        _render_package_model_review(
+            package_name=package_name,
+            endpoint=endpoint,
+            routes=routes,
+            pricing=pricing,
+            model_by_id=model_by_id,
+            recommendation=recommendation,
+            safety_mode=safety_mode,
+        ),
+        encoding="utf-8",
+    )
+    report_path.write_text(
+        _render_package_report(
+            package_name=package_name,
+            endpoint=endpoint,
+            superset_of=superset_of,
+            includes_packages=includes_packages,
+            route_rows=len(routes),
+            pricing_rows=len(pricing),
+            warning_counts=warning_counts,
+            excluded_counts=excluded_counts,
+            recommendation=recommendation,
+            safety_mode=safety_mode,
+        ),
+        encoding="utf-8",
+    )
+    return ProviderCatalogPackageResult(
+        package_name=package_name,
+        package_dir=output_dir,
+        endpoint_family=endpoint_family,
+        endpoint=endpoint,
+        route_rows=len(routes),
+        pricing_rows=len(pricing),
+        superset_of=superset_of,
+        includes_packages=includes_packages,
+        recommendation=recommendation,
+        warning_counts=warning_counts,
+        excluded_counts=excluded_counts,
+    )
+
+
+def _package_metadata(
+    package_name: str,
+) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, str]:
+    if package_name == OPENROUTER_CHAT_TEXT_PACKAGE:
+        return (
+            "chat_completions",
+            CHAT_COMPLETIONS_ENDPOINT,
+            (),
+            (),
+            "production",
+            "default safe import candidate",
+        )
+    if package_name == OPENROUTER_CHAT_IMAGE_PACKAGE:
+        return (
+            "chat_completions",
+            CHAT_COMPLETIONS_ENDPOINT,
+            (OPENROUTER_CHAT_TEXT_PACKAGE,),
+            (OPENROUTER_CHAT_TEXT_PACKAGE,),
+            "reviewed staging",
+            "superset of text chat adding image-input to text-output rows",
+        )
+    if package_name == OPENROUTER_CHAT_AUDIO_PACKAGE:
+        return (
+            "chat_completions",
+            CHAT_COMPLETIONS_ENDPOINT,
+            (OPENROUTER_CHAT_IMAGE_PACKAGE,),
+            (OPENROUTER_CHAT_TEXT_PACKAGE, OPENROUTER_CHAT_IMAGE_PACKAGE),
+            "reviewed staging",
+            "superset of image chat adding safe audio-input chat rows only",
+        )
+    if package_name == OPENROUTER_CHAT_MULTIMODAL_PACKAGE:
+        return (
+            "chat_completions",
+            CHAT_COMPLETIONS_ENDPOINT,
+            (OPENROUTER_CHAT_AUDIO_PACKAGE,),
+            (
+                OPENROUTER_CHAT_TEXT_PACKAGE,
+                OPENROUTER_CHAT_IMAGE_PACKAGE,
+                OPENROUTER_CHAT_AUDIO_PACKAGE,
+            ),
+            "staging",
+            "broader safe multimodal chat review surface",
+        )
+    return (
+        "responses",
+        RESPONSES_ENDPOINT,
+        (),
+        (),
+        "report-only",
+        "separate responses family; zero-row unless current evidence supports import-ready text rows",
+    )
+
+
+def _count_warning_codes_for_models(
+    rows: Iterable[ProviderCatalogModelStatus | None],
+) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        if row is None:
+            continue
+        for warning in row.warnings:
+            counts[warning] += 1
+    return dict(sorted(counts.items()))
+
+
+def _count_package_excluded_warnings(
+    *,
+    comparison_by_model: Mapping[str, ProviderCatalogModelStatus],
+    included_model_ids: set[str],
+) -> dict[str, int]:
+    counts: dict[str, int] = {code: 0 for code in PACKAGE_EXCLUDED_WARNING_CODES}
+    for model_id, row in comparison_by_model.items():
+        if model_id in included_model_ids:
+            continue
+        for warning in row.warnings:
+            if warning in counts:
+                counts[warning] += 1
+    return counts
+
+
+def _count_capability(
+    routes: Sequence[ProviderCatalogRouteCandidate],
+    capability_key: str,
+) -> int:
+    total = 0
+    for route in routes:
+        chat = _chat_capabilities_map(route.capabilities)
+        if bool(chat.get(capability_key)):
+            total += 1
+    return total
+
+
+def _render_package_model_review(
+    *,
+    package_name: str,
+    endpoint: str,
+    routes: Sequence[ProviderCatalogRouteCandidate],
+    pricing: Sequence[ProviderCatalogPricingCandidate],
+    model_by_id: Mapping[str, ProviderCatalogModelCandidate],
+    recommendation: str,
+    safety_mode: str,
+) -> str:
+    pricing_by_key = {
+        (row.provider, row.model_id, row.endpoint): row
+        for row in pricing
+    }
+    lines = [
+        f"# {package_name} review",
+        "",
+        f"Endpoint: `{endpoint}`",
+        f"Recommendation: {recommendation}",
+        f"Package status: {safety_mode}",
+        f"Rows: {len(routes)}",
+        "",
+        "<table>",
+        "  <thead>",
+        "    <tr><th>model</th><th>endpoint</th><th>input USD per 1M</th><th>cached input USD per 1M</th><th>output USD per 1M</th><th>reasoning USD per 1M</th><th>context</th><th>max output</th><th>capability badges</th><th>package status</th></tr>",
+        "  </thead>",
+        "  <tbody>",
+    ]
+    for route in routes:
+        pricing_row = pricing_by_key[(route.provider, route.upstream_model, route.endpoint)]
+        model = model_by_id.get(route.upstream_model)
+        context = _display_or_dash(model.context_length if model is not None else _parse_route_context(route.notes))
+        max_output = _display_or_dash(
+            model.max_output_tokens if model is not None else _parse_route_max_output(route.notes)
+        )
+        lines.append(
+            "    <tr>"
+            f"<td><code>{_html_escape(route.upstream_model)}</code></td>"
+            f"<td><code>{_html_escape(route.endpoint)}</code></td>"
+            f"<td>{_html_escape(_display_or_dash(pricing_row.input_price_per_1m))}</td>"
+            f"<td>{_html_escape(_display_or_dash(pricing_row.cached_input_price_per_1m))}</td>"
+            f"<td>{_html_escape(_display_or_dash(pricing_row.output_price_per_1m))}</td>"
+            f"<td>{_html_escape(_display_or_dash(pricing_row.reasoning_price_per_1m))}</td>"
+            f"<td>{_html_escape(context)}</td>"
+            f"<td>{_html_escape(max_output)}</td>"
+            f"<td>{_html_escape(', '.join(_package_capability_badges(route)) or '—')}</td>"
+            "<td>import-ready</td>"
+            "</tr>"
+        )
+    if not routes:
+        lines.append(
+            "    <tr><td colspan=\"10\">— no import-ready rows in this package; review package-report.md for why this surface remained report-only.</td></tr>"
+        )
+    lines.extend(
+        [
+            "  </tbody>",
+            "</table>",
+            "",
+            "Reasoning-capable and separately priced reasoning are distinct. `reasoning USD per 1M` stays `—` when no separate reasoning price is exposed.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_package_report(
+    *,
+    package_name: str,
+    endpoint: str,
+    superset_of: Sequence[str],
+    includes_packages: Sequence[str],
+    route_rows: int,
+    pricing_rows: int,
+    warning_counts: Mapping[str, int],
+    excluded_counts: Mapping[str, int],
+    recommendation: str,
+    safety_mode: str,
+) -> str:
+    lines = [
+        f"# {package_name}",
+        "",
+        f"Endpoint: `{endpoint}`",
+        f"Recommendation: {recommendation}",
+        f"Package status: {safety_mode}",
+        f"Route rows: {route_rows}",
+        f"Pricing rows: {pricing_rows}",
+        f"Superset of: {', '.join(superset_of) if superset_of else 'none'}",
+        f"Includes packages: {', '.join(includes_packages) if includes_packages else 'none'}",
+        "",
+        "## Included warning counts",
+        "",
+    ]
+    if warning_counts:
+        for code, count in warning_counts.items():
+            lines.append(f"- `{code}`: {count}")
+    else:
+        lines.append("- none")
+    lines.extend(("", "## Excluded counts", ""))
+    for code, count in excluded_counts.items():
+        lines.append(f"- `{code}`: {count}")
+    lines.extend(
+        [
+            "",
+            "## Review and preview sequence",
+            "",
+            "1. Review `model-review.md` and this package report.",
+            "2. Run pricing dry-run.",
+            "3. Run routes dry-run.",
+            "4. Execute pricing import only after explicit review.",
+            "5. Execute route import only after explicit review.",
+            "",
+            "```bash",
+            "slaif-gateway pricing import \\",
+            "  --format tsv \\",
+            f"  --file packages/{package_name}/pricing-proposal.tsv \\",
+            "  --dry-run \\",
+            "  --json",
+            "",
+            "slaif-gateway routes import \\",
+            "  --format tsv \\",
+            f"  --file packages/{package_name}/routes-proposal.tsv \\",
+            "  --dry-run \\",
+            "  --json",
+            "```",
+            "",
+            "Execution remains a separate operator action after review only:",
+            "",
+            "```bash",
+            "slaif-gateway pricing import \\",
+            "  --format tsv \\",
+            f"  --file packages/{package_name}/pricing-proposal.tsv \\",
+            "  --execute \\",
+            "  --confirm-import \\",
+            f"  --reason \"reviewed {package_name} pricing import\" \\",
+            "  --json",
+            "",
+            "slaif-gateway routes import \\",
+            "  --format tsv \\",
+            f"  --file packages/{package_name}/routes-proposal.tsv \\",
+            "  --execute \\",
+            "  --confirm-import \\",
+            f"  --reason \"reviewed {package_name} route import\" \\",
+            "  --json",
+            "```",
+            "",
+            "Safety notes:",
+            "",
+            "- proposal/package generation only",
+            "- paired-ready TSVs only",
+            "- no provider calls happen during import preview or execution",
+            "- no production import should be executed blindly from an unreviewed package",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_package_indexes(
+    *,
+    package_index_path: Path,
+    package_index_markdown_path: Path,
+    package_results: Sequence[ProviderCatalogPackageResult],
+) -> None:
+    payload = {
+        "packages": [
+            {
+                "package_name": item.package_name,
+                "package_dir": os.path.relpath(item.package_dir, package_index_path.parent.parent),
+                "endpoint_family": item.endpoint_family,
+                "endpoint": item.endpoint,
+                "route_rows": item.route_rows,
+                "pricing_rows": item.pricing_rows,
+                "superset_of": list(item.superset_of),
+                "includes_packages": list(item.includes_packages),
+                "recommendation": item.recommendation,
+                "warnings": dict(item.warning_counts),
+                "excluded_counts": dict(item.excluded_counts),
+            }
+            for item in package_results
+        ]
+    }
+    _write_json(package_index_path, payload)
+    lines = [
+        "# OpenRouter package index",
+        "",
+        "## Package relationships",
+        "",
+        "- `openrouter-chat-text`: base package",
+        "- `openrouter-chat-image`: superset of `openrouter-chat-text`",
+        "- `openrouter-chat-audio`: superset of `openrouter-chat-image`",
+        "- `openrouter-chat-multimodal`: superset of `openrouter-chat-audio`",
+        "- `openrouter-responses-text`: separate endpoint family, not a Chat superset",
+        "",
+        "## Recommended sequence",
+        "",
+        "1. Review the package report and model review table.",
+        "2. Run pricing dry-run.",
+        "3. Run routes dry-run.",
+        "4. Execute pricing import only with `--execute --confirm-import --reason` after review.",
+        "5. Execute route import only with `--execute --confirm-import --reason` after review.",
+        "",
+        "## Packages",
+        "",
+    ]
+    for item in package_results:
+        lines.extend(
+            [
+                f"### {item.package_name}",
+                "",
+                f"- endpoint family: `{item.endpoint_family}`",
+                f"- endpoint: `{item.endpoint}`",
+                f"- route rows: {item.route_rows}",
+                f"- pricing rows: {item.pricing_rows}",
+                f"- recommendation: {item.recommendation}",
+                f"- superset of: {', '.join(item.superset_of) if item.superset_of else 'none'}",
+                "",
+            ]
+        )
+    package_index_markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _package_capability_badges(route: ProviderCatalogRouteCandidate) -> list[str]:
+    chat = _chat_capabilities_map(route.capabilities)
+    badges = ["text"]
+    if chat.get(CHAT_CAPABILITY_STREAMING):
+        badges.append("streaming")
+    if chat.get(CHAT_CAPABILITY_IMAGE_INPUTS):
+        badges.append("image-input")
+    if chat.get(CHAT_CAPABILITY_FILE_INPUTS):
+        badges.append("file-input")
+    if chat.get(CHAT_CAPABILITY_AUDIO_INPUTS):
+        badges.append("audio-input")
+    if chat.get(CHAT_CAPABILITY_AUDIO_OUTPUTS):
+        badges.append("audio-output")
+    if chat.get(CHAT_CAPABILITY_REASONING_USAGE):
+        badges.append("reasoning-capable")
+    if chat.get(CHAT_CAPABILITY_FUNCTION_TOOLS):
+        badges.append("function-tools")
+    if chat.get(CHAT_CAPABILITY_STRUCTURED_OUTPUTS):
+        badges.append("structured")
+    return badges
+
+
+def _parse_route_context(notes: str | None) -> int | None:
+    if not notes:
+        return None
+    match = _ROUTE_CONTEXT_PATTERN.search(notes)
+    return int(match.group("value")) if match else None
+
+
+def _parse_route_max_output(notes: str | None) -> int | None:
+    if not notes:
+        return None
+    match = _ROUTE_MAX_OUTPUT_PATTERN.search(notes)
+    return int(match.group("value")) if match else None
+
+
+def _display_or_dash(value: object) -> str:
+    if value is None or value == "":
+        return "—"
+    return str(value)
+
+
+def _html_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def _write_route_tsv(
