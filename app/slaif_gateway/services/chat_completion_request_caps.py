@@ -887,12 +887,7 @@ def _validate_audio_output(payload: Mapping[str, Any], *, settings: Settings) ->
         )
 
     n = payload.get("n")
-    if (
-        isinstance(n, int)
-        and not isinstance(n, bool)
-        and n > 1
-        and not settings.CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES
-    ):
+    if isinstance(n, int) and not isinstance(n, bool) and n > 1:
         _raise(
             "n",
             "chat_audio_output_multiple_choices_not_supported",

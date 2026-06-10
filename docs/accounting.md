@@ -34,6 +34,12 @@ Core invariants:
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,
   session tokens, and email bodies must not be stored for accounting.
+- Current RC2 Chat audio support remains part of ordinary Chat Completions
+  accounting: audio input to text output and non-streaming audio output reserve
+  quota and finalize through the normal PostgreSQL Chat path. Provider aggregate
+  usage stays authoritative when available. Optional provider audio-token detail
+  may be recorded only as safe usage metadata; audio payloads and generated
+  audio bytes are never stored.
 
 ## Chat Completions Streaming Live-Burn Margin
 

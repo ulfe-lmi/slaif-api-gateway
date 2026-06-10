@@ -17,6 +17,7 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.accounting_errors import UsageMissingError
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
@@ -1012,7 +1013,7 @@ def test_openai_nonstreaming_audio_output_request_and_response_are_preserved(
         return_value=httpx.Response(200, json=upstream_payload)
     )
 
-    body = _audio_output_chat_request(audio_format="wav", voice="alloy")
+    body = _audio_output_chat_request(audio_format="aac", voice="alloy")
     response = TestClient(app).post(
         "/v1/chat/completions",
         json=body,
@@ -1027,12 +1028,72 @@ def test_openai_nonstreaming_audio_output_request_and_response_are_preserved(
     upstream_body = json.loads(upstream_request.content)
     assert upstream_body["model"] == "gpt-audio"
     assert upstream_body["modalities"] == ["text", "audio"]
-    assert upstream_body["audio"] == {"format": "wav", "voice": "alloy"}
+    assert upstream_body["audio"] == {"format": "aac", "voice": "alloy"}
     provider_response = state["provider_responses"][0]
     assert provider_response.usage.other_usage["completion_tokens_details"] == {
         "audio_tokens": 16
     }
     assert state["finalize_calls"] and len(state["finalize_calls"]) == 1
+
+
+def test_openai_nonstreaming_audio_output_missing_usage_fails_safely(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    import slaif_gateway.services.chat_completion_gateway as main_module
+
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="openai",
+        resolved_model="gpt-audio",
+        route_capabilities=_chat_capabilities(chat_audio_outputs=True),
+    )
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_audio_output_missing_usage",
+                "object": "chat.completion",
+                "model": "gpt-audio",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "hello",
+                            "audio": {
+                                "id": "audio_missing_usage",
+                                "data": "UklGRiQ=",
+                                "expires_at": 1893456000,
+                                "transcript": "hello",
+                            },
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+    )
+
+    async def _raise_usage_missing(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        raise UsageMissingError()
+
+    monkeypatch.setattr(main_module.AccountingService, "finalize_successful_response", _raise_usage_missing)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=_audio_output_chat_request(audio_format="aac", voice="alloy"),
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "usage_missing"
+    assert response.json().get("id") != "chatcmpl_audio_output_missing_usage"
+    assert route.calls
+    assert state["reserve_calls"]
 
 
 def test_openrouter_nonstreaming_audio_output_preserves_provider_reported_cost(

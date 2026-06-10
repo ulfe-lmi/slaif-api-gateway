@@ -274,7 +274,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | `image_url` message content parts | Supported for image input to text output only on user messages and only with `chat_image_inputs=true`; exact shape is `{ "type": "image_url", "image_url": { "url": "...", "detail"?: "auto" | "low" | "high" } }` |
 | `file` message content parts | Supported for inline file input to text output only on user messages and only with `chat_file_inputs=true`; exact accepted first-slice shape is `{ "type": "file", "file": { "filename": "...", "file_data": "<base64>" } }`. Raw base64 is accepted by default; `data:<mime>;base64,...` is accepted only when `CHAT_ALLOW_FILE_DATA_URLS=true`. File IDs and file URLs are rejected |
 | `input_audio` message content parts | Supported for audio input to text output only on user messages and only with `chat_audio_inputs=true`; exact accepted shape is `{ "type": "input_audio", "input_audio": { "data": "<base64>", "format": "wav" | "mp3" } }`. Audio data URLs and remote audio URLs are rejected in this PR |
-| `audio` | Supported only as top-level non-streaming audio-output config with `modalities: ["text", "audio"]` and `{ "format": "wav" | "mp3" | "flac" | "opus" | "pcm16", "voice": "alloy" | "ash" | "ballad" | "coral" | "echo" | "fable" | "nova" | "onyx" | "sage" | "shimmer" | "marin" | "cedar" }`. Custom voices, streaming audio output, and `n > 1` with audio output are rejected |
+| `audio` | Supported only as top-level non-streaming audio-output config with `modalities: ["text", "audio"]` and `{ "format": "wav" | "aac" | "mp3" | "flac" | "opus" | "pcm16", "voice": "alloy" | "ash" | "ballad" | "coral" | "echo" | "fable" | "nova" | "onyx" | "sage" | "shimmer" | "marin" | "cedar" }`. Custom voices, previous-audio assistant references, streaming audio output, and `n > 1` with audio output are rejected |
 | Video/alternate image/file/audio content parts | Rejected until separate broader multimodal pricing and accounting support exists; upstream evidence and the safe implementation roadmap are recorded in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) |
 | `web_search_options` | Rejected for standard keys; trusted calibration may pass known hosted discovery markers under its bounded policy |
 | `background`, `store=true`, `previous_response_id`, `conversation` | Rejected for Chat Completions; provider-side lifecycle/state features are not implemented on this endpoint |
@@ -458,7 +458,7 @@ SLAIF accepts `modalities: ["text", "audio"]` plus top-level
 `audio: {"format": ..., "voice": ...}` only when the route sets
 `chat_audio_outputs=true` and the active pricing rule includes
 `pricing_metadata.audio_output_price_per_1m`. Supported formats are `wav`,
-`mp3`, `flac`, `opus`, and `pcm16`; supported built-in voices are `alloy`,
+`aac`, `mp3`, `flac`, `opus`, and `pcm16`; supported built-in voices are `alloy`,
 `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`,
 `shimmer`, `marin`, and `cedar`. Custom voices, previous-audio assistant
 references, streaming audio output, and `n > 1` with audio output are rejected

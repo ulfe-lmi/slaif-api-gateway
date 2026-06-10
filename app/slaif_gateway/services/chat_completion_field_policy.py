@@ -270,8 +270,8 @@ def _unsupported_message_part_finding(
         classification=ChatCompletionFieldClassification.UNSUPPORTED_MODALITY,
         error_code="unsupported_chat_completion_modality",
         safe_message=(
-            "Only text Chat Completions message content is enabled because this "
-            "gateway does not yet account for image, audio, file, or video inputs."
+            "Only documented Chat Completions content-part types enabled by this "
+            "gateway may be used in message content."
         ),
     )
 
