@@ -17,7 +17,11 @@ If you are new to the project, start with the step-by-step
 [`docs/quickstart.md`](docs/quickstart.md). For RC-beta release status,
 verification scope, and known limitations, see
 [`docs/rc-beta.md`](docs/rc-beta.md) and
-[`docs/beta-readiness.md`](docs/beta-readiness.md).
+[`docs/beta-readiness.md`](docs/beta-readiness.md). For the locked RC2 target
+and the required missing features, see
+[`docs/rc2-feature-scope.md`](docs/rc2-feature-scope.md). A green full-harness
+run means verification-clean for the implemented scope; it does not mean
+feature-full RC2.
 
 For exact reviewer-facing behavior, see:
 

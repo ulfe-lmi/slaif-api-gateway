@@ -8,6 +8,11 @@ RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
+It is also not a feature-full RC2 approval. A green harness means
+verification-clean for the implemented scope only. The maintainer-locked RC2
+target still requires standalone `/v1/audio/*`, Realtime audio, and
+`POST /v1/embeddings`; see [`rc2-feature-scope.md`](rc2-feature-scope.md).
+
 Tag-specific release notes for the first release candidate are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).
 

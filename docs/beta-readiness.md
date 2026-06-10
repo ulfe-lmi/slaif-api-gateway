@@ -7,11 +7,17 @@ Status: RC-beta readiness candidate after verification fixes.
 Current `main` baseline after the RC-beta CI/docs PR #120 merge:
 `dbc98374c47be4537cc5087bd008a36b76fc8f17`
 
-Recommendation: RC-beta ready for the implemented and documented scope.
+Recommendation: verification-clean baseline for the implemented and documented
+scope only. This document is not an RC2 feature-fullness approval.
 
 This report is not a production certification, compliance attestation, or
 penetration-test report. It records a release-candidate beta verification pass
 for the current implemented scope.
+
+The maintainer-locked RC2 target is stricter than this historical implemented
+scope baseline. Standalone `/v1/audio/*`, Realtime audio, and
+`POST /v1/embeddings` remain RC2-required missing work. See
+[`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
 baseline. It supports RC-beta readiness for the implemented scope and identifies
@@ -290,7 +296,8 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Continue tuning monitoring and alert routing for the target deployment.
 - Keep CI green and review dependency/security updates before each tag.
 
-Final verdict: RC-beta ready: yes, for the implemented and documented scope.
+Final verdict: verification-clean baseline for the implemented and documented
+scope: yes. Feature-full RC2: no; see [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 Tag-specific release notes for the recommended first RC-beta tag are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).

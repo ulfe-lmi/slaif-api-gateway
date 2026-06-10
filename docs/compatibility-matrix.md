@@ -2,6 +2,11 @@
 
 This matrix summarizes implemented behavior for reviewers. It describes the current repository state, not a future roadmap promise.
 
+For the canonical RC2 target classification, see
+[`rc2-feature-scope.md`](rc2-feature-scope.md). This document records current
+implemented behavior only; a green harness on current `main` means
+verification-clean for this implemented scope, not feature-full RC2.
+
 | Feature / endpoint / field | Current support | Provider coverage | Notes | Test coverage |
 | --- | --- | --- | --- | --- |
 | `GET /v1/models` | Implemented | Local route/provider metadata | Returns enabled, visible routes allowed for the authenticated key; `allow_all_models=false` with empty `allowed_models` returns an empty OpenAI-shaped list | Unit, API route, integration, and mocked official-client E2E model catalog tests |
