@@ -15,8 +15,8 @@ penetration-test report. It records a release-candidate beta verification pass
 for the current implemented scope.
 
 The maintainer-locked RC2 target is stricter than this historical implemented
-scope baseline. Standalone `/v1/audio/*`, Realtime audio, and
-`POST /v1/embeddings` remain RC2-required missing work. See
+scope baseline. Standalone `/v1/audio/*` is now implemented, while Realtime
+audio and `POST /v1/embeddings` remain RC2-required missing work. See
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
@@ -56,6 +56,12 @@ operational guidance, not a production certification.
   audio-output pricing metadata; generated audio/transcripts are forwarded to
   the client but are not stored or logged. Supported output formats are `wav`,
   `aac`, `mp3`, `flac`, `opus`, and `pcm16` with built-in voices only.
+- Standalone `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and
+  `POST /v1/audio/translations` with separate endpoint permission, explicit
+  `audio_endpoints` route capability checks, canonical OpenAI provider
+  forwarding, OpenRouter fail-closed behavior, PostgreSQL
+  reservation/finalization, and no local storage/logging of uploaded audio,
+  transcripts, generated speech bytes, or raw multipart/JSON bodies.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.

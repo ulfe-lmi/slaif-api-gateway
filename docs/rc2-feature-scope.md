@@ -22,8 +22,8 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 
 | Classification | Row count |
 | --- | ---: |
-| `RC2_REQUIRED_IMPLEMENTED` | 22 |
-| `RC2_REQUIRED_MISSING` | 5 |
+| `RC2_REQUIRED_IMPLEMENTED` | 25 |
+| `RC2_REQUIRED_MISSING` | 2 |
 | `RC2_EXPLICITLY_DEFERRED` | 12 |
 | `RC2_UNSUPPORTED_BY_POLICY` | 1 |
 | `NEEDS_MAINTAINER_DECISION` | 6 |
@@ -55,9 +55,9 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | Responses previous_response_id | Implemented for owned non-streaming references only | Unit, mocked official-client E2E | Normal non-streaming generation accounting | Forwarded only after owned-reference resolution | Safe reference metadata only | `RC2_REQUIRED_IMPLEMENTED` | Part of current implemented Responses scope | — |
 | Conversations create/retrieve/update/delete | Implemented for owned provider references | Unit, repository, mocked official-client E2E | Control-plane/resource calls only; no normal generation ledger row | Canonical forwarding implemented | Safe reference metadata only; no item/metadata value storage | `RC2_REQUIRED_IMPLEMENTED` | Part of current implemented Responses scope | — |
 | Conversation items create/list/retrieve/delete | Implemented for owned provider references | Unit, mocked official-client E2E | Control-plane/resource calls only; no normal generation ledger row | Canonical forwarding implemented | No item content storage | `RC2_REQUIRED_IMPLEMENTED` | Part of current implemented Responses scope | — |
-| `POST /v1/audio/speech` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No audio payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified standalone audio endpoints are RC2 targets | `feature/audio-endpoints-foundation` |
-| `POST /v1/audio/transcriptions` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No audio payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified standalone audio endpoints are RC2 targets | `feature/audio-endpoints-foundation` |
-| `POST /v1/audio/translations` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No audio payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified standalone audio endpoints are RC2 targets | `feature/audio-endpoints-foundation` |
+| `POST /v1/audio/speech` | Implemented for bounded standalone speech subset | Unit, forwarding, pricing, mocked official-client E2E | Request-priced or bounded input-estimated finalization implemented; PostgreSQL authoritative | Canonical OpenAI forwarding implemented; OpenRouter fails closed | Uploaded/generated audio bytes and input text not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 standalone speech target is now implemented without Realtime or custom voices | — |
+| `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Unit, forwarding, pricing, mocked official-client E2E | Reservation/finalization implemented; provider usage authoritative when present; request-priced fallback only where configured | Canonical OpenAI multipart forwarding implemented; OpenRouter fails closed | Uploaded audio bytes and transcripts not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 standalone transcription target is now implemented without file IDs or local transcript storage | — |
+| `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Unit, forwarding, pricing, mocked official-client E2E | Reservation/finalization implemented; provider usage authoritative when present; request-priced fallback only where configured | Canonical OpenAI multipart forwarding implemented; OpenRouter fails closed | Uploaded audio bytes and translations not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 standalone translation target is now implemented without file IDs or local transcript storage | — |
 | Realtime audio | Not implemented | No runtime coverage; unsupported/http-absent surface only | No session accounting design yet | No transport/forwarding path yet | No audio payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified Realtime audio is an RC2 target | `feature/realtime-audio-foundation` |
 | `POST /v1/embeddings` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No embedding payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified embeddings are an RC2 target | `feature/embeddings-endpoint-foundation` |
 | Hosted/provider-side tools | Unsupported/fail-closed | Unit/policy coverage | No billing/accounting path exposed | Rejected before provider forwarding | No hosted-tool payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
@@ -81,15 +81,15 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 
 ## Required RC2 Implementation Sequence
 
-1. `feature/audio-endpoints-foundation`
-   - implement `POST /v1/audio/speech`
-   - implement `POST /v1/audio/transcriptions`
-   - implement `POST /v1/audio/translations`
-   - no Realtime yet
+1. `feature/audio-endpoints-foundation` — completed
+   - implemented `POST /v1/audio/speech`
+   - implemented `POST /v1/audio/transcriptions`
+   - implemented `POST /v1/audio/translations`
+   - no Realtime
    - no `/v1/files` lifecycle
    - no audio payload storage
    - normal quota/pricing/accounting
-   - OpenAI/OpenRouter support only where provider adapter support is safe
+   - OpenAI forwarding implemented; OpenRouter fails closed
 
 2. `feature/embeddings-endpoint-foundation`
    - implement `POST /v1/embeddings`
@@ -106,4 +106,4 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
    - expect at least one design PR before implementation
 
 4. `feature/rc2-final-verification`
-   - run the full 128-worker harness only after all `RC2_REQUIRED_MISSING` rows are implemented
+   - run the full 128-worker harness only after Realtime audio and `POST /v1/embeddings` are implemented

@@ -468,6 +468,40 @@ provider usage/cost. File IDs, file URLs, audio URLs, audio data URLs, streaming
 audio output, custom audio-output voices, previous-audio references, and `n > 1`
 with audio output remain unsupported.
 
+Standalone Audio API support is separate from Chat request-body audio. Current
+RC2 support implements bounded `POST /v1/audio/speech`,
+`POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` behind
+separate endpoint permissions plus explicit route/model `audio_endpoints`
+capability flags.
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `AUDIO_SPEECH_ALLOWED_MODELS` | `tts-1,tts-1-hd,gpt-4o-mini-tts,gpt-4o-mini-tts-2025-12-15` | Resolved standalone speech route models |
+| `AUDIO_SPEECH_ALLOWED_RESPONSE_FORMATS` | `mp3,opus,aac,flac,wav,pcm` | Standalone speech `response_format` values |
+| `AUDIO_SPEECH_ALLOWED_VOICES` | `alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,verse,marin,cedar` | Built-in standalone speech voices |
+| `AUDIO_SPEECH_MAX_INPUT_CHARS` | `4096` | Standalone speech `input` text length |
+| `AUDIO_SPEECH_MAX_INSTRUCTIONS_BYTES` | `8192` | Standalone speech `instructions` bytes |
+| `AUDIO_TRANSCRIPTION_ALLOWED_MODELS` | `gpt-4o-transcribe,gpt-4o-mini-transcribe,gpt-4o-mini-transcribe-2025-12-15,whisper-1,gpt-4o-transcribe-diarize` | Resolved standalone transcription route models |
+| `AUDIO_TRANSLATION_ALLOWED_MODELS` | `whisper-1` | Resolved standalone translation route models |
+| `AUDIO_UPLOAD_MAX_FILE_BYTES` | `26214400` | One uploaded standalone transcription/translation file |
+| `AUDIO_UPLOAD_ALLOWED_EXTENSIONS` | `.flac,.mp3,.mp4,.mpeg,.mpga,.m4a,.ogg,.wav,.webm` | Standalone transcription/translation filename extension allowlist |
+| `AUDIO_UPLOAD_ALLOWED_MIME_TYPES` | `audio/flac,audio/m4a,audio/mp3,audio/mp4,audio/mpeg,audio/mpga,audio/ogg,audio/wav,audio/webm,application/octet-stream,video/mp4` | Standalone transcription/translation MIME allowlist |
+| `AUDIO_UPLOAD_MAX_FILENAME_BYTES` | `255` | One uploaded filename |
+| `AUDIO_TRANSCRIPTION_ALLOWED_RESPONSE_FORMATS` | `json,text,srt,verbose_json,vtt` | Standalone transcription `response_format` values |
+| `AUDIO_TRANSLATION_ALLOWED_RESPONSE_FORMATS` | `json,text,srt,verbose_json,vtt` | Standalone translation `response_format` values |
+| `AUDIO_TRANSCRIPTION_ALLOWED_INCLUDE_VALUES` | `logprobs` | Standalone transcription `include` allowlist |
+| `AUDIO_ALLOWED_TIMESTAMP_GRANULARITIES` | `word,segment` | Standalone transcription `timestamp_granularities` allowlist |
+| `AUDIO_TRANSCRIPTION_MAX_PROMPT_BYTES` | `8192` | Standalone transcription `prompt` bytes |
+| `AUDIO_TRANSLATION_MAX_PROMPT_BYTES` | `8192` | Standalone translation `prompt` bytes |
+
+Standalone speech accepts only validated JSON fields `model`, `input`, `voice`,
+`response_format`, `speed`, and `instructions`. Standalone transcription and
+translation accept only validated multipart uploads plus the explicitly allowed
+text fields documented above. URLs, provider file IDs, custom voices,
+`/v1/audio/voices`, Realtime audio, `/v1/files`, and raw payload passthrough
+remain unsupported. Uploaded audio bytes, generated speech bytes, transcripts,
+prompt text, and raw multipart/JSON bodies are not stored or logged.
+
 Scalar Chat Completions controls are validated explicitly: `temperature`
 must be between `0` and `2`, `top_p` between `0` and `1`, presence/frequency
 penalties between `-2` and `2`, `top_logprobs` between `0` and `20` and only

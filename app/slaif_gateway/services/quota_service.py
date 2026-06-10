@@ -23,6 +23,9 @@ from slaif_gateway.services.quota_errors import (
 )
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+_AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
+_AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
+_AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 _RESPONSES_ENDPOINT = "/v1/responses"
 _DEFAULT_RESERVATION_TTL = timedelta(minutes=15)
 
@@ -211,6 +214,12 @@ def _normalize_endpoint(value: str) -> str:
     endpoint = value.strip()
     if endpoint == "chat.completions":
         return _CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "audio.speech":
+        return _AUDIO_SPEECH_ENDPOINT
+    if endpoint == "audio.transcriptions":
+        return _AUDIO_TRANSCRIPTIONS_ENDPOINT
+    if endpoint == "audio.translations":
+        return _AUDIO_TRANSLATIONS_ENDPOINT
     if endpoint == "responses":
         return _RESPONSES_ENDPOINT
     return endpoint

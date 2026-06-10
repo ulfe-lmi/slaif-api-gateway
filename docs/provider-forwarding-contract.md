@@ -1,13 +1,13 @@
 # Provider Forwarding Contract
 
-This document describes exactly how implemented `/v1/chat/completions` requests
-are forwarded to upstream providers. It also records the planned forwarding
-constraints for future Responses API work. It is intended for code reviewers and
-operators verifying implementation claims. Legacy `/v1/completions` is not
-implemented in the current gateway.
+This document describes exactly how implemented `/v1/chat/completions`,
+standalone `/v1/audio/*`, and the current `/v1/responses` subset are forwarded
+to upstream providers. It is intended for code reviewers and operators
+verifying implementation claims. Legacy `/v1/completions` is not implemented in
+the current gateway.
 
-For the maintainer-locked RC2 target, including the still-missing standalone
-audio endpoints, Realtime audio, and embeddings, see
+For the maintainer-locked RC2 target, including the still-missing Realtime
+audio and embeddings work after the standalone Audio API foundation, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). This document describes
 implemented forwarding behavior only.
 
@@ -16,9 +16,24 @@ implemented forwarding behavior only.
 | Provider | Adapter | Upstream API shape | Implemented endpoint |
 | --- | --- | --- | --- |
 | OpenAI | `OpenAIProviderAdapter` | OpenAI Chat Completions | `POST /chat/completions` |
+| OpenAI | `OpenAIProviderAdapter` | OpenAI Audio speech | `POST /audio/speech` |
+| OpenAI | `OpenAIProviderAdapter` | OpenAI Audio transcriptions | `POST /audio/transcriptions` |
+| OpenAI | `OpenAIProviderAdapter` | OpenAI Audio translations | `POST /audio/translations` |
 | OpenRouter | `OpenRouterProviderAdapter` | OpenRouter OpenAI-compatible Chat Completions | `POST /chat/completions` |
+| OpenRouter | `OpenRouterProviderAdapter` | Standalone Audio API | Fail-closed in current RC2 slice |
 
 Anthropic-family, Google, Meta, Mistral, Qwen, and other non-OpenAI model names are supported only when a route sends them to OpenRouter's OpenAI-compatible interface. There is no native Anthropic adapter in this implementation.
+
+Standalone Audio API forwarding is separate from Chat request-body audio. The
+gateway now implements bounded standalone `POST /v1/audio/speech`,
+`POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` for OpenAI
+routes only. Those handlers rebuild canonical provider-bound JSON or multipart
+payloads from validated normalized contracts, require separate endpoint
+permission plus `audio_speech`/`audio_transcriptions`/`audio_translations`
+route capability, and never forward client `Authorization`, cookies, CSRF,
+admin-session, or internal gateway headers upstream. Uploaded audio bytes and
+generated speech bytes are forwarded transiently for the active request only;
+they are not stored or logged locally.
 
 Provider config rows, model route rows, pricing rows, and FX rows are local
 metadata used by the existing provider factory, route resolver, pricing, and FX

@@ -10,6 +10,7 @@ from typing import Any, Final
 from slaif_gateway.db.models import FxRate, PricingRule
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+from slaif_gateway.schemas.audio import AudioPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import (
     ChatCostEstimate,
@@ -19,6 +20,7 @@ from slaif_gateway.schemas.pricing import (
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing_errors import (
     AudioOutputPricingNotSupportedError,
+    AudioRequestPricingNotSupportedError,
     FxRateNotFoundError,
     InvalidFxRateError,
     InvalidPricingDataError,
@@ -142,6 +144,59 @@ class PricingService:
             output_price_per_1m=pricing.output_price_per_1m,
             reasoning_price_per_1m=pricing.reasoning_price_per_1m,
             audio_output_price_per_1m=pricing.audio_output_price_per_1m,
+            request_price=pricing.request_price,
+            fx_rate=fx.rate,
+        )
+
+    async def estimate_audio_operation_cost(
+        self,
+        *,
+        route: RouteResolutionResult,
+        policy: AudioPolicyResult,
+        endpoint: str,
+        at: datetime | None = None,
+    ) -> ChatCostEstimate:
+        pricing = await self.find_active_pricing_rule(
+            provider=route.provider,
+            model=route.resolved_model,
+            endpoint=endpoint,
+            at=at,
+        )
+
+        input_tokens = policy.estimated_input_tokens
+        output_tokens = 0
+
+        input_cost_native = (
+            Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
+        )
+        total_native = input_cost_native
+        if pricing.request_price is not None:
+            total_native = pricing.request_price
+            input_cost_native = pricing.request_price
+        elif endpoint in {"/v1/audio/transcriptions", "/v1/audio/translations"}:
+            raise AudioRequestPricingNotSupportedError(param="model")
+
+        total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+
+        return ChatCostEstimate(
+            provider=route.provider,
+            requested_model=route.requested_model,
+            resolved_model=route.resolved_model,
+            native_currency=pricing.currency,
+            estimated_input_tokens=input_tokens,
+            estimated_output_tokens=output_tokens,
+            estimated_input_cost_native=input_cost_native,
+            estimated_output_cost_native=Decimal("0"),
+            estimated_total_cost_native=total_native,
+            estimated_total_cost_eur=total_eur,
+            pricing_rule_id=pricing.pricing_rule_id,
+            fx_rate_id=fx.fx_rate_id,
+            input_price_per_1m=pricing.input_price_per_1m,
+            cached_input_price_per_1m=pricing.cached_input_price_per_1m,
+            output_price_per_1m=pricing.output_price_per_1m,
+            reasoning_price_per_1m=pricing.reasoning_price_per_1m,
+            audio_output_price_per_1m=None,
+            request_price=pricing.request_price,
             fx_rate=fx.rate,
         )
 
@@ -165,6 +220,12 @@ def _normalize_endpoint(value: str) -> str:
     endpoint = value.strip()
     if endpoint == "chat.completions":
         return "/v1/chat/completions"
+    if endpoint == "audio.speech":
+        return "/v1/audio/speech"
+    if endpoint == "audio.transcriptions":
+        return "/v1/audio/transcriptions"
+    if endpoint == "audio.translations":
+        return "/v1/audio/translations"
     if endpoint == "responses":
         return "/v1/responses"
     return endpoint
@@ -203,6 +264,10 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
         output_price_per_1m=output_price,
         reasoning_price_per_1m=reasoning_price,
         audio_output_price_per_1m=audio_output_price,
+        request_price=_optional_non_negative_decimal(
+            row.request_price,
+            field_name="request_price",
+        ),
         pricing_rule_id=row.id,
         valid_from=row.valid_from,
         valid_until=row.valid_until,

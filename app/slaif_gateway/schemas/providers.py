@@ -32,8 +32,18 @@ class ProviderRequest:
     upstream_model: str
     endpoint: str
     body: Mapping[str, Any]
+    files: Mapping[str, "ProviderFileUpload"] | None = None
     request_id: str | None = None
     extra_headers: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFileUpload:
+    """Transient validated upload forwarded to an upstream provider."""
+
+    filename: str
+    content_type: str | None
+    data: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +54,9 @@ class ProviderResponse:
     upstream_model: str
     status_code: int
     json_body: Mapping[str, Any]
+    text_body: str | None = None
+    binary_body: bytes | None = None
+    content_type: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     upstream_request_id: str | None = None
     usage: ProviderUsage | None = None

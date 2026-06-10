@@ -25,9 +25,17 @@ from slaif_gateway.providers.errors import (
 )
 from slaif_gateway.providers.headers import build_provider_headers, safe_response_headers
 from slaif_gateway.providers.streaming import parse_sse_lines, with_streaming_usage_options
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
+from slaif_gateway.schemas.providers import (
+    ProviderFileUpload,
+    ProviderRequest,
+    ProviderResponse,
+    ProviderStreamChunk,
+)
 
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
+_AUDIO_SPEECH_PATH = "/audio/speech"
+_AUDIO_TRANSCRIPTIONS_PATH = "/audio/transcriptions"
+_AUDIO_TRANSLATIONS_PATH = "/audio/translations"
 _RESPONSES_PATH = "/responses"
 _RESPONSES_INPUT_TOKENS_PATH = "/responses/input_tokens"
 _RESPONSES_COMPACT_PATH = "/responses/compact"
@@ -77,6 +85,74 @@ class OpenAIProviderAdapter(ProviderAdapter):
             accept="application/json",
         )
         response = await self._post_json(_CHAT_COMPLETIONS_PATH, json=body, headers=headers)
+        return self._provider_response(request, response)
+
+    async def create_speech(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/audio/speech", "audio.speech"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        body = dict(request.body)
+        body["model"] = request.upstream_model
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/octet-stream",
+        )
+        response = await self._post_json(_AUDIO_SPEECH_PATH, json=body, headers=headers)
+        return self._provider_binary_response(request, response)
+
+    async def create_transcription(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/audio/transcriptions", "audio.transcriptions"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json, text/plain, text/vtt, application/x-subrip",
+            content_type=None,
+        )
+        response = await self._post_multipart(
+            _AUDIO_TRANSCRIPTIONS_PATH,
+            data=request.body,
+            files=request.files,
+            headers=headers,
+        )
+        return self._provider_response(request, response)
+
+    async def create_translation(self, request: ProviderRequest) -> ProviderResponse:
+        if request.endpoint not in {"/v1/audio/translations", "audio.translations"}:
+            raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        if not provider_api_key:
+            raise MissingProviderApiKeyError(provider=self.provider_name)
+
+        headers = build_provider_headers(
+            provider_api_key,
+            provider=self.provider_name,
+            request_id=request.request_id,
+            extra_headers=request.extra_headers,
+            accept="application/json, text/plain, text/vtt, application/x-subrip",
+            content_type=None,
+        )
+        response = await self._post_multipart(
+            _AUDIO_TRANSLATIONS_PATH,
+            data=request.body,
+            files=request.files,
+            headers=headers,
+        )
         return self._provider_response(request, response)
 
     async def stream_chat_completion(
@@ -500,6 +576,44 @@ class OpenAIProviderAdapter(ProviderAdapter):
 
         raise ProviderRequestError(provider=self.provider_name)
 
+    async def _post_multipart(
+        self,
+        path: str,
+        *,
+        data: Mapping[str, Any],
+        files: Mapping[str, ProviderFileUpload] | None,
+        headers: Mapping[str, str],
+    ) -> httpx.Response:
+        if files is None:
+            raise ProviderRequestError(provider=self.provider_name)
+        url = f"{self._base_url}{path}"
+        timeout = self._timeout_seconds
+        multipart_files = {
+            name: (upload.filename, upload.data, upload.content_type or "application/octet-stream")
+            for name, upload in files.items()
+        }
+        for attempt in range(self._max_retries + 1):
+            try:
+                if self._http_client is not None:
+                    return await self._http_client.post(
+                        url,
+                        data=data,
+                        files=multipart_files,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    return await client.post(url, data=data, files=multipart_files, headers=headers)
+            except httpx.TimeoutException as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderTimeoutError(provider=self.provider_name) from exc
+            except httpx.HTTPError as exc:
+                if attempt >= self._max_retries:
+                    raise ProviderRequestError(provider=self.provider_name) from exc
+            await asyncio.sleep(0)
+
+        raise ProviderRequestError(provider=self.provider_name)
+
     async def _get_json(
         self,
         path: str,
@@ -628,22 +742,57 @@ class OpenAIProviderAdapter(ProviderAdapter):
                 ),
             )
 
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise ProviderResponseParseError(provider=self.provider_name) from exc
-
-        if not isinstance(payload, Mapping):
-            raise ProviderResponseParseError(provider=self.provider_name)
+        content_type = response.headers.get("content-type", "")
+        payload: Mapping[str, Any] | None = None
+        text_body: str | None = None
+        if "json" in content_type:
+            try:
+                raw_payload = response.json()
+            except ValueError as exc:
+                raise ProviderResponseParseError(provider=self.provider_name) from exc
+            if not isinstance(raw_payload, Mapping):
+                raise ProviderResponseParseError(provider=self.provider_name)
+            payload = dict(raw_payload)
+        else:
+            text_body = response.text
 
         return ProviderResponse(
             provider=self.provider_name,
             upstream_model=request.upstream_model,
             status_code=response.status_code,
-            json_body=dict(payload),
+            json_body=dict(payload or {}),
+            text_body=text_body,
+            content_type=content_type or None,
             headers=safe_response_headers(response.headers),
-            upstream_request_id=_upstream_request_id(response.headers, payload),
-            usage=self.parse_usage(payload),
+            upstream_request_id=_upstream_request_id(response.headers, payload or {}),
+            usage=self.parse_usage(payload or {}),
+        )
+
+    def _provider_binary_response(
+        self,
+        request: ProviderRequest,
+        response: httpx.Response,
+    ) -> ProviderResponse:
+        if response.status_code < 200 or response.status_code >= 300:
+            raise ProviderHTTPError(
+                provider=self.provider_name,
+                upstream_status_code=response.status_code,
+                diagnostic=build_provider_error_diagnostic(
+                    provider=self.provider_name,
+                    upstream_status_code=response.status_code,
+                    body=_json_or_none(response),
+                    headers=response.headers,
+                ),
+            )
+        return ProviderResponse(
+            provider=self.provider_name,
+            upstream_model=request.upstream_model,
+            status_code=response.status_code,
+            json_body={},
+            binary_body=response.content,
+            content_type=response.headers.get("content-type"),
+            headers=safe_response_headers(response.headers),
+            upstream_request_id=_upstream_request_id(response.headers, {}),
         )
 
     def _raise_for_stream_error_event(

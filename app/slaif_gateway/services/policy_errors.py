@@ -49,3 +49,23 @@ class InvalidChoiceCountError(RequestPolicyError):
 
 class ChoiceCountLimitExceededError(RequestPolicyError):
     error_code = "chat_choice_count_limit_exceeded"
+
+
+class AudioSpeechInputLimitExceededError(RequestPolicyError):
+    error_code = "audio_speech_input_limit_exceeded"
+
+
+class AudioUploadLimitExceededError(RequestPolicyError):
+    error_code = "audio_upload_limit_exceeded"
+
+
+class AudioUnsupportedFieldError(RequestPolicyError):
+    error_code = "audio_field_not_supported"
+
+
+class AudioUnsupportedOptionError(RequestPolicyError):
+    error_code = "audio_option_not_supported"
+
+
+class AudioInvalidMultipartError(RequestPolicyError):
+    error_code = "audio_invalid_multipart"

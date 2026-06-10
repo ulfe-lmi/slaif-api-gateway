@@ -32,6 +32,21 @@ class ProviderAdapter(ABC):
         _ = request
         raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
+    async def create_speech(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a standalone Audio API speech request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def create_transcription(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a standalone Audio API transcription request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
+    async def create_translation(self, request: ProviderRequest) -> ProviderResponse:
+        """Forward a standalone Audio API translation request."""
+        _ = request
+        raise UnsupportedProviderEndpointError(provider=self.provider_name)
+
     async def forward_response_input_tokens(self, request: ProviderRequest) -> ProviderResponse:
         """Forward a Responses input-token count request."""
         _ = request

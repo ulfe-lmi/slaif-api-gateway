@@ -70,6 +70,25 @@ def test_rc2_scope_doc_marks_green_harness_as_implemented_scope_only() -> None:
     assert "feature-full RC2" in content
 
 
+def test_rc2_scope_doc_moves_standalone_audio_to_implemented_and_keeps_remaining_missing() -> None:
+    content = Path("docs/rc2-feature-scope.md").read_text(encoding="utf-8")
+
+    assert (
+        "| `POST /v1/audio/speech` | Implemented for bounded standalone speech subset |" in content
+    )
+    assert (
+        "| `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset |"
+        in content
+    )
+    assert (
+        "| `POST /v1/audio/translations` | Implemented for bounded multipart translation subset |"
+        in content
+    )
+    assert "| Realtime audio | Not implemented |" in content
+    assert "| `POST /v1/embeddings` | Not implemented |" in content
+    assert "| `RC2_REQUIRED_MISSING` | 2 |" in content
+
+
 def test_rc_beta_docs_no_longer_read_as_feature_full_rc2() -> None:
     for path in (
         Path("README.md"),

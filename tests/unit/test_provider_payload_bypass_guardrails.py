@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 ALLOWED_UPSTREAM_BUILDERS = {
+    "build_audio_speech_upstream_body",
+    "build_audio_transcription_upstream_body",
+    "build_audio_translation_upstream_body",
     "build_conversation_update_upstream_body",
     "build_conversation_items_create_upstream_body",
     "build_conversation_items_query_params",
@@ -25,6 +28,7 @@ ALLOWED_UPSTREAM_BUILDERS = {
 ALLOWED_UPSTREAM_BODY_PARAMETERS = {
     ("app/slaif_gateway/services/chat_completion_gateway.py", "_streaming_chat_completion_response", "upstream_body"),
     ("app/slaif_gateway/services/responses_gateway.py", "_streaming_responses_response", "upstream_body"),
+    ("app/slaif_gateway/services/audio_gateway.py", "_handle_audio_operation", "provider_request_body"),
 }
 
 
@@ -236,6 +240,41 @@ def test_normalized_body_is_built_before_rate_limit_and_quota_side_effects() -> 
     assert (
         conversation_item_retrieve_build_lines
     ), "Conversation item retrieve handler must build normalized upstream query params"
+
+    audio_tree = ast.parse(
+        Path("app/slaif_gateway/services/audio_gateway.py").read_text(encoding="utf-8")
+    )
+    audio_speech_handler = _find_function(audio_tree, "handle_audio_speech")
+    audio_speech_build_lines = _call_lines(
+        audio_speech_handler,
+        "_build_safe_audio_speech_upstream_body",
+    )
+    assert audio_speech_build_lines, "Audio speech handler must build the normalized upstream body"
+    assert audio_speech_build_lines[0] < _call_lines(audio_speech_handler, "_handle_audio_operation")[0]
+
+    audio_transcription_handler = _find_function(audio_tree, "handle_audio_transcription")
+    audio_transcription_build_lines = _call_lines(
+        audio_transcription_handler,
+        "_build_safe_audio_transcription_upstream_body",
+    )
+    assert (
+        audio_transcription_build_lines
+    ), "Audio transcription handler must build the normalized upstream body"
+    assert audio_transcription_build_lines[0] < _call_lines(
+        audio_transcription_handler, "_handle_audio_operation"
+    )[0]
+
+    audio_translation_handler = _find_function(audio_tree, "handle_audio_translation")
+    audio_translation_build_lines = _call_lines(
+        audio_translation_handler,
+        "_build_safe_audio_translation_upstream_body",
+    )
+    assert (
+        audio_translation_build_lines
+    ), "Audio translation handler must build the normalized upstream body"
+    assert audio_translation_build_lines[0] < _call_lines(
+        audio_translation_handler, "_handle_audio_operation"
+    )[0]
 
 
 def test_no_direct_forwarding_passthrough_names_in_provider_paths() -> None:

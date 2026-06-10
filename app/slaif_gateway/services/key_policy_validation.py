@@ -11,6 +11,9 @@ from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT
 from slaif_gateway.services.route_resolution import matches_model_route
 
 MODELS_ENDPOINT = "/v1/models"
+SPEECH_ENDPOINT = "/v1/audio/speech"
+TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
+TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
 RESPONSES_RETRIEVE_ENDPOINT = "GET /v1/responses/{response_id}"
@@ -30,6 +33,9 @@ IMPLEMENTED_CLIENT_ENDPOINTS = frozenset(
     {
         MODELS_ENDPOINT,
         CHAT_COMPLETIONS_ENDPOINT,
+        SPEECH_ENDPOINT,
+        TRANSCRIPTIONS_ENDPOINT,
+        TRANSLATIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
         RESPONSES_RETRIEVE_ENDPOINT,
@@ -86,6 +92,9 @@ async def validate_gateway_key_policy(
     )
     model_backed_endpoints = effective_endpoints & {
         CHAT_COMPLETIONS_ENDPOINT,
+        SPEECH_ENDPOINT,
+        TRANSCRIPTIONS_ENDPOINT,
+        TRANSLATIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
         RESPONSES_COMPACT_ENDPOINT,
@@ -166,6 +175,9 @@ async def _validate_models_have_routes(
     require_visible = endpoints == {MODELS_ENDPOINT}
     endpoints_to_check = (
         CHAT_COMPLETIONS_ENDPOINT,
+        SPEECH_ENDPOINT,
+        TRANSCRIPTIONS_ENDPOINT,
+        TRANSLATIONS_ENDPOINT,
         RESPONSES_ENDPOINT,
         RESPONSES_INPUT_TOKENS_ENDPOINT,
         RESPONSES_COMPACT_ENDPOINT,

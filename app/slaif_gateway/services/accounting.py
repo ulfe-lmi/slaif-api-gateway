@@ -313,6 +313,110 @@ class AccountingService:
             accounting_status=ledger.accounting_status,
         )
 
+    async def finalize_successful_custom_response(
+        self,
+        reservation_id: uuid.UUID,
+        authenticated_key: AuthenticatedGatewayKey,
+        route: RouteResolutionResult,
+        pricing_estimate: ChatCostEstimate,
+        provider_response: ProviderResponse,
+        request_id: str,
+        *,
+        endpoint: str,
+        usage: ActualUsage,
+        actual_cost_eur: Decimal,
+        actual_cost_native: Decimal,
+        native_currency: str,
+        cost_source: str = _COST_SOURCE_SLAIF,
+        cost_confidence: str = "slaif_calculated",
+        cost_warnings: tuple[str, ...] = (),
+        component_costs_native: Mapping[str, Decimal] | None = None,
+        component_token_counts: Mapping[str, int] | None = None,
+        response_metadata_extra: Mapping[str, object] | None = None,
+        streaming: bool = False,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> FinalizedAccountingResult:
+        finished = _aware_now(finished_at)
+        reservation = await self._locked_pending_reservation(
+            reservation_id,
+            authenticated_key=authenticated_key,
+        )
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id_for_quota_update(
+            authenticated_key.gateway_key_id
+        )
+        if gateway_key is None:
+            raise ReservationFinalizationError("Gateway key was not found during finalization")
+
+        await self._gateway_keys_repository.finalize_reserved_counters(
+            gateway_key,
+            reserved_cost_eur=reservation.reserved_cost_eur,
+            reserved_tokens_total=reservation.reserved_tokens,
+            reserved_requests_total=reservation.reserved_requests,
+            actual_cost_eur=actual_cost_eur,
+            actual_tokens_total=usage.total_tokens,
+            actual_requests_total=1,
+            last_used_at=finished,
+        )
+        reservation = await self._quota_reservations_repository.mark_pending_reservation_finalized(
+            reservation,
+            finalized_at=finished,
+        )
+
+        started = _aware_now(started_at or getattr(reservation, "created_at", None))
+        overrun_metadata = _reservation_overrun_metadata(
+            actual_cost_eur=actual_cost_eur,
+            actual_tokens=usage.total_tokens,
+            reserved_cost_eur=reservation.reserved_cost_eur,
+            reserved_tokens=reservation.reserved_tokens,
+            endpoint=_normalize_endpoint(endpoint),
+        )
+        actual_cost = ActualCost(
+            actual_cost_eur=actual_cost_eur,
+            actual_cost_native=actual_cost_native,
+            native_currency=_normalize_currency(native_currency),
+            slaif_calculated_cost_eur=actual_cost_eur,
+            slaif_calculated_cost_native=actual_cost_native,
+            cost_source=cost_source,
+            cost_confidence=cost_confidence,
+            cost_warnings=cost_warnings,
+            component_costs_native=component_costs_native or {},
+            component_token_counts=component_token_counts or {},
+        )
+        ledger = await self._create_success_ledger(
+            request_id=request_id,
+            reservation_id=reservation.id,
+            authenticated_key=authenticated_key,
+            route=route,
+            provider_response=provider_response,
+            endpoint=_normalize_endpoint(endpoint),
+            usage=usage,
+            pricing_estimate=pricing_estimate,
+            actual_cost=actual_cost,
+            overrun_metadata={
+                **overrun_metadata,
+                **sanitize_metadata_mapping(response_metadata_extra or {}, drop_content_keys=True),
+            },
+            streaming=streaming,
+            started_at=started,
+            finished_at=finished,
+        )
+
+        return FinalizedAccountingResult(
+            usage_ledger_id=ledger.id,
+            reservation_id=reservation.id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            request_id=request_id,
+            estimated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+            actual_cost_eur=actual_cost.actual_cost_eur,
+            actual_cost_native=actual_cost.actual_cost_native,
+            native_currency=actual_cost.native_currency,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            accounting_status=ledger.accounting_status,
+        )
+
     async def record_provider_completed_before_finalization(
         self,
         reservation_id: uuid.UUID,
@@ -1163,6 +1267,12 @@ def _normalize_endpoint(value: str) -> str:
     endpoint = value.strip()
     if endpoint == "chat.completions":
         return _CHAT_COMPLETIONS_ENDPOINT
+    if endpoint == "audio.speech":
+        return "/v1/audio/speech"
+    if endpoint == "audio.transcriptions":
+        return "/v1/audio/transcriptions"
+    if endpoint == "audio.translations":
+        return "/v1/audio/translations"
     if endpoint == "responses":
         return _RESPONSES_ENDPOINT
     return endpoint

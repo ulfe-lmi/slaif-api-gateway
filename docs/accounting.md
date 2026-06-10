@@ -5,8 +5,8 @@ implementation work. It does not add runtime behavior or schema fields.
 
 For RC2 feature-fullness versus implemented-scope verification status, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). Current accounting docs describe
-implemented paths only; they do not mean standalone audio endpoints,
-Realtime audio, or embeddings are already implemented.
+implemented paths only; they do not mean Realtime audio or embeddings are
+already implemented.
 
 Current authoritative contracts:
 
@@ -45,6 +45,15 @@ Core invariants:
   usage stays authoritative when available. Optional provider audio-token detail
   may be recorded only as safe usage metadata; audio payloads and generated
   audio bytes are never stored.
+- Standalone `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and
+  `POST /v1/audio/translations` now use their own endpoint permission, route,
+  pricing, and finalization path. PostgreSQL remains authoritative. Provider
+  usage stays authoritative when present. Speech can finalize from configured
+  request pricing or bounded input estimation when provider usage is absent.
+  Transcription and translation require provider usage or an explicit configured
+  request-pricing fallback; missing required usage does not become zero-cost
+  success. Uploaded audio bytes, transcripts, prompt/input text, and generated
+  speech bytes are never stored.
 
 ## Chat Completions Streaming Live-Burn Margin
 
