@@ -48,7 +48,8 @@ operational guidance, not a production certification.
 - Chat Completions non-streaming audio output when the resolved route
   explicitly enables `chat_audio_outputs` and the active pricing row provides
   audio-output pricing metadata; generated audio/transcripts are forwarded to
-  the client but are not stored or logged.
+  the client but are not stored or logged. Supported output formats are `wav`,
+  `aac`, `mp3`, `flac`, `opus`, and `pcm16` with built-in voices only.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.
@@ -237,11 +238,12 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   Responses template policy remain future work. See
   `responses-compatibility.md`.
 - Embeddings API is not implemented.
-- Chat Completions file IDs, file URLs, audio URLs, streaming audio output,
-  custom audio-output voices, previous-audio references, and `n > 1` with audio
-  output are not implemented. Non-streaming Chat Completions audio output is
-  implemented only behind explicit route capability and pricing metadata. The
-  upstream evidence and future implementation roadmap are documented in
+- Chat Completions file IDs, file URLs, audio URLs, audio data URLs, streaming
+  audio output, custom audio-output voices, previous-audio references, and
+  `n > 1` with audio output are not implemented. Non-streaming Chat
+  Completions audio output is implemented only behind explicit route
+  capability and pricing metadata. The upstream evidence and future
+  implementation roadmap are documented in
   [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md).
 - MFA is not implemented.
 - Full RBAC is not implemented; every active admin is currently a full operator

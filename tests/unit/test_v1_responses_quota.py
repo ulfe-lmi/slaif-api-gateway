@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
@@ -3966,7 +3967,30 @@ def test_chat_endpoint_permission_does_not_allow_responses(monkeypatch) -> None:
     assert response.json()["error"]["code"] == "endpoint_not_allowed"
 
 
-def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("payload_extra", "expected_code"),
+    [
+        ({"background": True}, "responses_background_not_supported"),
+        ({"modalities": ["audio"]}, "responses_multimodal_not_supported"),
+        ({"audio": {"format": "wav"}}, "responses_multimodal_not_supported"),
+        (
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_audio", "data": "secret-audio"}],
+                    }
+                ]
+            },
+            "responses_input_multimodal_not_supported",
+        ),
+    ],
+)
+def test_policy_error_happens_before_route_pricing_or_quota(
+    monkeypatch,
+    payload_extra: dict[str, object],
+    expected_code: str,
+) -> None:
     import slaif_gateway.services.responses_gateway as main_module
 
     app = create_app()
@@ -3997,11 +4021,12 @@ def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None
 
     response = TestClient(app).post(
         "/v1/responses",
-        json={**_responses_request(), "background": True},
+        json={**_responses_request(), **payload_extra},
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "responses_background_not_supported"
+    assert response.json()["error"]["code"] == expected_code
+    assert "secret-audio" not in response.text
     assert route_calls == []
     assert pricing_calls == []
     assert quota_calls == []

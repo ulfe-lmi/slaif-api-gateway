@@ -21,6 +21,9 @@ def test_unimplemented_responses_rc2_routes_keep_openai_404_error_shape() -> Non
         ("get", "/v1/responses", 405),
         ("post", "/v1/responses/resp_123/cancel", 404),
         ("post", "/v1/files", 404),
+        ("post", "/v1/audio/speech", 404),
+        ("post", "/v1/audio/transcriptions", 404),
+        ("post", "/v1/audio/translations", 404),
     ):
         response = getattr(client, method)(path)
 

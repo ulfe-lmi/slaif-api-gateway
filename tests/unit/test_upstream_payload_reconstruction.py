@@ -289,7 +289,7 @@ def test_chat_normalized_contract_deep_copies_opaque_containers() -> None:
         "max_completion_tokens": 18,
     }
 
-    normalized_request = _normalize_chat_body(inbound, CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES=True)
+    normalized_request = _normalize_chat_body(inbound)
 
     inbound["messages"][0]["content"][0]["text"] = "changed"
     inbound["messages"][0]["content"][1]["image_url"]["url"] = "data:image/png;base64,Q0hBTkdFRA=="
@@ -323,7 +323,7 @@ def test_chat_normalized_contract_deep_copies_opaque_containers() -> None:
     assert rebuilt["metadata"]["safe"]["nested"] == "original"
 
 
-def test_chat_multimodal_multiple_choice_and_audio_output_are_reconstructed_exactly() -> None:
+def test_chat_multimodal_audio_output_is_reconstructed_exactly() -> None:
     inbound = {
         "model": "classroom-alias",
         "messages": [
@@ -345,14 +345,12 @@ def test_chat_multimodal_multiple_choice_and_audio_output_are_reconstructed_exac
         ],
         "modalities": ["text", "audio"],
         "audio": {"format": "wav", "voice": "alloy"},
-        "n": 2,
         "max_completion_tokens": 18,
     }
 
     normalized_request = _normalize_chat_body_with_resolved_model(
         inbound,
         resolved_model="gpt-4.1-mini",
-        CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES=True,
     )
     outbound = build_chat_completion_upstream_body(
         normalized_request,
@@ -363,7 +361,6 @@ def test_chat_multimodal_multiple_choice_and_audio_output_are_reconstructed_exac
         "messages": inbound["messages"],
         "modalities": ["text", "audio"],
         "audio": {"format": "wav", "voice": "alloy"},
-        "n": 2,
         "max_completion_tokens": 18,
     }
 

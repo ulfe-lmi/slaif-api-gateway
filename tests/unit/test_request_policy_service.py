@@ -516,7 +516,7 @@ def test_audio_input_content_part_is_validated_and_preserved(audio_format: str) 
     }
 
 
-@pytest.mark.parametrize("audio_format", ["wav", "mp3", "flac", "opus", "pcm16"])
+@pytest.mark.parametrize("audio_format", ["wav", "aac", "mp3", "flac", "opus", "pcm16"])
 @pytest.mark.parametrize(
     "voice",
     ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "marin", "cedar"],
@@ -542,7 +542,7 @@ def test_audio_output_config_is_validated_and_preserved(audio_format: str, voice
         ({"audio": None}, "chat_audio_output_config_invalid", "audio", ""),
         ({"audio": {"format": "wav"}}, "chat_audio_output_voice_not_supported", "audio.voice", ""),
         ({"audio": {"voice": "alloy"}}, "chat_audio_output_format_not_supported", "audio.format", ""),
-        ({"audio": {"format": "aac", "voice": "alloy"}}, "chat_audio_output_format_not_supported", "audio.format", "aac"),
+        ({"audio": {"format": "ogg", "voice": "alloy"}}, "chat_audio_output_format_not_supported", "audio.format", "ogg"),
         ({"audio": {"format": "wav", "voice": "verse"}}, "chat_audio_output_voice_not_supported", "audio.voice", "verse"),
         (
             {"audio": {"format": "wav", "voice": {"id": "voice_secret"}}},
@@ -587,6 +587,35 @@ def test_streaming_audio_output_is_rejected_even_if_toggle_is_enabled() -> None:
 
     assert exc_info.value.error_code == "chat_streaming_audio_output_not_supported"
     assert exc_info.value.param == "stream"
+
+
+def test_audio_input_data_urls_remain_rejected_even_if_toggle_is_enabled() -> None:
+    settings = _settings(HARD_MAX_INPUT_TOKENS=5000)
+    settings.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS = True
+    policy = ChatCompletionRequestPolicy(settings)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [_audio_message("data:audio/wav;base64,UklG", "wav")],
+            }
+        )
+
+    assert exc_info.value.error_code == "chat_audio_data_url_not_allowed"
+    assert exc_info.value.param == "messages[0].content[1].input_audio.data"
+
+
+def test_audio_output_multiple_choices_remain_rejected_even_if_toggle_is_enabled() -> None:
+    settings = _settings(HARD_MAX_INPUT_TOKENS=5000)
+    settings.CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES = True
+    policy = ChatCompletionRequestPolicy(settings)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(_audio_output_request(n=2))
+
+    assert exc_info.value.error_code == "chat_audio_output_multiple_choices_not_supported"
+    assert exc_info.value.param == "n"
 
 
 def test_audio_config_without_audio_modality_is_rejected() -> None:

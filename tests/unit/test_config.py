@@ -212,7 +212,7 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.CHAT_MAX_AUDIO_INPUT_DATA_BYTES == 10485760
     assert settings.CHAT_ALLOWED_AUDIO_INPUT_FORMATS == "wav,mp3"
     assert settings.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is False
-    assert settings.CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS == "wav,mp3,flac,opus,pcm16"
+    assert settings.CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS == "wav,aac,mp3,flac,opus,pcm16"
     assert "alloy" in settings.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES
     assert "cedar" in settings.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES
     assert settings.CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES is False
@@ -299,6 +299,57 @@ def test_streaming_audio_output_toggle_is_rejected_until_live_burn_exists(monkey
         get_settings()
 
     assert "CHAT_ALLOW_STREAMING_AUDIO_OUTPUT is not supported" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_message"),
+    [
+        (
+            "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS",
+            "true",
+            "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is not supported",
+        ),
+        (
+            "CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES",
+            "true",
+            "CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES is not supported",
+        ),
+        (
+            "CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES",
+            "true",
+            "CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES is not supported",
+        ),
+        (
+            "CHAT_ALLOWED_AUDIO_INPUT_FORMATS",
+            "wav,flac",
+            "CHAT_ALLOWED_AUDIO_INPUT_FORMATS contains unsupported values: flac",
+        ),
+        (
+            "CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS",
+            "wav,ogg",
+            "CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS contains unsupported values: ogg",
+        ),
+        (
+            "CHAT_ALLOWED_AUDIO_OUTPUT_VOICES",
+            "alloy,verse",
+            "CHAT_ALLOWED_AUDIO_OUTPUT_VOICES contains unsupported values: verse",
+        ),
+    ],
+)
+def test_rc2_chat_audio_settings_reject_unsupported_values(
+    monkeypatch,
+    field: str,
+    value: str,
+    expected_message: str,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(field, value)
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as exc_info:
+        get_settings()
+
+    assert expected_message in str(exc_info.value)
 
 
 def test_metrics_require_auth_defaults_to_production(monkeypatch) -> None:

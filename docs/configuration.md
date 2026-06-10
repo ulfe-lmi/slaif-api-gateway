@@ -419,12 +419,12 @@ forwarding. Defaults:
 | `CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE` | `2` | Audio input content parts in one message |
 | `CHAT_MAX_AUDIO_INPUT_DATA_BYTES` | `10485760` | One `input_audio.data` base64 string |
 | `CHAT_ALLOWED_AUDIO_INPUT_FORMATS` | `wav,mp3` | Allowed `input_audio.format` values |
-| `CHAT_ALLOW_AUDIO_INPUT_DATA_URLS` | `false` | Reserved for future policy; audio input data URLs are not accepted by default |
-| `CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS` | `wav,mp3,flac,opus,pcm16` | Allowed non-streaming Chat Completions audio-output formats |
+| `CHAT_ALLOW_AUDIO_INPUT_DATA_URLS` | `false` | Must remain `false` for RC2; startup validation rejects `true` because Chat audio data URLs remain unsupported |
+| `CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS` | `wav,aac,mp3,flac,opus,pcm16` | Allowed non-streaming Chat Completions audio-output formats |
 | `CHAT_ALLOWED_AUDIO_OUTPUT_VOICES` | `alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar` | Allowed built-in Chat Completions audio-output voices |
-| `CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES` | `false` | Reserved for future policy; custom audio-output voices are rejected by default |
-| `CHAT_ALLOW_STREAMING_AUDIO_OUTPUT` | `false` | Streaming Chat Completions audio output remains unsupported by default |
-| `CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES` | `false` | `n > 1` with Chat Completions audio output remains unsupported by default |
+| `CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES` | `false` | Must remain `false` for RC2; startup validation rejects `true` because custom audio-output voices remain unsupported |
+| `CHAT_ALLOW_STREAMING_AUDIO_OUTPUT` | `false` | Must remain `false` for RC2; startup validation rejects `true` because streaming audio output has no audio-aware live-burn/accounting support |
+| `CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES` | `false` | Must remain `false` for RC2; startup validation rejects `true` because `n > 1` with Chat audio output is unsupported |
 | `CHAT_MAX_TOOLS_PER_REQUEST` | `64` | `tools` entries |
 | `CHAT_MAX_CUSTOM_TOOLS_PER_REQUEST` | `16` | Custom local tools in one request |
 | `CHAT_MAX_FUNCTIONS_PER_REQUEST` | `64` | Legacy `functions` entries |
@@ -452,7 +452,10 @@ sets `chat_image_inputs=true`. Inline file input to text output is enabled only
 when the route sets `chat_file_inputs=true`. Audio input to text output is
 enabled only when the route sets `chat_audio_inputs=true`. Non-streaming audio
 output is enabled only when the route sets `chat_audio_outputs=true` and the
-active pricing row provides `pricing_metadata.audio_output_price_per_1m`. The
+active pricing row provides `pricing_metadata.audio_output_price_per_1m`. RC2
+supports raw base64 `wav`/`mp3` audio input and non-streaming audio output in
+`wav`, `aac`, `mp3`, `flac`, `opus`, or `pcm16` with built-in voice names only.
+The
 image/file/audio caps above bound request shape before provider forwarding.
 SLAIF does not fetch remote image URLs, fetch file or audio URLs, upload files
 upstream, transcribe audio locally, transcode audio, decode media payloads,

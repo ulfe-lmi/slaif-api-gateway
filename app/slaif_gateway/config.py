@@ -23,6 +23,11 @@ _PLACEHOLDER_SECRET_SUBSTRINGS = (
     "example",
     "dummy",
 )
+_SUPPORTED_CHAT_AUDIO_INPUT_FORMATS = frozenset({"wav", "mp3"})
+_SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS = frozenset({"wav", "aac", "mp3", "flac", "opus", "pcm16"})
+_SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES = frozenset(
+    {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "marin", "cedar"}
+)
 
 
 class Settings(BaseSettings):
@@ -152,7 +157,7 @@ class Settings(BaseSettings):
     CHAT_MAX_AUDIO_INPUT_DATA_BYTES: int = 10485760
     CHAT_ALLOWED_AUDIO_INPUT_FORMATS: str = "wav,mp3"
     CHAT_ALLOW_AUDIO_INPUT_DATA_URLS: bool = False
-    CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS: str = "wav,mp3,flac,opus,pcm16"
+    CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS: str = "wav,aac,mp3,flac,opus,pcm16"
     CHAT_ALLOWED_AUDIO_OUTPUT_VOICES: str = "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar"
     CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES: bool = False
     CHAT_ALLOW_STREAMING_AUDIO_OUTPUT: bool = False
@@ -511,10 +516,40 @@ class Settings(BaseSettings):
             raise ValueError("CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
         if self.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:
             raise ValueError("CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR must be non-negative")
+        _validate_audio_option_set(
+            self.CHAT_ALLOWED_AUDIO_INPUT_FORMATS,
+            allowed_values=_SUPPORTED_CHAT_AUDIO_INPUT_FORMATS,
+            field_name="CHAT_ALLOWED_AUDIO_INPUT_FORMATS",
+        )
+        _validate_audio_option_set(
+            self.CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS,
+            allowed_values=_SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS,
+            field_name="CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS",
+        )
+        _validate_audio_option_set(
+            self.CHAT_ALLOWED_AUDIO_OUTPUT_VOICES,
+            allowed_values=_SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES,
+            field_name="CHAT_ALLOWED_AUDIO_OUTPUT_VOICES",
+        )
+        if self.CHAT_ALLOW_AUDIO_INPUT_DATA_URLS:
+            raise ValueError(
+                "CHAT_ALLOW_AUDIO_INPUT_DATA_URLS is not supported until explicit Chat audio "
+                "data-URL validation, accounting, and tests are implemented"
+            )
+        if self.CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES:
+            raise ValueError(
+                "CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES is not supported until custom audio-output "
+                "voice policy and accounting are implemented"
+            )
         if self.CHAT_ALLOW_STREAMING_AUDIO_OUTPUT:
             raise ValueError(
                 "CHAT_ALLOW_STREAMING_AUDIO_OUTPUT is not supported until streaming audio "
                 "live-burn accounting is implemented"
+            )
+        if self.CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES:
+            raise ValueError(
+                "CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES is not supported until non-streaming "
+                "audio-output multi-choice accounting and response-shape handling are implemented"
             )
         if self.RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER <= 0:
             raise ValueError("RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
@@ -735,6 +770,25 @@ def validate_provider_secret_present(name: str, value: str | None) -> None:
         raise ValueError(
             f"{name} must be at least {_MIN_PROVIDER_SECRET_LENGTH} characters in production"
         )
+
+
+def _validate_audio_option_set(
+    raw_value: str,
+    *,
+    allowed_values: frozenset[str],
+    field_name: str,
+) -> None:
+    parsed = {
+        item.strip().lower()
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+    if not parsed:
+        raise ValueError(f"{field_name} must contain at least one supported value")
+    unsupported = sorted(parsed - allowed_values)
+    if unsupported:
+        joined = ", ".join(unsupported)
+        raise ValueError(f"{field_name} contains unsupported values: {joined}")
 
 
 def looks_like_real_upstream_openai_key(
