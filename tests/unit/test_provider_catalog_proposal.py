@@ -92,6 +92,25 @@ OPENAI_PRICING_DOC_FIXTURE = """
 | gpt-5-search-test | $4.00 | $0.40 | $12.00 |
 """
 
+OPENAI_PRICING_DOC_WITH_NOISE_FIXTURE = """
+Pricing
+API
+ChatGPT
+Codex
+1M
+400K
+| Model | Input | Cached input | Output |
+| --- | --- | --- | --- |
+| AGENTS.md | $1.00 | $0.10 | $2.00 |
+| API | $1.00 | $0.10 | $2.00 |
+| Image | $10.00 |  |  |
+| Audio | $3.00 |  |  |
+| Embeddings | $0.20 |  |  |
+| gpt-5.5 | $5.00 | $0.50 | $15.00 |
+| gpt-5.6 | $6.00 | $0.60 |  |
+| text-embedding-3-small | $0.02 |  |  |
+"""
+
 OPENAI_MODELS_DOC_FIXTURE = """
 ## gpt-5.5
 Endpoints: /v1/chat/completions, /v1/responses
@@ -105,6 +124,37 @@ Endpoints: /v1/chat/completions
 Features: streaming, web_search, hosted_tools
 Context length: 128000
 Max output tokens: 8192
+"""
+
+OPENAI_MODELS_DOC_WITH_NOISE_FIXTURE = """
+AGENTS.md
+API
+AWS
+Actions
+Pricing
+ChatGPT
+Codex
+Image
+Audio
+Embeddings
+
+## gpt-5.5
+Endpoints: /v1/chat/completions, /v1/responses
+Features: streaming, function calling, structured outputs, logprobs, image input
+Context length: 400000
+Max output tokens: 16384
+Knowledge cutoff: 2025-01
+
+## gpt-5.6
+Endpoints: /v1/chat/completions
+Features: streaming, function calling
+Context length: 256000
+Max output tokens: 8192
+
+## text-embedding-3-small
+Endpoints: /v1/embeddings
+Features: embeddings
+Context length: 8192
 """
 
 
@@ -277,6 +327,29 @@ def test_openai_docs_parsers_extract_pricing_and_model_features() -> None:
     assert models["gpt-5.5"].max_output_tokens == 16384
 
 
+def test_openai_docs_parsers_reject_navigation_tokens_and_unsupported_categories() -> None:
+    pricing = _parse_openai_pricing_docs(
+        text=OPENAI_PRICING_DOC_WITH_NOISE_FIXTURE,
+        source_url=OPENAI_PRICING_DOCS_URL,
+        source_retrieved_at="2026-06-10T00:00:00Z",
+    )
+    models = _parse_openai_models_docs(
+        text=OPENAI_MODELS_DOC_WITH_NOISE_FIXTURE,
+        source_url=OPENAI_MODELS_DOCS_URL,
+    )
+
+    pricing_model_ids = {record.model_id for record in pricing}
+    assert pricing_model_ids == {"gpt-5.5", "gpt-5.6", "text-embedding-3-small"}
+    assert "AGENTS.md" not in pricing_model_ids
+    assert "API" not in pricing_model_ids
+    assert "Image" not in pricing_model_ids
+
+    assert set(models) == {"gpt-5.5", "gpt-5.6", "text-embedding-3-small"}
+    assert "API" not in models
+    assert "ChatGPT" not in models
+    assert "Codex" not in models
+
+
 @pytest.mark.asyncio
 async def test_generate_openrouter_catalog_proposal_outputs_safe_tsv_files(
     tmp_path: Path,
@@ -409,6 +482,115 @@ async def test_generate_openai_catalog_proposal_compares_docs_api_and_assisted_s
     assert result.pricing_rows_ready == 0
     assert result.route_rows_ready == 1
     assert "admin-discovery-key" not in result.manifest_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_docs_only_catalog_skips_noise_and_incomplete_chat_pricing(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENAI_PRICING_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_PRICING_DOC_WITH_NOISE_FIXTURE)
+    )
+    respx_mock.get(OPENAI_MODELS_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_MODELS_DOC_WITH_NOISE_FIXTURE)
+    )
+
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path,
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+    )
+
+    assert result.route_rows_ready == 2
+    assert result.pricing_rows_ready == 1
+
+    route_tsv = result.routes_proposal_path.read_text(encoding="utf-8")
+    pricing_tsv = result.pricing_proposal_path.read_text(encoding="utf-8")
+
+    for bad_token in {
+        "1M",
+        "400K",
+        "AGENTS.md",
+        "API",
+        "AWS",
+        "Actions",
+        "Pricing",
+        "ChatGPT",
+        "Codex",
+        "Image",
+        "Audio",
+        "Embeddings",
+        "Files",
+    }:
+        assert bad_token not in route_tsv
+        assert bad_token not in pricing_tsv
+
+    assert "gpt-5.5" in route_tsv
+    assert "gpt-5.6" in route_tsv
+    assert "gpt-5.5" in pricing_tsv
+    assert "gpt-5.6" not in pricing_tsv
+    assert "text-embedding-3-small" not in route_tsv
+    assert "text-embedding-3-small" not in pricing_tsv
+
+    warnings_payload = json.loads(result.warnings_path.read_text(encoding="utf-8"))
+    warning_codes = {item["code"] for item in warnings_payload["warnings"]}
+    assert "missing_pricing" in warning_codes
+    assert "unsupported_modality" in warning_codes
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_docs_only_catalog_succeeds_with_zero_ready_rows(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    respx_mock.get(OPENAI_PRICING_DOCS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="""
+Pricing
+API
+ChatGPT
+| Model | Input | Cached input | Output |
+| --- | --- | --- | --- |
+| Image | $10.00 |  |  |
+| Audio | $3.00 |  |  |
+| Embeddings | $0.20 |  |  |
+""",
+        )
+    )
+    respx_mock.get(OPENAI_MODELS_DOCS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="""
+AGENTS.md
+API
+Pricing
+ChatGPT
+Codex
+Image
+Audio
+Embeddings
+""",
+        )
+    )
+
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path,
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+    )
+
+    assert result.route_rows_ready == 0
+    assert result.pricing_rows_ready == 0
+    assert result.routes_proposal_path.read_text(encoding="utf-8").strip().splitlines() == [
+        "requested_model\tmatch_type\tendpoint\tprovider\tupstream_model\tpriority\tenabled\tvisible_in_models\tsupports_streaming\tcapabilities\tnotes"
+    ]
+    assert result.pricing_proposal_path.read_text(encoding="utf-8").strip().splitlines() == [
+        "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\tcached_input_price_per_1m\toutput_price_per_1m\treasoning_price_per_1m\trequest_price\tvalid_from\tsource_url\tsource_retrieved_at\tpricing_metadata\tnotes"
+    ]
 
 
 def test_provider_catalog_skill_exists_and_is_repo_local() -> None:

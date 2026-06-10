@@ -72,6 +72,12 @@ OpenAI:
   `OPENAI_ADMIN_DISCOVERY_API_KEY`
 - optional existing OpenAI-assisted proposal workflow as a cross-check only
 
+OpenAI docs extraction is intentionally conservative. Documentation navigation
+labels, product/category headings, bare context-window labels, and unsupported
+modality buckets are never treated as model IDs. A docs-only OpenAI run may
+produce zero ready rows; that is acceptable and safer than emitting bad import
+rows.
+
 ## Output Files
 
 Every run writes:
@@ -91,6 +97,17 @@ reports success. If a TSV has malformed rows, invalid JSON cells, invalid
 boolean or decimal fields, suspicious secret-like content, or a broken
 `source_url` / `source_retrieved_at` split, the run fails with
 `proposal_tsv_validation_failed`.
+
+For OpenAI docs-only proposals, readiness additionally requires:
+
+- a canonical OpenAI model ID
+- explicit support for a currently implemented SLAIF endpoint
+- complete parseable pricing for the target endpoint, including output price
+- supported modality/feature alignment for that endpoint
+
+Unsupported modality rows such as image-only, audio-only, embeddings-only,
+files, moderation, search-specific, or other non-chat categories remain
+report-only and must not appear in Chat Completions import TSV rows.
 
 ## Comparison, Confidence, And Warnings
 

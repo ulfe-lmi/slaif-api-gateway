@@ -142,6 +142,17 @@ OPENAI_ASSISTED_ACKNOWLEDGEMENT = (
 _PRICE_CELL_PATTERN = re.compile(r"^\$?(?P<amount>-?[0-9]+(?:\.[0-9]+)?)$")
 _LABEL_PATTERN = re.compile(r"^(?P<label>[A-Za-z][A-Za-z0-9 /_-]+):\s*(?P<value>.+)$")
 _MODEL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$")
+_OPENAI_MODEL_IDENTIFIER_PATTERN = re.compile(
+    r"^(?:"
+    r"gpt(?:-[a-z0-9][a-z0-9.-]*)"
+    r"|o[0-9](?:[a-z0-9.-]*)"
+    r"|chatgpt-[a-z0-9][a-z0-9.-]*"
+    r"|text-embedding-[a-z0-9][a-z0-9.-]*"
+    r"|whisper-[a-z0-9][a-z0-9.-]*"
+    r"|tts-[a-z0-9][a-z0-9.-]*"
+    r"|omni-moderation-[a-z0-9][a-z0-9.-]*"
+    r")$"
+)
 _NUMERIC_PATTERN = re.compile(r"^[0-9][0-9,]*$")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
@@ -861,6 +872,8 @@ async def _propose_openai(
             has_pricing=bool(doc_prices),
             api_model_ids=api_model_ids if (include_api_models or "api" in source_methods) else None,
         )
+        if "chat_completions" in endpoint_scopes and not _is_openai_chat_completions_model_id(model_id):
+            row_warnings = tuple(sorted(set(row_warnings + ("unsupported_modality",))))
         if is_search_specific_chat_completion_model(model_id):
             row_warnings = tuple(sorted(set(row_warnings + ("search_specific_model",))))
         if docs_model is not None:
@@ -905,7 +918,12 @@ async def _propose_openai(
         route_status = "missing"
         if docs_model is not None and "chat_completions" in endpoint_scopes:
             route_status = "report-only"
-            if CHAT_COMPLETIONS_ENDPOINT in docs_model.endpoints and "search_specific_model" not in row_warnings:
+            if (
+                CHAT_COMPLETIONS_ENDPOINT in docs_model.endpoints
+                and _is_openai_chat_completions_model_id(model_id)
+                and "search_specific_model" not in row_warnings
+                and "hosted_tool_only" not in row_warnings
+            ):
                 route_confidence: Confidence = (
                     "high" if (model_id in api_model_ids and api_model_ids) else "medium"
                 )
@@ -1518,21 +1536,21 @@ def _parse_openai_pricing_docs(
     records: list[_OpenAIPricingRecord] = []
     for table in tables:
         header = [cell.strip().lower() for cell in table[0]]
-        if "model" not in header or "input" not in header:
-            continue
-        model_index = header.index("model")
-        modality_index = header.index("modality") if "modality" in header else None
-        cached_index = header.index("cached input") if "cached input" in header else None
         output_index = next(
             (idx for idx, value in enumerate(header) if value.startswith("output")),
             None,
         )
+        if "model" not in header or "input" not in header or output_index is None:
+            continue
+        model_index = header.index("model")
+        modality_index = header.index("modality") if "modality" in header else None
+        cached_index = header.index("cached input") if "cached input" in header else None
         input_index = header.index("input")
         category = None
         for row in table[1:]:
             if len(row) <= model_index:
                 continue
-            model_id = _safe_model_id(row[model_index])
+            model_id = _safe_openai_model_id(row[model_index])
             if model_id is None:
                 first = row[0].lower() if row else ""
                 if first in {"category", "standard", "batch", "priority"}:
@@ -1569,7 +1587,7 @@ def _parse_openai_models_docs(*, text: str, source_url: str) -> dict[str, _OpenA
     blocks = _split_model_blocks(text)
     records: dict[str, _OpenAIModelRecord] = {}
     for block in blocks:
-        model_id = _safe_model_id(block.get("model_id"))
+        model_id = _safe_openai_model_id(block.get("model_id"))
         if model_id is None:
             continue
         endpoints = tuple(
@@ -1581,6 +1599,8 @@ def _parse_openai_models_docs(*, text: str, source_url: str) -> dict[str, _OpenA
             if endpoint is not None
         )
         features = tuple(sorted(set(_csvish_values(block.get("features", "")))))
+        if not _openai_model_block_is_trusted(block):
+            continue
         warnings: list[str] = []
         if "web_search" in features or "search" in features or is_search_specific_chat_completion_model(model_id):
             warnings.append("search_specific_model")
@@ -1608,7 +1628,7 @@ def _parse_openai_models_api(payload: Mapping[str, object]) -> set[str]:
     for row in data:
         if not isinstance(row, Mapping):
             continue
-        model_id = _safe_model_id(row.get("id"))
+        model_id = _safe_openai_model_id(row.get("id"))
         if model_id:
             result.add(model_id)
     return result
@@ -1662,14 +1682,15 @@ def _openai_pricing_candidates(
     if selected is None:
         warning_codes.add("missing_pricing")
         return candidates, sorted(warning_codes)
-    if "unsupported_modality" in selected.warnings:
-        warning_codes.add("unsupported_modality")
+    warning_codes.update(selected.warnings)
     if model_record is None:
         warning_codes.add("model_missing_from_docs")
     elif model_record.warnings:
         warning_codes.update(model_record.warnings)
     if is_search_specific_chat_completion_model(model_id):
         warning_codes.add("search_specific_model")
+    if not _is_openai_chat_completions_model_id(model_id):
+        warning_codes.add("unsupported_modality")
     for endpoint_scope in endpoint_scopes:
         if endpoint_scope == "responses":
             warning_codes.add("future_endpoint")
@@ -1686,7 +1707,15 @@ def _openai_pricing_candidates(
         )
         if zero_price_detected:
             warning_codes.add("zero_price_requires_review")
-        ready = not {"missing_pricing", "pricing_disagreement", "search_specific_model"} & warning_codes
+        ready = not {
+            "missing_pricing",
+            "model_missing_from_docs",
+            "pricing_disagreement",
+            "search_specific_model",
+            "unsupported_modality",
+            "unsupported_endpoint",
+            "hosted_tool_only",
+        } & warning_codes
         if zero_price_detected and not allow_zero_prices:
             ready = False
         confidence: Confidence = "high" if assisted is not None and "pricing_disagreement" not in warning_codes else "medium"
@@ -1930,11 +1959,18 @@ def _split_model_blocks(text: str) -> list[dict[str, str]]:
 
 def _heading_model_id(line: str) -> str | None:
     stripped = line.lstrip("# ").strip()
-    if not _MODEL_IDENTIFIER_PATTERN.match(stripped):
-        return None
-    if " " in stripped:
-        return None
-    return stripped
+    return _safe_openai_model_id(stripped)
+
+
+def _openai_model_block_is_trusted(block: Mapping[str, str]) -> bool:
+    trusted_fields = {
+        "endpoints",
+        "features",
+        "context_length",
+        "max_output_tokens",
+        "knowledge_cutoff",
+    }
+    return any(block.get(field) for field in trusted_fields)
 
 
 def _csvish_values(value: str) -> tuple[str, ...]:
@@ -2019,6 +2055,26 @@ def _safe_model_id(value: object) -> str | None:
     if text is None or not _MODEL_IDENTIFIER_PATTERN.match(text):
         return None
     return text
+
+
+def _safe_openai_model_id(value: object) -> str | None:
+    text = _safe_text(value)
+    if text is None:
+        return None
+    normalized = text.strip()
+    if normalized != normalized.lower():
+        return None
+    if not _OPENAI_MODEL_IDENTIFIER_PATTERN.match(normalized):
+        return None
+    return normalized
+
+
+def _is_openai_chat_completions_model_id(model_id: str) -> bool:
+    return (
+        model_id.startswith("gpt-")
+        or model_id.startswith("chatgpt-")
+        or bool(re.match(r"^o[0-9](?:[a-z0-9.-]*)$", model_id))
+    )
 
 
 def _safe_int(value: object) -> int | None:

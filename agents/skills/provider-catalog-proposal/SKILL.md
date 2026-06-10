@@ -38,6 +38,15 @@ OpenAI:
 4. Existing OpenAI-assisted proposal workflow only as an optional cross-check,
    never as the sole trusted source
 
+OpenAI docs extraction must stay conservative:
+
+- documentation navigation, headings, product names, and category labels are
+  not model IDs
+- docs-only extraction may legitimately produce zero ready rows
+- route/pricing readiness requires a canonical OpenAI model ID plus complete
+  supported endpoint/pricing evidence
+- unsupported modality/category rows remain report-only
+
 ## Required Safety Rules
 
 - Proposals only.
@@ -101,6 +110,7 @@ or suspicious cell content must fail the proposal command with
 - ambiguous capabilities
 - deprecated/expiring models
 - hosted/search-only models
+- docs tokens that were skipped because they were not canonical model IDs
 
 4. Check confidence:
 

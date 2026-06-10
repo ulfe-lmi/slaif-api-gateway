@@ -145,6 +145,12 @@ feature source, optional `GET /v1/models` as an availability/basic model-ID
 cross-check, and optional OpenAI-assisted proposal generation as a secondary
 cross-check only.
 
+OpenAI docs extraction is conservative by design. Navigation labels, generic
+product headings, unsupported modality buckets, and bare context-window labels
+must never become route-ready or pricing-ready proposal rows. A docs-only run
+may produce zero ready rows; operators should treat that as a safe outcome,
+then decide whether to add the optional model-list cross-check or reduce scope.
+
 The optional OpenAI API model listing uses `OPENAI_ADMIN_DISCOVERY_API_KEY`,
 never `OPENAI_API_KEY`. `OPENAI_API_KEY` remains reserved for client-side
 gateway-issued keys.
@@ -239,6 +245,11 @@ OpenAI-assisted route proposals must not turn search-specific models such as
 `gpt-4o-mini-search-preview` into ordinary Chat Completions routes. Those models
 require future hosted web-search policy, pricing, and audit controls; the
 proposal workflow should omit them or report them as warnings.
+
+For Chat Completions pricing proposals, complete input and output pricing is
+required. Missing output price, unsupported modality pricing, or unsupported
+endpoint/category rows remain report-only and must not be emitted into
+`pricing-proposal.tsv`.
 
 No silent replacement of production pricing rows is allowed. No direct mutation
 from a web fetch or LLM call is allowed. Imports are preview-first and
