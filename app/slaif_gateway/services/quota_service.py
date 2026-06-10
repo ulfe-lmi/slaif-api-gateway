@@ -15,6 +15,7 @@ from slaif_gateway.schemas.embeddings import EmbeddingsPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.quota import QuotaReservationResult
+from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.quota_errors import (
     InvalidQuotaEstimateError,
@@ -29,6 +30,7 @@ _AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 _AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 _AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 _EMBEDDINGS_ENDPOINT = "/v1/embeddings"
+_REALTIME_CLIENT_SECRETS_ENDPOINT = "/v1/realtime/client_secrets"
 _RESPONSES_ENDPOINT = "/v1/responses"
 _DEFAULT_RESERVATION_TTL = timedelta(minutes=15)
 
@@ -55,7 +57,7 @@ class QuotaService:
         *,
         authenticated_key: AuthenticatedGatewayKey,
         route: RouteResolutionResult,
-        policy: ChatCompletionPolicyResult | ResponsesPolicyResult | AudioPolicyResult | EmbeddingsPolicyResult,
+        policy: ChatCompletionPolicyResult | ResponsesPolicyResult | AudioPolicyResult | EmbeddingsPolicyResult | RealtimePolicyResult,
         cost_estimate: ChatCostEstimate,
         request_id: str,
         endpoint: str = _CHAT_COMPLETIONS_ENDPOINT,
@@ -225,6 +227,8 @@ def _normalize_endpoint(value: str) -> str:
         return _AUDIO_TRANSLATIONS_ENDPOINT
     if endpoint == "embeddings":
         return _EMBEDDINGS_ENDPOINT
+    if endpoint == "realtime.client_secrets":
+        return _REALTIME_CLIENT_SECRETS_ENDPOINT
     if endpoint == "responses":
         return _RESPONSES_ENDPOINT
     return endpoint

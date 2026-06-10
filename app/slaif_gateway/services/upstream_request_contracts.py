@@ -125,6 +125,12 @@ EMBEDDINGS_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "user",
     }
 )
+REALTIME_CLIENT_SECRET_UPSTREAM_ALLOWED_FIELDS = frozenset(
+    {
+        "expires_after",
+        "session",
+    }
+)
 CONVERSATION_ITEMS_CREATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"items"})
 CONVERSATION_UPDATE_UPSTREAM_ALLOWED_FIELDS = frozenset({"metadata"})
 CONVERSATION_ITEMS_QUERY_ALLOWED_FIELDS = frozenset(
@@ -404,6 +410,21 @@ class NormalizedEmbeddingsUpstreamRequest:
             if not _is_set(value):
                 continue
             fields[name] = _select_field(value)
+        return fields
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedRealtimeClientSecretUpstreamRequest:
+    requested_model: str
+    upstream_model: str
+    session: Mapping[str, Any]
+
+    expires_after: object = _UNSET
+
+    def as_upstream_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {"session": copy.deepcopy(dict(self.session))}
+        if _is_set(self.expires_after):
+            fields["expires_after"] = _select_field(self.expires_after)
         return fields
 
 
@@ -725,6 +746,35 @@ def normalize_embeddings_upstream_request(
         encoding_format=_select_field(body.get("encoding_format", _UNSET)),
         dimensions=_select_field(body.get("dimensions", _UNSET)),
         user=_select_field(body.get("user", _UNSET)),
+    )
+
+
+def normalize_realtime_client_secret_upstream_request(
+    effective_body: Mapping[str, Any],
+    *,
+    requested_model: str,
+    upstream_model: str,
+) -> NormalizedRealtimeClientSecretUpstreamRequest:
+    """Build a normalized Realtime client-secret contract from a policy-approved body."""
+
+    _ensure_required_text_model(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        endpoint="Realtime client secret",
+    )
+    body = dict(effective_body)
+    _ensure_no_unknown_fields(body, allowed_fields=REALTIME_CLIENT_SECRET_UPSTREAM_ALLOWED_FIELDS)
+    session = body.get("session")
+    if not isinstance(session, Mapping):
+        raise ValueError("Realtime client-secret request is missing session.")
+    session_model = session.get("model")
+    if session_model != requested_model:
+        raise ValueError("Requested model must match policy-effective session model.")
+    return NormalizedRealtimeClientSecretUpstreamRequest(
+        requested_model=requested_model,
+        upstream_model=upstream_model,
+        session=copy.deepcopy(dict(session)),
+        expires_after=_select_field(body.get("expires_after", _UNSET)),
     )
 
 

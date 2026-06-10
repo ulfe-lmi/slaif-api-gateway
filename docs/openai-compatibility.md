@@ -2,10 +2,11 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
-For the maintainer-locked RC2 target, including the still-missing Realtime
-audio work after the standalone Audio API and embeddings foundation, see
-[`rc2-feature-scope.md`](rc2-feature-scope.md). A green verification harness
-proves the implemented surface is clean; it does not prove feature-full RC2.
+For the maintainer-locked RC2 target, including the bounded Realtime
+client-secret slice that is now implemented and the remaining deferred
+Realtime sub-surfaces, see [`rc2-feature-scope.md`](rc2-feature-scope.md). A
+green verification harness proves the implemented surface is clean; it does
+not prove feature-full RC2 beyond the exact subset documented here.
 
 Clients use standard OpenAI client configuration only:
 
@@ -33,20 +34,25 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe estimated fallback when usage is absent | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
+| `POST /v1/realtime/client_secrets` | Implemented for bounded WebRTC client-secret admission subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; otherwise safe estimated admission finalization with bounded session budget | Non-streaming JSON control-plane response only; no server-side WebRTC/WebSocket proxying | Unit, forwarding, pricing, error-shape, and guarded mocked official OpenAI Python client E2E coverage |
+| `POST /v1/realtime/calls` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
+| `POST /v1/realtime/transcription_sessions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Images endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
-| Realtime audio | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Native Anthropic API | Not implemented | Not applicable | Not implemented | Not implemented | Anthropic-family model names are covered only through OpenRouter routes |
 
 Unsupported `/v1` routes return OpenAI-shaped errors through the FastAPI error handlers. The gateway does not claim 100% OpenAI platform compatibility outside the rows marked implemented.
 
 Standalone Audio API support is separate from Chat request-body audio. Current
 RC2 support includes standalone `POST /v1/audio/speech`,
-`POST /v1/audio/transcriptions`, and `POST /v1/audio/translations`, plus Chat
-request-body audio input and non-streaming Chat audio output. Realtime audio,
-Responses audio, `/v1/files`, provider file IDs, and streaming Chat audio
-remain unsupported. Embeddings input strings, token arrays, and vectors are not
-stored or logged.
+`POST /v1/audio/transcriptions`, `POST /v1/audio/translations`,
+standalone `POST /v1/embeddings`, and the bounded browser/mobile Realtime
+client-secret route `POST /v1/realtime/client_secrets`. Realtime call helper
+routes, server-side WebSocket proxying, transcription sessions, translation,
+SIP, Responses audio, `/v1/files`, provider file IDs, and streaming Chat audio
+remain unsupported. Embeddings input strings, token arrays, vectors,
+instructions text, audio payloads, transcripts, raw SDP, raw event bodies, and
+ephemeral client secrets are not stored or logged.
 
 ## Responses API Scope
 

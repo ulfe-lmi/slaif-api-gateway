@@ -10,8 +10,9 @@ compliance attestation, or penetration-test report.
 
 It is also not a feature-full RC2 approval. A green harness means
 verification-clean for the implemented scope only. The maintainer-locked RC2
-target still requires Realtime audio; standalone `/v1/audio/*` and
-`POST /v1/embeddings` are now implemented. See
+target now includes a bounded implemented Realtime client-secret slice; the
+remaining deferred Realtime sub-surfaces are tracked precisely. Standalone
+`/v1/audio/*` and `POST /v1/embeddings` are also implemented. See
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 Tag-specific release notes for the first release candidate are in
@@ -63,6 +64,12 @@ but are not a production certification.
   forwarding, OpenRouter fail-closed behavior, PostgreSQL
   reservation/finalization, and no local storage/logging of input strings,
   token arrays, embedding vectors, or raw JSON/provider bodies.
+- `POST /v1/realtime/client_secrets` behind separate endpoint permission,
+  explicit `realtime.audio` plus `realtime.webrtc_client_secrets` route
+  capability, canonical OpenAI provider forwarding, OpenRouter fail-closed
+  behavior, PostgreSQL admission reservation/finalization, and no local
+  storage/logging of ephemeral client secrets, instructions text, raw session
+  config, audio, transcripts, raw SDP, or raw events.
 - OpenAI-shaped errors for unsupported `/v1` endpoints and policy failures.
 - Explicit Chat Completions route/model capability metadata, enforced
   separately from gateway-key endpoint/model/provider allowlists.

@@ -15,8 +15,9 @@ penetration-test report. It records a release-candidate beta verification pass
 for the current implemented scope.
 
 The maintainer-locked RC2 target is stricter than this historical implemented
-scope baseline. Standalone `/v1/audio/*` and `POST /v1/embeddings` are now
-implemented, while Realtime audio remains RC2-required missing work. See
+scope baseline. Standalone `/v1/audio/*`, `POST /v1/embeddings`, and the
+bounded `POST /v1/realtime/client_secrets` foundation are now implemented; the
+remaining deferred Realtime sub-surfaces are tracked precisely in
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
@@ -68,6 +69,12 @@ operational guidance, not a production certification.
   forwarding, OpenRouter fail-closed behavior, PostgreSQL
   reservation/finalization, and no local storage/logging of input strings,
   token arrays, embedding vectors, or raw JSON/provider bodies.
+- `POST /v1/realtime/client_secrets` with separate endpoint permission,
+  explicit `realtime.audio` plus `realtime.webrtc_client_secrets` route
+  capability checks, canonical OpenAI provider forwarding, OpenRouter
+  fail-closed behavior, PostgreSQL admission reservation/finalization, and no
+  local storage/logging of ephemeral client secrets, instructions text, raw
+  session config, audio, transcripts, raw SDP, or raw events.
 - Chat Completions route/model capability metadata is enforced separately from
   key endpoint/model/provider allowlists.
 - OpenAI-shaped errors for unsupported `/v1` routes and policy failures.

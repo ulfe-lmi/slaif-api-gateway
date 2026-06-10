@@ -5,8 +5,8 @@ implementation work. It does not add runtime behavior or schema fields.
 
 For RC2 feature-fullness versus implemented-scope verification status, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). Current accounting docs describe
-implemented paths only; they do not mean Realtime audio is already
-implemented.
+implemented paths only; they cover the bounded Realtime client-secret
+admission slice but not full Realtime call/media transport parity.
 
 Current authoritative contracts:
 
@@ -60,6 +60,14 @@ Core invariants:
   usage is absent, SLAIF finalizes through a bounded input-estimated fallback
   instead of zero-cost success. Input strings, token arrays, embedding vectors,
   raw request bodies, and raw provider response bodies are never stored.
+- `POST /v1/realtime/client_secrets` now uses its own endpoint permission,
+  route, pricing, and bounded admission finalization path. PostgreSQL remains
+  authoritative. Provider usage stays authoritative when present. When provider
+  usage is absent, SLAIF finalizes a bounded admission estimate with the safe
+  reason `realtime_client_secret_issued` instead of creating an unbounded
+  zero-cost path. Ephemeral client secrets, instructions, raw session config,
+  audio payloads, transcripts, raw SDP, raw events, and raw provider bodies
+  are never stored.
 
 ## Chat Completions Streaming Live-Burn Margin
 

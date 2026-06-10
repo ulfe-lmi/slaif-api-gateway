@@ -12,6 +12,7 @@ import pytest
 from slaif_gateway.schemas.audio import AudioPolicyResult
 from slaif_gateway.schemas.embeddings import EmbeddingsPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import (
@@ -741,5 +742,71 @@ async def test_embeddings_estimate_requires_fx_rate_for_non_eur_pricing() -> Non
                 estimated_input_tokens=4,
             ),
             endpoint="/v1/embeddings",
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_realtime_client_secret_estimate_uses_higher_of_token_and_request_pricing() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-realtime-mini",
+                endpoint="/v1/realtime/client_secrets",
+                currency="EUR",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("2.000000000"),
+                request_price=Decimal("0.005000000"),
+            )
+        ]
+    )
+
+    estimate = await service.estimate_realtime_client_secret_cost(
+        route=_route(
+            requested_model="classroom-realtime",
+            resolved_model="gpt-realtime-mini",
+        ),
+        policy=RealtimePolicyResult(
+            effective_body={"session": {"model": "classroom-realtime", "type": "realtime"}},
+            estimated_input_tokens=100,
+            effective_output_tokens=200,
+        ),
+        endpoint="/v1/realtime/client_secrets",
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.request_price == Decimal("0.005000000")
+    assert estimate.estimated_total_cost_native == Decimal("0.005000000")
+    assert estimate.estimated_output_tokens == 200
+
+
+@pytest.mark.asyncio
+async def test_realtime_client_secret_estimate_requires_fx_rate_for_non_eur_pricing() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-realtime-mini",
+                endpoint="/v1/realtime/client_secrets",
+                currency="USD",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("2.000000000"),
+                request_price=Decimal("0.005000000"),
+            )
+        ],
+        fx_rows=[],
+    )
+
+    with pytest.raises(FxRateNotFoundError):
+        await service.estimate_realtime_client_secret_cost(
+            route=_route(
+                requested_model="classroom-realtime",
+                resolved_model="gpt-realtime-mini",
+            ),
+            policy=RealtimePolicyResult(
+                effective_body={"session": {"model": "classroom-realtime", "type": "realtime"}},
+                estimated_input_tokens=100,
+                effective_output_tokens=200,
+            ),
+            endpoint="/v1/realtime/client_secrets",
             at=datetime(2026, 4, 25, tzinfo=UTC),
         )

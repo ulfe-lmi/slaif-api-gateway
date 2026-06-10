@@ -1273,6 +1273,8 @@ def _normalize_endpoint(value: str) -> str:
         return "/v1/audio/transcriptions"
     if endpoint == "audio.translations":
         return "/v1/audio/translations"
+    if endpoint == "realtime.client_secrets":
+        return "/v1/realtime/client_secrets"
     if endpoint == "responses":
         return _RESPONSES_ENDPOINT
     return endpoint

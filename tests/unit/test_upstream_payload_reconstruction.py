@@ -14,6 +14,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_conversation_update_upstream_request,
     normalize_chat_completion_upstream_request,
     normalize_embeddings_upstream_request,
+    normalize_realtime_client_secret_upstream_request,
     normalize_responses_compact_upstream_request,
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
@@ -31,6 +32,7 @@ from slaif_gateway.services.upstream_payloads import (
     build_conversation_update_upstream_body,
     build_chat_completion_upstream_body,
     build_embeddings_upstream_body,
+    build_realtime_client_secret_upstream_body,
     build_responses_compact_upstream_body,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
@@ -170,6 +172,33 @@ def _normalize_embeddings_body(
     )
 
 
+def _normalize_realtime_body(
+    body: dict[str, object],
+    *,
+    resolved_model: str = "gpt-realtime-mini",
+):
+    from slaif_gateway.services.realtime_request_policy import RealtimeRequestPolicy
+
+    policy_result = RealtimeRequestPolicy(
+        _settings(
+            REALTIME_ALLOWED_AUDIO_FORMAT_TYPES="audio/pcm,audio/pcmu,audio/pcma",
+            REALTIME_ALLOWED_VOICES="alloy,cedar,marin",
+            REALTIME_PCM_AUDIO_RATE=24000,
+            REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS=600,
+            REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS=10,
+            REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS=7200,
+            REALTIME_MAX_INSTRUCTIONS_BYTES=8192,
+            REALTIME_DEFAULT_MAX_OUTPUT_TOKENS=512,
+            REALTIME_MAX_OUTPUT_TOKENS=4096,
+        )
+    ).apply_client_secret_create(body)
+    return normalize_realtime_client_secret_upstream_request(
+        policy_result.effective_body,
+        requested_model=str(policy_result.effective_body["session"]["model"]),
+        upstream_model=resolved_model,
+    )
+
+
 def test_chat_minimal_text_request_reconstructs_exact_upstream_body() -> None:
     inbound = {
         "model": "classroom-alias",
@@ -291,6 +320,44 @@ def test_embeddings_request_reconstructs_exact_upstream_body() -> None:
         "encoding_format": "base64",
         "dimensions": 8,
         "user": "learner-1",
+    }
+    assert inbound == original
+    assert outbound is not inbound
+
+
+def test_realtime_client_secret_request_reconstructs_exact_upstream_body() -> None:
+    inbound = {
+        "expires_after": {"anchor": "created_at", "seconds": 600},
+        "session": {
+            "type": "realtime",
+            "model": "classroom-realtime",
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {"format": {"type": "audio/pcm", "rate": 24000}},
+                "output": {"format": {"type": "audio/pcmu"}, "voice": "cedar"},
+            },
+            "instructions": "Keep answers short.",
+            "max_output_tokens": 256,
+        },
+    }
+    original = copy.deepcopy(inbound)
+
+    normalized_request = _normalize_realtime_body(inbound)
+    outbound = build_realtime_client_secret_upstream_body(normalized_request)
+
+    assert outbound == {
+        "expires_after": {"anchor": "created_at", "seconds": 600},
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime-mini",
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {"format": {"type": "audio/pcm", "rate": 24000}},
+                "output": {"format": {"type": "audio/pcmu"}, "voice": "cedar"},
+            },
+            "instructions": "Keep answers short.",
+            "max_output_tokens": 256,
+        },
     }
     assert inbound == original
     assert outbound is not inbound

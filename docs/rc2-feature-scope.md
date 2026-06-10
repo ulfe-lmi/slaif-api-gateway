@@ -22,9 +22,9 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 
 | Classification | Row count |
 | --- | ---: |
-| `RC2_REQUIRED_IMPLEMENTED` | 26 |
-| `RC2_REQUIRED_MISSING` | 1 |
-| `RC2_EXPLICITLY_DEFERRED` | 12 |
+| `RC2_REQUIRED_IMPLEMENTED` | 27 |
+| `RC2_REQUIRED_MISSING` | 0 |
+| `RC2_EXPLICITLY_DEFERRED` | 17 |
 | `RC2_UNSUPPORTED_BY_POLICY` | 1 |
 | `NEEDS_MAINTAINER_DECISION` | 6 |
 
@@ -59,7 +59,7 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Unit, forwarding, pricing, mocked official-client E2E | Reservation/finalization implemented; provider usage authoritative when present; request-priced fallback only where configured | Canonical OpenAI multipart forwarding implemented; OpenRouter fails closed | Uploaded audio bytes and transcripts not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 standalone transcription target is now implemented without file IDs or local transcript storage | — |
 | `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Unit, forwarding, pricing, mocked official-client E2E | Reservation/finalization implemented; provider usage authoritative when present; request-priced fallback only where configured | Canonical OpenAI multipart forwarding implemented; OpenRouter fails closed | Uploaded audio bytes and translations not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 standalone translation target is now implemented without file IDs or local transcript storage | — |
 | `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset | Unit, forwarding, pricing, mocked official-client E2E | PostgreSQL reservation/finalization implemented; provider usage authoritative when present; safe estimated fallback when usage is absent | Canonical OpenAI JSON forwarding implemented; OpenRouter fails closed | Input strings, token arrays, and embedding vectors not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 embeddings target is now implemented without Realtime or file-ID lifecycle | — |
-| Realtime audio | Not implemented | No runtime coverage; unsupported/http-absent surface only | No session accounting design yet | No transport/forwarding path yet | No audio payload storage | `RC2_REQUIRED_MISSING` | Maintainer clarified Realtime audio is an RC2 target | `feature/realtime-audio-foundation` |
+| Realtime audio | Implemented for bounded WebRTC client-secret admission foundation | Unit, forwarding, pricing, error-shape, and guarded mocked official-client E2E coverage | PostgreSQL reservation/finalization implemented for bounded client-secret issuance; provider usage authoritative when present; safe estimated admission finalization when provider usage is absent | Canonical OpenAI JSON forwarding implemented for `POST /v1/realtime/client_secrets`; OpenRouter fails closed | Ephemeral client secrets, instructions, audio/transcript payloads, raw session config, raw SDP, and raw events are not stored/logged | `RC2_REQUIRED_IMPLEMENTED` | RC2 now implements the browser/mobile WebRTC client-secret slice while keeping larger Realtime transports/features explicitly deferred | — |
 | Hosted/provider-side tools | Unsupported/fail-closed | Unit/policy coverage | No billing/accounting path exposed | Rejected before provider forwarding | No hosted-tool payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | MCP/connectors | Unsupported/fail-closed | Unit/policy coverage | No billing/accounting path exposed | Rejected before provider forwarding | No connector payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | File search | Unsupported/fail-closed | Unit/policy coverage | No billing/accounting path exposed | Rejected before provider forwarding | No search payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
@@ -72,6 +72,11 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | Vector stores | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No vector-store payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | Responses `background=true` | Unsupported/fail-closed | Unit/policy coverage | No async/background accounting path exposed | Rejected before provider forwarding | No background payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | `POST /v1/responses/{response_id}/cancel` | Not implemented | Unsupported-route/error-shape coverage only | No cancel accounting path yet | No provider forwarding path yet | No response body storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
+| `POST /v1/realtime/calls` | Not implemented | Unsupported-route/error-shape coverage only | No provider-backed live session accounting path yet | No server-mediated WebRTC call helper/proxy path yet | No SDP/audio/event storage | `RC2_EXPLICITLY_DEFERRED` | RC2 foundation is client-secret issuance only; call helper/proxying is deferred | — |
+| Realtime server-side WebSocket proxying | Not implemented | Unsupported-route/docs coverage only | No safe live session accounting or disconnect-finalization path yet | No server-side WebSocket proxy path yet | No event/audio/SDP storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly deferred to keep the first Realtime slice browser/mobile WebRTC-only | — |
+| `POST /v1/realtime/transcription_sessions` | Not implemented | Unsupported-route/error-shape coverage only | No transcription-session accounting path yet | No provider forwarding path yet | No transcript/audio storage | `RC2_EXPLICITLY_DEFERRED` | Deferred; current Realtime slice supports `session.type="realtime"` only | — |
+| Realtime translation sessions | Not implemented | Request-policy/docs coverage only | No translation-session accounting path yet | No provider forwarding path yet | No transcript/audio storage | `RC2_EXPLICITLY_DEFERRED` | Deferred to keep the first Realtime slice narrow and bounded | — |
+| Realtime SIP | Not implemented | Unsupported-route/docs coverage only | No SIP session accounting path yet | No SIP transport or forwarding path yet | No call audio/metadata storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly deferred by maintainer scope for this PR | — |
 | `/v1/files` list/create/retrieve/delete/content | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No file payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
 | `/v1/uploads` and upload parts | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No upload payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
 | Legacy `POST /v1/completions` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No prompt/completion storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
@@ -97,13 +102,12 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
    - added pricing/accounting for input-only usage and safe missing-usage fallback
    - added official OpenAI Python client E2E coverage
 
-3. `feature/realtime-audio-foundation`
-   - design Realtime audio transport/session model
-   - make explicit WebSocket/WebRTC decision
-   - define authentication/quota/accounting behavior
-   - keep no prompt/audio payload storage
-   - design live session cost and disconnect accounting
-   - expect at least one design PR before implementation
+3. `feature/realtime-audio-foundation` — completed for the bounded first slice
+   - implemented `POST /v1/realtime/client_secrets`
+   - implemented browser/mobile WebRTC ephemeral client-secret admission flow
+   - implemented explicit endpoint permission plus route/model `realtime` capability checks
+   - implemented bounded client-secret admission reservation/finalization without storing instructions, audio, transcripts, raw session config, raw SDP, raw events, or ephemeral secrets
+   - left `/v1/realtime/calls`, server-side WebSocket proxying, transcription sessions, translation, SIP, hosted tools, and MCP explicitly deferred
 
 4. `feature/rc2-final-verification`
-   - run the full 128-worker harness only after Realtime audio is implemented
+   - run the full 128-worker harness only after the merged Realtime client-secret slice is on `main`
