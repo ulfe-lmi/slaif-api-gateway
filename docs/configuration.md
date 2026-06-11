@@ -533,7 +533,12 @@ Realtime client-secret support is separate again. Current RC2 support
 implements bounded `POST /v1/realtime/client_secrets` only for the browser/mobile
 WebRTC admission flow. It requires its own endpoint permission plus explicit
 route/model `realtime.audio=true` and `realtime.webrtc_client_secrets=true`
-capability flags.
+capability flags. OpenAI's current Realtime docs/SDK describe client secrets as
+reusable until expiry and later session behavior as client-updatable, so SLAIF
+does not treat issuance as a hard actual-usage bound. Quota-limited keys fail
+closed unless the route also sets
+`realtime.client_secret_direct_provider_exposure_accepted=true` and the pricing
+row has a non-refundable `request_price` admission charge.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |

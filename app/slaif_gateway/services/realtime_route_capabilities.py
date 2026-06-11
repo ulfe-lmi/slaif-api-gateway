@@ -11,12 +11,16 @@ REALTIME_CAPABILITIES_KEY = "realtime"
 REALTIME_CAPABILITY_AUDIO = "audio"
 REALTIME_CAPABILITY_WEBRTC_CLIENT_SECRETS = "webrtc_client_secrets"
 REALTIME_CAPABILITY_TRANSCRIPTION = "transcription"
+REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED = (
+    "client_secret_direct_provider_exposure_accepted"
+)
 
 KNOWN_REALTIME_CAPABILITIES = frozenset(
     {
         REALTIME_CAPABILITY_AUDIO,
         REALTIME_CAPABILITY_WEBRTC_CLIENT_SECRETS,
         REALTIME_CAPABILITY_TRANSCRIPTION,
+        REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED,
     }
 )
 
@@ -26,6 +30,7 @@ def default_realtime_capabilities() -> dict[str, bool]:
         REALTIME_CAPABILITY_AUDIO: True,
         REALTIME_CAPABILITY_WEBRTC_CLIENT_SECRETS: True,
         REALTIME_CAPABILITY_TRANSCRIPTION: False,
+        REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED: False,
     }
 
 
@@ -59,6 +64,7 @@ def enforce_realtime_route_capabilities(
     *,
     route_capabilities: Mapping[str, object] | None,
     transcription_requested: bool,
+    direct_provider_exposure_required: bool,
 ) -> None:
     capabilities = _parse_realtime_route_capabilities(route_capabilities)
     if not capabilities.get(REALTIME_CAPABILITY_AUDIO, False):
@@ -86,6 +92,21 @@ def enforce_realtime_route_capabilities(
                 field="session.type",
                 error_code="realtime_transcription_not_supported",
                 safe_message="This model route does not support Realtime transcription sessions.",
+            )
+        )
+    if direct_provider_exposure_required and not capabilities.get(
+        REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED,
+        False,
+    ):
+        raise RealtimeRouteCapabilityError(
+            RealtimeRouteCapabilityFinding(
+                capability=REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED,
+                field="session.model",
+                error_code="realtime_direct_provider_exposure_not_accepted",
+                safe_message=(
+                    "This model route does not allow Realtime client-secret issuance "
+                    "for quota-limited keys without explicit direct-provider exposure acceptance."
+                ),
             )
         )
 

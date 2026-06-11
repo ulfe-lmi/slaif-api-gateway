@@ -34,7 +34,7 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 | `POST /v1/audio/transcriptions` | Implemented for bounded multipart transcription subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/audio/translations` | Implemented for bounded multipart translation subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe request-priced fallback only when configured | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/embeddings` | Implemented for bounded standalone embeddings subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; safe estimated fallback when usage is absent | Non-streaming only | Unit, forwarding, pricing, and mocked official OpenAI Python client E2E coverage |
-| `POST /v1/realtime/client_secrets` | Implemented for bounded WebRTC client-secret admission subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; otherwise safe estimated admission finalization with bounded session budget | Non-streaming JSON control-plane response only; no server-side WebRTC/WebSocket proxying | Unit, forwarding, pricing, error-shape, and guarded mocked official OpenAI Python client E2E coverage |
+| `POST /v1/realtime/client_secrets` | Implemented for bounded WebRTC client-secret admission subset | Required | PostgreSQL reservation before provider call; provider usage authoritative when present; quota-limited keys fail closed unless the route explicitly accepts direct-provider exposure and has configured admission pricing; no hard actual-session-usage bound is claimed when usage is not observable | Non-streaming JSON control-plane response only; no server-side WebRTC/WebSocket proxying | Unit, forwarding, pricing, error-shape, and guarded mocked official OpenAI Python client E2E coverage |
 | `POST /v1/realtime/calls` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | `POST /v1/realtime/transcription_sessions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
 | Files endpoints | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only |
@@ -47,7 +47,13 @@ Standalone Audio API support is separate from Chat request-body audio. Current
 RC2 support includes standalone `POST /v1/audio/speech`,
 `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`,
 standalone `POST /v1/embeddings`, and the bounded browser/mobile Realtime
-client-secret route `POST /v1/realtime/client_secrets`. Realtime call helper
+client-secret route `POST /v1/realtime/client_secrets`. OpenAI's current Realtime
+docs and SDK state that a client secret can be used to create multiple sessions
+until it expires, that a session may continue after expiry once started, and
+that the client can later send `session.update` / per-response overrides. SLAIF
+therefore treats quota-limited direct-provider client-secret issuance as an
+explicitly accepted admission estimate, not as a hard actual-usage bound.
+Realtime call helper
 routes, server-side WebSocket proxying, transcription sessions, translation,
 SIP, Responses audio, `/v1/files`, provider file IDs, and streaming Chat audio
 remain unsupported. Embeddings input strings, token arrays, vectors,

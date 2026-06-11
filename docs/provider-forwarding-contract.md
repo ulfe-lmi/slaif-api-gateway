@@ -53,10 +53,16 @@ client-secret contract, requires separate endpoint permission plus explicit
 `realtime.audio=true` and `realtime.webrtc_client_secrets=true` route
 capabilities, replaces the nested `session.model` with the resolved upstream
 model, and never forwards client `Authorization`, cookies, CSRF,
-admin-session, or internal gateway headers upstream. The gateway returns the
-provider-issued ephemeral secret response to the caller but does not store or
-log the secret value, instructions text, raw session config, audio, raw SDP,
-or raw event bodies. `/v1/realtime/calls`, Realtime WebSocket proxying,
+admin-session, or internal gateway headers upstream. OpenAI's current docs/SDK
+describe the returned client secret as reusable until expiry and later session
+behavior as client-updatable/overridable, so SLAIF does not treat issuance as a
+hard actual-usage bound. Quota-limited keys therefore fail closed unless the
+route also sets
+`realtime.client_secret_direct_provider_exposure_accepted=true` and admission
+pricing is configured. The gateway returns the provider-issued ephemeral secret
+response to the caller but does not store or log the secret value, instructions
+text, raw session config, audio, raw SDP, or raw event bodies.
+`/v1/realtime/calls`, Realtime WebSocket proxying,
 transcription sessions, translation, SIP, tools, and MCP remain deferred.
 
 Provider config rows, model route rows, pricing rows, and FX rows are local

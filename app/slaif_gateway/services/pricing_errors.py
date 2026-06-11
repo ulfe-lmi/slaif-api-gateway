@@ -56,6 +56,11 @@ class AudioRequestPricingNotSupportedError(PricingError):
     message = "Standalone Audio API pricing is not configured for the resolved model"
 
 
+class RealtimeClientSecretPricingNotSupportedError(PricingError):
+    error_code = "realtime_client_secret_pricing_not_supported"
+    message = "Realtime client-secret admission pricing is not configured for the resolved model"
+
+
 class InvalidFxRateError(PricingError):
     status_code = 500
     error_type = "server_error"

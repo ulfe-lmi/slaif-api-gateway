@@ -22,6 +22,7 @@ from slaif_gateway.services.pricing_errors import (
     InvalidFxRateError,
     InvalidPricingDataError,
     PricingRuleNotFoundError,
+    RealtimeClientSecretPricingNotSupportedError,
 )
 
 
@@ -778,6 +779,74 @@ async def test_realtime_client_secret_estimate_uses_higher_of_token_and_request_
     assert estimate.request_price == Decimal("0.005000000")
     assert estimate.estimated_total_cost_native == Decimal("0.005000000")
     assert estimate.estimated_output_tokens == 200
+
+
+@pytest.mark.asyncio
+async def test_realtime_client_secret_admission_pricing_requires_request_price() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-realtime-mini",
+                endpoint="/v1/realtime/client_secrets",
+                currency="EUR",
+                input_price_per_1m=Decimal("1.000000000"),
+                output_price_per_1m=Decimal("2.000000000"),
+                request_price=None,
+            )
+        ]
+    )
+
+    with pytest.raises(RealtimeClientSecretPricingNotSupportedError):
+        await service.estimate_realtime_client_secret_cost(
+            route=_route(
+                requested_model="classroom-realtime",
+                resolved_model="gpt-realtime-mini",
+            ),
+            policy=RealtimePolicyResult(
+                effective_body={"session": {"model": "classroom-realtime", "type": "realtime"}},
+                estimated_input_tokens=100,
+                effective_output_tokens=200,
+            ),
+            endpoint="/v1/realtime/client_secrets",
+            admission_pricing_only=True,
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_realtime_client_secret_admission_pricing_uses_request_price_only() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                upstream_model="gpt-realtime-mini",
+                endpoint="/v1/realtime/client_secrets",
+                currency="EUR",
+                input_price_per_1m=Decimal("10.000000000"),
+                output_price_per_1m=Decimal("20.000000000"),
+                request_price=Decimal("0.005000000"),
+            )
+        ]
+    )
+
+    estimate = await service.estimate_realtime_client_secret_cost(
+        route=_route(
+            requested_model="classroom-realtime",
+            resolved_model="gpt-realtime-mini",
+        ),
+        policy=RealtimePolicyResult(
+            effective_body={"session": {"model": "classroom-realtime", "type": "realtime"}},
+            estimated_input_tokens=100,
+            effective_output_tokens=200,
+        ),
+        endpoint="/v1/realtime/client_secrets",
+        admission_pricing_only=True,
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.request_price == Decimal("0.005000000")
+    assert estimate.estimated_total_cost_native == Decimal("0.005000000")
+    assert estimate.estimated_input_cost_native == Decimal("0")
+    assert estimate.estimated_output_cost_native == Decimal("0")
 
 
 @pytest.mark.asyncio

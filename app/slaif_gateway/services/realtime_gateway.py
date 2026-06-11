@@ -86,9 +86,13 @@ async def handle_realtime_client_secret_create(
     )
 
     try:
+        direct_provider_exposure_required = _requires_direct_provider_exposure_acceptance(
+            authenticated_key
+        )
         enforce_realtime_route_capabilities(
             route_capabilities=route.capabilities,
             transcription_requested=session_body["type"] == "transcription",
+            direct_provider_exposure_required=direct_provider_exposure_required,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -100,6 +104,7 @@ async def handle_realtime_client_secret_create(
         policy_result=policy_result,
         request_id=request_id,
         request=request,
+        admission_pricing_only=direct_provider_exposure_required,
     )
 
     provider_request = ProviderRequest(
@@ -138,6 +143,7 @@ async def handle_realtime_client_secret_create(
         provider_response=provider_response,
         request_id=request_id,
         request=request,
+        admission_pricing_only=direct_provider_exposure_required,
     )
     _record_realtime_success_metrics(route=route, accounting_result=accounting_result)
     return JSONResponse(
@@ -176,6 +182,7 @@ async def _reserve_realtime_quota(
     policy_result: RealtimePolicyResult,
     request_id: str,
     request: Request | None,
+    admission_pricing_only: bool,
 ) -> tuple[QuotaReservationResult, ChatCostEstimate]:
     async for session in _db_session_iterator(request):
         pricing = PricingService(
@@ -191,6 +198,7 @@ async def _reserve_realtime_quota(
                 route=route,
                 policy=policy_result,
                 endpoint=REALTIME_CLIENT_SECRETS_ENDPOINT,
+                admission_pricing_only=admission_pricing_only,
             )
             reservation = await quota.reserve_for_chat_completion(
                 authenticated_key=authenticated_key,
@@ -258,6 +266,7 @@ async def _finalize_realtime_success(
     provider_response: ProviderResponse,
     request_id: str,
     request: Request | None,
+    admission_pricing_only: bool,
 ) -> FinalizedAccountingResult:
     async for session in _db_session_iterator(request):
         service = AccountingService(session)
@@ -308,7 +317,9 @@ async def _finalize_realtime_success(
                 },
                 response_metadata_extra={
                     "provider_usage_available": False,
+                    "estimate_is_invoice_grade": False,
                     "realtime_estimate_reason": "realtime_client_secret_issued",
+                    "realtime_direct_provider_exposure_admission": admission_pricing_only,
                     "session_type": session_body.get("type"),
                     "output_modalities": list(session_body.get("output_modalities", [])),
                     "audio_input_format": input_body.get("format", {}).get("type")
@@ -392,6 +403,19 @@ def _request_id_from_request(request: Request | None) -> str:
     if header_value and header_value.strip():
         return header_value.strip()
     return uuid.uuid4().hex
+
+
+def _requires_direct_provider_exposure_acceptance(
+    authenticated_key: AuthenticatedGatewayKey,
+) -> bool:
+    return any(
+        limit is not None
+        for limit in (
+            authenticated_key.cost_limit_eur,
+            authenticated_key.token_limit_total,
+            authenticated_key.request_limit_total,
+        )
+    )
 
 
 async def _db_session_iterator(request: Request | None):

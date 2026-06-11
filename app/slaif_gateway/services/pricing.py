@@ -27,6 +27,7 @@ from slaif_gateway.services.pricing_errors import (
     InvalidFxRateError,
     InvalidPricingDataError,
     PricingRuleNotFoundError,
+    RealtimeClientSecretPricingNotSupportedError,
     UnsupportedCurrencyError,
 )
 
@@ -251,6 +252,7 @@ class PricingService:
         route: RouteResolutionResult,
         policy: RealtimePolicyResult,
         endpoint: str = "/v1/realtime/client_secrets",
+        admission_pricing_only: bool = False,
         at: datetime | None = None,
     ) -> ChatCostEstimate:
         pricing = await self.find_active_pricing_rule(
@@ -262,11 +264,18 @@ class PricingService:
 
         input_tokens = policy.estimated_input_tokens
         output_tokens = policy.effective_output_tokens
-        input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
-        output_cost_native = Decimal(output_tokens) / _ONE_MILLION * pricing.output_price_per_1m
-        total_native = input_cost_native + output_cost_native
-        if pricing.request_price is not None:
-            total_native = max(total_native, pricing.request_price)
+        if admission_pricing_only:
+            if pricing.request_price is None:
+                raise RealtimeClientSecretPricingNotSupportedError(param="model")
+            input_cost_native = Decimal("0")
+            output_cost_native = Decimal("0")
+            total_native = pricing.request_price
+        else:
+            input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
+            output_cost_native = Decimal(output_tokens) / _ONE_MILLION * pricing.output_price_per_1m
+            total_native = input_cost_native + output_cost_native
+            if pricing.request_price is not None:
+                total_native = max(total_native, pricing.request_price)
         total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
 
         return ChatCostEstimate(
