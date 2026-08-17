@@ -201,3 +201,47 @@ baseline evidence and require a deliberately authorized, focused continuation
 to resolve the OAP governance contract mismatch before any fresh verification
 gate. The 128-worker post-PR-220 qualification and RC2 release decision remain
 outstanding regardless of that future result.
+
+## Focused remediation — OAP 001-b
+
+OAP continuation `001-b` repairs the narrow governance contract mismatch in
+commit `76e99e2598e0ceadd98baadba82890249e4b5bd2` without changing or rerunning the
+historical matrix above.
+
+Root cause: the original test duplicated the one-objective/one-PR invariant by
+requiring every active `NNN-a` strategic order to repeat the literal prose
+fragment `one numeric objective as exactly one PR`. The active 001-a order
+already declared `PR mode: CREATE_NEW_PR`, required exactly one new PR, and
+prohibited a second PR, but did not contain that exact fragment.
+
+Focused change: the test remains identifier-generic and continues to require
+`PR mode: CREATE_NEW_PR` from the active `NNN-a` order. Its second assertion now
+reads the durable coding-agent protocol and requires:
+
+```text
+`NNN-a` creates exactly one new PR for that numeric objective.
+```
+
+This is structural rather than weaker: active-order mode and durable protocol
+invariant are both asserted, while arbitrary repeated order wording is not.
+
+Observed focused results:
+
+- `python -m pytest tests/unit/test_oap_governance.py -q`: PASS — 8/8.
+- `python -m ruff check tests/unit/test_oap_governance.py`: PASS.
+- No full unit, integration, E2E, browser, Docker, HPC, or other broad local
+  suite was run.
+- The 24-worker harness was not run a second time.
+- Implementation-head GitHub CI had not started at documentation time; its
+  actual observed result is recorded in the immutable OAP 001-b report and on
+  PR #226 rather than predicted here.
+
+Evidence interpretation:
+
+- The original one-pass full matrix remains the historical `RESULT=FAIL` record
+  with its original tables, counts, command, timestamps, and failure.
+- Focused remediation plus final standard PR CI can qualify the corrected PR
+  candidate without rewriting the original failed run as green.
+- The 128-worker post-PR-220 HPC qualification remains **NOT RUN**.
+- No production, RC2 release, security, penetration-test, compliance, or scale
+  claim follows from the focused repair or standard CI.

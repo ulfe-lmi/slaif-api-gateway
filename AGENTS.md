@@ -83,6 +83,16 @@ post-PR-220 128-worker HPC qualification remains **NOT RUN**, and no RC2
 release/tag or production-certification claim follows. See
 `docs/verification/2026-08-17-current-main-baseline.md`.
 
+OAP continuation `001-b` records a focused structural repair at commit
+`76e99e2598e0ceadd98baadba82890249e4b5bd2`: the governance test now reads the
+one-new-PR invariant from the durable coding-agent protocol instead of requiring
+one literal sentence in every strategic order. The focused governance test
+passes 8/8, and no second full harness run occurred. The original 001-a matrix
+remains a failed historical run; focused remediation plus standard PR CI may
+qualify the corrected PR candidate without rewriting that history. The
+128-worker qualification remains **NOT RUN**, and no release or production
+claim follows.
+
 ### 0.3 Provider-catalog continuation state
 
 Provider-catalog implementation through PR #218 is merged:
