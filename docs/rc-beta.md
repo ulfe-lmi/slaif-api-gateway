@@ -34,11 +34,16 @@ OAP continuation `001-b` applies a focused structural repair at commit
 `76e99e2598e0ceadd98baadba82890249e4b5bd2`: the OAP governance test checks the
 one-new-PR invariant in the durable coding protocol instead of requiring one
 literal sentence in every strategic order. The focused governance test passes
-8/8 and changed-file Ruff passes. No second full harness was run, so the
-original matrix remains `RESULT=FAIL`; focused remediation and the standard PR
-CI are separate evidence for the corrected candidate. Implementation-head CI
-had not started at documentation time and is reported from GitHub in the OAP
-report.
+8/8 and changed-file Ruff passes. No second full harness was run. The earlier
+documentation-time observation that implementation-head CI had not started was
+accurate at that moment; later GitHub evidence shows PR #226 report head
+`24431512a993df81f15de4e0268c40ad61e0ad57` completed all ten final-head checks
+successfully and PR #226 merged as
+`adaefdc45ddd13e172955c14e02cb6c97d49b629`. The focused repair and standard PR
+checks are separate evidence for the corrected candidate: the original
+2,533/2,534 matrix remains `RESULT=FAIL`, and the post-PR-220 128-worker
+qualification remains NOT RUN. No release, RC2, production, security, or
+compliance claim follows.
 
 It is also not a feature-full RC2 approval. A green harness means
 verification-clean for the implemented scope only. The maintainer-locked RC2
@@ -242,7 +247,14 @@ migrations automatically.
   generation, policy mutation, and hosted/background/multimodal Responses
   template policy remain future work.
   See `responses-compatibility.md`.
-- Embeddings API is not implemented.
+- Standalone `POST /v1/embeddings` is implemented only as the bounded current
+  surface: it requires separate key endpoint permission and explicit
+  route/model `embeddings` capability; optional `dimensions` additionally
+  requires `embeddings_dimensions=true`. Requests use PostgreSQL
+  reservation/finalization and canonical OpenAI forwarding, while OpenRouter
+  fails closed. Input strings, token arrays, embedding vectors, and raw
+  JSON/provider bodies are not stored or logged. This does not imply support
+  for every Embeddings field or provider.
 - File endpoints and image-generation endpoints are not implemented.
 - Chat Completions file IDs, file URLs, audio URLs, audio data URLs, streaming
   audio output, custom audio-output voices, previous-audio references, and
@@ -302,13 +314,18 @@ test setup at `DATABASE_URL`.
 
 ## Tagging Guidance
 
-Tag only after the release checklist is complete:
+The historical `v0.1.0-rc.1` tag and GitHub release already exist. Do not
+recreate, move, or reuse that tag for current `main`. Any future version/tag is
+a human maintainer decision after its own verification and release gate.
+
+For a future maintainer-selected version, tag only after the applicable release
+checklist is complete:
 
 ```bash
-git tag -a v0.1.0-rc.1 -m "SLAIF API Gateway v0.1.0-rc.1"
-git push origin v0.1.0-rc.1
+git tag -a <future-version> -m "SLAIF API Gateway <future-version>"
+git push origin <future-version>
 ```
 
-The exact version is a maintainer decision. For this RC-beta preparation pass,
-the recommended tag is `v0.1.0-rc.1`. The tag should point to a commit whose CI
-run and Docker smoke are green.
+The exact future version and target are maintainer decisions. A future tag
+should point to a commit whose required verification and release gate are
+complete.

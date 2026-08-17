@@ -245,3 +245,22 @@ Evidence interpretation:
 - The 128-worker post-PR-220 HPC qualification remains **NOT RUN**.
 - No production, RC2 release, security, penetration-test, compliance, or scale
   claim follows from the focused repair or standard CI.
+
+## Post-publication outcome — 2026-08-17
+
+The observations above describe the matrix and the documentation-time state
+accurately and remain unchanged. Later GitHub evidence established a separate
+outcome for the focused repair:
+
+- PR #226 report head `24431512a993df81f15de4e0268c40ad61e0ad57`
+  completed all ten final-head checks successfully;
+- PR #226 merged as `adaefdc45ddd13e172955c14e02cb6c97d49b629`;
+- the 24-worker matrix was not run a second time; and
+- its original 2,533/2,534 `RESULT=FAIL` classification remains the immutable
+  full-matrix result.
+
+The focused repair and green standard PR checks qualify only that corrected PR
+candidate. They do not establish a clean post-PR-220 128-worker qualification,
+which remains **NOT RUN**, and they do not authorize an RC2 release or any
+production, security, penetration-test, compliance, reliability, or scale
+claim.

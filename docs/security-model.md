@@ -921,7 +921,14 @@ never recover or send old plaintext keys.
   cancel/list routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.
-  Embeddings API is not implemented.
+- Standalone `POST /v1/embeddings` is implemented only as the bounded current
+  surface: it requires separate key endpoint permission and explicit
+  route/model `embeddings` capability; optional `dimensions` additionally
+  requires `embeddings_dimensions=true`. Requests use PostgreSQL
+  reservation/finalization and canonical OpenAI forwarding, while OpenRouter
+  fails closed. Input strings, token arrays, embedding vectors, and raw
+  JSON/provider bodies are not stored or logged. This does not imply support
+  for every Embeddings field or provider.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.
