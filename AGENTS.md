@@ -702,6 +702,13 @@ Current behavior:
   streaming, structured/text formats in the documented subset, local/client
   `function` tools, non-streaming local/client `custom` tools, and the existing
   output-cap/reservation/finalization policy.
+- The bounded non-tool Codex request-envelope slice is implemented only when a
+  key's sanitized `responses_policy.allowed_capabilities` explicitly contains
+  `codex_request_envelope` and the resolved route explicitly sets
+  `capabilities.responses.codex_request_envelope=true`. It canonicalizes the
+  approved include/parallel/cache/reasoning/verbosity/message-ID fields,
+  validates then drops `client_metadata`, and does not imply Codex tool,
+  namespace, tool-choice, or streaming-event compatibility.
 - Responses streaming live-burn is implemented for the supported stateless
   text-output streaming subset. It is a provisional gateway brake, not
   invoice-grade truth; final provider usage/cost remains authoritative when
@@ -724,6 +731,11 @@ Explicit exclusions:
   tool search, MCP/connectors, and provider-side authorization remain
   unsupported/fail-closed unless a future approved contract changes them.
 - Endpoint and model permission never imply tool/capability permission.
+- Codex client headers, model names, and endpoint permission never substitute
+  for either `codex_request_envelope` gate. Client metadata, cache keys, and
+  message IDs must not be persisted, logged, audited, exported, or used as
+  identity/state authority; only the approved cache key and message IDs are
+  forwarded transiently after validation.
 - Do not blindly pass through unknown request fields or tool types.
 - Local function/custom tool support does not authorize hosted execution by
   SLAIF; the downstream client remains responsible for executing local tools.

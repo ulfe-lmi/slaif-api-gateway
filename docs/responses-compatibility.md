@@ -4,10 +4,11 @@ Status: limited foundation implemented on current `main`.
 
 Codex CLI wire compatibility is tracked separately in
 [`codex-compatibility.md`](codex-compatibility.md). The pinned Codex CLI 0.147.0
-`gpt-5.6-sol` API-key Responses profile is **CAPTURED, NOT YET
-CODEX-COMPATIBLE**: current fail-closed policy still rejects captured fields,
-Responses-lite input/tool containers, and message-item fields. The capture does
-not relax this contract or authorize Codex tools.
+`gpt-5.6-sol` API-key Responses profile has **PARTIAL REQUEST-ENVELOPE SUPPORT
+AND IS NOT CODEX-COMPATIBLE**. The bounded non-tool envelope described below is
+implemented behind dual key/route gates, while Responses-lite input/tool
+containers, tool-dependent choice, and Codex reasoning/tool stream events
+remain rejected. The capture does not authorize Codex tools.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
@@ -92,6 +93,28 @@ Implemented request fields for the first slice:
 - `tool_choice` as `none`, `auto`, `required`, a named local function choice,
   or a named local custom choice
 - `service_tier` omitted or `auto`
+- behind both `codex_request_envelope` gates only: exact
+  `include=["reasoning.encrypted_content"]`, boolean `parallel_tool_calls`,
+  bounded opaque `prompt_cache_key`, bounded `reasoning.effort` plus optional
+  `reasoning.context="all_turns"`, `text.verbosity` as `low|medium|high`, and a
+  bounded conservative `id` on otherwise-supported message items
+
+The Codex request-envelope gates are independent and default-deny. The
+authenticated key's sanitized `responses_policy.allowed_capabilities` must
+explicitly include `codex_request_envelope`, and the resolved route must set
+`capabilities.responses.codex_request_envelope=true`. Missing or malformed key
+policy fails before route/database work; a missing/false route flag fails before
+Redis, pricing, quota, or provider work. Neither endpoint/model permission nor
+Codex-like headers grants this capability.
+
+Bounded `client_metadata` presence also triggers both gates. Only the pinned
+0.147.0 installation/session/thread/window/turn key vocabulary is accepted and
+all values must be capped strings. The gateway does not parse embedded
+`x-codex-turn-metadata` JSON. After validation, it drops the complete object;
+client metadata is never forwarded, persisted, logged, audited, metered,
+hashed, exported, or echoed. Prompt-cache values and message IDs are forwarded
+only as validated opaque provider input and are never persisted, logged,
+audited, exported, echoed, or used as identity/state authority.
 
 If `store` is omitted, SLAIF injects `store=false` before provider forwarding so
 the gateway remains stateless even when an upstream default would store
@@ -231,6 +254,14 @@ and a `/v1/responses` pricing row exists. Streaming additionally requires
 OpenRouter Responses forwarding, including streaming, is implemented only for
 explicitly configured `/v1/responses` OpenRouter routes; OpenRouter support
 remains beta/stateless and is not enabled by model allowlist alone.
+
+The bounded Codex envelope composes with this existing route policy but does
+not broaden it. Unknown fields, `additional_tools`, namespace/nested tools,
+hosted/MCP authority, tool-dependent `tool_choice`, background/storage
+expansion, and unapproved streaming event types still fail closed. Approved
+provider-forwarded envelope and message-ID bytes increase the conservative
+admission estimate; safe estimation evidence contains field names and counts
+only. Dropped client metadata is size-capped but is not provider-billed input.
 
 ## Stored Response Lifecycle
 
@@ -475,6 +506,8 @@ Required policy controls:
 - maximum built-in tool calls via `max_tool_calls`
 - maximum single-request estimated cost in EUR
 - explicit unsupported-field rejection for stateful/background features
+- explicit per-key `codex_request_envelope` capability for the bounded non-tool
+  envelope; no default or trusted-calibration discovery grant
 
 Leaving Responses disabled must continue to reject `/v1/responses` before route
 resolution, pricing, quota reservation, or provider forwarding.
@@ -519,6 +552,12 @@ sanitized summary into gateway-key metadata. Hosted tools, MCP/connectors,
 conversation state, background, raw image URLs/data, raw file URLs/names/data/base64,
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
 out of scope for template metadata and are rejected.
+
+`codex_request_envelope` may also appear in that capability list, but only when
+the reviewed template snapshot explicitly includes it. Template normalization
+never adds it by default. Copying it to one created key does not enable hosted
+tools, storage, background, namespace tools, MCP, or any Codex compatibility
+claim, and the route gate remains independently required.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.

@@ -424,7 +424,43 @@ def test_create_key_from_template_allows_safe_responses_policy_metadata() -> Non
         "multimodal": False,
         "notes": "safe summary only",
     }
+    assert "codex_request_envelope" not in payload.responses_policy["allowed_capabilities"]
     assert "responses_policy" in audit.rows[-1].new_values
+
+
+def test_create_key_from_template_propagates_only_explicit_codex_envelope_capability() -> None:
+    templates = FakeTemplatesRepository()
+    key_service = FakeKeyService()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=key_service,
+    )
+    policy = _responses_policy()
+    policy["allowed_capabilities"] = [
+        *policy["allowed_capabilities"],
+        "codex_request_envelope",
+    ]
+    _template, revision = _template_revision(
+        templates,
+        allowed_endpoints=["/v1/responses"],
+        template_snapshot={"responses_policy": policy},
+    )
+
+    asyncio.run(
+        service.create_key_from_revision(
+            template_revision_id=revision.id,
+            owner_id=uuid.uuid4(),
+            reason="Reviewed Codex envelope template",
+            confirm_create_key_from_template=True,
+        )
+    )
+
+    copied = key_service.payloads[0].responses_policy
+    assert copied is not None
+    assert copied["allowed_capabilities"].count("codex_request_envelope") == 1
+    assert copied["hosted_tools_allowed"] == []
+    assert copied["storage"] is False
 
 
 def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> None:

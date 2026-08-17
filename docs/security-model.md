@@ -625,6 +625,41 @@ bulk key creation from templates remain future work.
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
 
+## Codex Request-Envelope Boundary
+
+The first runtime Codex slice is request-shape permission, not client identity
+or tool authority. A request that contains an approved envelope field,
+`text.verbosity`, or a message `id` requires both an explicit
+`codex_request_envelope` capability in the authenticated key's sanitized
+Responses policy and the same explicit capability on the resolved route.
+Missing or malformed key policy denies before route/database work. Route denial
+happens before Redis, pricing, PostgreSQL quota reservation, or provider work.
+Headers, user agents, model names, and endpoint permission never substitute for
+either gate.
+
+Approved `include`, `parallel_tool_calls`, `prompt_cache_key`, `reasoning`,
+`text.verbosity`, and message `id` fields are bounded, canonicalized, and
+reconstructed rather than raw-passed through. The prompt-cache key and message
+ID are opaque transient provider inputs: the gateway does not parse them or use
+them as identity, ownership, routing, persistence, or state authority. It never
+stores, logs, audits, exports, or echoes them.
+
+`client_metadata` has a stricter boundary. Only capped string values under the
+pinned Codex 0.147.0 installation/session/thread/window/turn key vocabulary are
+accepted. The gateway deliberately does not parse embedded turn-metadata JSON,
+which may contain workspace URLs or tool mappings. The entire field is dropped
+after validation and never reaches providers, persistence, logs, audits,
+accounting, hashes, metrics, exports, or error echoes. Reasoning request values
+and encrypted reasoning content likewise must not enter those local surfaces.
+Safe admission evidence contains only approved field names and aggregate
+byte/token counts.
+
+This capability does not enable `additional_tools`, namespaces, nested tools,
+tool-dependent choices, hosted tools, MCP/connectors, background/storage
+expansion, or new streaming event types. Key templates may propagate the
+capability only from an explicit reviewed snapshot; defaults and trusted
+calibration discovery do not add it.
+
 ## Codex Protocol Capture Evidence
 
 The versioned Codex evidence process is documented in

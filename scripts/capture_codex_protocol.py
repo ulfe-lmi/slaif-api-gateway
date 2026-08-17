@@ -19,18 +19,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from slaif_gateway.services.responses_gateway import _ALLOWED_RESPONSES_STREAM_EVENT_TYPES
-from slaif_gateway.services.responses_request_policy import (
-    _HOSTED_TOOL_TYPES,
-    _SUPPORTED_CUSTOM_TOOL_FIELDS,
-    _SUPPORTED_FIELDS,
-    _SUPPORTED_FUNCTION_TOOL_FIELDS,
-    _SUPPORTED_INPUT_MESSAGE_FIELDS,
-    _SUPPORTED_INPUT_TEXT_PART_FIELDS,
-    _unsupported_code_for_field,
-)
-
-
 SCHEMA_VERSION = 1
 PINNED_CLI_VERSION = "0.147.0"
 PINNED_RAW_VERSION = "codex-cli 0.147.0"
@@ -75,6 +63,74 @@ MOCK_EVENTS = (
         },
     },
 )
+
+# Immutable 004-baseline classifier vocabulary. This evidence tool must keep
+# reproducing the checked-in pre-005 compatibility diff even as runtime policy
+# gains separately reviewed fields.
+_BASELINE_004_SUPPORTED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "temperature",
+        "top_p",
+        "metadata",
+        "stream",
+        "store",
+        "text",
+        "service_tier",
+        "tools",
+        "tool_choice",
+        "previous_response_id",
+        "conversation",
+    }
+)
+_BASELINE_004_SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
+_BASELINE_004_SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
+_BASELINE_004_SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
+    {"type", "name", "description", "parameters", "strict"}
+)
+_BASELINE_004_SUPPORTED_CUSTOM_TOOL_FIELDS = frozenset(
+    {"type", "name", "description", "format"}
+)
+_BASELINE_004_HOSTED_TOOL_TYPES = frozenset(
+    {
+        "web_search",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "web_search_2025_08_26",
+        "file_search",
+        "code_interpreter",
+        "computer",
+        "computer_use",
+        "computer_use_preview",
+        "image_generation",
+        "tool_search",
+        "mcp",
+        "shell",
+        "local_shell",
+        "apply_patch",
+        "namespace",
+    }
+)
+_BASELINE_004_ALLOWED_RESPONSES_STREAM_EVENT_TYPES = frozenset(
+    {"response.created", "response.in_progress", "response.output_text.delta"}
+)
+
+
+def _baseline_004_unsupported_code_for_field(field_name: str) -> str:
+    if field_name == "parallel_tool_calls":
+        return "responses_tools_not_supported"
+    if field_name in {"previous_response_id", "conversation"}:
+        return "responses_state_not_supported"
+    if field_name == "background":
+        return "responses_background_not_supported"
+    if field_name in {"modalities", "audio", "include"}:
+        return "responses_multimodal_not_supported"
+    if field_name in {"prompt", "prompt_cache_key", "prompt_cache_retention"}:
+        return "responses_state_not_supported"
+    return "responses_field_not_supported"
 
 _VERSION_RE = re.compile(r"codex-cli ([0-9]+\.[0-9]+\.[0-9]+)\n?\Z")
 _SAFE_CATALOG_FIELDS = frozenset(
@@ -593,11 +649,11 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
     for field in top_fields:
         if not isinstance(field, str):
             raise CaptureError("Sanitized request field names have an unexpected shape.")
-        if field in _SUPPORTED_FIELDS:
+        if field in _BASELINE_004_SUPPORTED_FIELDS:
             supported_fields.append(field)
         else:
             rejected_fields.append(
-                {"name": field, "reason_code": _unsupported_code_for_field(field)}
+                {"name": field, "reason_code": _baseline_004_unsupported_code_for_field(field)}
             )
 
     text_shape = field_shapes.get("text")
@@ -630,7 +686,7 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
         item_type = item.get("type")
         fields = item.get("field_names")
         if item_type == "message" and isinstance(fields, list):
-            unknown_fields = sorted(set(fields) - _SUPPORTED_INPUT_MESSAGE_FIELDS)
+            unknown_fields = sorted(set(fields) - _BASELINE_004_SUPPORTED_INPUT_MESSAGE_FIELDS)
             if unknown_fields:
                 rejected_input_types.append(
                     {"name": "message", "reason_code": "responses_input_item_invalid"}
@@ -654,7 +710,7 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
                 if (
                     part_type == "input_text"
                     and isinstance(part_fields, list)
-                    and not (set(part_fields) - _SUPPORTED_INPUT_TEXT_PART_FIELDS)
+                    and not (set(part_fields) - _BASELINE_004_SUPPORTED_INPUT_TEXT_PART_FIELDS)
                 ):
                     supported_content_types.add("input_text")
                 elif isinstance(part_type, str):
@@ -691,7 +747,7 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
         elif tool_type == "function":
             field_names = tool.get("field_names")
             unknown = (
-                set(field_names) - _SUPPORTED_FUNCTION_TOOL_FIELDS
+                set(field_names) - _BASELINE_004_SUPPORTED_FUNCTION_TOOL_FIELDS
                 if isinstance(field_names, list)
                 else set()
             )
@@ -704,7 +760,7 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
         elif tool_type == "custom":
             field_names = tool.get("field_names")
             unknown = (
-                set(field_names) - _SUPPORTED_CUSTOM_TOOL_FIELDS
+                set(field_names) - _BASELINE_004_SUPPORTED_CUSTOM_TOOL_FIELDS
                 if isinstance(field_names, list)
                 else set()
             )
@@ -715,7 +771,7 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
                 finding["reason_code"] = "responses_custom_tool_streaming_not_supported"
             else:
                 finding["reason_code"] = "requires_top_level_local_tool_shape"
-        elif tool_type in _HOSTED_TOOL_TYPES:
+        elif tool_type in _BASELINE_004_HOSTED_TOOL_TYPES:
             finding["status"] = "rejected"
             finding["reason_code"] = "responses_hosted_tool_not_supported"
         else:
@@ -725,7 +781,10 @@ def build_gateway_compatibility(request: dict[str, object]) -> dict[str, object]
 
     event_findings = []
     for event in ("response.created", "response.completed"):
-        supported = event in _ALLOWED_RESPONSES_STREAM_EVENT_TYPES or event == "response.completed"
+        supported = (
+            event in _BASELINE_004_ALLOWED_RESPONSES_STREAM_EVENT_TYPES
+            or event == "response.completed"
+        )
         event_findings.append(
             {
                 "name": event,

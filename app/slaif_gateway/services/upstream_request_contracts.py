@@ -64,6 +64,10 @@ RESPONSES_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "tool_choice",
         "previous_response_id",
         "conversation",
+        "include",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
     }
 )
 
@@ -252,6 +256,10 @@ class NormalizedResponsesUpstreamRequest:
     tool_choice: object = _UNSET
     previous_response_id: object = _UNSET
     conversation: object = _UNSET
+    include: object = _UNSET
+    parallel_tool_calls: object = _UNSET
+    prompt_cache_key: object = _UNSET
+    reasoning: object = _UNSET
 
     def as_upstream_fields(self) -> dict[str, Any]:
         input_value: Any
@@ -557,6 +565,10 @@ def normalize_responses_upstream_request(
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
         previous_response_id=_select_field(body.get("previous_response_id", _UNSET)),
         conversation=_select_field(body.get("conversation", _UNSET)),
+        include=_select_field(body.get("include", _UNSET)),
+        parallel_tool_calls=_select_field(body.get("parallel_tool_calls", _UNSET)),
+        prompt_cache_key=_select_field(body.get("prompt_cache_key", _UNSET)),
+        reasoning=_select_field(body.get("reasoning", _UNSET)),
     )
 
 

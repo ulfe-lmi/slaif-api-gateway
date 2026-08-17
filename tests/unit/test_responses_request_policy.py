@@ -392,7 +392,7 @@ def test_compact_rejects_non_text_or_extra_content_parts(part: dict[str, object]
     [
         ("background", True, "responses_background_not_supported"),
         ("store", True, "responses_store_not_supported"),
-        ("include", ["message.input_image.image_url"], "responses_multimodal_not_supported"),
+        ("include", ["message.input_image.image_url"], "responses_codex_envelope_not_allowed"),
         ("unknown_future_field", {"x": "y"}, "responses_field_not_supported"),
     ],
 )

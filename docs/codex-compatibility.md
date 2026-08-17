@@ -1,6 +1,6 @@
 # Codex CLI Compatibility
 
-Status: **CAPTURED, NOT YET CODEX-COMPATIBLE**.
+Status: **PARTIAL REQUEST-ENVELOPE SUPPORT, NOT CODEX-COMPATIBLE**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -20,7 +20,8 @@ Checked on 2026-08-18:
 | Wire endpoint | `POST /v1/responses` |
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
-| Current compatibility result | `not_compatible` |
+| Immutable 004-baseline compatibility result | `not_compatible` |
+| Current runtime status | Non-tool envelope slice only; still `not_compatible` |
 
 Primary references:
 
@@ -30,6 +31,7 @@ Primary references:
 - [Pinned request-compression tests](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/core/tests/suite/request_compression.rs)
 - [Pinned model-catalog schema](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/protocol/src/openai_models.rs)
 - [Pinned loopback Responses server](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/app-server-test-client/src/loopback_responses_server.rs)
+- [Pinned Responses metadata vocabulary](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/core/src/responses_metadata.rs)
 
 The bundled model metadata is part of the pin. For this binary,
 `gpt-5.6-sol` selects Responses-lite/code-mode behavior, a `shell_command`
@@ -102,18 +104,20 @@ request compression is enabled. The separate ChatGPT-backend authentication
 path can use zstd when enabled. Neither observation is a promise about later
 Codex releases, and SLAIF does not add decompression support here.
 
-## Captured compatibility diff
+## Immutable captured compatibility baseline
 
-The checked-in diff is derived from the sanitized request plus the current
-gateway `_SUPPORTED_FIELDS`, input/tool rules, and streaming event allowlist.
-It is reproducible by the focused unit test.
+The checked-in diff is derived from the sanitized request plus the gateway
+rules that existed when objective 004 captured it. Those classifier constants
+are now frozen and clearly named as the 004 baseline so later runtime support
+cannot rewrite historical evidence. The fixture and its SHA remain unchanged,
+and live verification must still reproduce the exact canonical document.
 
 Supported top-level names observed were `input`, `model`, `store`, `stream`,
 `text`, and the `tool_choice` field name. `tool_choice` is nevertheless rejected
 for this request because Responses-lite carries tools inside an input item
 instead of the gateway's required top-level local-tool array.
 
-| Captured element | Current result | Safe reason code |
+| Captured element | Immutable 004-baseline result | Safe reason code |
 | --- | --- | --- |
 | `client_metadata` | Rejected | `responses_field_not_supported` |
 | `include` | Rejected | `responses_multimodal_not_supported` |
@@ -140,6 +144,55 @@ client IDs, and authorization values are absent from the fixture.
 Because required captured elements are rejected, the overall status is
 `not_compatible`. Endpoint/model permission must not be interpreted as Codex
 tool permission.
+
+## Current bounded request-envelope slice
+
+Current runtime policy can accept a tool-free projection of the captured
+request envelope, but only through two explicit gates using the same capability
+name:
+
+- the authenticated key's sanitized
+  `responses_policy.allowed_capabilities` must explicitly contain
+  `codex_request_envelope`; and
+- the resolved route must explicitly set
+  `capabilities.responses.codex_request_envelope=true`.
+
+The key gate is default-deny for missing or malformed policy and returns
+`responses_codex_envelope_not_allowed` before route or database work. The route
+flag is a known capability whose conservative default is `false`; route denial
+happens before Redis, pricing, quota reservation, or provider work. Headers and
+model names do not identify or authorize Codex traffic.
+
+With both gates, `POST /v1/responses` accepts and reconstructs only:
+
+- `include`, canonicalized to the exact singleton
+  `reasoning.encrypted_content`;
+- boolean `parallel_tool_calls` without granting tool permission;
+- an opaque, non-empty UTF-8 `prompt_cache_key` of at most 256 bytes;
+- bounded `reasoning` containing `effort` and optional
+  `context="all_turns"`;
+- `text.verbosity` as `low`, `medium`, or `high`, composed with the existing
+  approved `text.format` surface; and
+- a bounded conservative ASCII `id` on otherwise-supported message items.
+
+`client_metadata` is accepted only as a small string-valued object using the
+pinned 0.147.0 source vocabulary: `x-codex-installation-id`, `session_id`,
+`thread_id`, `turn_id`, `x-codex-window-id`, and
+`x-codex-turn-metadata`. The embedded turn-metadata string is never parsed.
+After validation the entire object is dropped: it is not forwarded, metered,
+hashed, stored, logged, audited, exported, or echoed. Prompt-cache values and
+message IDs are forwarded transiently but are likewise never stored, logged,
+audited, exported, echoed, or treated as identity/state authority.
+
+Provider-forwarded envelope and message-ID material is counted conservatively
+in admission estimation. Estimation evidence exposes only safe field names and
+byte/token counts, never values. Provider final usage/cost remains authoritative.
+
+This is not a Codex compatibility claim. The captured profile still includes
+Responses-lite `additional_tools`, namespace/nested tool containers, a
+tool-dependent `tool_choice`, and Codex reasoning/tool stream event families
+that remain denied pending objectives 006 through 008. Hosted tools, MCP,
+background/state expansion, and WebSocket behavior are also not enabled.
 
 ## Regeneration and verification
 
@@ -181,10 +234,10 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Objectives 005 through 011 remain separate strategic work-order boundaries.
-This capture grants none of them implicitly. Any later field normalization,
-Responses-lite input/tool handling, permission mapping, streaming expansion,
-quota/accounting work, end-to-end validation, operator guidance, or release
-decision requires its own activated scope, tests, privacy review, and GitHub
-acceptance. Until then, SLAIF makes no Codex production, provider, or release
-compatibility claim.
+Objectives 006 through 011 remain separate strategic work-order boundaries.
+The request-envelope slice grants none of them implicitly. Responses-lite
+input/tool handling, permission mapping, streaming expansion, quota/accounting
+work, end-to-end validation, operator guidance, and any release decision each
+require their own activated scope, tests, privacy review, and GitHub acceptance.
+Until then, SLAIF makes no Codex production, provider, or release compatibility
+claim.

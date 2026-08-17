@@ -225,6 +225,21 @@ Responses-specific rules for the current foundation:
 
 - text output is supported for stateless create and for non-streaming
   `store=true` when the route explicitly enables stored Responses;
+- the bounded non-tool Codex envelope is reconstructed only when the key's
+  sanitized `responses_policy.allowed_capabilities` includes
+  `codex_request_envelope` and the route independently sets
+  `capabilities.responses.codex_request_envelope=true`. The normalized
+  Responses contract can carry only approved `include`, `parallel_tool_calls`,
+  `prompt_cache_key`, `reasoning`, composed `text.format`/`text.verbosity`, and
+  validated message `id` values. It never contains `client_metadata`;
+- Codex `client_metadata` accepts only capped string values under the pinned
+  installation/session/thread/window/turn key vocabulary, is never parsed, and
+  is dropped before normalized-contract construction. It is never forwarded,
+  persisted, logged, audited, metered, hashed, exported, or echoed;
+- `prompt_cache_key` and message `id` remain opaque transient provider input.
+  They are forwarded after validation and counted conservatively, but are not
+  persisted, logged, audited, exported, echoed, or treated as routing,
+  ownership, cache, or state authority;
 - `input` may be a string or a bounded message/input item array.
   Supported arrays are reconstructed from message roles plus string content or
   `input_text` content parts; string-only `function_call_output` items are
@@ -278,6 +293,9 @@ Responses-specific rules for the current foundation:
   the route advertises `capabilities.responses.previous_response_id=true`, and
   provider/route metadata is compatible. Unknown, non-owned, deleted,
   provider-mismatched, or route-incompatible IDs are not proxied upstream;
+- `additional_tools`, namespace/nested tool containers, tool-dependent
+  `tool_choice`, hosted/MCP authority, and unapproved Codex reasoning/tool SSE
+  event types remain denied even when both envelope gates are enabled;
 - non-streaming `conversation` is forwarded only after the ID resolves to an
   active local conversation reference owned by the authenticated gateway key,
   the route advertises `capabilities.responses.conversations=true`, and
