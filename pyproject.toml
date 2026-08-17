@@ -38,12 +38,12 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "pytest-xdist",
-  "respx",
-  "openai",
+  "respx==0.23.1",
+  "openai==2.41.0",
   "playwright",
   "testcontainers[postgres]",
   "hypothesis",
-  "ruff",
+  "ruff==0.15.16",
 ]
 
 [project.scripts]
