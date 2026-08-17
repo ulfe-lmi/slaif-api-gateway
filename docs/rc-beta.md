@@ -8,6 +8,31 @@ RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
+## Current verification evidence
+
+The 2026-08-17 current-machine verification record is
+[`verification/2026-08-17-current-main-baseline.md`](verification/2026-08-17-current-main-baseline.md).
+Its classification is `RESULT=FAIL`: one 24-worker full-matrix run passed 2,533
+of 2,534 tests, with one OAP governance assertion failure. All integration,
+E2E, browser, Redis, Docker Compose config, Ruff, Alembic, safety, and isolation
+coverage in that run passed, but the failed unit gate means current main is not
+verification-clean on the basis of this evidence.
+
+The record is commit- and environment-specific. It does not replace the older
+historical readiness baseline, close the still-unrun post-PR-220 128-worker HPC
+qualification, approve an RC2 tag/release, or certify production/security/
+compliance readiness.
+
+OAP continuation `001-b` applies a focused structural repair at commit
+`76e99e2598e0ceadd98baadba82890249e4b5bd2`: the OAP governance test checks the
+one-new-PR invariant in the durable coding protocol instead of requiring one
+literal sentence in every strategic order. The focused governance test passes
+8/8 and changed-file Ruff passes. No second full harness was run, so the
+original matrix remains `RESULT=FAIL`; focused remediation and the standard PR
+CI are separate evidence for the corrected candidate. Implementation-head CI
+had not started at documentation time and is reported from GitHub in the OAP
+report.
+
 It is also not a feature-full RC2 approval. A green harness means
 verification-clean for the implemented scope only. The maintainer-locked RC2
 target now includes a bounded implemented Realtime client-secret slice; the
