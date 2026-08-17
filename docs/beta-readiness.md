@@ -2,7 +2,8 @@
 
 Date: 2026-05-01
 
-Status: RC-beta readiness candidate after verification fixes.
+Historical status (2026-05-01): RC-beta readiness candidate after verification
+fixes.
 
 Historical `main` baseline after the RC-beta CI/docs PR #120 merge:
 `dbc98374c47be4537cc5087bd008a36b76fc8f17`
@@ -21,7 +22,7 @@ feature-fullness approval.
 
 This report is not a production certification, compliance attestation, or
 penetration-test report. It records a release-candidate beta verification pass
-for the current implemented scope.
+for the scope implemented and documented at that historical baseline.
 
 The maintainer-locked RC2 target is stricter than this historical implemented
 scope baseline. Standalone `/v1/audio/*`, `POST /v1/embeddings`, and the
@@ -325,10 +326,11 @@ truth, not current `main` status.
 
 - Add MFA and role-gated permissions if required for the deployment context.
 - Add formal security review or penetration testing before production claims.
-- Continue Responses API as scoped RC2 work under
-  `responses-compatibility.md`; decide separately whether to implement
-  Responses hosted tools, background/cancel/list routes, stateful streaming,
-  files, multimodal output, bulk key send-now, and native provider adapters.
+- Further Responses expansion beyond the current implemented RC2 boundary is
+  separately scoped work under `responses-compatibility.md`; decide separately
+  whether to implement Responses hosted tools, background/cancel/list routes,
+  stateful streaming, files, multimodal output, bulk key send-now, and native
+  provider adapters.
 - Extend Responses live-burn beyond the current stateless text-output
   streaming subset only as separate scoped work under
   `streaming-live-burn-margin.md`.
@@ -343,5 +345,5 @@ scope matrix has zero `RC2_REQUIRED_MISSING` rows, but a clean post-PR-220
 current-main qualification and a human release decision remain outstanding;
 see [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
-Tag-specific release notes for the recommended first RC-beta tag are in
+Tag-specific release notes for the historical first RC-beta tag are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).

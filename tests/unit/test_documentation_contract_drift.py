@@ -157,3 +157,15 @@ def test_live_burn_staged_acceptance_sections_are_explicitly_historical() -> Non
     assert "## 19. Historical bounded Responses implementation acceptance record" in (
         live_burn_contract
     )
+
+
+def test_beta_readiness_separates_historical_status_from_current_future_work() -> None:
+    beta_readiness = _read("docs/beta-readiness.md")
+    remaining_pre_ga = beta_readiness.split("## Remaining Pre-GA Items", maxsplit=1)[1]
+
+    assert "Historical status (2026-05-01):" in beta_readiness
+    assert "for the current implemented scope" not in beta_readiness
+    assert "beyond the current implemented RC2 boundary" in remaining_pre_ga
+    assert "separately scoped work" in remaining_pre_ga
+    assert "Continue Responses API as scoped RC2 work" not in remaining_pre_ga
+    assert "historical first RC-beta tag" in beta_readiness
