@@ -9,12 +9,24 @@
 [![CI](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml)
 
-SLAIF API Gateway is an open-source, OpenAI-compatible API gateway for educational and institutional LLM access. It lets users run ordinary OpenAI SDK examples by setting `OPENAI_API_KEY` and `OPENAI_BASE_URL`, while operators keep control over issued gateway keys, quotas, model access, provider routing, pricing, usage accounting, and audit logs.
+SLAIF API Gateway is an open-source, self-hosted, OpenAI-compatible
+organizational AI access control plane for SMEs, institutions, and bounded
+teams. Ordinary OpenAI SDK clients use gateway-issued keys through
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`, while upstream provider credentials stay
+server-side. Operators govern provider, model, and endpoint access; quotas and
+budgets; routing; pricing and accounting; and safe audit metadata.
 
-The gateway is intended for workshops, courses, training events, and AI-factory environments where users need practical LLM API access but organizers must protect upstream provider credentials and spending.
+The current SME MVP assumes **one organization per deployment**. Workshop,
+Organization, Research, Agent/Codex, and Trusted Evaluation are documented
+policy/deployment profiles built from current primitives and approved target
+capabilities—not separate tenants or five fully implemented one-click modes.
+This positioning is not an enterprise-readiness, regulatory-compliance, or
+production-certification claim.
 
 If you are new to the project, start with the step-by-step
-[`docs/quickstart.md`](docs/quickstart.md). For RC-beta release status,
+[`docs/quickstart.md`](docs/quickstart.md). For the canonical current-vs-target
+product boundary and profile definitions, see
+[`docs/product-scope.md`](docs/product-scope.md). For RC-beta release status,
 verification scope, and known limitations, see
 [`docs/rc-beta.md`](docs/rc-beta.md) and
 [`docs/beta-readiness.md`](docs/beta-readiness.md). For the locked RC2 target
@@ -25,6 +37,9 @@ feature-full RC2.
 
 For exact reviewer-facing behavior, see:
 
+- [`docs/product-scope.md`](docs/product-scope.md) for the organizational AI
+  control-plane proposition, current deployment boundary, policy profiles,
+  approved target behavior, and explicit non-goals.
 - [`docs/releases/v0.1.0-rc.1.md`](docs/releases/v0.1.0-rc.1.md) for the
   first RC-beta release-candidate notes and tagging checklist.
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
