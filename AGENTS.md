@@ -492,6 +492,15 @@ pastes the verification prompt below. Codex is the caller: it uses its shell
 tool to run the repository harness. Repository scripts must never invoke
 `codex`.
 
+The only narrow exception is `scripts/capture_codex_protocol.py`, which is a
+manually invoked, version-pinned loopback evidence tool rather than an HPC/test
+runner. Only a human or active OAP work order may invoke its explicit live
+capture/verify actions. Normal pytest, CI, application startup, packaging,
+Docker, migrations, production, and every HPC helper/harness must never invoke
+Codex. Each supported Codex CLI/model/profile combination requires a separate
+versioned, sanitized fixture and reviewed compatibility diff; captured evidence
+must not be described as compatibility when required elements remain rejected.
+
 If Codex shell execution fails before Bash starts with a message like
 `bwrap: execvp ... codex: No such file or directory`, that is a Codex
 command-runner preflight failure, not a SLAIF test failure. Relaunch Codex with
