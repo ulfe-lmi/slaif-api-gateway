@@ -4,6 +4,13 @@ This document is the operator-facing RC-beta checklist. It complements
 [`beta-readiness.md`](beta-readiness.md), which records the detailed readiness
 verification pass.
 
+The canonical current-vs-target product and deployment boundary is
+[`product-scope.md`](product-scope.md). It positions the self-hosted gateway as
+organizational AI access control for SMEs and institutions, documents the
+current one-organization-per-deployment boundary and five policy profiles, and
+keeps enterprise tenancy, compliance, and production claims explicitly out of
+current scope.
+
 RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.

@@ -2,13 +2,22 @@
 
 This file is the implementation brief for Codex or any other coding agent working on this repository.
 
-The project is an open-source, production-oriented, OpenAI-compatible API
-gateway for SLAIF training and education. It issues its own API keys, enforces
-hard per-key quotas, accounts for tokens and cost, forwards permitted requests
-to upstream providers such as OpenAI and OpenRouter, and exposes an admin
-dashboard plus CLI for key management. The implemented scope is a credible
-RC-beta foundation, but the project is not production-certified and must not be
-described as such.
+The project is an open-source, self-hosted, OpenAI-compatible organizational AI
+access control plane for European SMEs, institutions, and bounded teams. It
+issues its own API keys, enforces per-key policy and hard quota/accounting
+state, forwards permitted requests to upstream providers such as OpenAI and
+OpenRouter, and exposes an operator dashboard plus CLI. Upstream provider
+credentials remain server-side. The current SME MVP assumes one organization
+per deployment. The implemented scope is a credible RC-beta foundation, but
+the project is not production-certified and must not be described as such.
+
+The durable product intent includes five documented policy/deployment profiles:
+Workshop, Organization, Research, Agent/Codex, and Trusted Evaluation.
+Workshops remain supported, but they are one profile rather than the complete
+product identity. These profiles compose current primitives and approved target
+capabilities; they are not five fully implemented one-click modes, separate
+tenants, or new RBAC roles. `docs/product-scope.md` is authoritative for this
+current-vs-target positioning and its explicit non-goals.
 
 The project must be designed so normal users can use the standard OpenAI Python client with no code changes beyond environment variables.
 
@@ -1474,6 +1483,8 @@ current truth for the behavior they describe and keep them synchronized with
 code changes:
 
 - `docs/database-schema.md`
+- `docs/product-scope.md`, for repository-facing product identity, deployment
+  boundary, policy profiles, approved target behavior, and explicit non-goals
 - `docs/accounting.md`
 - `docs/openai-compatibility.md`
 - `docs/provider-forwarding-contract.md`
