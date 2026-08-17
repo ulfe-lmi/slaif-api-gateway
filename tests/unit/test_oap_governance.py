@@ -50,8 +50,9 @@ def test_initial_round_declares_new_pr_and_one_objective_one_pr() -> None:
     identifier, _order_path, order_text = _active_order()
 
     if identifier.endswith("-a"):
+        protocol_text = PROTOCOL_FILE.read_text(encoding="utf-8")
         assert "PR mode: `CREATE_NEW_PR`" in order_text
-        assert "one numeric objective as exactly one PR" in order_text
+        assert "`NNN-a` creates exactly one new PR for that numeric objective." in protocol_text
 
 
 def test_coding_agent_is_never_merge_authority() -> None:
