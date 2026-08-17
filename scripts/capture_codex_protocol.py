@@ -44,6 +44,10 @@ TOKEN_CANARY = "SLAIF_CAPTURE_TOKEN_CANARY_DO_NOT_PERSIST"
 FIXTURE_RELATIVE_PATH = Path(
     "tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json"
 )
+APPROVED_CANONICAL_FIXTURE_SHA256 = (
+    "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
+)
+FIXTURE_INTEGRITY_ERROR = "Fixture canonical document integrity check failed."
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAX_HEADER_BYTES = 64 * 1024
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -1297,6 +1301,8 @@ def validate_fixture(fixture: Any) -> None:
     )
     if any(value in serialized for value in forbidden):
         raise CaptureError("Fixture contains forbidden capture content.")
+    if hashlib.sha256(serialized).hexdigest() != APPROVED_CANONICAL_FIXTURE_SHA256:
+        raise CaptureError(FIXTURE_INTEGRITY_ERROR)
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:

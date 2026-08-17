@@ -19,6 +19,7 @@ Checked on 2026-08-18:
 | Capture profile | `api-key-responses-baseline` |
 | Wire endpoint | `POST /v1/responses` |
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
+| Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Current compatibility result | `not_compatible` |
 
 Primary references:
@@ -164,10 +165,19 @@ Only a human or active work order may invoke the installed Codex binary:
 Normal pytest, CI, application startup, packaging, Docker, migrations, and HPC
 verification must never run either live action.
 
+Pure fixture validation and both live paths pin the complete canonical JSON
+document to the approved SHA-256 above after semantic and safety validation.
+Appending, removing, or changing any content therefore fails with a fixed safe
+integrity error before live evidence can be returned to the write path or
+accepted for comparison. The digest is not configurable by command line or
+environment.
+
 For a Codex upgrade, create a new version directory and fixture, pin the exact
 release tag/model/profile, review the bundled model metadata, repeat the
 loopback capture and compatibility diff, and preserve the old fixture. Never
-overwrite historical evidence or silently accept wire drift.
+overwrite historical evidence or silently accept wire drift. Any structural
+drift requires a new reviewed fixture plus an explicit code/documentation pin;
+it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import subprocess
@@ -14,6 +15,9 @@ from scripts import capture_codex_protocol as capture
 FIXTURE = (
     capture.REPO_ROOT
     / "tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json"
+)
+APPROVED_FIXTURE_SHA256 = (
+    "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 )
 SAFE_HEADERS = (
     ("authorization", f"Bearer {capture.TOKEN_CANARY}"),
@@ -236,6 +240,10 @@ def test_fixture_identity_canonical_encoding_and_required_capture_invariants() -
     fixture = _checked_in_fixture()
     capture.validate_fixture(fixture)
 
+    assert capture.APPROVED_CANONICAL_FIXTURE_SHA256 == APPROVED_FIXTURE_SHA256
+    assert hashlib.sha256(capture.canonical_json_bytes(fixture)).hexdigest() == (
+        APPROVED_FIXTURE_SHA256
+    )
     assert FIXTURE.read_bytes() == capture.canonical_json_bytes(fixture)
     assert fixture["schema_version"] == capture.SCHEMA_VERSION
     assert fixture["identity"] == {
@@ -295,6 +303,46 @@ def test_altered_version_and_structure_fail_fixture_validation() -> None:
     altered_path["capture"]["request"]["path"] = "/v1/chat/completions"
     with pytest.raises(capture.CaptureError, match="path"):
         capture.validate_fixture(altered_path)
+
+
+def _assert_fixture_integrity_failure(
+    fixture: dict[str, object],
+    *,
+    injected_content: str | None = None,
+) -> None:
+    computed_digest = hashlib.sha256(capture.canonical_json_bytes(fixture)).hexdigest()
+    with pytest.raises(capture.CaptureError) as error:
+        capture.validate_fixture(fixture)
+
+    assert str(error.value) == capture.FIXTURE_INTEGRITY_ERROR
+    assert computed_digest not in str(error.value)
+    if injected_content is not None:
+        assert injected_content not in str(error.value)
+
+
+def test_fixture_integrity_rejects_unknown_nested_content_without_echo() -> None:
+    fixture = copy.deepcopy(_checked_in_fixture())
+    injected_content = "synthetic-free-text-secret-canary"
+    fixture["capture"]["unexpected_raw"] = {"value": injected_content}
+
+    _assert_fixture_integrity_failure(fixture, injected_content=injected_content)
+
+
+def test_fixture_integrity_rejects_removed_harmless_structural_member() -> None:
+    fixture = copy.deepcopy(_checked_in_fixture())
+    del fixture["model_catalog"]["supports_search_tool"]
+
+    _assert_fixture_integrity_failure(fixture)
+
+
+def test_fixture_integrity_rejects_subtle_schema_shape_mutation() -> None:
+    fixture = copy.deepcopy(_checked_in_fixture())
+    first_tool = fixture["capture"]["request"]["field_shapes"]["input"]["items"][0][
+        "tools"
+    ][0]["tools"][1]
+    first_tool["parameter_schema"]["properties"][0]["type"] = "integer"
+
+    _assert_fixture_integrity_failure(fixture)
 
 
 def test_module_import_has_no_subprocess_network_or_filesystem_action(monkeypatch) -> None:
