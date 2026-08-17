@@ -201,6 +201,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Project-local agent and generated provider-catalog state
+.codex/
+.local-provider-catalog/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

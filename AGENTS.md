@@ -2,9 +2,137 @@
 
 This file is the implementation brief for Codex or any other coding agent working on this repository.
 
-The project is an open-source, production-grade, OpenAI-compatible API gateway for SLAIF training and education. It issues its own API keys, enforces hard per-key quotas, accounts for tokens and cost, forwards permitted requests to upstream providers such as OpenAI and OpenRouter, and exposes an admin dashboard plus CLI for key management.
+The project is an open-source, production-oriented, OpenAI-compatible API
+gateway for SLAIF training and education. It issues its own API keys, enforces
+hard per-key quotas, accounts for tokens and cost, forwards permitted requests
+to upstream providers such as OpenAI and OpenRouter, and exposes an admin
+dashboard plus CLI for key management. The implemented scope is a credible
+RC-beta foundation, but the project is not production-certified and must not be
+described as such.
 
 The project must be designed so normal users can use the standard OpenAI Python client with no code changes beyond environment variables.
+
+---
+
+## 0. Authority, current baseline, and OAP workflow
+
+### 0.1 Authority and precedence
+
+Use these sources for different kinds of truth:
+
+1. The human maintainer owns product intent, risk acceptance, and release
+   authority.
+2. When OAP is explicitly active, `OAP-COMMUNICATION-coding-agent.md` and the
+   single work order selected by `oap/active` govern orchestration for that
+   execution turn.
+3. This `AGENTS.md` is the durable repository implementation constitution. An
+   active work order narrows the task but does not silently waive these rules.
+4. The contract documents named in Section 5.1 govern the behavior they
+   describe. `docs/database-schema.md` alone governs schema detail, and
+   `docs/rc2-feature-scope.md` is the canonical RC2 feature-status document.
+5. Canonical GitHub state in `ulfe-lmi/slaif-api-gateway` is authoritative for
+   branches, commits, pull requests, checks, merges, releases, and remote
+   `main`.
+6. Local checkouts, linked worktrees, generated artifacts, chat transcripts,
+   and strategic-side `handover/` files are context or disposable execution
+   state, not current project truth.
+
+If an active work order appears to conflict with this constitution or a
+contract document, the coding agent must not invent a precedence exception.
+Preserve safety, report the conflict, and let the strategic model/human resolve
+it deliberately.
+
+### 0.2 Verified adoption baseline
+
+This dated baseline records the state from which OAP adoption begins. Every
+execution turn must re-check GitHub rather than assuming it remains current.
+
+As independently verified on **2026-08-17**:
+
+- Canonical repository: `https://github.com/ulfe-lmi/slaif-api-gateway`.
+- Remote default branch: `main`.
+- Remote `main` and the primary local checkout both point to
+  `0c921ea1827cf13e645b20b653660194873d38fd`, the merge commit for PR #220,
+  **Harden Realtime client-secret admission accounting**.
+- PRs #205 through #220 are merged. They include the completed RC2
+  Responses/readiness, provider-catalog, standalone Audio, Embeddings, bounded
+  Realtime client-secret, and Realtime admission-hardening work.
+- `docs/rc2-feature-scope.md` reports 27 `RC2_REQUIRED_IMPLEMENTED`, 0
+  `RC2_REQUIRED_MISSING`, 17 `RC2_EXPLICITLY_DEFERRED`, 1
+  `RC2_UNSUPPORTED_BY_POLICY`, and 6 `NEEDS_MAINTAINER_DECISION` rows.
+- PR #220's GitHub checks passed, but no result is recorded for the requested
+  final full 128-worker verification run on post-#220 `main`.
+- The only published GitHub release/tag is `v0.1.0-rc.1`; no RC2 release/tag
+  exists. Therefore the honest state is **RC2 required-scope implemented, final
+  current-main verification and release decision still outstanding**.
+- The only open PR at this baseline is Dependabot PR #224. It is not part of
+  `main`, changes GitHub Actions dependencies only, and has a failing
+  `Unit, lint, and migration head` check. Do not treat it as accepted project
+  state or silently reuse it for an OAP objective.
+
+### 0.3 Provider-catalog continuation state
+
+Provider-catalog implementation through PR #218 is merged:
+
+- proposal tooling and deterministic artifacts;
+- conservative OpenRouter/OpenAI extraction hardening;
+- import-preview contract and paired ordinary-Chat filtering;
+- explicitly confirmed route/pricing execution;
+- package presets for OpenRouter Chat text/image/audio/multimodal and a
+  separate Responses-text family.
+
+Post-merge verification produced local, uncommitted evidence only:
+
+- the full `openrouter-chat-text` package had 132 paired route/pricing rows and
+  passed dry-run plus confirmed import into a disposable PostgreSQL database;
+- a human-curated 15-model first-staging subset was created and passed pricing
+  and route dry-runs plus confirmed import into another disposable database;
+- both disposable databases were dropped;
+- no staging or production catalog import is recorded;
+- no real upstream inference smoke is recorded;
+- OpenAI catalog import remains paused;
+- OpenRouter image/audio/multimodal packages remain review/staging surfaces,
+  not approved production imports;
+- the OpenRouter Responses package remains separate and must not be mixed into
+  Chat import work without an explicit objective.
+
+Generated `.local-provider-catalog/` trees and the detached curation worktree
+are local artifacts. Preserve them. Do not clean, reset, overwrite, or commit
+them unless the active work order explicitly names the exact reviewed artifact
+and desired action.
+
+### 0.4 OAP activation boundary
+
+The paired communication documents are:
+
+- strategic side:
+  `/home/ubuntu/codex-supervision/slaif-api-gateway/OAP-COMMUNICATION-strategic.md`;
+- coding-agent side: `OAP-COMMUNICATION-coding-agent.md` in this repository.
+
+The presence of those documents or FIFO objects does not activate execution.
+OAP begins only after the human explicitly authorizes activation, the strategic
+model deliberately bootstraps/validates `oap/`, `control.fifo`, and
+`response.fifo`, atomically publishes `000-a`, sets `oap/active`, and sends the
+two-byte `OK` signal defined by the protocol.
+
+Once activated:
+
+- GitHub remains software/project truth;
+- `oap/active` is the sole work selector;
+- one numeric objective maps to exactly one PR;
+- `NNN-a` creates that PR and `NNN-b` through `NNN-z` amend the same PR;
+- activated orders, the active pointer, and immutable reports are versioned on
+  the objective PR exactly as the OAP protocol specifies;
+- the coding agent never merges;
+- the strategic model independently reviews GitHub evidence and acts as the
+  human maintainer's delegated merge authority for OAP-managed PRs only;
+- all required checks must be successful and strategic review must be
+  satisfactory before merge;
+- the next numeric objective is not activated until the current objective is
+  resolved.
+
+For non-OAP work, the manual pull-request workflow remains available and the
+human maintainer merges manually.
 
 ---
 
@@ -28,7 +156,7 @@ This project is intended to be open source.
 Source distribution is by `git clone`:
 
 ```bash
-git clone https://github.com/<org>/slaif-api-gateway.git
+git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
 cd slaif-api-gateway
 ```
 
@@ -467,20 +595,28 @@ Current implemented `/v1` endpoints:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- `POST /v1/responses` for the implemented Responses subset, including
-  stateless text output and non-streaming stored-response create when explicitly
-  enabled
-- `GET /v1/responses/{response_id}` and `DELETE /v1/responses/{response_id}`
-  for ownership-checked provider-stored Responses references
-- `GET /v1/responses/{response_id}/input_items` for ownership-checked
-  provider-stored Responses input-item listing without local content storage
+- `POST /v1/responses`
+- `POST /v1/responses/input_tokens`
+- `POST /v1/responses/compact`
+- `GET /v1/responses/{response_id}`
+- `GET /v1/responses/{response_id}/input_items`
+- `DELETE /v1/responses/{response_id}`
+- `POST /v1/conversations`
+- `GET`, `POST`, and `DELETE /v1/conversations/{conversation_id}`
+- `POST` and `GET /v1/conversations/{conversation_id}/items`
+- `GET` and `DELETE /v1/conversations/{conversation_id}/items/{item_id}`
+- `POST /v1/audio/speech`
+- `POST /v1/audio/transcriptions`
+- `POST /v1/audio/translations`
+- `POST /v1/embeddings`
+- `POST /v1/realtime/client_secrets`
 
-Future endpoints:
-
-- `POST /v1/embeddings` only if a later implementation adds endpoint
-  forwarding, pricing/accounting, and tests
-- Responses cancel/list endpoints only if a later implementation
-  adds ownership, forwarding, pricing/accounting, and tests
+This list states route existence, not unrestricted compatibility. Every
+non-core surface is bounded by the endpoint, key, route/model capability,
+pricing/accounting, provider, privacy, and streaming rules documented in
+`docs/rc2-feature-scope.md`, `docs/openai-compatibility.md`,
+`docs/responses-compatibility.md`, `docs/provider-forwarding-contract.md`, and
+`docs/compatibility-matrix.md`.
 
 Rules:
 
@@ -490,124 +626,87 @@ Rules:
 - Do not require custom headers from clients.
 - Do not require custom environment variables from clients.
 - The client-provided `Authorization: Bearer ...` token is a gateway-issued token, not the upstream provider token.
-- `/v1/files`, `/v1/audio/*`, image-generation endpoints, and Realtime are
-  out of scope unless explicitly implemented, priced, routed, and tested.
-  Current Chat Completions request-body support for image input, inline file
-  input, audio input, and non-streaming audio output is narrower than those
-  standalone endpoint families and is gated by explicit route/model
+- `/v1/files`, `/v1/uploads`, image generation, video, moderations, batch,
+  vector stores, legacy `/v1/completions`, and other unlisted endpoint families
+  remain unimplemented or require a maintainer decision as classified in
+  `docs/rc2-feature-scope.md`.
+- Chat Completions image input, inline file input, audio input, and
+  non-streaming audio output are implemented only behind their explicit
+  route/model capabilities and request caps. Chat streaming audio output
+  remains fail-closed.
+- Standalone `/v1/audio/*` support is the bounded speech/transcription/
+  translation subset only. It uses canonical OpenAI forwarding and OpenRouter
+  fail-closed behavior; it does not create a `/v1/files` lifecycle.
+- Realtime support is only `POST /v1/realtime/client_secrets` for bounded
+  browser/mobile WebRTC admission. It is not server-side WebSocket proxying,
+  `/v1/realtime/calls`, transcription/translation sessions, SIP, or hard
+  actual-session usage accounting.
+
+### 4.1.1 Responses API / RC2 implemented boundary
+
+The current RC2 Responses surface is implemented for a bounded
+non-hosted/non-MCP subset. Preserve SLAIF's core promise: gateway keys,
+provider-secret isolation, PostgreSQL hard quota/accounting, auditability, and
+no prohibited plaintext/content leakage.
+
+Current behavior:
+
+- Responses is disabled per key by default and requires explicit endpoint,
+  model, provider, route, pricing, and Responses-capability policy.
+- Supported create behavior includes bounded text input/output, typed text
+  streaming, structured/text formats in the documented subset, local/client
+  `function` tools, non-streaming local/client `custom` tools, and the existing
+  output-cap/reservation/finalization policy.
+- Responses streaming live-burn is implemented for the supported stateless
+  text-output streaming subset. It is a provisional gateway brake, not
+  invoice-grade truth; final provider usage/cost remains authoritative when
+  available.
+- `store=true` is supported only for the documented non-streaming stored-create
+  path and only with explicit route capability.
+- `previous_response_id`, response retrieve/delete/input-item listing,
+  conversations, and conversation items are supported only after local
+  ownership and compatible-provider checks against safe reference metadata.
+- `POST /v1/responses/input_tokens` and the bounded
+  `POST /v1/responses/compact` subset are implemented.
+- The gateway stores only safe provider reference metadata for these lifecycle
+  surfaces, never response/input/conversation item content.
+
+Explicit exclusions:
+
+- `background=true`, response listing, response cancel, stateful streaming,
+  Responses audio, hosted/provider-side tools, file/web search, code
+  interpreter, computer use, image generation, shell/patch tool execution,
+  tool search, MCP/connectors, and provider-side authorization remain
+  unsupported/fail-closed unless a future approved contract changes them.
+- Endpoint and model permission never imply tool/capability permission.
+- Do not blindly pass through unknown request fields or tool types.
+- Local function/custom tool support does not authorize hosted execution by
+  SLAIF; the downstream client remains responsible for executing local tools.
+
+Chat tool/request policy remains fail-closed by registry:
+
+- Explicitly supported local `function` and non-streaming local `custom` tools,
+  legacy `functions`/`function_call`, documented response formats, ordinary
+  text streaming, and bounded multiple choices require matching route/model
   capabilities.
+- Hosted/provider-side tools, MCP/connectors, web-search fields,
+  search-specific models, background execution, provider-side authorization,
+  unknown fields/tool types, file IDs/URLs, streaming custom tools, streaming
+  audio output, custom audio voices, previous-audio references, and unapproved
+  media shapes remain denied before forwarding.
 
-### 4.1.1 Responses API / RC2-beta direction
+Any future hosted-tool or provider-state expansion must define an explicit
+bounded-overrun policy, pricing/accounting contract, admin-visible maximum
+exposure, privacy/storage policy, capability gates, negative tests, and
+documentation before it can be enabled. PostgreSQL must block subsequent
+admission after a finalized overrun.
 
-The next release-candidate beta feature family is Responses API support. The
-current foundation implements a bounded local Responses subset plus the first
-non-streaming stored-response lifecycle and owned previous-response foundation.
-
-Implemented foundation:
-
-- Preserve SLAIF's core promise: gateway keys, provider-secret isolation,
-  PostgreSQL hard quota/accounting, auditability, and no plaintext secret
-  leakage.
-- Require explicit key endpoint permission, route/model Responses capability,
-  provider route, and `/v1/responses` pricing for create requests.
-- Inject `store=false` when omitted and inject/default `max_output_tokens`
-  through the existing output cap settings.
-- Reject background mode, conversations, hosted tools, unsupported multimodal
-  surfaces, MCP/connectors, streaming previous-response chaining, and
-  cancel/list routes. Stored Responses, `previous_response_id`, and
-  input-item listing are ownership-checked only in the implemented lifecycle
-  slice.
-
-Future RC2 goal:
-
-- Support Responses tools only through explicit key/template policies and
-  bounded-overrun cost estimates.
-
-Default policy:
-
-- Responses API is disabled per key by default.
-- Admins may enable Responses API with a single checkbox.
-- Enabling Responses API must expose clear policy controls and cost-bound
-  previews.
-
-Stateful/background exclusions for RC2:
-
-- `background=true` is not supported.
-- `store=true` is supported only for non-streaming `POST /v1/responses` when
-  the route explicitly enables `capabilities.responses.stored_responses=true`.
-- `previous_response_id` is supported only for non-streaming
-  `POST /v1/responses` after the ID resolves to an active local response
-  reference owned by the same gateway key and compatible with the resolved
-  provider route.
-- Conversation/provider-side state is not supported.
-- Response retrieve/delete/input-item listing are supported only after local
-  ownership checks against safe provider response reference metadata. Cancel,
-  compact, and response listing are not supported unless explicitly implemented
-  later.
-- MCP/connectors are not supported.
-
-Tool policy:
-
-- Endpoint and model permission are not tool/capability permission. A key that
-  may call `/v1/chat/completions` with a model is not thereby allowed to use
-  hosted/provider-side tools.
-- Current Chat Completions policy allows client-side/local `function` tools,
-  non-streaming client-side/local `custom` tools, legacy `functions` /
-  `function_call`, `response_format`, JSON mode, ordinary text streaming, and
-  bounded `n > 1` multiple choices when the resolved route/model explicitly
-  enables the matching capability. SLAIF does not police what the downstream
-  application does when it receives a local function/custom tool call from the
-  model.
-- Current Chat Completions request fields are fail-closed by registry. Unknown
-  top-level fields, non-default service tiers, and unsupported request shapes
-  must not be silently forwarded until policy, pricing/accounting, forwarding,
-  and tests explicitly support them. Current implemented non-text
-  Chat Completions slices are image input to text output, inline file input to
-  text output, audio input to text output, and non-streaming audio output, each
-  behind explicit route/model capability gates and request caps.
-- Current Chat Completions policy denies hosted/provider-side tools by default:
-  `web_search_options`, `web_search`, `web_search_preview`, `file_search`,
-  `code_interpreter`, `computer` / `computer_use`, `image_generation`,
-  `tool_search`, unknown tool types, background execution, external web access,
-  MCP/connectors, provider-side authorization/connectors markers, and
-  search-specific Chat Completions models such as `gpt-5-search-api` unless a
-  future explicit hosted web-search policy is implemented.
-- Streaming custom tools, file IDs, file URLs, audio URLs, audio data URLs by
-  default, streaming audio output, custom audio-output voices, previous-audio
-  references, `n > 1` with audio output, video/alternate media part shapes,
-  `/v1/files`, `/v1/audio/*`, and Realtime remain unsupported unless a future
-  scoped PR implements capability policy, caps, pricing/accounting, forwarding,
-  and tests.
-- Do not blindly pass through Responses tools.
-- Supported tool types must be explicitly allowlisted per key or key template.
-- MCP is out of scope for RC2.
-- Function tools may be supported first.
-- Web search may be supported with `max_tool_calls` and cost-bound
-  calculations.
-- File search and code interpreter/container tools require explicit policy,
-  pricing, and audit treatment.
-- Image generation, computer use, external MCP/connectors, shell tools, and
-  hosted patch/application tools are out of scope unless explicitly approved
-  later.
-
-Bounded overrun policy:
-
-- With Responses tools, the final request that starts under a key limit may
-  exceed the remaining limit.
-- This is acceptable only if the maximum possible single-request overrun is
-  bounded, visible to admins, and controlled by policy.
-- SLAIF must calculate and display informative upper bounds before admins enable
-  a Responses/tool policy.
-- After an overrun, PostgreSQL accounting must block future requests until
-  limits are restored or reset.
-
-Key templates:
-
-- Key templates are required for usable Responses policies.
-- Templates should be snapshot/versioned.
-- Keys created from a template should record template/revision metadata.
-- Editing a template must not silently mutate existing keys unless a separate
-  audited "apply update" workflow is implemented.
+Key templates are versioned snapshots for the currently implemented safe
+policy vocabulary. A reviewed template revision can create one normal gateway
+key and records template/revision provenance. Editing a template never silently
+mutates existing keys. Bulk participant-key creation from templates and
+arbitrary apply-to-existing-key workflows remain future, separately audited
+work.
 
 #### Usage-derived quota recommendations / calibration keys
 
@@ -1017,11 +1116,12 @@ Streaming requirements:
   `docs/streaming-live-burn-margin.md`. It is per-key, defaults to enabled with
   zero cost/token margins, enforces money and token cutoffs independently, and
   remains a provisional operational brake rather than invoice-grade billing
-  truth. Responses live-burn monitoring remains future work. Preserve provider
-  final usage/cost as authoritative, PostgreSQL as hard quota truth, Redis or
-  in-memory live counters as temporary operational state only, and no storage of
-  prompts, completions, raw bodies, streamed chunks, tool payloads, or media
-  payloads.
+  truth. Responses streaming live-burn monitoring is also implemented for the
+  supported stateless text-output streaming subset and estimates only supported
+  visible text deltas. Preserve provider final usage/cost as authoritative,
+  PostgreSQL as hard quota truth, Redis or in-memory live counters as temporary
+  operational state only, and no storage of prompts, completions, raw bodies,
+  streamed chunks, tool payloads, or media payloads.
 
 Quota period semantics for v1:
 
@@ -1355,8 +1455,8 @@ code changes:
 - `docs/openai-compatibility.md`
 - `docs/provider-forwarding-contract.md`
 - `docs/compatibility-matrix.md`
-- `docs/streaming-live-burn-margin.md`, for Chat Completions streaming
-  live-burn behavior and the future Responses live-burn milestone
+- `docs/streaming-live-burn-margin.md`, for implemented Chat Completions and
+  supported Responses stateless text-streaming live-burn behavior
 - `docs/provider-routing.md`, if present
 - `README.md`, for top-level current status, quickstart, and operator-facing
   truth
@@ -1472,6 +1572,11 @@ Use this structure unless there is a strong reason to adjust it.
 ```text
 slaif-api-gateway/
 ├── AGENTS.md
+├── OAP-COMMUNICATION-coding-agent.md
+├── oap/                           # versioned OAP transcript after bootstrap
+│   ├── active
+│   ├── orders/
+│   └── reports/
 ├── README.md
 ├── LICENSE
 ├── SECURITY.md
@@ -1582,11 +1687,10 @@ slaif-api-gateway/
 │       │   └── usage.py
 │       │
 │       ├── workers/
-│       │   └── __init__.py         # Celery workers are future work
+│       │   └── __init__.py         # Celery worker/task package
 │       │
 │       ├── web/
-│       │   ├── templates/
-│       │   │   └── .gitkeep        # dashboard templates are future work
+│       │   ├── templates/           # implemented admin dashboard templates
 │       │   └── static/
 │       │       ├── css/.gitkeep
 │       │       ├── img/.gitkeep
@@ -2158,75 +2262,87 @@ Open-source users may simply clone and build locally.
 
 Do not add CI/CD-specific requirements unless requested later.
 
-## 10.5 Codex CLI Git and pull-request workflow
+## 10.5 Git and pull-request workflow
 
-This project uses pull requests only. Codex CLI work must always happen on a
-feature branch.
+This project uses pull requests only. Coding-agent implementation work must
+happen on a focused feature branch and must be published to canonical GitHub.
 
-Rules:
+Common rules for OAP and manual work:
 
-- Codex must never commit directly to `main` or `master`.
-- Codex must never push directly to `main` or `master`.
-- Codex must never merge pull requests.
-- The maintainer merges PRs manually in the GitHub web UI.
-- After the maintainer merges a PR, the next task starts by updating local
-  `main` from `origin/main`.
-- After updating `main`, Codex creates a new task branch with
-  `git switch -c feature/<short-task-name>`.
-- Codex implements the task, runs tests, commits, pushes the feature branch, and
-  creates a PR with `gh`.
-- Each task should normally produce exactly one focused branch and one focused
-  PR.
-- Codex must not mix unrelated tasks in the same branch or PR.
-- Codex must not continue working on an old feature branch after its PR has
-  been merged.
-- If the current branch is already a feature branch with unrelated changes,
-  Codex must stop and report instead of mixing work.
-- If `gh` authentication fails, Codex must report the exact failure and must not
-  fake PR creation.
-- If `gh` reports an invalid `GH_TOKEN` or `GITHUB_TOKEN`, Codex should try:
+- Never commit or push directly to `main` or `master`.
+- Never merge from the coding-agent role.
+- Never mix unrelated tasks, pre-existing edits, or generated local artifacts
+  into a task branch or PR.
+- Never continue implementing on a feature branch after its PR has merged.
+- Fetch and independently reconcile remote GitHub state before editing.
+- GitHub, not a local branch or prose report, is authoritative for PR, commit,
+  check, merge, and default-branch state.
+- Stage only explicitly intended task paths. Never use `git add .`,
+  `git add -A`, or `git add --all` in a mixed worktree.
+- Preserve `.local-provider-catalog/`, `.codex`, local secrets, `.env`, test
+  databases, and unrelated linked-worktree state; do not commit them.
+- If tracked files are dirty for reasons outside the active task, stop and
+  report or use a deliberately created clean linked worktree. Never stash,
+  reset, clean, or discard someone else's work without explicit authorization.
+- If `gh` authentication fails, report the exact failure and never fabricate a
+  PR. If environment tokens shadow working stored credentials, try
+  `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status` and use that env-unset form
+  when it succeeds.
+- Reports must distinguish passed, failed, skipped, not-run, blocked, pending,
+  cancelled, and missing checks accurately.
+- Every task report must include the documentation-impact statement required by
+  Section 5.1.
 
-  ```bash
-  env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
-  ```
+### 10.5.1 OAP-managed work
 
-  If that succeeds, Codex should use the env-unset form for `gh` commands.
-- Codex must not commit local Codex state such as `.codex`.
-- At the end of every task, Codex must report the branch name, commit hash,
-  pushed status, PR URL, tests run, and any failures or skips.
-- At the end of every task, Codex must also report documentation impact using
-  one of the forms required by the documentation contract section.
+After explicit OAP activation, follow
+`OAP-COMMUNICATION-coding-agent.md` in full:
 
-Required start-of-task update sequence after a previous PR has been merged:
+- Block for the exact two-byte `OK` signal, then execute only the identifier in
+  `oap/active`; never infer work from filenames, mtimes, or sequence numbers.
+- Resolve exactly one matching order under `oap/orders/`.
+- `NNN-a` starts a new numeric objective from current remote `main`, creates one
+  new feature branch, and creates exactly one new PR.
+- `NNN-b` through `NNN-z` check out and amend that same objective PR. They must
+  never create a replacement or second PR.
+- Commit and push the strategic-model-authored active order and `oap/active`
+  unchanged with the objective implementation/governance commit set.
+- Push all implementation commits, create or amend the PR, and inspect GitHub
+  checks before publishing the report.
+- Atomically publish exactly one immutable report for the active identifier.
+  Record the literal implementation-head SHA and
+  `Report publication commit: SELF`.
+- The final round commit changes only the new report file, has the recorded
+  implementation head as its first parent, and is pushed/verified as remote PR
+  head before the coding agent sends `OK` to `response.fifo`.
+- Checks triggered by the report-only commit may still be pending when the
+  response signal is sent; the strategic model independently waits for and
+  verifies the current required checks.
+- The strategic model, not the coding agent, chooses continuation versus the
+  next numeric objective and is the delegated merge authority for OAP PRs after
+  independent review and a fully satisfied merge gate.
+
+### 10.5.2 Manual/non-OAP work
+
+When OAP is not active, the human maintainer retains manual merge authority.
+The normal start sequence after a previous PR is resolved is:
 
 ```bash
 git fetch origin
 git switch main
 git pull --ff-only origin main
-```
-
-Then create a fresh task branch:
-
-```bash
 git switch -c feature/<short-task-name>
 ```
 
-Concrete command sequence:
+Then implement, verify, stage only task paths, commit, push, and create one PR:
 
 ```bash
-git fetch origin
-git switch main
-git pull --ff-only origin main
-git switch -c feature/<short-task-name>
-
-# implement task
-
 python -m pytest tests/unit
 python -m ruff check app tests
 alembic heads
 
 git status --short
-git add <task files only>
+git add -- <task-path-1> <task-path-2>
 git commit -m "<clear task message>"
 git push -u origin HEAD
 
@@ -2235,8 +2351,12 @@ gh pr create \
   --base main \
   --head "$(git branch --show-current)" \
   --title "<PR title>" \
-  --body "<summary, tests run, and scope constraints>"
+  --body "<summary, tests run, documentation impact, and scope constraints>"
 ```
+
+The coding agent reports the branch, commit, pushed state, PR URL, exact local
+tests, GitHub check state, failures/skips, documentation impact, and safety/
+scope deviations. It does not merge.
 
 ---
 
@@ -2359,98 +2479,151 @@ Do not store prompts or completions as a workaround for reporting.
 
 ## 13. Implementation status and sequencing
 
-AGENTS.md is future-oriented guidance, but it should not send Codex back to
-completed RC-beta foundation work. The current implemented RC-beta scope is a
-credible beta implementation for the documented endpoint and operator surface,
-but it is not production certified and is not a formal security, penetration
-test, or compliance attestation.
+Do not derive current feature state from old prompts, branch names, or stale
+future-looking passages. Reconcile canonical GitHub first and use
+`docs/rc2-feature-scope.md` for the endpoint/scope matrix. This section is a
+compressed execution summary.
 
-The implemented core includes:
+### 13.1 Implemented core at the OAP adoption baseline
 
-1. FastAPI application setup with `/healthz`, `/readyz`, and OpenAI-compatible
-   `/v1` routing and OpenAI-shaped error handling.
-2. Authenticated `GET /v1/models`, filtered by local provider/route metadata
-   and the gateway key's effective model policy.
-3. Non-streaming and SSE streaming `POST /v1/chat/completions` through OpenAI
-   and OpenRouter adapters, including provider-secret substitution, provider
-   header/body policy, final streaming usage handling, and mocked official
-   OpenAI-client E2E coverage.
-4. Per-key Chat Completions streaming live-burn monitoring for
-   `stream=true`, with enabled/zero-margin defaults, safe provisional
-   cost/token estimates, safe SSE interruption, and estimated interrupted
-   accounting when final provider usage is unavailable after an intentional
-   live-burn stop.
-5. Chat Completions hosted-tool request policy that permits client-side
-   function tools but denies provider-side hosted tools, MCP/connectors,
-   web-search fields, background execution, and search-specific models before
-   rate limiting, routing, pricing, quota reservation, or provider forwarding.
-6. Gateway key generation/authentication with HMAC-only storage, configurable
-   key prefixes, endpoint/model/provider policy checks, editable key request
-   policy, and no plaintext key persistence after creation/rotation flows.
-7. PostgreSQL-backed hard quota reservation/finalization, usage ledger,
-   advisory safe usage profiles for current Chat Completions, pricing/FX lookup,
-   route resolution, audit records, reconciliation helpers, and integration-test
-   coverage. `docs/database-schema.md` remains the schema source of truth; do
-   not duplicate table, column, index, or constraint details here.
-8. Redis-backed operational rate limiting when enabled, including request,
-   estimated-token, and active-concurrency throttles. Redis is operational
-   state only; PostgreSQL remains authoritative for hard quota/accounting.
-9. Admin dashboard pages/actions for the current scope: login/logout, keys and
-   key lifecycle actions, bulk key import preview/execution, owner,
-   institution, and cohort metadata, provider/route/pricing/FX metadata,
-   usage/audit CSV exports, and one-time-secret-backed email-delivery actions,
-   with CSRF protection on state-changing forms.
-10. CLI administration commands for the implemented admin bootstrap, owner,
-   institution, cohort, key lifecycle, provider/route/pricing/FX, usage export,
-   reconciliation, email, and database migration workflows.
-11. Email delivery for newly generated or rotated keys through encrypted
-   one-time secrets, SMTP via `aiosmtplib`, Celery workers, ID-only Celery
-   payloads, Mailpit for local development, and fail-closed ambiguous delivery
-   handling.
-12. Metrics, structured logging, request IDs, redaction, sanitized provider
-    diagnostics, and controlled `/metrics` exposure foundation.
-12. Docker Compose packaging for API, worker, scheduler, PostgreSQL, Redis,
-    Mailpit, and optional Nginx; migrations remain explicit operator actions.
-13. Production/operator runbooks for the current system, plus local Docker
-    debug/refresh workflow documentation and scripts.
-14. OpenAI Completions catalog bootstrap for local OpenAI Chat Completions
-    provider, route, and pricing metadata seeding.
-15. Public documentation for current compatibility, OpenAI-compatible usage,
-    security model, RC-beta readiness, release checklist, and known limitations.
+The merged implementation through PR #220 includes:
 
-Remaining work should be treated as future scoped projects, not as missing
-foundation for the current RC-beta:
+- FastAPI `/healthz`, `/readyz`, `/metrics`, `/admin`, and OpenAI-compatible
+  `/v1` routing with OpenAI-shaped error handling.
+- Authenticated, policy-filtered `GET /v1/models`.
+- Non-streaming and SSE streaming Chat Completions through OpenAI and
+  OpenRouter adapters, including strict provider-secret/header/body handling,
+  bounded output/input policy, PostgreSQL quota reservation/finalization,
+  provider-usage accounting, and streaming live-burn.
+- Bounded Chat image/file/audio input, non-streaming audio output, multiple
+  choices, structured formats, and local function/custom tool behavior behind
+  explicit capabilities; hosted/provider tools remain fail-closed.
+- The documented Responses subset: stateless and stored create, typed text
+  streaming and live-burn, owned previous-response lifecycle, response
+  retrieve/delete/input-items, input-token count, compact, conversations and
+  conversation items, and bounded local function/custom tools.
+- Standalone OpenAI-routed Audio speech, transcription, and translation
+  endpoints with OpenRouter fail-closed behavior and no local media/content
+  storage.
+- Standalone Embeddings with route/model capability, input-oriented
+  pricing/accounting, provider usage or safe fallback, and no local
+  input/vector storage.
+- The bounded Realtime WebRTC client-secret admission endpoint. Quota-limited
+  keys fail closed unless the route explicitly accepts direct-provider
+  exposure and supplies non-refundable admission pricing. This is not hard
+  actual-session accounting and is not a server-side Realtime proxy.
+- HMAC-only gateway-key storage, encrypted one-time delivery secrets,
+  Argon2id admin credentials, CSRF-protected admin actions, audit logging,
+  redaction, and provider-secret isolation.
+- PostgreSQL-authoritative quota/accounting/ledger/reconciliation, optional
+  Redis operational rate limiting, pricing/FX/routing/provider metadata, and
+  safe usage-profile/calibration evidence.
+- Admin dashboard and CLI workflows for key lifecycle, owners, institutions,
+  cohorts, templates, policy selectors, provider/route/pricing/FX data, usage,
+  audit, email delivery, imports, exports, and reconciliation.
+- Versioned key-template snapshots, calibration-derived policy previews, and
+  creation of one normal key from a reviewed template revision. Bulk
+  template-derived participant-key creation remains future work.
+- Celery email/background-job support, Mailpit development email, Docker
+  Compose packaging, Nginx examples, structured logs, metrics, runbooks, and
+  the existing CI matrix.
+- Provider-catalog proposal, hardening, import preview/confirmation, and
+  OpenRouter package-preset tooling through PR #218.
 
-1. Responses API expansion beyond the current local/stored foundation,
-   including hosted tool controls, bounded-overrun cost estimates,
-   previous-response/conversation/background ownership policy, cancel/list
-   routes, and provider/accounting/dashboard tests.
-2. Versioned key templates and template-derived bulk key workflows.
-3. Usage-derived quota or template recommendations built from trusted
-   calibration keys and the existing safe usage-profile rows.
-4. Pricing catalog and fetch-preview workflows, including OpenRouter metadata
-   proposals and curated/manual OpenAI pricing imports with confirmation and
-   audit before production use.
-5. Legacy `POST /v1/completions`, if desired later, with its own forwarding,
-   pricing, accounting, compatibility, and test slice.
-6. `POST /v1/embeddings`, if desired later, with its own routing, pricing,
-   accounting, compatibility, and test slice.
-7. MFA and full RBAC. For now every active admin is a full operator, and
-   `superadmin` is metadata/future-proofing rather than an enforced boundary.
-8. Owner/institution/cohort delete or anonymization workflows that preserve
-   historical usage and audit integrity.
-9. Bulk key synchronous `send-now` execution. Bulk `none`, `pending`, and
-   `enqueue` modes are implemented; arbitrary old-key resend remains forbidden.
-10. External FX refresh workflows. Current FX import/edit workflows are local
-    metadata workflows and do not call external FX APIs.
-11. OpenTelemetry tracing.
-12. Production certification, formal penetration testing, and compliance
-    attestation. Production deployments still require operator-managed secrets,
-    HTTPS/Nginx hardening, backups, monitoring, alert routing, staging rehearsal,
-    and environment-specific review.
+### 13.2 RC2 verification and release gate
 
-At every stage, keep OpenAI-compatible client usage working.
+The canonical scope matrix currently has no `RC2_REQUIRED_MISSING` rows. That
+does not by itself authorize an RC2 release.
 
+Evidence that exists:
+
+- Each merged feature PR through #220 passed its reported focused/GitHub
+  checks.
+- PR #220 passed the repository GitHub check suite.
+- A full 128-worker HPC verification succeeded earlier after PR #183.
+
+Evidence that is still missing:
+
+- No completed final 128-worker verification result is recorded for the
+  post-#220 `main` tree.
+- No RC2 release decision, tag, or GitHub release exists.
+
+Therefore do not call current `main` RC2-released, release-cuttable,
+production-ready, production-certified, penetration-tested, compliant, or
+formally secure. A release-focused objective must first run verification only
+against current remote `main` using the repository HPC harness and classify
+the result exactly as `OK`, `FAIL`, `ENVIRONMENT_BLOCKED`, or the documented
+command-runner failure. Verification must not edit code. A real failure
+becomes a separate bounded repair objective; an environment blocker is fixed
+and rerun; only a clean current-main result may lead to release-note/tag
+preparation and a human release decision.
+
+### 13.3 Provider-catalog operational continuation
+
+The provider-catalog code path is implemented, but operational deployment is
+not complete:
+
+- `openrouter-chat-text` is mechanically verified for 132 paired rows in a
+  disposable database.
+- A reviewed 15-model subset is also mechanically verified in a disposable
+  database.
+- The next operator step, if the human chooses this track, is an explicitly
+  named non-production local/staging metadata import of the reviewed subset,
+  followed by local `/v1/models` visibility verification with a narrow test
+  key.
+- A real OpenRouter inference smoke requires a separate explicit human
+  authorization, a real provider key supplied outside source, a narrow
+  low-limit gateway key, minimal calls, and exact ledger/quota verification.
+- Production import is never implied by proposal generation, curation,
+  dry-run, or disposable-DB success.
+- Do not import OpenAI proposals. Do not import image/audio/multimodal or
+  Responses packages merely because package artifacts exist.
+
+### 13.4 OAP sequencing
+
+Before normal feature work begins under OAP, objective `000-a` should
+bootstrap and version the gateway-specific communication/governance
+artifacts and initial `oap/` transcript without mixing product changes. The
+strategic model defines and activates that work order; the coding agent must
+not create it for itself.
+
+After bootstrap, every objective must start from live GitHub state and be
+small enough for one coherent PR. Resolve each objective by merge, deliberate
+abandonment, or human escalation before activating the next numeric
+objective. Do not resume an old handover prompt merely because it was once
+described as the next step.
+
+### 13.5 Explicitly deferred or separately decided work
+
+Treat these as future scoped projects or maintainer decisions, not hidden
+requirements for the implemented RC2 boundary:
+
+- hosted/provider-side tools, MCP/connectors, web/file search, code
+  interpreter, computer use, image generation, shell/patch/tool-search
+  execution, and provider-side authorization;
+- Responses background mode, cancel/list, Responses audio, multimodal output,
+  and unsupported stateful streaming;
+- `/v1/files`, `/v1/uploads`, legacy `/v1/completions`, image/video,
+  moderations, batch, vector stores, and other endpoint families classified
+  as deferred or `NEEDS_MAINTAINER_DECISION`;
+- Realtime `/v1/realtime/calls`, server-side WebSocket/media proxying,
+  transcription sessions, translation sessions, SIP, and hard actual-session
+  accounting;
+- production OpenAI catalog imports and broader OpenRouter multimodal package
+  approval;
+- bulk participant-key generation from templates and audited apply-to-existing
+  template updates;
+- MFA and full RBAC;
+- owner/institution/cohort deletion or anonymization workflows that preserve
+  historical ledger/audit integrity;
+- external FX refresh, OpenTelemetry, and other separately approved operator
+  expansions;
+- production certification, formal penetration testing, compliance
+  attestation, and environment-specific production approval.
+
+At every stage, preserve OpenAI-compatible client usage, fail-closed policy,
+provider-secret isolation, PostgreSQL accounting truth, documentation
+honesty, and the human's release authority.
 ---
 
 ## 14. Non-negotiable constraints for Codex
