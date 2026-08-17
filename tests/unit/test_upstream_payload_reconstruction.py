@@ -1664,9 +1664,9 @@ def test_responses_conversation_reconstructs_exact_upstream_body_and_deep_copies
     ("field", "value", "code"),
     [
         ("unknown_top_level", "SHOULD_NOT_REACH_PROVIDER_TOP_LEVEL", "responses_field_not_supported"),
-        ("parallel_tool_calls", True, "responses_tools_not_supported"),
+        ("parallel_tool_calls", True, "responses_codex_envelope_not_allowed"),
         ("background", True, "responses_background_not_supported"),
-        ("include", ["output_text"], "responses_multimodal_not_supported"),
+        ("include", ["output_text"], "responses_codex_envelope_not_allowed"),
         ("prompt", {"id": "prompt_123"}, "responses_state_not_supported"),
         ("modalities", ["audio"], "responses_multimodal_not_supported"),
         ("audio", {"format": "wav"}, "responses_multimodal_not_supported"),

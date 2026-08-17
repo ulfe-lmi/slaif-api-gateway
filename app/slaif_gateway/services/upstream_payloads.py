@@ -72,6 +72,10 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
     "tool_choice",
     "previous_response_id",
     "conversation",
+    "include",
+    "parallel_tool_calls",
+    "prompt_cache_key",
+    "reasoning",
 )
 
 RESPONSES_INPUT_TOKENS_UPSTREAM_FIELDS: tuple[str, ...] = (

@@ -14,6 +14,10 @@ from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.responses_route_capabilities import (
+    KNOWN_RESPONSES_CAPABILITIES,
+    RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+)
 
 _SUPPORTED_FIELDS = frozenset(
     {
@@ -32,6 +36,11 @@ _SUPPORTED_FIELDS = frozenset(
         "tool_choice",
         "previous_response_id",
         "conversation",
+        "client_metadata",
+        "include",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
     }
 )
 _SUPPORTED_INPUT_TOKEN_COUNT_FIELDS = frozenset(
@@ -66,7 +75,7 @@ _TEXT_FORMAT_TYPES = frozenset(
 )
 _TEXT_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SUPPORTED_INPUT_MESSAGE_ROLES = frozenset({"user", "assistant", "system", "developer"})
-_SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"type", "role", "content"})
+_SUPPORTED_INPUT_MESSAGE_FIELDS = frozenset({"id", "type", "role", "content"})
 _SUPPORTED_INPUT_TEXT_PART_FIELDS = frozenset({"type", "text"})
 _SUPPORTED_COMPACT_MESSAGE_FIELDS = frozenset({"id", "type", "status", "role", "content"})
 _SUPPORTED_COMPACT_TEXT_PART_FIELDS = frozenset({"type", "text"})
@@ -146,6 +155,30 @@ _IMAGE_DATA_URL_BASE64_SUFFIX = ";base64"
 _FILE_DATA_URL_PREFIX = "data:"
 _FILE_DATA_URL_BASE64_SUFFIX = ";base64"
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+_CODEX_INCLUDE_VALUE = "reasoning.encrypted_content"
+_CODEX_REASONING_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
+_CODEX_REASONING_CONTEXT = "all_turns"
+_CODEX_TEXT_VERBOSITIES = frozenset({"low", "medium", "high"})
+_CODEX_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CODEX_CLIENT_METADATA_KEYS = frozenset(
+    {
+        "x-codex-installation-id",
+        "session_id",
+        "thread_id",
+        "turn_id",
+        "x-codex-window-id",
+        "x-codex-turn-metadata",
+    }
+)
+_CODEX_MAX_INCLUDE_ITEMS = 8
+_CODEX_MAX_PROMPT_CACHE_KEY_BYTES = 256
+_CODEX_MAX_REASONING_BYTES = 256
+_CODEX_MAX_CLIENT_METADATA_KEYS = len(_CODEX_CLIENT_METADATA_KEYS)
+_CODEX_MAX_CLIENT_METADATA_KEY_BYTES = 64
+_CODEX_MAX_CLIENT_METADATA_VALUE_BYTES = 4096
+_CODEX_MAX_CLIENT_METADATA_BYTES = 8192
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -162,8 +195,21 @@ class ResponsesRequestPolicy:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def apply(self, body: Mapping[str, Any], *, allow_store: bool = False) -> ResponsesPolicyResult:
+    def apply(
+        self,
+        body: Mapping[str, Any],
+        *,
+        allow_store: bool = False,
+        allow_codex_request_envelope: bool = False,
+    ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
+        codex_envelope_requested = responses_codex_request_envelope_requested(effective_body)
+        if codex_envelope_requested and not allow_codex_request_envelope:
+            _raise(
+                _first_codex_envelope_param(effective_body),
+                "responses_codex_envelope_not_allowed",
+                "The Codex request envelope is not enabled for this gateway key.",
+            )
         self._reject_unknown_fields(effective_body)
 
         model = effective_body.get("model")
@@ -174,7 +220,10 @@ class ResponsesRequestPolicy:
                 "The 'model' field must be a non-empty string.",
             )
 
-        canonical_input, input_material_bytes = self._validate_input(effective_body.get("input"))
+        canonical_input, input_material_bytes = self._validate_input(
+            effective_body.get("input"),
+            allow_codex_request_envelope=allow_codex_request_envelope,
+        )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
             effective_body.get("instructions"),
@@ -192,7 +241,15 @@ class ResponsesRequestPolicy:
             )
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
-        self._validate_text_config(effective_body.get("text"), stream=effective_body.get("stream"))
+        self._validate_text_config(
+            effective_body.get("text"),
+            stream=effective_body.get("stream"),
+            allow_codex_request_envelope=allow_codex_request_envelope,
+        )
+        self._validate_codex_request_envelope(
+            effective_body,
+            allow_codex_request_envelope=allow_codex_request_envelope,
+        )
         tools_schema_bytes = self._validate_tools(effective_body)
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
@@ -223,7 +280,12 @@ class ResponsesRequestPolicy:
             )
         output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
 
-        estimated_input_tokens = self._estimate_input_tokens(
+        (
+            estimated_input_tokens,
+            estimated_non_message_input_tokens,
+            estimated_non_message_input_bytes,
+            estimated_non_message_input_fields,
+        ) = self._estimate_input_tokens(
             input_material_bytes=input_material_bytes,
             instructions=instructions,
             body=effective_body,
@@ -242,10 +304,12 @@ class ResponsesRequestPolicy:
             requested_output_tokens=output_tokens,
             effective_output_tokens=output_tokens,
             estimated_input_tokens=estimated_input_tokens,
-            estimated_message_input_tokens=estimated_input_tokens,
-            estimated_non_message_input_tokens=0,
-            estimated_non_message_input_bytes=0,
-            estimated_non_message_input_fields=(),
+            estimated_message_input_tokens=max(
+                0, estimated_input_tokens - estimated_non_message_input_tokens
+            ),
+            estimated_non_message_input_tokens=estimated_non_message_input_tokens,
+            estimated_non_message_input_bytes=estimated_non_message_input_bytes,
+            estimated_non_message_input_fields=estimated_non_message_input_fields,
             injected_default_output_tokens=injected_default,
         )
 
@@ -278,7 +342,7 @@ class ResponsesRequestPolicy:
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         self._validate_input_token_count_controls(effective_body)
 
-        estimated_input_tokens = self._estimate_input_tokens(
+        estimated_input_tokens, _, _, _ = self._estimate_input_tokens(
             input_material_bytes=input_material_bytes,
             instructions=instructions,
             body=effective_body,
@@ -336,7 +400,7 @@ class ResponsesRequestPolicy:
             param="instructions",
             max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
         )
-        estimated_input_tokens = self._estimate_input_tokens(
+        estimated_input_tokens, _, _, _ = self._estimate_input_tokens(
             input_material_bytes=input_material_bytes,
             instructions=instructions,
             body=effective_body,
@@ -383,7 +447,12 @@ class ResponsesRequestPolicy:
                     "This Responses request field is not enabled by this gateway.",
                 )
 
-    def _validate_input(self, value: Any) -> tuple[str | list[dict[str, Any]], int]:
+    def _validate_input(
+        self,
+        value: Any,
+        *,
+        allow_codex_request_envelope: bool = False,
+    ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
                 _raise(
@@ -399,7 +468,10 @@ class ResponsesRequestPolicy:
             return value, len(value.encode("utf-8"))
 
         if isinstance(value, list):
-            return self._validate_input_item_array(value)
+            return self._validate_input_item_array(
+                value,
+                allow_codex_request_envelope=allow_codex_request_envelope,
+            )
 
         _raise(
             "input",
@@ -606,7 +678,12 @@ class ResponsesRequestPolicy:
         self._validate_input_item_text_bytes(text_bytes, param=f"{param}.text")
         return {"type": part_type, "text": text}, text_bytes
 
-    def _validate_input_item_array(self, value: list[Any]) -> tuple[list[dict[str, Any]], int]:
+    def _validate_input_item_array(
+        self,
+        value: list[Any],
+        *,
+        allow_codex_request_envelope: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
                 "input",
@@ -636,7 +713,11 @@ class ResponsesRequestPolicy:
                 item_image_data_url_bytes,
                 item_file_parts,
                 item_file_data_url_bytes,
-            ) = self._validate_input_item(item, index=index)
+            ) = self._validate_input_item(
+                item,
+                index=index,
+                allow_codex_request_envelope=allow_codex_request_envelope,
+            )
             total_text_bytes += item_text_bytes
             total_material_bytes += item_material_bytes
             total_image_parts += item_image_parts
@@ -681,6 +762,7 @@ class ResponsesRequestPolicy:
         item: Any,
         *,
         index: int,
+        allow_codex_request_envelope: bool = False,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -747,6 +829,15 @@ class ResponsesRequestPolicy:
         canonical_item: dict[str, Any] = {"role": role, "content": canonical_content}
         if item_type == "message":
             canonical_item["type"] = "message"
+        if "id" in item:
+            if not allow_codex_request_envelope:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_envelope_not_allowed",
+                    "The Codex request envelope is not enabled for this gateway key.",
+                )
+            item_id = self._validate_codex_message_id(item.get("id"), param=f"{param}.id")
+            canonical_item["id"] = item_id
         return (
             canonical_item,
             text_bytes,
@@ -1479,7 +1570,13 @@ class ResponsesRequestPolicy:
                 "The 'metadata' field exceeds the gateway size limit.",
             )
 
-    def _validate_text_config(self, value: Any, *, stream: Any) -> None:
+    def _validate_text_config(
+        self,
+        value: Any,
+        *,
+        stream: Any,
+        allow_codex_request_envelope: bool = False,
+    ) -> None:
         if value is None:
             return
         if not isinstance(value, Mapping):
@@ -1488,13 +1585,24 @@ class ResponsesRequestPolicy:
                 "responses_field_invalid_type",
                 "The 'text' field must be an object.",
             )
-        unknown = set(value) - {"format"}
+        allowed_fields = {"format"}
+        if allow_codex_request_envelope:
+            allowed_fields.add("verbosity")
+        unknown = set(value) - allowed_fields
         if unknown:
             _raise(
                 f"text.{sorted(unknown)[0]}",
                 "responses_field_not_supported",
                 "This Responses text configuration field is not enabled by this gateway.",
             )
+        if "verbosity" in value:
+            verbosity = value.get("verbosity")
+            if verbosity not in _CODEX_TEXT_VERBOSITIES:
+                _raise(
+                    "text.verbosity",
+                    "responses_codex_envelope_invalid",
+                    "The Responses text verbosity is not supported.",
+                )
         text_format = value.get("format")
         if text_format is None:
             return
@@ -1623,6 +1731,203 @@ class ResponsesRequestPolicy:
             invalid_code="responses_text_format_invalid",
             field_label="Responses text format",
         )
+
+    def _validate_codex_request_envelope(
+        self,
+        body: dict[str, Any],
+        *,
+        allow_codex_request_envelope: bool,
+    ) -> None:
+        if not allow_codex_request_envelope:
+            return
+
+        if "include" in body:
+            include = body.get("include")
+            if not isinstance(include, list) or not include:
+                _raise(
+                    "include",
+                    "responses_codex_envelope_invalid",
+                    "The Codex include field must contain the supported value.",
+                )
+            if len(include) > _CODEX_MAX_INCLUDE_ITEMS:
+                _raise(
+                    "include",
+                    "responses_codex_envelope_invalid",
+                    "The Codex include field contains too many values.",
+                )
+            if any(item != _CODEX_INCLUDE_VALUE for item in include):
+                _raise(
+                    "include",
+                    "responses_codex_envelope_invalid",
+                    "The Codex include field contains an unsupported value.",
+                )
+            body["include"] = [_CODEX_INCLUDE_VALUE]
+
+        if "parallel_tool_calls" in body and not isinstance(body.get("parallel_tool_calls"), bool):
+            _raise(
+                "parallel_tool_calls",
+                "responses_codex_envelope_invalid",
+                "The Codex parallel_tool_calls field must be a boolean.",
+            )
+
+        if "prompt_cache_key" in body:
+            prompt_cache_key = body.get("prompt_cache_key")
+            if not isinstance(prompt_cache_key, str) or not prompt_cache_key:
+                _raise(
+                    "prompt_cache_key",
+                    "responses_codex_envelope_invalid",
+                    "The Codex prompt_cache_key field must be a non-empty string.",
+                )
+            if _contains_control_character(prompt_cache_key):
+                _raise(
+                    "prompt_cache_key",
+                    "responses_codex_envelope_invalid",
+                    "The Codex prompt_cache_key field contains unsupported characters.",
+                )
+            self._validate_string_bytes(
+                prompt_cache_key,
+                param="prompt_cache_key",
+                max_bytes=_CODEX_MAX_PROMPT_CACHE_KEY_BYTES,
+                code="responses_codex_envelope_invalid",
+            )
+
+        if "reasoning" in body:
+            reasoning = body.get("reasoning")
+            if not isinstance(reasoning, Mapping):
+                _raise(
+                    "reasoning",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning field must be an object.",
+                )
+            unknown = set(reasoning) - {"context", "effort"}
+            if unknown:
+                _raise(
+                    "reasoning",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning field contains an unsupported member.",
+                )
+            if not reasoning:
+                _raise(
+                    "reasoning",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning field must not be empty.",
+                )
+            if "effort" not in reasoning:
+                _raise(
+                    "reasoning.effort",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning effort is required.",
+                )
+            canonical_reasoning: dict[str, str] = {}
+            effort = reasoning.get("effort")
+            if effort not in _CODEX_REASONING_EFFORTS:
+                _raise(
+                    "reasoning.effort",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning effort is not supported.",
+                )
+            canonical_reasoning["effort"] = str(effort)
+            if "context" in reasoning:
+                context = reasoning.get("context")
+                if context != _CODEX_REASONING_CONTEXT:
+                    _raise(
+                        "reasoning.context",
+                        "responses_codex_envelope_invalid",
+                        "The Codex reasoning context is not supported.",
+                    )
+                canonical_reasoning["context"] = _CODEX_REASONING_CONTEXT
+            if len(canonical_json_bytes(canonical_reasoning)) > _CODEX_MAX_REASONING_BYTES:
+                _raise(
+                    "reasoning",
+                    "responses_codex_envelope_invalid",
+                    "The Codex reasoning field exceeds the gateway size limit.",
+                )
+            body["reasoning"] = canonical_reasoning
+
+        if "client_metadata" in body:
+            self._validate_and_drop_codex_client_metadata(body)
+
+        text = body.get("text")
+        if isinstance(text, Mapping):
+            body["text"] = {
+                field: copy.deepcopy(text[field])
+                for field in ("format", "verbosity")
+                if field in text
+            }
+
+    def _validate_and_drop_codex_client_metadata(self, body: dict[str, Any]) -> None:
+        metadata = body.get("client_metadata")
+        if not isinstance(metadata, Mapping):
+            _raise(
+                "client_metadata",
+                "responses_codex_envelope_invalid",
+                "The Codex client_metadata field must be an object.",
+            )
+        if len(metadata) > _CODEX_MAX_CLIENT_METADATA_KEYS:
+            _raise(
+                "client_metadata",
+                "responses_codex_envelope_invalid",
+                "The Codex client_metadata field contains too many keys.",
+            )
+        for key, value in metadata.items():
+            if not isinstance(key, str) or key not in _CODEX_CLIENT_METADATA_KEYS:
+                _raise(
+                    "client_metadata",
+                    "responses_codex_envelope_invalid",
+                    "The Codex client_metadata field contains an unsupported key.",
+                )
+            if len(key.encode("utf-8")) > _CODEX_MAX_CLIENT_METADATA_KEY_BYTES:
+                _raise(
+                    "client_metadata",
+                    "responses_codex_envelope_invalid",
+                    "The Codex client_metadata key exceeds the gateway size limit.",
+                )
+            if not isinstance(value, str):
+                _raise(
+                    f"client_metadata.{key}",
+                    "responses_codex_envelope_invalid",
+                    "Codex client_metadata values must be strings.",
+                )
+            if _contains_control_character(value):
+                _raise(
+                    f"client_metadata.{key}",
+                    "responses_codex_envelope_invalid",
+                    "A Codex client_metadata value contains unsupported characters.",
+                )
+            if len(value.encode("utf-8")) > _CODEX_MAX_CLIENT_METADATA_VALUE_BYTES:
+                _raise(
+                    f"client_metadata.{key}",
+                    "responses_codex_envelope_invalid",
+                    "A Codex client_metadata value exceeds the gateway size limit.",
+                )
+        if len(canonical_json_bytes(dict(metadata))) > _CODEX_MAX_CLIENT_METADATA_BYTES:
+            _raise(
+                "client_metadata",
+                "responses_codex_envelope_invalid",
+                "The Codex client_metadata field exceeds the gateway size limit.",
+            )
+        body.pop("client_metadata", None)
+
+    def _validate_codex_message_id(self, value: Any, *, param: str) -> str:
+        if not isinstance(value, str) or not value or len(value) > 128:
+            _raise(
+                param,
+                "responses_codex_envelope_invalid",
+                "The Codex message item ID is invalid.",
+            )
+        if not value.isascii() or not _CODEX_MESSAGE_ID_RE.fullmatch(value):
+            _raise(
+                param,
+                "responses_codex_envelope_invalid",
+                "The Codex message item ID contains unsupported characters.",
+            )
+        if "://" in value or _looks_secret_like_identifier(value):
+            _raise(
+                param,
+                "responses_codex_envelope_invalid",
+                "The Codex message item ID is not an approved opaque identifier.",
+            )
+        return value
 
     def _validate_tools(self, body: dict[str, Any]) -> int:
         value = body.get("tools")
@@ -2119,15 +2424,35 @@ class ResponsesRequestPolicy:
         body: Mapping[str, Any],
         tools_schema_bytes: int = 0,
         tool_choice_bytes: int = 0,
-    ) -> int:
+    ) -> tuple[int, int, int, tuple[str, ...]]:
         total_bytes = input_material_bytes
         if instructions is not None:
             total_bytes += len(instructions.encode("utf-8"))
-        total_bytes += tools_schema_bytes + tool_choice_bytes
-        for field in ("text",):
+        non_message_bytes = tools_schema_bytes + tool_choice_bytes
+        non_message_fields: list[str] = []
+        if tools_schema_bytes:
+            non_message_fields.append("tools")
+        if tool_choice_bytes:
+            non_message_fields.append("tool_choice")
+        for field in ("include", "parallel_tool_calls", "prompt_cache_key", "reasoning", "text"):
             if field in body and body[field] is not None:
-                total_bytes += len(canonical_json_bytes({field: body[field]}))
-        return max(1, (total_bytes + 2) // 3)
+                non_message_bytes += len(canonical_json_bytes({field: body[field]}))
+                non_message_fields.append(field)
+        message_id_bytes = _message_id_estimation_bytes(body.get("input"))
+        if message_id_bytes:
+            non_message_bytes += message_id_bytes
+            non_message_fields.append("input[].id")
+        total_bytes += non_message_bytes
+        estimated_input_tokens = max(1, (total_bytes + 2) // 3)
+        estimated_non_message_input_tokens = (
+            (non_message_bytes + 2) // 3 if non_message_bytes else 0
+        )
+        return (
+            estimated_input_tokens,
+            estimated_non_message_input_tokens,
+            non_message_bytes,
+            tuple(non_message_fields),
+        )
 
     def _validate_string_bytes(
         self,
@@ -2143,6 +2468,104 @@ class ResponsesRequestPolicy:
                 code,
                 f"The '{param}' field exceeds the gateway size limit.",
             )
+
+
+def responses_codex_request_envelope_requested(body: Mapping[str, Any]) -> bool:
+    """Detect the bounded envelope from body shape only, never headers or model names."""
+
+    if any(
+        field in body
+        for field in (
+            "client_metadata",
+            "include",
+            "parallel_tool_calls",
+            "prompt_cache_key",
+            "reasoning",
+        )
+    ):
+        return True
+    text = body.get("text")
+    if isinstance(text, Mapping) and "verbosity" in text:
+        return True
+    input_value = body.get("input")
+    if isinstance(input_value, list):
+        return any(
+            isinstance(item, Mapping)
+            and item.get("type") in (None, "message")
+            and "id" in item
+            for item in input_value
+        )
+    return False
+
+
+def responses_codex_request_envelope_allowed(policy: object) -> bool:
+    """Return true only for an explicit, well-formed key capability grant."""
+
+    if not isinstance(policy, Mapping):
+        return False
+    version = policy.get("version")
+    if isinstance(version, bool) or version != 1:
+        return False
+    capabilities = policy.get("allowed_capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        return False
+    if any(
+        not isinstance(item, str) or item not in KNOWN_RESPONSES_CAPABILITIES
+        for item in capabilities
+    ):
+        return False
+    if len(capabilities) != len(set(capabilities)):
+        return False
+    return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE in capabilities
+
+
+def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
+    for field in (
+        "client_metadata",
+        "include",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
+    ):
+        if field in body:
+            return field
+    text = body.get("text")
+    if isinstance(text, Mapping) and "verbosity" in text:
+        return "text.verbosity"
+    input_value = body.get("input")
+    if isinstance(input_value, list):
+        for index, item in enumerate(input_value):
+            if (
+                isinstance(item, Mapping)
+                and item.get("type") in (None, "message")
+                and "id" in item
+            ):
+                return f"input[{index}].id"
+    return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def _looks_secret_like_identifier(value: str) -> bool:
+    lowered = value.lower()
+    if lowered.startswith(("bearer", "ghp_", "github_pat_", "sk-", "sk_")):
+        return True
+    if any(fragment in lowered for fragment in ("api_key", "apikey", "password", "secret", "token")):
+        return True
+    segments = value.split(".")
+    return len(segments) == 3 and all(len(segment) >= 8 for segment in segments)
+
+
+def _message_id_estimation_bytes(value: Any) -> int:
+    if not isinstance(value, list):
+        return 0
+    return sum(
+        len(canonical_json_bytes({"id": item["id"]}))
+        for item in value
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    )
 
 
 def responses_text_format_type(body: Mapping[str, Any]) -> str | None:

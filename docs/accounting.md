@@ -35,10 +35,21 @@ Core invariants:
   metadata.
 - Missing streaming usage is not normal success. It must not be treated as
   zero-cost success or followed by a normal successful terminal marker.
+- Dual-gated Codex request-envelope admission counts the approved
+  provider-forwarded envelope and message-ID material conservatively. Safe
+  estimation evidence may contain field names and aggregate byte/token counts,
+  never envelope values. Size-capped `client_metadata` is validated and dropped
+  before provider forwarding, so it is not provider-billed input. Provider
+  final usage/cost remains authoritative.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,
   session tokens, and email bodies must not be stored for accounting.
+- Codex client metadata, prompt-cache keys, message IDs, reasoning request
+  values, and encrypted reasoning content must not be copied into quota,
+  ledger, audit, usage-profile, reconciliation, metric-label, or export
+  metadata. A prompt-cache key and message ID may exist transiently in the
+  validated provider request only.
 - Current RC2 Chat audio support remains part of ordinary Chat Completions
   accounting: audio input to text output and non-streaming audio output reserve
   quota and finalize through the normal PostgreSQL Chat path. Provider aggregate
