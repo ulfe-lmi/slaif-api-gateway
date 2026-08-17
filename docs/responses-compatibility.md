@@ -2,6 +2,13 @@
 
 Status: limited foundation implemented on current `main`.
 
+Codex CLI wire compatibility is tracked separately in
+[`codex-compatibility.md`](codex-compatibility.md). The pinned Codex CLI 0.147.0
+`gpt-5.6-sol` API-key Responses profile is **CAPTURED, NOT YET
+CODEX-COMPATIBLE**: current fail-closed policy still rejects captured fields,
+Responses-lite input/tool containers, and message-item fields. The capture does
+not relax this contract or authorize Codex tools.
+
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
 `POST /v1/embeddings` are implemented separately, while the bounded Realtime

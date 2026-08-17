@@ -1,0 +1,1010 @@
+{
+  "capture": {
+    "mock_response": {
+      "accepted_by_codex": true,
+      "connection_close": true,
+      "content_type": "text/event-stream",
+      "events": [
+        {
+          "data": {
+            "field_names": [
+              "response",
+              "type"
+            ],
+            "fields": {
+              "response": {
+                "kind": "object"
+              },
+              "type": {
+                "kind": "string"
+              }
+            },
+            "kind": "object"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "field_names": [
+              "response",
+              "type"
+            ],
+            "fields": {
+              "response": {
+                "kind": "object"
+              },
+              "type": {
+                "kind": "string"
+              }
+            },
+            "kind": "object"
+          },
+          "event": "response.completed"
+        }
+      ]
+    },
+    "request": {
+      "field_shapes": {
+        "client_metadata": {
+          "kind": "object"
+        },
+        "include": {
+          "item_kinds": [
+            "string"
+          ],
+          "kind": "array"
+        },
+        "input": {
+          "items": [
+            {
+              "field_names": [
+                "role",
+                "tools",
+                "type"
+              ],
+              "kind": "object",
+              "role": "developer",
+              "tools": [
+                {
+                  "field_names": [
+                    "description",
+                    "name",
+                    "tools",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "name": "functions",
+                  "tools": [
+                    {
+                      "field_names": [
+                        "description",
+                        "format",
+                        "name",
+                        "type"
+                      ],
+                      "format_shape": {
+                        "field_names": [
+                          "definition",
+                          "syntax",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "type": "grammar"
+                      },
+                      "kind": "object",
+                      "name": "exec",
+                      "type": "custom"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "wait",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "boolean"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "number"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "number"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 4,
+                        "required_count": 1,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "request_user_input",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "items",
+                              "type"
+                            ],
+                            "items": {
+                              "additional_properties": false,
+                              "field_names": [
+                                "additionalProperties",
+                                "properties",
+                                "required",
+                                "type"
+                              ],
+                              "kind": "object",
+                              "properties": [
+                                {
+                                  "field_names": [
+                                    "items",
+                                    "type"
+                                  ],
+                                  "items": {
+                                    "additional_properties": false,
+                                    "field_names": [
+                                      "additionalProperties",
+                                      "properties",
+                                      "required",
+                                      "type"
+                                    ],
+                                    "kind": "object",
+                                    "properties": [
+                                      {
+                                        "field_names": [
+                                          "type"
+                                        ],
+                                        "kind": "object",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "field_names": [
+                                          "type"
+                                        ],
+                                        "kind": "object",
+                                        "type": "string"
+                                      }
+                                    ],
+                                    "property_count": 2,
+                                    "required_count": 2,
+                                    "type": "object"
+                                  },
+                                  "kind": "object",
+                                  "type": "array"
+                                },
+                                {
+                                  "field_names": [
+                                    "type"
+                                  ],
+                                  "kind": "object",
+                                  "type": "string"
+                                },
+                                {
+                                  "field_names": [
+                                    "type"
+                                  ],
+                                  "kind": "object",
+                                  "type": "string"
+                                },
+                                {
+                                  "field_names": [
+                                    "type"
+                                  ],
+                                  "kind": "object",
+                                  "type": "string"
+                                }
+                              ],
+                              "property_count": 4,
+                              "required_count": 4,
+                              "type": "object"
+                            },
+                            "kind": "object",
+                            "type": "array"
+                          }
+                        ],
+                        "property_count": 1,
+                        "required_count": 1,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    }
+                  ],
+                  "type": "namespace"
+                },
+                {
+                  "field_names": [
+                    "description",
+                    "name",
+                    "tools",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "name": "collaboration",
+                  "tools": [
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "followup_task",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 2,
+                        "required_count": 2,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "interrupt_agent",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 1,
+                        "required_count": 1,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "list_agents",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 1,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "send_message",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 2,
+                        "required_count": 2,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "spawn_agent",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "required",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          },
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "string"
+                          }
+                        ],
+                        "property_count": 5,
+                        "required_count": 2,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    },
+                    {
+                      "field_names": [
+                        "description",
+                        "name",
+                        "parameters",
+                        "strict",
+                        "type"
+                      ],
+                      "kind": "object",
+                      "name": "wait_agent",
+                      "parameter_schema": {
+                        "additional_properties": false,
+                        "field_names": [
+                          "additionalProperties",
+                          "properties",
+                          "type"
+                        ],
+                        "kind": "object",
+                        "properties": [
+                          {
+                            "field_names": [
+                              "type"
+                            ],
+                            "kind": "object",
+                            "type": "number"
+                          }
+                        ],
+                        "property_count": 1,
+                        "type": "object"
+                      },
+                      "type": "function"
+                    }
+                  ],
+                  "type": "namespace"
+                }
+              ],
+              "type": "additional_tools"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "developer",
+              "type": "message"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                },
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "id",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "developer",
+              "type": "message"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "id",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "developer",
+              "type": "message"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "id",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "developer",
+              "type": "message"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "id",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "content": [
+                {
+                  "field_names": [
+                    "text",
+                    "type"
+                  ],
+                  "kind": "object",
+                  "type": "input_text"
+                }
+              ],
+              "field_names": [
+                "content",
+                "id",
+                "role",
+                "type"
+              ],
+              "kind": "object",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "kind": "array"
+        },
+        "model": {
+          "kind": "string",
+          "value": "gpt-5.6-sol"
+        },
+        "parallel_tool_calls": {
+          "kind": "boolean",
+          "value": false
+        },
+        "prompt_cache_key": {
+          "kind": "string"
+        },
+        "reasoning": {
+          "field_names": [
+            "context",
+            "effort"
+          ],
+          "fields": {
+            "context": {
+              "kind": "string"
+            },
+            "effort": {
+              "kind": "string"
+            }
+          },
+          "kind": "object"
+        },
+        "store": {
+          "kind": "boolean",
+          "value": false
+        },
+        "stream": {
+          "kind": "boolean",
+          "value": true
+        },
+        "text": {
+          "field_names": [
+            "verbosity"
+          ],
+          "fields": {
+            "verbosity": {
+              "kind": "string"
+            }
+          },
+          "kind": "object"
+        },
+        "tool_choice": {
+          "kind": "string"
+        }
+      },
+      "headers": {
+        "authorization": {
+          "present": true,
+          "redacted": true
+        },
+        "content_encoding": {
+          "present": false
+        },
+        "content_type": "application/json",
+        "entries": [
+          {
+            "classification": "media_type_recorded_separately",
+            "name": "accept"
+          },
+          {
+            "classification": "secret_value_redacted",
+            "name": "authorization"
+          },
+          {
+            "classification": "size_value_omitted",
+            "name": "content-length"
+          },
+          {
+            "classification": "media_type_recorded_separately",
+            "name": "content-type"
+          },
+          {
+            "classification": "loopback_value_omitted",
+            "name": "host"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "originator"
+          },
+          {
+            "classification": "secret_value_redacted",
+            "name": "session-id"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "thread-id"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "user-agent"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "x-client-request-id"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "x-codex-beta-features"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "x-codex-turn-metadata"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "x-codex-window-id"
+          },
+          {
+            "classification": "value_omitted",
+            "name": "x-openai-internal-codex-responses-lite"
+          }
+        ],
+        "names": [
+          "accept",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "originator",
+          "session-id",
+          "thread-id",
+          "user-agent",
+          "x-client-request-id",
+          "x-codex-beta-features",
+          "x-codex-turn-metadata",
+          "x-codex-window-id",
+          "x-openai-internal-codex-responses-lite"
+        ]
+      },
+      "method": "POST",
+      "path": "/v1/responses",
+      "top_level_fields": [
+        "client_metadata",
+        "include",
+        "input",
+        "model",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice"
+      ]
+    },
+    "subprocess": {
+      "accepted_mock": true,
+      "exit_success": true
+    }
+  },
+  "gateway_compatibility": {
+    "events": [
+      {
+        "name": "response.created",
+        "reason_code": "supported_stream_event",
+        "status": "supported"
+      },
+      {
+        "name": "response.completed",
+        "reason_code": "supported_stream_event",
+        "status": "supported"
+      }
+    ],
+    "input_content_types": {
+      "rejected": [],
+      "supported": [
+        "input_text"
+      ]
+    },
+    "input_item_types": {
+      "rejected": [
+        {
+          "name": "additional_tools",
+          "reason_code": "responses_input_item_type_not_supported"
+        },
+        {
+          "name": "message",
+          "reason_code": "responses_input_item_invalid"
+        }
+      ],
+      "supported": [
+        "message"
+      ]
+    },
+    "status": "not_compatible",
+    "tools": [
+      {
+        "name": "exec",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "custom"
+      },
+      {
+        "name": "followup_task",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "interrupt_agent",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "list_agents",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "request_user_input",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "send_message",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "spawn_agent",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "wait",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "wait_agent",
+        "parent_type": "namespace",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "function"
+      },
+      {
+        "name": "collaboration",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "namespace"
+      },
+      {
+        "name": "functions",
+        "reason_code": "responses_hosted_tool_not_supported",
+        "status": "rejected",
+        "type": "namespace"
+      }
+    ],
+    "top_level_fields": {
+      "rejected": [
+        {
+          "name": "client_metadata",
+          "reason_code": "responses_field_not_supported"
+        },
+        {
+          "name": "include",
+          "reason_code": "responses_multimodal_not_supported"
+        },
+        {
+          "name": "parallel_tool_calls",
+          "reason_code": "responses_tools_not_supported"
+        },
+        {
+          "name": "prompt_cache_key",
+          "reason_code": "responses_state_not_supported"
+        },
+        {
+          "name": "reasoning",
+          "reason_code": "responses_field_not_supported"
+        },
+        {
+          "name": "text.verbosity",
+          "reason_code": "responses_field_not_supported"
+        },
+        {
+          "name": "tool_choice",
+          "reason_code": "responses_tool_choice_invalid"
+        }
+      ],
+      "supported": [
+        "input",
+        "model",
+        "store",
+        "stream",
+        "text",
+        "tool_choice"
+      ]
+    }
+  },
+  "identity": {
+    "cli_family": "codex-cli",
+    "cli_version": "0.147.0",
+    "model": "gpt-5.6-sol",
+    "profile": "api-key-responses-baseline",
+    "source_tag": "rust-v0.147.0"
+  },
+  "model_catalog": {
+    "apply_patch_tool_type": "freeform",
+    "context_window": 272000,
+    "default_reasoning_level": "low",
+    "effective_context_window_percent": 95,
+    "include_apps_usage_instructions": true,
+    "include_plugin_usage_instructions": true,
+    "include_skills_usage_instructions": false,
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "max_context_window": 272000,
+    "multi_agent_version": "v2",
+    "shell_type": "shell_command",
+    "slug": "gpt-5.6-sol",
+    "support_verbosity": true,
+    "supported_in_api": true,
+    "supported_reasoning_levels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "supports_image_detail_original": true,
+    "supports_parallel_tool_calls": true,
+    "supports_search_tool": true,
+    "tool_mode": "code_mode_only",
+    "truncation_policy": {
+      "limit": 10000,
+      "mode": "tokens"
+    },
+    "use_responses_lite": true,
+    "visibility": "list"
+  },
+  "schema_version": 1
+}

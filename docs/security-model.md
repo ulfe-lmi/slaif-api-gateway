@@ -625,6 +625,27 @@ bulk key creation from templates remain future work.
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
 
+## Codex Protocol Capture Evidence
+
+The versioned Codex evidence process is documented in
+[`codex-compatibility.md`](codex-compatibility.md). Its live actions use a
+private temporary Codex home, an empty work directory, a fixed dummy API-key
+canary, and one numeric `127.0.0.1` ephemeral listener. They remove inherited
+provider/auth variables and do not read the operator's Codex config, auth
+store, history, plugins, memories, rules, project `AGENTS.md`, or user prompts.
+
+Raw request headers/body and Codex subprocess output exist only in memory for
+bounded parsing and are discarded. They are never written to the fixture,
+logs, exceptions, stdout, or stderr. The checked-in fixture keeps only
+allowlisted structural field/type/discriminator data, redacted authorization
+presence, header names/classifications, safe tool/schema shape, selected
+non-free-text bundled-model metadata, fixed mock event shapes, and safe
+compatibility reason codes. It excludes authorization values, prompts,
+instructions, client identifiers, description values, arbitrary schema
+property names/values, grammar-definition values, raw bodies, and provider
+traffic. Capture status `not_compatible` is evidence of fail-closed behavior,
+not authority to relax tool, privacy, routing, quota, or accounting controls.
+
 ## Redis Rate Limiting
 
 When enabled, Redis enforces request, estimated-token, and active-concurrency
