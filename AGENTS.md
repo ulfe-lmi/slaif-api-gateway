@@ -70,6 +70,19 @@ As independently verified on **2026-08-17**:
   `Unit, lint, and migration head` check. Do not treat it as accepted project
   state or silently reuse it for an OAP objective.
 
+Post-adoption verification evidence is recorded separately from that adoption
+baseline. On **2026-08-17**, OAP objective 001 ran the full current-machine
+matrix once at 24 workers against commit
+`0f09de476f643e5879baeaf08eeb1d7393529758`, whose parent is merged objective-000
+`main`. The result was `FAIL`: 2,533 of 2,534 tests passed, with one OAP
+governance assertion failing because the active `001-a` order did not contain a
+literal phrase required by the existing test. Integration, E2E, browser, Redis,
+Docker Compose config, Ruff, Alembic, safety, and isolation coverage passed.
+This does not establish a current-main verification-clean result; the
+post-PR-220 128-worker HPC qualification remains **NOT RUN**, and no RC2
+release/tag or production-certification claim follows. See
+`docs/verification/2026-08-17-current-main-baseline.md`.
+
 ### 0.3 Provider-catalog continuation state
 
 Provider-catalog implementation through PR #218 is merged:

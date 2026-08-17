@@ -8,6 +8,21 @@ RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
+## Current verification evidence
+
+The 2026-08-17 current-machine verification record is
+[`verification/2026-08-17-current-main-baseline.md`](verification/2026-08-17-current-main-baseline.md).
+Its classification is `RESULT=FAIL`: one 24-worker full-matrix run passed 2,533
+of 2,534 tests, with one OAP governance assertion failure. All integration,
+E2E, browser, Redis, Docker Compose config, Ruff, Alembic, safety, and isolation
+coverage in that run passed, but the failed unit gate means current main is not
+verification-clean on the basis of this evidence.
+
+The record is commit- and environment-specific. It does not replace the older
+historical readiness baseline, close the still-unrun post-PR-220 128-worker HPC
+qualification, approve an RC2 tag/release, or certify production/security/
+compliance readiness.
+
 It is also not a feature-full RC2 approval. A green harness means
 verification-clean for the implemented scope only. The maintainer-locked RC2
 target now includes a bounded implemented Realtime client-secret slice; the
