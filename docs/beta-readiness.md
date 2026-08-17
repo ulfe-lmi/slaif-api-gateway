@@ -2,17 +2,27 @@
 
 Date: 2026-05-01
 
-Status: RC-beta readiness candidate after verification fixes.
+Historical status (2026-05-01): RC-beta readiness candidate after verification
+fixes.
 
-Current `main` baseline after the RC-beta CI/docs PR #120 merge:
+Historical `main` baseline after the RC-beta CI/docs PR #120 merge:
 `dbc98374c47be4537cc5087bd008a36b76fc8f17`
 
-Recommendation: verification-clean baseline for the implemented and documented
-scope only. This document is not an RC2 feature-fullness approval.
+> **Historical evidence snapshot boundary (2026-05-01):** the date, PR #120
+> SHA, original verification counts, Review 5.0 closure, and original RC1
+> non-goals in this report describe the evidence available for that tagged-era
+> baseline. They are preserved historical evidence, not the current repository
+> inventory. Current endpoint status is governed by
+> [`rc2-feature-scope.md`](rc2-feature-scope.md), with later verification
+> evidence recorded separately.
+
+Historical recommendation: verification-clean baseline for the implemented and
+documented scope at that time only. This document is not an RC2
+feature-fullness approval.
 
 This report is not a production certification, compliance attestation, or
 penetration-test report. It records a release-candidate beta verification pass
-for the current implemented scope.
+for the scope implemented and documented at that historical baseline.
 
 The maintainer-locked RC2 target is stricter than this historical implemented
 scope baseline. Standalone `/v1/audio/*`, `POST /v1/embeddings`, and the
@@ -159,7 +169,7 @@ The RC-beta CI/docs follow-up adds GitHub Actions coverage for unit/lint,
 PostgreSQL integration, E2E, Playwright browser smoke, Docker Compose smoke,
 Nginx syntax validation, documentation hygiene, CodeQL, and Dependabot.
 
-## Review 5.0 Closure
+## Historical Review 5.0 Closure
 
 The Review 5.0 remediation matrix now records every Review 5.0 finding as
 addressed or hardened:
@@ -265,7 +275,14 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   participant-key generation, policy mutation, and hosted/background/multimodal
   Responses template policy remain future work. See
   `responses-compatibility.md`.
-- Embeddings API is not implemented.
+- Standalone `POST /v1/embeddings` is implemented only as the bounded current
+  surface: it requires separate key endpoint permission and explicit
+  route/model `embeddings` capability; optional `dimensions` additionally
+  requires `embeddings_dimensions=true`. Requests use PostgreSQL
+  reservation/finalization and canonical OpenAI forwarding, while OpenRouter
+  fails closed. Input strings, token arrays, embedding vectors, and raw
+  JSON/provider bodies are not stored or logged. This does not imply support
+  for every Embeddings field or provider.
 - Chat Completions file IDs, file URLs, audio URLs, audio data URLs, streaming
   audio output, custom audio-output voices, previous-audio references, and
   `n > 1` with audio output are not implemented. Non-streaming Chat
@@ -288,7 +305,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   hardening, backups, monitoring, alert routing, and staging rehearsal of the
   runbooks.
 
-## Non-Goals For This RC-Beta
+## Historical RC1 Non-Goals For The 2026-05-01 Snapshot
+
+This section records the scope of `v0.1.0-rc.1` and its original verification
+baseline. Its no-Audio/no-Embeddings statements are historical tagged-release
+truth, not current `main` status.
 
 - No synchronous bulk `send-now`.
 - No native Anthropic adapter.
@@ -305,11 +326,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 
 - Add MFA and role-gated permissions if required for the deployment context.
 - Add formal security review or penetration testing before production claims.
-- Continue Responses API as scoped RC2 work under
-  `responses-compatibility.md`; decide separately whether to implement
-  Responses hosted tools, background routes,
-  broader lifecycle routes,
-  bulk key send-now, embeddings, and native provider adapters.
+- Further Responses expansion beyond the current implemented RC2 boundary is
+  separately scoped work under `responses-compatibility.md`; decide separately
+  whether to implement Responses hosted tools, background/cancel/list routes,
+  stateful streaming, files, multimodal output, bulk key send-now, and native
+  provider adapters.
 - Extend Responses live-burn beyond the current stateless text-output
   streaming subset only as separate scoped work under
   `streaming-live-burn-margin.md`.
@@ -318,8 +339,11 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
 - Continue tuning monitoring and alert routing for the target deployment.
 - Keep CI green and review dependency/security updates before each tag.
 
-Final verdict: verification-clean baseline for the implemented and documented
-scope: yes. Feature-full RC2: no; see [`rc2-feature-scope.md`](rc2-feature-scope.md).
+Final verdict for the historical 2026-05-01 snapshot: verification-clean for
+its implemented and documented scope: yes. Feature-full RC2: no — the current
+scope matrix has zero `RC2_REQUIRED_MISSING` rows, but a clean post-PR-220
+current-main qualification and a human release decision remain outstanding;
+see [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
-Tag-specific release notes for the recommended first RC-beta tag are in
+Tag-specific release notes for the historical first RC-beta tag are in
 [`releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md).

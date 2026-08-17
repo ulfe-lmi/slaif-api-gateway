@@ -1087,9 +1087,17 @@ No streamed content is stored.
 
 ---
 
-## 17. Documentation-only milestone acceptance criteria
+## Historical staged implementation acceptance record
 
-A documentation-only milestone PR should:
+Sections 17 through 19 preserve the staged acceptance criteria used for the
+original documentation-only, Chat Completions, and bounded Responses
+implementation phases. They are historical implementation records, not the
+current status summary. The current contract and limitations are stated in the
+earlier normative sections and in Sections 13, 14, and 20.
+
+## 17. Historical documentation-only phase acceptance record
+
+The documentation-only milestone PR was expected to:
 
 - add this milestone document;
 - link it from `AGENTS.md`;
@@ -1103,13 +1111,14 @@ A documentation-only milestone PR should:
 - update key-template documentation to mention future safe live-burn policy summaries without claiming implementation;
 - avoid README unless its roadmap/current-status text is materially stale.
 
-No runtime behavior should change in a documentation-only milestone PR.
+No runtime behavior was expected to change in that documentation-only
+milestone PR.
 
 ---
 
-## 18. Chat Completions implementation acceptance criteria
+## 18. Historical Chat Completions implementation acceptance record
 
-The Chat implementation PR should add:
+The Chat implementation PR was expected to add:
 
 - per-key effective live-burn policy;
 - configuration defaults;
@@ -1125,7 +1134,7 @@ The Chat implementation PR should add:
 - admin/CLI surfaces if persisted;
 - docs and tests.
 
-It must not add:
+It was not expected to add:
 
 - Responses live-burn behavior;
 - audio streaming;
@@ -1138,11 +1147,12 @@ It must not add:
 
 ---
 
-## 19. Responses implementation acceptance criteria
+## 19. Historical bounded Responses implementation acceptance record
 
-The Responses implementation PR should apply the same model to Responses typed SSE.
+The bounded Responses implementation PR was expected to apply the same model
+to Responses typed SSE.
 
-It should add:
+It was expected to add:
 
 - the same key live-burn policy used by Chat;
 - parsing for `response.output_text.delta`;
@@ -1155,7 +1165,7 @@ It should add:
 - no raw chunk content storage/logging;
 - docs and tests.
 
-It must not add:
+It was not expected to add:
 
 - structured-output streaming;
 - function/custom tool streaming;

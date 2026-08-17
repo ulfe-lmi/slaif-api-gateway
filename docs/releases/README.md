@@ -12,4 +12,9 @@ Release notes for tagged SLAIF API Gateway release candidates and releases.
   production certification, or completed 128-worker HPC qualification. Focused
   OAP continuation `001-b` repairs the brittle governance assertion without a
   second harness run; the original run remains failed history, while focused
-  checks and standard PR CI evaluate the corrected candidate separately.
+  checks and standard PR CI evaluate the corrected candidate separately. Later
+  GitHub evidence shows PR #226 report head
+  `24431512a993df81f15de4e0268c40ad61e0ad57` completed all ten final-head
+  checks successfully and PR #226 merged as
+  `adaefdc45ddd13e172955c14e02cb6c97d49b629`; this does not change the original
+  `RESULT=FAIL` classification or the still-NOT-RUN 128-worker qualification.
