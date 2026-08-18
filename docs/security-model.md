@@ -833,18 +833,27 @@ misrepresent an unused operator-supplied endpoint. It does not establish
 production or provider-E2E readiness.
 
 Objective 011 adds a separate manual local gateway phase gate. It requires a
-validated disposable PostgreSQL test URL on numeric loopback, refuses ambient
-`DATABASE_URL` and real-provider variables, generates ordinary keys through
-`KeyService`, and runs five exact-Codex children through the real app, private
-no-persistence Redis, and a scripted numeric-loopback upstream. All client
-homes/workspaces are private temporary roots; external proxies fail closed;
-retries are disabled; and only the tool scenario uses workspace-write. The
+canonical disposable `postgresql+asyncpg` URL on numeric loopback with an
+explicit TCP port and rejects query/fragment/control/whitespace and connection-
+override ambiguity. It refuses ambient `DATABASE_URL` and real-provider
+variables, generates ordinary keys through `KeyService`, and runs five exact-
+Codex children through the real app, private no-persistence Redis, and a
+scripted numeric-loopback upstream. One shared helper creates and verifies each
+`0700` root/home/workspace and both `0600` credential-free profile files before
+the child starts; cleanup resolves the platform temp directory and rejects any
+target outside its unique generated root. External proxies fail closed,
+retries are disabled, and only the tool scenario uses workspace-write. The
 mock proves the gateway replaced client auth with its dummy server key and
-removed client/admin/internal headers. Raw HTTP/SSE, subprocess output,
-prompts, completion, tool payloads, and opaque reasoning/compaction material
-remain bounded in memory and are discarded. Database proof scans known
-text/JSON columns for per-run sentinels and requires replay rows to contain only
-HMACs plus safe ownership/routing/expiry metadata.
+removed client/admin/internal headers. Successful local exec requires the exact
+linked per-run output sentinel after a zero-exit `pwd`; final text requires the
+exact structured agent marker. Exact Decimal component/native/EUR money and
+zero reserved money are reconciled for every successful key/ledger, while
+interruption/provider-error rows require their distinct safe error contracts
+and zero actual costs. Raw HTTP/SSE, subprocess output, prompts, completion,
+tool payloads, failure bodies, and opaque reasoning/compaction material remain
+bounded in memory and are discarded. Database proof scans known text/JSON
+columns for every per-run exec/final/failure sentinel and requires replay rows
+to contain only HMACs plus safe ownership/routing/expiry metadata.
 
 That gate establishes local gateway qualification and prepares—but does not
 execute—the separately authorized bounded OpenAI runbook. It does not make

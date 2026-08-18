@@ -769,8 +769,13 @@ Current behavior:
   long-context accounting, V1 compact continuation, pre-provider quota
   rejection, interruption/error accounting, auth substitution, zero pending
   reservations, HMAC-only replay state, and no sentinel/raw-payload
-  persistence. It is opt-in only and must not be invoked by pytest, CI,
-  startup, packaging, Docker, or HPC. This establishes only
+  persistence. The continuation proof requires a canonical explicit-port
+  asyncpg loopback target with no query/fragment overrides, one shared verified
+  0700/0600 workspace/profile path, an exact linked successful-exec sentinel,
+  the exact structured final marker, per-run provider-failure body sentinels,
+  and complete Decimal component/native/EUR ledger and key reconciliation with
+  zero reserved money. It is opt-in only and must not be invoked by pytest,
+  CI, startup, packaging, Docker, or HPC. This establishes only
   `local_gateway_e2e_qualified=true` and
   `bounded_real_openai_pilot_prepared=true`; the separately authorized human
   pilot was not executed and `real_provider_e2e=false` remains authoritative.

@@ -328,10 +328,14 @@ sequential actual-Codex scenarios because each has a distinct deterministic
 upstream state machine and standard gateway key.
 
 It requires an operator-created empty PostgreSQL test database on
-`127.0.0.1`, addressed only through `TEST_DATABASE_URL`; refuses ambient
-`DATABASE_URL` and real-provider variables; and starts private no-persistence
-Redis plus the gateway and mock on ephemeral numeric-loopback ports. Run it
-once, never as a shard or retry loop, then drop only the exact disposable
-database. See [`codex-compatibility.md`](codex-compatibility.md) for the command
-and [the pilot runbook](runbooks/codex-openai-pilot.md) for the distinct,
-separately authorized human real-provider procedure.
+`127.0.0.1`, addressed only through a canonical explicit-port
+`postgresql+asyncpg` `TEST_DATABASE_URL` with no query or fragment; refuses
+ambient `DATABASE_URL`, connection overrides, and real-provider variables; and
+starts private no-persistence Redis plus the gateway and mock on ephemeral
+numeric-loopback ports. Pure tests cover the strict DB target, exact
+Decimal/component reducer, linked exec/final markers, failure-body sentinels,
+and shared `0700`/`0600` profile/cleanup helper without starting Codex. Run the
+manual verifier once, never as a shard or retry loop, then drop only the exact
+disposable database. See [`codex-compatibility.md`](codex-compatibility.md) for
+the command and [the pilot runbook](runbooks/codex-openai-pilot.md) for the
+distinct, separately authorized human real-provider procedure.

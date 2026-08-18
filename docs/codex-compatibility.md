@@ -154,26 +154,35 @@ reasoning usage, V1 compact and continuation, pre-provider hard-quota
 rejection, stream interruption, and a structured provider error.
 
 The verifier requires `TEST_DATABASE_URL`, refuses ambient `DATABASE_URL`,
-non-PostgreSQL schemes, non-numeric-loopback hosts, and database names without
-`test`, `dev`, or `local`. The operator must create one empty disposable
-database explicitly and drop that exact database after the run. The only
-supported invocation is:
+any scheme other than `postgresql+asyncpg`, non-numeric-loopback hosts,
+implicit ports, query strings, fragments, whitespace/control ambiguity, and
+database names without `test`, `dev`, or `local`. The canonical URL has an
+explicit safe user, optional simple password, `127.0.0.1`, explicit TCP port,
+and one disposable database path; socket/host/options overrides are rejected.
+The operator must create one empty disposable database explicitly and drop
+that exact database after the run. The only supported invocation is:
 
 ```bash
 unset DATABASE_URL OPENAI_API_KEY OPENAI_UPSTREAM_API_KEY OPENROUTER_API_KEY
 unset RUN_UPSTREAM_TESTS
-TEST_DATABASE_URL='postgresql+asyncpg://...@127.0.0.1/..._test_...' \
+TEST_DATABASE_URL='postgresql+asyncpg://USER:PASSWORD@127.0.0.1:5432/DISPOSABLE_TEST_DB' \
   .venv/bin/python scripts/verify_codex_gateway_e2e.py
 ```
 
-Do not place a real credential in that URL example or in shell history. The
-script migrates only the validated target, generates standard keys through
-`KeyService`, writes credential-free profile-v2 files under a private
-temporary `CODEX_HOME`, keeps raw HTTP/SSE/subprocess material only in bounded
-memory, scans known text/JSON columns for unique sentinels, and checks HMAC-only
-replay rows. Its fixed output contains booleans and counts only. Normal pytest,
-CI, application startup, import, packaging, migrations, Docker, and HPC do not
-invoke it.
+`USER`, `PASSWORD`, and `DISPOSABLE_TEST_DB` are placeholders; set the actual
+dummy DSN through a private environment mechanism and never print or retain it
+in shell history. The script migrates only the validated target, generates
+standard keys through `KeyService`, and uses one shared preparation path to
+create and verify a `0700` temporary root/home/workspace plus two `0600`
+credential-free profile-v2 files before every child. It keeps raw HTTP/SSE/
+subprocess material only in bounded memory. Exact proof requires the linked
+successful exec-output sentinel and exact structured final marker, complete
+Decimal component/native/EUR cost mappings and zero reserved money for every
+successful key/ledger, exact zero-cost failure ledgers, and distinct
+interruption/provider-error body sentinels. All per-run values join the known
+text/JSON-column scan; replay rows must remain HMAC-only. Fixed output contains
+booleans and counts only. Normal pytest, CI, application startup, import,
+packaging, migrations, Docker, and HPC do not invoke it.
 
 This establishes only:
 

@@ -15,8 +15,10 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -87,6 +89,30 @@ DUMMY_UPSTREAM_KEY = "oap011-fixed-loopback-provider-key"
 MAX_CAPTURE_BYTES = 1_000_000
 MAX_CODEX_OUTPUT_BYTES = 1_000_000
 SERVER_TIMEOUT_SECONDS = 30.0
+MONEY_SCALE = Decimal("0.000000001")
+COMPONENT_COST_KEYS = (
+    "input_uncached",
+    "input_cached",
+    "input_cache_write",
+    "output_non_reasoning",
+    "output_reasoning",
+    "output_audio",
+)
+COMPONENT_TOKEN_KEYS = (
+    "input_uncached_tokens",
+    "input_cached_tokens",
+    "output_non_reasoning_tokens",
+    "output_reasoning_tokens",
+    "long_context_tier_applied",
+    "total_tokens",
+)
+CANONICAL_DATABASE_URL = re.compile(
+    r"\Apostgresql\+asyncpg://"
+    r"(?P<username>[A-Za-z0-9_.~-]+)"
+    r"(?::(?P<password>[A-Za-z0-9_.~-]+))?"
+    r"@127\.0\.0\.1:(?P<port>[0-9]{1,5})/"
+    r"(?P<database>[A-Za-z0-9_-]+)\Z"
+)
 SAFE_DATABASE_ERROR = "unsafe_test_database_url"
 SAFE_ARGUMENT_ERROR = "invalid_arguments"
 SAFE_STAGE_ERROR = "verification_failed"
@@ -185,6 +211,8 @@ class UpstreamRequestFacts:
 
 @dataclass(frozen=True, slots=True)
 class KeyAccountingFacts:
+    cost_used_eur: Decimal
+    cost_reserved_eur: Decimal
     requests_used: int
     tokens_used: int
     requests_reserved: int
@@ -194,8 +222,20 @@ class KeyAccountingFacts:
     ledger_statuses: tuple[str, ...]
     ledger_successes: tuple[bool | None, ...]
     ledger_error_types: tuple[str | None, ...]
+    ledger_http_statuses: tuple[int | None, ...]
+    ledger_actual_costs_eur: tuple[Decimal | None, ...]
+    ledger_actual_costs_native: tuple[Decimal | None, ...]
+    ledger_native_currencies: tuple[str | None, ...]
     usage: tuple[tuple[int, int, int, int, int], ...]
     component_metadata: tuple[dict[str, object], ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateCodexWorkspace:
+    root: Path
+    codex_home: Path
+    workspace: Path
+    profile_files: tuple[Path, Path]
 
 
 @dataclass(slots=True)
@@ -260,14 +300,33 @@ def parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
 def validate_test_database_url(value: str | None) -> SafeDatabaseTarget:
     """Require a numeric-loopback disposable PostgreSQL database URL."""
 
-    if not isinstance(value, str) or not value or value != value.strip():
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(
+            character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F
+            for character in value
+        )
+        or "?" in value
+        or "#" in value
+    ):
+        raise VerificationError(SAFE_DATABASE_ERROR)
+    canonical = CANONICAL_DATABASE_URL.fullmatch(value)
+    if canonical is None:
         raise VerificationError(SAFE_DATABASE_ERROR)
     parsed = urlsplit(value)
-    if parsed.scheme not in {"postgresql+asyncpg", "postgresql", "postgres"}:
+    if parsed.scheme != "postgresql+asyncpg":
         raise VerificationError(SAFE_DATABASE_ERROR)
     if parsed.hostname != "127.0.0.1":
         raise VerificationError(SAFE_DATABASE_ERROR)
-    database_name = parsed.path.removeprefix("/")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise VerificationError(SAFE_DATABASE_ERROR) from exc
+    if port is None or not 1 <= port <= 65535:
+        raise VerificationError(SAFE_DATABASE_ERROR)
+    database_name = canonical.group("database")
     lowered = database_name.lower()
     if (
         not database_name
@@ -278,8 +337,7 @@ def validate_test_database_url(value: str | None) -> SafeDatabaseTarget:
         or not any(marker in lowered for marker in ("test", "dev", "local"))
     ):
         raise VerificationError(SAFE_DATABASE_ERROR)
-    query = parsed.query.lower()
-    if "sslmode=require" in query or parsed.fragment:
+    if parsed.query or parsed.fragment:
         raise VerificationError(SAFE_DATABASE_ERROR)
     return SafeDatabaseTarget(url=value, database_name=database_name)
 
@@ -493,7 +551,12 @@ def _completed_events(
 
 
 def build_tool_scenario_actions(
-    *, workspace: Path, marker_content: str, encrypted_content: str, final_text: str
+    *,
+    workspace: Path,
+    marker_content: str,
+    exec_sentinel: str,
+    encrypted_content: str,
+    final_text: str,
 ) -> tuple[MockAction, ...]:
     """Build one shell call, one patch call, encrypted replay, and final text."""
 
@@ -501,7 +564,9 @@ def build_tool_scenario_actions(
     exec_source = (
         'const r = await tools.exec_command({cmd:"pwd",workdir:'
         + json.dumps(str(workspace))
-        + '}); text("EXEC_OK");'
+        + '}); if (r.exit_code !== 0) { throw new Error("exec_failed"); } text('
+        + json.dumps(exec_sentinel)
+        + ");"
     )
     patch_text = (
         "*** Begin Patch\n*** Add File: " + marker_name + "\n+" + marker_content + "\n*** End Patch"
@@ -576,6 +641,35 @@ def build_context_scenario_actions(
         MockAction("/v1/responses", "sse", first),
         MockAction("/v1/responses/compact", "json", compact),
         MockAction("/v1/responses", "sse", final),
+    )
+
+
+def build_failure_action(*, interrupted: bool, sentinel: str) -> MockAction:
+    """Build one valid bounded failure body carrying a per-run privacy sentinel."""
+
+    if interrupted:
+        return MockAction(
+            "/v1/responses",
+            "interrupted",
+            (
+                {
+                    "type": "response.created",
+                    "response": {"id": f"resp_{sentinel}"},
+                },
+            ),
+        )
+    return MockAction(
+        "/v1/responses",
+        "error",
+        {
+            "error": {
+                "message": "bounded loopback provider error",
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+                "content": sentinel,
+            }
+        },
+        status_code=429,
     )
 
 
@@ -1126,38 +1220,97 @@ def build_codex_command(*, workdir: Path, prompt: str, sandbox: str) -> list[str
     ]
 
 
+def _private_temp_directory() -> Path:
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def prepare_private_codex_workspace(*, gateway_port: int) -> PrivateCodexWorkspace:
+    """Create and verify one credential-free private profile/workspace tree."""
+
+    if isinstance(gateway_port, bool) or not isinstance(gateway_port, int):
+        raise VerificationError(SAFE_STAGE_ERROR)
+    if not 1 <= gateway_port <= 65535:
+        raise VerificationError(SAFE_STAGE_ERROR)
+    temp_directory = _private_temp_directory()
+    root = Path(tempfile.mkdtemp(prefix="slaif-oap011-codex-", dir=temp_directory)).resolve()
+    codex_home = root / "codex-home"
+    workspace = root / "workspace"
+    root.chmod(0o700)
+    codex_home.mkdir(mode=0o700)
+    workspace.mkdir(mode=0o700)
+    artifacts = render_codex_profile(f"http://127.0.0.1:{gateway_port}/v1")
+    base_config = codex_home / "config.toml"
+    profile_config = codex_home / "slaif.config.toml"
+    base_config.write_text(artifacts.base_config_toml, encoding="utf-8")
+    profile_config.write_text(artifacts.profile_config_toml, encoding="utf-8")
+    base_config.chmod(0o600)
+    profile_config.chmod(0o600)
+    prepared = PrivateCodexWorkspace(
+        root=root,
+        codex_home=codex_home,
+        workspace=workspace,
+        profile_files=(base_config, profile_config),
+    )
+    _verify_private_workspace_modes(prepared)
+    return prepared
+
+
+def _verify_private_workspace_modes(prepared: PrivateCodexWorkspace) -> None:
+    expected_directories = (prepared.root, prepared.codex_home, prepared.workspace)
+    if any(stat.S_IMODE(path.stat().st_mode) != 0o700 for path in expected_directories):
+        raise VerificationError(SAFE_STAGE_ERROR)
+    if any(stat.S_IMODE(path.stat().st_mode) != 0o600 for path in prepared.profile_files):
+        raise VerificationError(SAFE_STAGE_ERROR)
+    if any(path.parent != prepared.codex_home for path in prepared.profile_files):
+        raise VerificationError(SAFE_STAGE_ERROR)
+
+
+def _run_prepared_codex(
+    *,
+    prepared: PrivateCodexWorkspace,
+    gateway_key: str,
+    prompt: str,
+    sandbox: str,
+) -> subprocess.CompletedProcess[bytes]:
+    """Verify modes immediately before starting the bounded Codex child."""
+
+    _verify_private_workspace_modes(prepared)
+    try:
+        result = subprocess.run(
+            build_codex_command(
+                workdir=prepared.workspace,
+                prompt=prompt,
+                sandbox=sandbox,
+            ),
+            check=False,
+            capture_output=True,
+            env=_profile_environment(prepared.codex_home, gateway_key),
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise VerificationError(SAFE_STAGE_ERROR) from exc
+    if len(result.stdout) > MAX_CODEX_OUTPUT_BYTES or len(result.stderr) > MAX_CODEX_OUTPUT_BYTES:
+        raise VerificationError(SAFE_STAGE_ERROR)
+    return result
+
+
 def run_codex(
     *, gateway_port: int, gateway_key: str, prompt: str, sandbox: str
 ) -> tuple[subprocess.CompletedProcess[bytes], Path, Path]:
     """Run one actual pinned Codex child in private profile/workspace roots."""
 
-    root = Path(tempfile.mkdtemp(prefix="slaif-oap011-codex-"))
-    codex_home = root / "codex-home"
-    workspace = root / "workspace"
-    codex_home.mkdir(mode=0o700)
-    workspace.mkdir(mode=0o700)
-    artifacts = render_codex_profile(f"http://127.0.0.1:{gateway_port}/v1")
-    (codex_home / "config.toml").write_text(artifacts.base_config_toml, encoding="utf-8")
-    (codex_home / "slaif.config.toml").write_text(artifacts.profile_config_toml, encoding="utf-8")
-    (codex_home / "config.toml").chmod(0o600)
-    (codex_home / "slaif.config.toml").chmod(0o600)
-    (codex_home / "config.toml").chmod(0o600)
-    (codex_home / "slaif.config.toml").chmod(0o600)
+    prepared = prepare_private_codex_workspace(gateway_port=gateway_port)
     try:
-        result = subprocess.run(
-            build_codex_command(workdir=workspace, prompt=prompt, sandbox=sandbox),
-            check=False,
-            capture_output=True,
-            env=_profile_environment(codex_home, gateway_key),
-            timeout=120,
+        result = _run_prepared_codex(
+            prepared=prepared,
+            gateway_key=gateway_key,
+            prompt=prompt,
+            sandbox=sandbox,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        _remove_private_root(root)
-        raise VerificationError(SAFE_STAGE_ERROR) from exc
-    if len(result.stdout) > MAX_CODEX_OUTPUT_BYTES or len(result.stderr) > MAX_CODEX_OUTPUT_BYTES:
-        _remove_private_root(root)
-        raise VerificationError(SAFE_STAGE_ERROR)
-    return result, workspace, root
+    except Exception:
+        _remove_private_root(prepared.root)
+        raise
+    return result, prepared.workspace, prepared.root
 
 
 def _remove_private_root(root: Path) -> None:
@@ -1165,22 +1318,90 @@ def _remove_private_root(root: Path) -> None:
 
     import shutil
 
-    if not root.name.startswith("slaif-oap011-codex-") or root.parent != Path("/tmp"):
+    try:
+        resolved = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise VerificationError(SAFE_STAGE_ERROR) from exc
+    if (
+        not resolved.is_dir()
+        or not resolved.name.startswith("slaif-oap011-codex-")
+        or resolved.parent != _private_temp_directory()
+    ):
         raise VerificationError(SAFE_STAGE_ERROR)
-    shutil.rmtree(root)
+    shutil.rmtree(resolved)
 
 
-def _codex_completed(result: subprocess.CompletedProcess[bytes]) -> bool:
+def _structured_codex_events(
+    result: subprocess.CompletedProcess[bytes],
+) -> tuple[dict[str, object], ...] | None:
     if result.returncode != 0:
-        return False
+        return None
+    events: list[dict[str, object]] = []
     for line in result.stdout.splitlines():
         try:
             event = json.loads(line)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if isinstance(event, dict) and event.get("type") == "turn.completed":
-            return True
-    return False
+            return None
+        if not isinstance(event, dict):
+            return None
+        events.append(event)
+    return tuple(events) if events else None
+
+
+def _codex_completed(result: subprocess.CompletedProcess[bytes]) -> bool:
+    events = _structured_codex_events(result)
+    return events is not None and any(event.get("type") == "turn.completed" for event in events)
+
+
+def _codex_final_marker_seen(result: subprocess.CompletedProcess[bytes], *, marker: str) -> bool:
+    events = _structured_codex_events(result)
+    if events is None:
+        return False
+    return any(
+        event.get("type") == "item.completed"
+        and isinstance(event.get("item"), Mapping)
+        and event["item"].get("type") == "agent_message"
+        and event["item"].get("text") == marker
+        for event in events
+    )
+
+
+def _validated_text_leaves(value: object) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        return (value,)
+    if value is None or isinstance(value, (bool, int, float)):
+        return ()
+    if isinstance(value, list):
+        collected: list[str] = []
+        for item in value:
+            leaves = _validated_text_leaves(item)
+            if leaves is None:
+                return None
+            collected.extend(leaves)
+        return tuple(collected)
+    if isinstance(value, Mapping) and all(isinstance(key, str) for key in value):
+        collected = []
+        for item in value.values():
+            leaves = _validated_text_leaves(item)
+            if leaves is None:
+                return None
+            collected.extend(leaves)
+        return tuple(collected)
+    return None
+
+
+def _linked_custom_tool_output_contains(
+    facts: UpstreamRequestFacts, *, call_id: str, sentinel: str
+) -> bool:
+    matches = [
+        item
+        for item in facts.input_items
+        if item.get("type") == "custom_tool_call_output" and item.get("call_id") == call_id
+    ]
+    if len(matches) != 1 or "output" not in matches[0]:
+        return False
+    leaves = _validated_text_leaves(matches[0]["output"])
+    return leaves is not None and any(sentinel in text for text in leaves)
 
 
 def _contains_replay_item(
@@ -1219,6 +1440,8 @@ async def load_accounting(database_url: str, gateway_key_id: uuid.UUID) -> KeyAc
                 ).scalars()
             )
             return KeyAccountingFacts(
+                cost_used_eur=key.cost_used_eur,
+                cost_reserved_eur=key.cost_reserved_eur,
                 requests_used=int(key.requests_used_total),
                 tokens_used=int(key.tokens_used_total),
                 requests_reserved=int(key.requests_reserved_total),
@@ -1228,6 +1451,10 @@ async def load_accounting(database_url: str, gateway_key_id: uuid.UUID) -> KeyAc
                 ledger_statuses=tuple(row.accounting_status for row in ledgers),
                 ledger_successes=tuple(row.success for row in ledgers),
                 ledger_error_types=tuple(row.error_type for row in ledgers),
+                ledger_http_statuses=tuple(row.http_status for row in ledgers),
+                ledger_actual_costs_eur=tuple(row.actual_cost_eur for row in ledgers),
+                ledger_actual_costs_native=tuple(row.actual_cost_native for row in ledgers),
+                ledger_native_currencies=tuple(row.native_currency for row in ledgers),
                 usage=tuple(
                     (
                         int(row.input_tokens),
@@ -1335,44 +1562,38 @@ def _run_tool_scenario(
     gateway_port: int,
     key: CreatedGatewayKey,
     sentinels: list[str],
-) -> tuple[bool, bool, bool, bool, bool, tuple[UpstreamRequestFacts, ...]]:
+) -> tuple[bool, bool, bool, bool, bool, bool, tuple[UpstreamRequestFacts, ...]]:
     marker_content = "marker-" + secrets.token_hex(24)
+    exec_sentinel = "exec-" + secrets.token_hex(24)
     final_text = "final-" + secrets.token_hex(24)
     ciphertext_source = "reasoning-" + secrets.token_hex(24)
     encrypted = base64.b64encode(ciphertext_source.encode()).decode()
     prompt = "bounded-tool-scenario-" + secrets.token_hex(24)
-    root = Path(tempfile.mkdtemp(prefix="slaif-oap011-codex-"))
-    codex_home = root / "codex-home"
-    workspace = root / "workspace"
-    codex_home.mkdir(mode=0o700)
-    workspace.mkdir(mode=0o700)
-    artifacts = render_codex_profile(f"http://127.0.0.1:{gateway_port}/v1")
-    (codex_home / "config.toml").write_text(artifacts.base_config_toml, encoding="utf-8")
-    (codex_home / "slaif.config.toml").write_text(artifacts.profile_config_toml, encoding="utf-8")
+    prepared = prepare_private_codex_workspace(gateway_port=gateway_port)
     start = mock.queue(
         build_tool_scenario_actions(
-            workspace=workspace,
+            workspace=prepared.workspace,
             marker_content=marker_content,
+            exec_sentinel=exec_sentinel,
             encrypted_content=encrypted,
             final_text=final_text,
         )
     )
     try:
-        result = subprocess.run(
-            build_codex_command(workdir=workspace, prompt=prompt, sandbox="workspace-write"),
-            check=False,
-            capture_output=True,
-            env=_profile_environment(codex_home, key.plaintext_key),
-            timeout=120,
+        result = _run_prepared_codex(
+            prepared=prepared,
+            gateway_key=key.plaintext_key,
+            prompt=prompt,
+            sandbox="workspace-write",
         )
-        if (
-            len(result.stdout) > MAX_CODEX_OUTPUT_BYTES
-            or len(result.stderr) > MAX_CODEX_OUTPUT_BYTES
-        ):
-            raise VerificationError(SAFE_STAGE_ERROR)
         facts = mock.facts_since(start, 3)
-        marker_matched = (workspace / "oap011-marker.txt").read_text(encoding="utf-8") == (
-            marker_content + "\n"
+        marker_matched = (prepared.workspace / "oap011-marker.txt").read_text(
+            encoding="utf-8"
+        ) == marker_content + "\n"
+        exec_output_seen = _linked_custom_tool_output_contains(
+            facts[1],
+            call_id="call_oap011_exec",
+            sentinel=exec_sentinel,
         )
         replay_seen = any(
             _contains_replay_item(fact, kind="custom_tool_call_output") for fact in facts[1:]
@@ -1381,10 +1602,19 @@ def _run_tool_scenario(
             facts[2], kind="reasoning", item_id="rs_oap011_tool_replay"
         )
         sentinels.extend(
-            [prompt, marker_content, final_text, ciphertext_source, encrypted, key.plaintext_key]
+            [
+                prompt,
+                marker_content,
+                exec_sentinel,
+                final_text,
+                ciphertext_source,
+                encrypted,
+                key.plaintext_key,
+            ]
         )
         return (
-            _codex_completed(result),
+            _codex_completed(result) and _codex_final_marker_seen(result, marker=final_text),
+            exec_output_seen,
             marker_matched,
             replay_seen,
             reasoning_seen,
@@ -1392,7 +1622,7 @@ def _run_tool_scenario(
             facts,
         )
     finally:
-        _remove_private_root(root)
+        _remove_private_root(prepared.root)
 
 
 def _run_context_scenario(
@@ -1487,25 +1717,10 @@ def _run_failure_scenario(
     prompt = (
         "bounded-interruption-" if interrupted else "bounded-provider-error-"
     ) + secrets.token_hex(24)
-    if interrupted:
-        action = MockAction(
-            "/v1/responses",
-            "interrupted",
-            ({"type": "response.created", "response": {"id": "resp_oap011_interrupted"}},),
-        )
-    else:
-        action = MockAction(
-            "/v1/responses",
-            "error",
-            {
-                "error": {
-                    "message": "bounded loopback provider error",
-                    "type": "rate_limit_error",
-                    "code": "rate_limit_exceeded",
-                }
-            },
-            status_code=429,
-        )
+    failure_sentinel = (
+        "interruption-body-" if interrupted else "provider-error-body-"
+    ) + secrets.token_hex(24)
+    action = build_failure_action(interrupted=interrupted, sentinel=failure_sentinel)
     start = mock.queue((action,))
     result, _workspace, root = run_codex(
         gateway_port=gateway_port,
@@ -1515,10 +1730,101 @@ def _run_failure_scenario(
     )
     try:
         facts = mock.facts_since(start, 1)
-        sentinels.extend([prompt, key.plaintext_key])
+        sentinels.extend([prompt, failure_sentinel, key.plaintext_key])
         return result.returncode != 0, facts
     finally:
         _remove_private_root(root)
+
+
+def _db_money_equals(value: Decimal | None, expected: Decimal) -> bool:
+    return (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and value.as_tuple().exponent == -9
+        and value == expected.quantize(MONEY_SCALE)
+    )
+
+
+def _exact_decimal_mapping(value: object, expected: Mapping[str, Decimal]) -> bool:
+    if not isinstance(value, Mapping) or set(value) != set(COMPONENT_COST_KEYS):
+        return False
+    actual: dict[str, Decimal] = {}
+    for key in COMPONENT_COST_KEYS:
+        raw = value.get(key)
+        if not isinstance(raw, str):
+            return False
+        try:
+            parsed = Decimal(raw)
+        except Exception:
+            return False
+        if not parsed.is_finite():
+            return False
+        actual[key] = parsed
+    return actual == dict(expected)
+
+
+def _exact_integer_mapping(value: object, expected: Mapping[str, int]) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == set(COMPONENT_TOKEN_KEYS)
+        and all(
+            not isinstance(value.get(key), bool)
+            and isinstance(value.get(key), int)
+            and value.get(key) == expected[key]
+            for key in COMPONENT_TOKEN_KEYS
+        )
+    )
+
+
+def _successful_money_matches(
+    facts: KeyAccountingFacts,
+    *,
+    key_total: Decimal,
+    ledger_totals: Sequence[Decimal],
+    component_costs: Sequence[Mapping[str, Decimal]],
+    component_tokens: Sequence[Mapping[str, int]],
+) -> bool:
+    return (
+        _db_money_equals(facts.cost_used_eur, key_total)
+        and _db_money_equals(facts.cost_reserved_eur, Decimal("0"))
+        and len(facts.ledger_actual_costs_eur) == len(ledger_totals)
+        and len(facts.ledger_actual_costs_native) == len(ledger_totals)
+        and len(facts.ledger_native_currencies) == len(ledger_totals)
+        and len(facts.component_metadata) == len(ledger_totals)
+        and all(
+            _db_money_equals(actual, expected)
+            for actual, expected in zip(
+                facts.ledger_actual_costs_eur,
+                ledger_totals,
+                strict=True,
+            )
+        )
+        and all(
+            _db_money_equals(actual, expected)
+            for actual, expected in zip(
+                facts.ledger_actual_costs_native,
+                ledger_totals,
+                strict=True,
+            )
+        )
+        and facts.ledger_native_currencies == ("EUR",) * len(ledger_totals)
+        and all(
+            _exact_decimal_mapping(metadata.get("component_costs_native"), expected)
+            for metadata, expected in zip(
+                facts.component_metadata,
+                component_costs,
+                strict=True,
+            )
+        )
+        and all(
+            _exact_integer_mapping(metadata.get("component_token_counts"), expected)
+            for metadata, expected in zip(
+                facts.component_metadata,
+                component_tokens,
+                strict=True,
+            )
+        )
+    )
 
 
 def _validate_accounting(
@@ -1529,11 +1835,37 @@ def _validate_accounting(
     interruption: KeyAccountingFacts,
     provider_error: KeyAccountingFacts,
 ) -> tuple[bool, bool, bool, bool]:
+    ordinary_costs = {
+        "input_uncached": Decimal("0.000001"),
+        "input_cached": Decimal("0"),
+        "input_cache_write": Decimal("0"),
+        "output_non_reasoning": Decimal("0.000002"),
+        "output_reasoning": Decimal("0"),
+        "output_audio": Decimal("0"),
+    }
+    ordinary_tokens = {
+        "input_uncached_tokens": 1,
+        "input_cached_tokens": 0,
+        "output_non_reasoning_tokens": 1,
+        "output_reasoning_tokens": 0,
+        "long_context_tier_applied": 0,
+        "total_tokens": 2,
+    }
     tool_ok = (
         tool.requests_used == 3
         and tool.tokens_used == 6
         and tool.reservation_statuses == ("finalized", "finalized", "finalized")
         and tool.ledger_statuses == ("finalized", "finalized", "finalized")
+        and tool.ledger_successes == (True, True, True)
+        and tool.ledger_error_types == (None, None, None)
+        and tool.ledger_http_statuses == (200, 200, 200)
+        and _successful_money_matches(
+            tool,
+            key_total=Decimal("0.000009000"),
+            ledger_totals=(Decimal("0.000003000"),) * 3,
+            component_costs=(ordinary_costs,) * 3,
+            component_tokens=(ordinary_tokens,) * 3,
+        )
     )
     context_expected = (
         (600_000, 200_000, 10, 4, 600_010),
@@ -1546,13 +1878,65 @@ def _validate_accounting(
         and context.usage == context_expected
         and context.reservation_statuses == ("finalized", "finalized", "finalized")
         and context.ledger_statuses == ("finalized", "finalized", "finalized")
+        and context.ledger_successes == (True, True, True)
+        and context.ledger_error_types == (None, None, None)
+        and context.ledger_http_statuses == (200, 200, 200)
     )
     component_counts = [
         metadata.get("component_token_counts") for metadata in context.component_metadata
     ]
-    component_costs = [
-        metadata.get("component_costs_native") for metadata in context.component_metadata
-    ]
+    expected_context_costs = (
+        {
+            "input_uncached": Decimal("0.6"),
+            "input_cached": Decimal("0.2"),
+            "input_cache_write": Decimal("0.25"),
+            "output_non_reasoning": Decimal("0.000018"),
+            "output_reasoning": Decimal("0.000012"),
+            "output_audio": Decimal("0"),
+        },
+        {
+            "input_uncached": Decimal("0.122"),
+            "input_cached": Decimal("0.05"),
+            "input_cache_write": Decimal("0.0625"),
+            "output_non_reasoning": Decimal("0.000002"),
+            "output_reasoning": Decimal("0.000002"),
+            "output_audio": Decimal("0"),
+        },
+        {
+            "input_uncached": Decimal("0.000004"),
+            "input_cached": Decimal("0.0000025"),
+            "input_cache_write": Decimal("0.00000125"),
+            "output_non_reasoning": Decimal("0.000002"),
+            "output_reasoning": Decimal("0.000002"),
+            "output_audio": Decimal("0"),
+        },
+    )
+    expected_context_tokens = (
+        {
+            "input_uncached_tokens": 300_000,
+            "input_cached_tokens": 200_000,
+            "output_non_reasoning_tokens": 6,
+            "output_reasoning_tokens": 4,
+            "long_context_tier_applied": 1,
+            "total_tokens": 600_010,
+        },
+        {
+            "input_uncached_tokens": 122_000,
+            "input_cached_tokens": 100_000,
+            "output_non_reasoning_tokens": 1,
+            "output_reasoning_tokens": 1,
+            "long_context_tier_applied": 0,
+            "total_tokens": 272_002,
+        },
+        {
+            "input_uncached_tokens": 4,
+            "input_cached_tokens": 5,
+            "output_non_reasoning_tokens": 1,
+            "output_reasoning_tokens": 1,
+            "long_context_tier_applied": 0,
+            "total_tokens": 12,
+        },
+    )
     tiers = [
         component.get("long_context_tier_applied") if isinstance(component, Mapping) else None
         for component in component_counts
@@ -1571,26 +1955,60 @@ def _validate_accounting(
             strict=True,
         )
     ]
-    cache_ok = derived_cache_write == [100_000, 50_000, 1] and all(
-        isinstance(component, Mapping)
-        and Decimal(str(component.get("input_cache_write", "-1"))) > 0
-        for component in component_costs
+    context_money_ok = _successful_money_matches(
+        context,
+        key_total=Decimal("1.284545750"),
+        ledger_totals=(
+            Decimal("1.050030000"),
+            Decimal("0.234504000"),
+            Decimal("0.000011750"),
+        ),
+        component_costs=expected_context_costs,
+        component_tokens=expected_context_tokens,
     )
+    cache_ok = derived_cache_write == [100_000, 50_000, 1] and context_money_ok
     quota_ok = (
         quota.requests_used == 1
         and quota.tokens_used == 2
         and quota.pending_reservations == 0
         and quota.reservation_statuses == ("finalized",)
         and quota.ledger_statuses == ("finalized",)
+        and quota.ledger_successes == (True,)
+        and quota.ledger_error_types == (None,)
+        and quota.ledger_http_statuses == (200,)
+        and _successful_money_matches(
+            quota,
+            key_total=Decimal("0.000003000"),
+            ledger_totals=(Decimal("0.000003000"),),
+            component_costs=(ordinary_costs,),
+            component_tokens=(ordinary_tokens,),
+        )
     )
-    failure_ok = all(
+    failure_common = all(
         facts.requests_used == 0
         and facts.tokens_used == 0
         and facts.pending_reservations == 0
         and facts.reservation_statuses == ("released",)
         and facts.ledger_statuses == ("failed",)
         and facts.ledger_successes == (False,)
+        and _db_money_equals(facts.cost_used_eur, Decimal("0"))
+        and _db_money_equals(facts.cost_reserved_eur, Decimal("0"))
+        and all(_db_money_equals(value, Decimal("0")) for value in facts.ledger_actual_costs_eur)
+        and all(_db_money_equals(value, Decimal("0")) for value in facts.ledger_actual_costs_native)
+        and facts.ledger_native_currencies == ("EUR",)
+        and all(
+            metadata.get("component_costs_native") is None
+            and metadata.get("component_token_counts") is None
+            for metadata in facts.component_metadata
+        )
         for facts in (interruption, provider_error)
+    )
+    failure_ok = (
+        failure_common
+        and interruption.ledger_error_types == ("provider_request_error",)
+        and interruption.ledger_http_statuses == (None,)
+        and provider_error.ledger_error_types == ("provider_http_error",)
+        and provider_error.ledger_http_statuses == (429,)
     )
     overall = (
         all(
@@ -1599,6 +2017,7 @@ def _validate_accounting(
         )
         and tool_ok
         and context_ok
+        and context_money_ok
         and quota_ok
         and failure_ok
     )
@@ -1622,7 +2041,7 @@ def verify(target: SafeDatabaseTarget) -> VerificationFacts:
     with safe_stage("gateway_start_failed"):
         mock.start()
     sentinels: list[str] = [DUMMY_UPSTREAM_KEY]
-    private_roots_before = set(Path("/tmp").glob("slaif-oap011-codex-*"))
+    private_roots_before = set(_private_temp_directory().glob("slaif-oap011-codex-*"))
     prior_upstream = os.environ.get(UPSTREAM_KEY_ENV)
     os.environ[UPSTREAM_KEY_ENV] = DUMMY_UPSTREAM_KEY
     try:
@@ -1644,7 +2063,8 @@ def verify(target: SafeDatabaseTarget) -> VerificationFacts:
                 try:
                     with safe_stage("tool_scenario_failed"):
                         (
-                            tool_completed,
+                            final_text_seen,
+                            exec_output_seen,
                             marker_matched,
                             replay_seen,
                             reasoning_seen,
@@ -1720,10 +2140,10 @@ def verify(target: SafeDatabaseTarget) -> VerificationFacts:
             *interruption_requests,
             *error_requests,
         )
-        private_roots_after = set(Path("/tmp").glob("slaif-oap011-codex-*"))
+        private_roots_after = set(_private_temp_directory().glob("slaif-oap011-codex-*"))
         facts.scenario_count = 5
-        facts.text_completion_seen = tool_completed
-        facts.local_exec_seen = tool_completed and len(tool_requests) == 3
+        facts.text_completion_seen = final_text_seen
+        facts.local_exec_seen = exec_output_seen
         facts.local_edit_seen = marker_matched
         facts.workspace_marker_matched = marker_matched
         facts.multi_round_replay_seen = replay_seen

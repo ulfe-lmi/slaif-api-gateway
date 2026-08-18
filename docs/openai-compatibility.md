@@ -19,10 +19,14 @@ The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenA
 
 The pinned Codex 0.147.0 / `gpt-5.6-sol` profile has a local-only gateway E2E
 qualification using disposable PostgreSQL, private Redis, and a
-numeric-loopback scripted provider. Its prepared real-OpenAI pilot was not run,
-so this evidence does not change `real_provider_e2e=false` or authorize a real
-provider call. See [`codex-compatibility.md`](codex-compatibility.md) and the
-human-only [bounded pilot runbook](runbooks/codex-openai-pilot.md).
+numeric-loopback scripted provider. The local phase gate requires exact linked
+exec/final-output evidence, complete Decimal component/native/EUR accounting,
+unique interruption/provider-error privacy sentinels, strict canonical DB
+targeting, and verified private profile modes. Its prepared real-OpenAI pilot
+was not run, so this evidence does not change `real_provider_e2e=false` or
+authorize a real provider call. See
+[`codex-compatibility.md`](codex-compatibility.md) and the human-only
+[bounded pilot runbook](runbooks/codex-openai-pilot.md).
 
 ## Endpoint Support
 

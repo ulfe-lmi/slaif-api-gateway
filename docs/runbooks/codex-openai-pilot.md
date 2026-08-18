@@ -83,6 +83,28 @@ dead external proxies with a proxy exception only for the selected
 non-production gateway. Do not copy user auth, history, rules, memories,
 plugins, MCP configuration, or a repository `.codex` directory into it.
 
+For example, create the two private directories, set both to mode `0700`, and
+install the two reviewed credential-free profile documents there before
+continuing:
+
+```bash
+PILOT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/slaif-codex-pilot.XXXXXX")"
+export PILOT_WORKSPACE="$PILOT_ROOT/workspace"
+export CODEX_HOME="$PILOT_ROOT/codex-home"
+mkdir -m 0700 "$PILOT_WORKSPACE" "$CODEX_HOME"
+```
+
+The two profile files must already have been written by the reviewed
+credential-free `slaif-gateway codex profile` workflow before the invocation;
+do not paste either key into them. After writing them once, run:
+
+```bash
+chmod 0600 "$CODEX_HOME/config.toml" "$CODEX_HOME/slaif.config.toml"
+```
+
+Set the dead proxy variables and a `NO_PROXY` exception for only the exact
+reviewed non-production gateway host.
+
 Supply the freshly issued gateway key without putting it in shell history or
 argv:
 
@@ -113,6 +135,40 @@ SLAIF_CODEX_BOUNDED_PILOT, read that file, then reply with PILOT_OK. Do not use
 network access, Git, package managers, credentials, or any path outside this
 workspace.
 ```
+
+After the private profile, dead proxies, exact gateway-only proxy exception,
+and `OPENAI_API_KEY` environment variable are prepared, the complete copyable
+Codex invocation is:
+
+```bash
+/usr/bin/codex \
+  --ask-for-approval never \
+  --profile slaif \
+  exec \
+  --ephemeral \
+  --ignore-rules \
+  --json \
+  --skip-git-repo-check \
+  --sandbox workspace-write \
+  --cd "$PILOT_WORKSPACE" \
+  -c check_for_update_on_startup=false \
+  -c 'model_reasoning_effort="low"' \
+  -c 'model_verbosity="low"' \
+  -c model_providers.slaif.request_max_retries=0 \
+  -c model_providers.slaif.stream_max_retries=0 \
+  -c model_providers.slaif.stream_idle_timeout_ms=5000 \
+  'In this disposable workspace only, run pwd, create pilot-marker.txt containing SLAIF_CODEX_BOUNDED_PILOT, read that file, then reply with PILOT_OK. Do not use network access, Git, package managers, credentials, or any path outside this workspace.'
+PILOT_EXIT=$?
+```
+
+This command reads the client key only from `OPENAI_API_KEY`; neither client nor
+provider secret appears in argv or shell history. It does not enable search,
+network tools, hosted tools, MCP, or provider-side authorization. Require
+`PILOT_EXIT=0`, `pilot-marker.txt` to contain exactly
+`SLAIF_CODEX_BOUNDED_PILOT`, one final structured agent message exactly
+`PILOT_OK`, and a completed turn. Observe those facts live without retaining
+full Codex output. The gateway's safe counters must still prove that no more
+than four provider calls were admitted.
 
 Observe only the process exit status and expected marker/result. Do not capture
 raw HTTP, prompts, responses, tool arguments/results, reasoning, ciphertext,

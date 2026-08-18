@@ -787,20 +787,26 @@ by this verifier.
 
 The distinct unified local gateway verifier is manual and requires an
 explicitly disposable `TEST_DATABASE_URL` on `127.0.0.1`. It refuses ambient
-`DATABASE_URL` and all real-provider variables, starts its own loopback
-gateway/mock and private no-persistence Redis, and emits fixed facts only:
+`DATABASE_URL` and all real-provider variables. The URL must use exactly
+`postgresql+asyncpg`, an explicit simple user, explicit numeric-loopback TCP
+port, and one test/dev/local database name. Every query string (including
+socket/host/port/options overrides), fragment, implicit port, alternate scheme,
+and whitespace/control form is rejected. The verifier starts its own loopback
+gateway/mock and private no-persistence Redis and emits fixed facts only:
 
 ```bash
 unset DATABASE_URL OPENAI_API_KEY OPENAI_UPSTREAM_API_KEY OPENROUTER_API_KEY
 unset RUN_UPSTREAM_TESTS
-TEST_DATABASE_URL='postgresql+asyncpg://...@127.0.0.1/..._test_...' \
+TEST_DATABASE_URL='postgresql+asyncpg://USER:PASSWORD@127.0.0.1:5432/DISPOSABLE_TEST_DB' \
   .venv/bin/python scripts/verify_codex_gateway_e2e.py
 ```
 
-The database must be created empty and dropped by the operator as an exact
-validated target. This command is not a real-provider switch and must not be
-placed in pytest, CI, startup, packaging, Docker, or HPC automation. The later
-human-only provider procedure is
+The URL values shown are non-secret placeholders. Supply the actual dummy DSN
+privately without printing it or retaining it in shell history. The database
+must be created empty and dropped by the operator as an exact validated target.
+This command is not a real-provider switch and must not be placed in pytest,
+CI, startup, packaging, Docker, or HPC automation. The later human-only
+provider procedure is
 [`runbooks/codex-openai-pilot.md`](runbooks/codex-openai-pilot.md).
 
 Responses custom-tool settings cap local/client-side custom tool names,
