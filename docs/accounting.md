@@ -41,6 +41,14 @@ Core invariants:
   never envelope values. Size-capped `client_metadata` is validated and dropped
   before provider forwarding, so it is not provider-billed input. Provider
   final usage/cost remains authoritative.
+- Fully key-gated Codex create/compact history may contain pinned
+  `internal_chat_message_metadata_passthrough` only on message, reasoning,
+  function/custom call and output, or compaction items. A null or canonical JSON
+  object of at most 32,768 bytes is validated and discarded before canonical
+  input estimation. It contributes zero model-input tokens/bytes and never
+  reaches provider input, replay/HMAC material, accounting metadata, safe
+  evidence, logs, audits, metrics, or exports. Ordinary, partially gated,
+  additional-tools, hosted, and unknown item paths remain rejected.
 - Separately gated Codex client-tool declarations count their canonical
   namespace/tool containers, descriptions, function schemas, `exec` grammar,
   and bounded string `tool_choice` as provider/model request input. Pinned

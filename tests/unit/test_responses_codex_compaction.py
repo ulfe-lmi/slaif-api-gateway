@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from types import SimpleNamespace
 import uuid
@@ -16,9 +17,11 @@ from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.services import responses_gateway
 from slaif_gateway.services.codex_replay_service import CodexReplayReferenceError
 from slaif_gateway.services.responses_gateway import (
+    _build_safe_responses_compact_upstream_body,
     _validate_compact_response,
     handle_response_compact,
 )
+from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_replay_request_candidates,
@@ -32,6 +35,10 @@ from scripts.verify_codex_context_compaction import (
     VerificationError,
     _validate_captured_compact_policy,
 )
+
+
+_INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
+_PRIVATE_METADATA_CANARY = "PRIVATE-EXECUTED-TOOL-ARGUMENT-CANARY"
 
 
 def _compact_body() -> dict[str, object]:
@@ -118,6 +125,77 @@ def _pinned_compact_additional_tools(description_bytes: int) -> dict[str, object
     }
 
 
+def _fully_gated_history_body(
+    *,
+    include_metadata: bool,
+    metadata: object = None,
+) -> dict[str, object]:
+    items: list[dict[str, object]] = [
+        _pinned_compact_additional_tools(64),
+        {"role": "user", "content": "omitted message type"},
+        {"type": "message", "role": "assistant", "content": "typed message"},
+        {
+            "type": "reasoning",
+            "id": "rs_metadata",
+            "summary": [{"type": "summary_text", "text": "bounded summary"}],
+            "encrypted_content": "opaque-reasoning",
+        },
+        {
+            "type": "function_call",
+            "id": "fc_metadata",
+            "name": "wait",
+            "namespace": "functions",
+            "arguments": "{}",
+            "call_id": "call_function_metadata",
+            "status": "completed",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_function_metadata",
+            "output": "bounded result",
+        },
+        {
+            "type": "custom_tool_call",
+            "id": "ctc_metadata",
+            "name": "exec",
+            "namespace": "functions",
+            "input": "bounded",
+            "call_id": "call_custom_metadata",
+            "status": "completed",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "call_id": "call_custom_metadata",
+            "output": [{"type": "input_text", "text": "bounded result"}],
+        },
+        {
+            "type": "compaction",
+            "id": "cmp_metadata",
+            "encrypted_content": "opaque-compaction",
+        },
+    ]
+    if include_metadata:
+        for item in items[1:]:
+            item[_INTERNAL_CHAT_METADATA_FIELD] = copy.deepcopy(metadata)
+    return {
+        "model": "gpt-5.6-sol",
+        "input": items,
+        "parallel_tool_calls": False,
+        "reasoning": {"effort": "high", "context": "all_turns"},
+        "prompt_cache_key": "safe-session-key",
+        "text": {"verbosity": "medium"},
+    }
+
+
+def _metadata_object_with_canonical_bytes(size: int) -> dict[str, str]:
+    empty = {"payload": ""}
+    payload_bytes = size - len(canonical_json_bytes(empty))
+    assert payload_bytes >= 0
+    value = {"payload": "x" * payload_bytes}
+    assert len(canonical_json_bytes(value)) == size
+    return value
+
+
 def test_codex_compact_requires_independent_key_gate() -> None:
     with pytest.raises(Exception) as exc_info:
         ResponsesRequestPolicy(Settings()).apply_compact(_compact_body())
@@ -158,6 +236,273 @@ def test_codex_compact_accepts_pinned_18_137_byte_child_description() -> None:
     assert len(description.encode("utf-8")) == 18_137
     assert result.estimated_non_message_input_bytes >= 18_137
     assert "input[].additional_tools" in result.estimated_non_message_input_fields
+
+
+def test_fully_gated_codex_history_drops_internal_chat_metadata_from_every_surface() -> None:
+    metadata = {
+        "turn_id": "private-turn",
+        "authorization": "discarded-not-authority",
+        "executed_tool_calls": [
+            {
+                "name": "exec",
+                "arguments": {"private": _PRIVATE_METADATA_CANARY},
+            }
+        ],
+    }
+    body = _fully_gated_history_body(include_metadata=True, metadata=metadata)
+    original = copy.deepcopy(body)
+    clean_body = _fully_gated_history_body(include_metadata=False)
+
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        body,
+        allow_codex_compaction=True,
+    )
+    clean_result = ResponsesRequestPolicy(Settings()).apply_compact(
+        clean_body,
+        allow_codex_compaction=True,
+    )
+
+    assert body == original
+    assert result.effective_body == clean_result.effective_body
+    assert result.estimated_input_tokens == clean_result.estimated_input_tokens
+    assert (
+        result.estimated_non_message_input_tokens
+        == clean_result.estimated_non_message_input_tokens
+    )
+    assert result.estimated_non_message_input_bytes == clean_result.estimated_non_message_input_bytes
+    assert result.estimated_non_message_input_fields == clean_result.estimated_non_message_input_fields
+    canonical_items = result.effective_body["input"]
+    assert isinstance(canonical_items, list)
+    assert all(
+        _INTERNAL_CHAT_METADATA_FIELD not in item
+        for item in canonical_items
+        if isinstance(item, dict)
+    )
+
+    upstream = _build_safe_responses_compact_upstream_body(
+        policy_result=result,
+        upstream_model="gpt-5.6-sol",
+    )
+    clean_upstream = _build_safe_responses_compact_upstream_body(
+        policy_result=clean_result,
+        upstream_model="gpt-5.6-sol",
+    )
+    assert upstream == clean_upstream
+    assert _INTERNAL_CHAT_METADATA_FIELD not in repr(upstream)
+
+    candidates = codex_replay_request_candidates(result.effective_body)
+    clean_candidates = codex_replay_request_candidates(clean_result.effective_body)
+    assert candidates == clean_candidates
+    assert all(not hasattr(candidate, _INTERNAL_CHAT_METADATA_FIELD) for candidate in candidates)
+    safe_evidence = repr(
+        (
+            result.estimated_input_tokens,
+            result.estimated_non_message_input_tokens,
+            result.estimated_non_message_input_bytes,
+            result.estimated_non_message_input_fields,
+            candidates,
+        )
+    )
+    assert _PRIVATE_METADATA_CANARY not in safe_evidence
+
+
+def test_internal_chat_metadata_canonical_object_cap_is_exact_and_zero_metered() -> None:
+    at_limit = _compact_body()
+    at_limit_items = at_limit["input"]
+    assert isinstance(at_limit_items, list)
+    assert isinstance(at_limit_items[0], dict)
+    at_limit_items[0][_INTERNAL_CHAT_METADATA_FIELD] = _metadata_object_with_canonical_bytes(32_768)
+    clean_result = ResponsesRequestPolicy(Settings()).apply_compact(
+        _compact_body(),
+        allow_codex_compaction=True,
+    )
+
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        at_limit,
+        allow_codex_compaction=True,
+    )
+    assert result.effective_body == clean_result.effective_body
+    assert result.estimated_input_tokens == clean_result.estimated_input_tokens
+    assert result.estimated_non_message_input_bytes == clean_result.estimated_non_message_input_bytes
+
+    over_limit = _compact_body()
+    over_limit_items = over_limit["input"]
+    assert isinstance(over_limit_items, list)
+    assert isinstance(over_limit_items[0], dict)
+    over_limit_items[0][_INTERNAL_CHAT_METADATA_FIELD] = _metadata_object_with_canonical_bytes(
+        32_769
+    )
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            over_limit,
+            allow_codex_compaction=True,
+        )
+    assert getattr(exc_info.value, "error_code", None) == (
+        "responses_codex_internal_chat_metadata_invalid"
+    )
+    assert getattr(exc_info.value, "param", None) == (
+        "input[0].internal_chat_message_metadata_passthrough"
+    )
+
+
+def test_internal_chat_metadata_null_passes_and_drops() -> None:
+    body = _compact_body()
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    assert isinstance(input_items[0], dict)
+    input_items[0][_INTERNAL_CHAT_METADATA_FIELD] = None
+
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        body,
+        allow_codex_compaction=True,
+    )
+    assert _INTERNAL_CHAT_METADATA_FIELD not in result.effective_body["input"][0]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        _PRIVATE_METADATA_CANARY,
+        [],
+        7,
+        True,
+        {"value": object()},
+    ],
+    ids=["string", "list", "integer", "boolean", "non-json-object"],
+)
+def test_internal_chat_metadata_rejects_non_object_or_non_json_without_echo(
+    metadata: object,
+) -> None:
+    body = _compact_body()
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    assert isinstance(input_items[0], dict)
+    input_items[0][_INTERNAL_CHAT_METADATA_FIELD] = metadata
+
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            body,
+            allow_codex_compaction=True,
+        )
+    assert getattr(exc_info.value, "error_code", None) == (
+        "responses_codex_internal_chat_metadata_invalid"
+    )
+    assert getattr(exc_info.value, "param", None) == (
+        "input[0].internal_chat_message_metadata_passthrough"
+    )
+    assert _PRIVATE_METADATA_CANARY not in str(exc_info.value)
+    assert _PRIVATE_METADATA_CANARY not in getattr(exc_info.value, "safe_message", "")
+
+
+@pytest.mark.parametrize(
+    "missing_gate",
+    [
+        "allow_codex_request_envelope",
+        "allow_codex_client_tools",
+        "allow_codex_streaming_tool_events",
+        "allow_codex_encrypted_reasoning_replay",
+        "allow_codex_compaction_replay",
+    ],
+)
+def test_internal_chat_metadata_requires_every_codex_gate(missing_gate: str) -> None:
+    body = {
+        "model": "gpt-5.6-sol",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "bounded",
+                _INTERNAL_CHAT_METADATA_FIELD: {},
+            }
+        ],
+        "max_output_tokens": 16,
+    }
+    gates = {
+        "allow_codex_request_envelope": True,
+        "allow_codex_client_tools": True,
+        "allow_codex_streaming_tool_events": True,
+        "allow_codex_encrypted_reasoning_replay": True,
+        "allow_codex_compaction_replay": True,
+    }
+    gates[missing_gate] = False
+
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(body, **gates)
+    assert getattr(exc_info.value, "error_code", None) == "responses_input_item_invalid"
+    assert getattr(exc_info.value, "param", None) == (
+        "input[0].internal_chat_message_metadata_passthrough"
+    )
+
+
+def test_internal_chat_metadata_ordinary_request_remains_strict() -> None:
+    body = {
+        "model": "ordinary-model",
+        "input": [
+            {
+                "role": "user",
+                "content": "bounded",
+                _INTERNAL_CHAT_METADATA_FIELD: {},
+            }
+        ],
+        "max_output_tokens": 16,
+    }
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(body)
+    assert getattr(exc_info.value, "error_code", None) == "responses_input_item_invalid"
+    assert getattr(exc_info.value, "param", None) == (
+        "input[0].internal_chat_message_metadata_passthrough"
+    )
+
+
+def test_internal_chat_metadata_additional_tools_item_remains_strict() -> None:
+    body = _compact_body()
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    declarations = _pinned_compact_additional_tools(64)
+    declarations[_INTERNAL_CHAT_METADATA_FIELD] = {}
+    input_items.insert(0, declarations)
+
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            body,
+            allow_codex_compaction=True,
+        )
+    assert getattr(exc_info.value, "error_code", None) == "responses_codex_client_tools_invalid"
+    assert getattr(exc_info.value, "param", None) == (
+        "input[0].internal_chat_message_metadata_passthrough"
+    )
+
+
+@pytest.mark.parametrize(
+    ("item_type", "expected_code"),
+    [
+        ("web_search_call", "responses_input_tool_item_not_supported"),
+        ("unknown_history_item", "responses_input_item_type_not_supported"),
+    ],
+)
+def test_internal_chat_metadata_hosted_and_unknown_item_types_remain_denied(
+    item_type: str,
+    expected_code: str,
+) -> None:
+    body = _compact_body()
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    input_items.insert(
+        0,
+        {
+            "type": item_type,
+            _INTERNAL_CHAT_METADATA_FIELD: {"private": _PRIVATE_METADATA_CANARY},
+        },
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply_compact(
+            body,
+            allow_codex_compaction=True,
+        )
+    assert getattr(exc_info.value, "error_code", None) == expected_code
+    assert getattr(exc_info.value, "param", None) == "input[0].type"
+    assert _PRIVATE_METADATA_CANARY not in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

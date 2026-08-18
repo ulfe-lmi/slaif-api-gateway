@@ -233,6 +233,20 @@ _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES = 1_048_576
 _CODEX_MAX_REASONING_SUMMARY_BYTES = 65_536
 _CODEX_MAX_REASONING_SUMMARY_PARTS = 64
 _CODEX_MAX_COMPACTION_ITEM_BYTES = 1_048_576
+_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
+_CODEX_MAX_INTERNAL_CHAT_MESSAGE_METADATA_BYTES = 32_768
+_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_ITEM_TYPES = frozenset(
+    {
+        None,
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "compaction",
+    }
+)
 _CODEX_CLIENT_TOOL_TAXONOMY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "functions",
@@ -1067,6 +1081,15 @@ class ResponsesRequestPolicy:
                 "Each Responses input item must be an object.",
             )
 
+        item = self._copy_and_drop_codex_internal_chat_message_metadata(
+            item,
+            param=param,
+            allow_codex_request_envelope=allow_codex_request_envelope,
+            allow_codex_client_tools=allow_codex_client_tools,
+            allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+            allow_codex_encrypted_reasoning_replay=allow_codex_encrypted_reasoning_replay,
+            allow_codex_compaction_replay=allow_codex_compaction_replay,
+        )
         item_type = item.get("type")
         if item_type == "compaction":
             if not allow_codex_compaction_replay:
@@ -1194,6 +1217,64 @@ class ResponsesRequestPolicy:
             file_parts,
             file_data_url_bytes,
         )
+
+    def _copy_and_drop_codex_internal_chat_message_metadata(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+        allow_codex_request_envelope: bool,
+        allow_codex_client_tools: bool,
+        allow_codex_streaming_tool_events: bool,
+        allow_codex_encrypted_reasoning_replay: bool,
+        allow_codex_compaction_replay: bool,
+    ) -> dict[str, Any]:
+        copied_item = dict(item)
+        if _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD not in copied_item:
+            return copied_item
+
+        fully_gated = all(
+            (
+                allow_codex_request_envelope,
+                allow_codex_client_tools,
+                allow_codex_streaming_tool_events,
+                allow_codex_encrypted_reasoning_replay,
+                allow_codex_compaction_replay,
+            )
+        )
+        if (
+            not fully_gated
+            or copied_item.get("type")
+            not in _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_ITEM_TYPES
+        ):
+            return copied_item
+
+        metadata_param = f"{param}.{_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD}"
+        metadata = copied_item[_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD]
+        if metadata is not None:
+            if not isinstance(metadata, Mapping):
+                raise ResponsesRequestPolicyError(
+                    "Codex internal chat metadata must be a bounded JSON object or null.",
+                    param=metadata_param,
+                    error_code="responses_codex_internal_chat_metadata_invalid",
+                )
+            try:
+                metadata_bytes = len(canonical_json_bytes(metadata))
+            except ValueError as exc:
+                raise ResponsesRequestPolicyError(
+                    "Codex internal chat metadata must be a bounded JSON object or null.",
+                    param=metadata_param,
+                    error_code="responses_codex_internal_chat_metadata_invalid",
+                ) from exc
+            if metadata_bytes > _CODEX_MAX_INTERNAL_CHAT_MESSAGE_METADATA_BYTES:
+                raise ResponsesRequestPolicyError(
+                    "Codex internal chat metadata must be a bounded JSON object or null.",
+                    param=metadata_param,
+                    error_code="responses_codex_internal_chat_metadata_invalid",
+                )
+
+        del copied_item[_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD]
+        return copied_item
 
     def _validate_codex_additional_tools_item(
         self,

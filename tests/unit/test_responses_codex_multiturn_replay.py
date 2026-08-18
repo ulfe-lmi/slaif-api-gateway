@@ -23,6 +23,10 @@ from slaif_gateway.services.responses_request_policy import (
 )
 
 
+_INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
+_PRIVATE_METADATA_CANARY = "PRIVATE-REPLAY-METADATA-CANARY"
+
+
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -111,6 +115,17 @@ def _apply_tools(body: dict[str, object]):
     )
 
 
+def _apply_fully_gated(body: dict[str, object]):
+    return ResponsesRequestPolicy(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        allow_codex_encrypted_reasoning_replay=True,
+        allow_codex_compaction_replay=True,
+    )
+
+
 def test_encrypted_reasoning_replay_is_canonical_metered_and_id_only_for_lookup() -> None:
     body = _body(
         [
@@ -130,6 +145,62 @@ def test_encrypted_reasoning_replay_is_canonical_metered_and_id_only_for_lookup(
     assert candidates[0].item_id == "rs_1"
     assert not hasattr(candidates[0], "encrypted_content")
     assert not hasattr(candidates[0], "summary")
+
+
+def test_dropped_internal_chat_metadata_never_enters_replay_or_hmac_candidates() -> None:
+    body = _body(
+        [
+            {
+                **_reasoning(),
+                _INTERNAL_CHAT_METADATA_FIELD: {
+                    "turn_id": "private-turn",
+                    "executed_tool_calls": [
+                        {
+                            "name": "exec",
+                            "arguments": {"private": _PRIVATE_METADATA_CANARY},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": "next turn",
+                _INTERNAL_CHAT_METADATA_FIELD: None,
+            },
+        ]
+    )
+    original = copy.deepcopy(body)
+    clean_body = copy.deepcopy(body)
+    clean_items = clean_body["input"]
+    assert isinstance(clean_items, list)
+    for item in clean_items:
+        assert isinstance(item, dict)
+        item.pop(_INTERNAL_CHAT_METADATA_FIELD)
+
+    result = _apply_fully_gated(body)
+    clean_result = _apply_fully_gated(clean_body)
+    candidates = codex_replay_request_candidates(result.effective_body)
+    clean_candidates = codex_replay_request_candidates(clean_result.effective_body)
+
+    assert body == original
+    assert result.effective_body == clean_result.effective_body
+    assert result.estimated_input_tokens == clean_result.estimated_input_tokens
+    assert result.estimated_non_message_input_bytes == clean_result.estimated_non_message_input_bytes
+    assert result.estimated_non_message_input_fields == clean_result.estimated_non_message_input_fields
+    assert candidates == clean_candidates
+    assert len(candidates) == 1
+    assert candidates[0].item_id == "rs_1"
+    assert not hasattr(candidates[0], _INTERNAL_CHAT_METADATA_FIELD)
+    safe_evidence = repr(
+        (
+            result.estimated_input_tokens,
+            result.estimated_non_message_input_bytes,
+            result.estimated_non_message_input_fields,
+            candidates,
+        )
+    )
+    assert _PRIVATE_METADATA_CANARY not in safe_evidence
 
 
 def test_pinned_reasoning_replay_accepts_only_exact_null_content() -> None:

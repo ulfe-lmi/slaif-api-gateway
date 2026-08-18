@@ -365,6 +365,22 @@ create/compact replay must prove the same composite for the same key/provider/
 model and an explicitly compatible route. V2 `compaction_trigger`, background,
 hosted tools, MCP, and provider-side authority remain unsupported.
 
+Pinned Codex 0.147.0 preserves
+`internal_chat_message_metadata_passthrough` for the OpenAI provider identity
+used to induce remote compaction. That internal/warehouse-only object can hold
+turn and executed-tool details that SLAIF neither needs nor permits downstream.
+Only when the key has all five Codex capabilities, the gateway accepts this
+exact field as null or a canonical JSON object of at most 32,768 bytes on
+message (including omitted `type`), reasoning, function/custom call and output,
+or compaction history items. It copies the item, validates the field's type and
+size without interpreting nested contents, and deletes the field before normal
+item validation. The field is therefore absent from canonical/provider input,
+metering, replay candidates, HMAC material, persistence, logs, audits, metrics,
+exports, errors, and verifier evidence and contributes zero model-input tokens.
+Ordinary or partially gated requests, `additional_tools`, hosted/provider
+tools, unknown item types, and any other endpoint retain strict unknown-field
+or unsupported-shape rejection; the metadata field grants no authority.
+
 This is one partial client-side streaming tool loop plus opaque V1 compaction,
 not general Codex compatibility. Codex/the downstream client owns and performs the local tool
 execution; SLAIF only validates and forwards the bounded model protocol.

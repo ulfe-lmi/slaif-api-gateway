@@ -236,6 +236,16 @@ Responses-specific rules for the current foundation:
   installation/session/thread/window/turn key vocabulary, is never parsed, and
   is dropped before normalized-contract construction. It is never forwarded,
   persisted, logged, audited, metered, hashed, exported, or echoed;
+- only with all five Codex key capabilities, pinned
+  `internal_chat_message_metadata_passthrough` is accepted as null or a
+  canonical JSON object of at most 32,768 bytes on message, reasoning,
+  function/custom call and output, or compaction history items. Each item is
+  copied and the field is deleted before strict item validation and normalized
+  contract construction. Nested contents are not interpreted or authorized.
+  The field is absent from provider bodies, metering, replay/HMAC inputs,
+  persistence, logs, audits, metrics, exports, errors, and safe evidence.
+  Ordinary, partially gated, additional-tools, hosted, and unknown paths remain
+  rejected;
 - `prompt_cache_key` and message `id` remain opaque transient provider input.
   They are forwarded after validation and counted conservatively, but are not
   persisted, logged, audited, exported, echoed, or treated as routing,

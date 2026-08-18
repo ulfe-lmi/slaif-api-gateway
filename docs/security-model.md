@@ -712,6 +712,17 @@ metrics, ledger metadata, exports, or errors.
 Safe admission evidence contains only approved field names and aggregate
 byte/token counts.
 
+Pinned `internal_chat_message_metadata_passthrough` has an even narrower
+history-only privacy boundary. It is accepted only with every Codex key gate and
+only on message, reasoning, function/custom call and output, or compaction
+items, as null or a canonical JSON object capped at 32,768 bytes. The gateway
+does not inspect nested turn/tool details for authority; it copies the item and
+discards the entire field before strict canonical validation and every provider,
+metering, replay, HMAC, persistence, logging, audit, metric, export, error, or
+evidence surface. The dropped bytes count as zero model input. Partial gates,
+ordinary requests, `additional_tools`, hosted/provider items, unknown types, and
+all other endpoint shapes remain fail-closed.
+
 The separate client-tool declaration slice accepts at most one developer
 `additional_tools` item only when `codex_request_envelope` and
 `codex_client_tools` are each present on both the key and route. It admits

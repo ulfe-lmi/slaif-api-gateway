@@ -174,6 +174,18 @@ fields. Prior reasoning/tool/compaction history must pass same-key HMAC lookup
 before side effects. A different compact route row requires explicit same-
 provider/same-upstream-model compatible-route metadata.
 
+With all five Codex key capabilities, pinned create/compact history may also
+contain exact `internal_chat_message_metadata_passthrough` on message (including
+omitted `type`), reasoning, function/custom call and output, or compaction
+items. The value must be null or a canonical JSON object no larger than 32,768
+bytes. The gateway copies the item, validates only that type/size boundary, and
+drops the field before ordinary item validation, canonicalization, metering,
+replay/HMAC extraction, or forwarding. It contributes zero input tokens and
+cannot reach provider bodies, persistence, logs, audits, metrics, exports,
+errors, or safe evidence. `additional_tools`, hosted or unknown item types,
+ordinary requests, missing-gate requests, and other endpoints continue to
+reject the field rather than dropping or forwarding it.
+
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
 that field absent in the provider request while using the validated Codex route
 maximum (128,000 for the qualification profile) as effective/requested output
