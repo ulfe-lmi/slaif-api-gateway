@@ -161,6 +161,24 @@ class KeyService:
             allow_all_models=allow_all_models,
             allow_all_endpoints=allow_all_endpoints,
         )
+        metadata_json = self._metadata_with_rate_limit_window(
+            self._metadata_with_responses_streaming_live_burn_policy(
+                self._metadata_with_chat_streaming_live_burn_policy(
+                    self._metadata_with_responses_policy(
+                        self._metadata_with_provider_policy({}, payload.allowed_providers),
+                        payload.responses_policy,
+                    ),
+                    chat_live_burn_policy,
+                ),
+                default_responses_streaming_live_burn_policy(),
+            ),
+            rate_limit_policy,
+        )
+        if external_tool_policy.mode == EXTERNAL_TOOL_FENCED:
+            metadata_json = self._metadata_with_external_tool_policy(
+                metadata_json,
+                external_tool_policy,
+            )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
             key_prefix=active_prefix,
@@ -186,22 +204,7 @@ class KeyService:
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
-            metadata_json=self._metadata_with_external_tool_policy(
-                self._metadata_with_rate_limit_window(
-                    self._metadata_with_responses_streaming_live_burn_policy(
-                        self._metadata_with_chat_streaming_live_burn_policy(
-                            self._metadata_with_responses_policy(
-                                self._metadata_with_provider_policy({}, payload.allowed_providers),
-                                payload.responses_policy,
-                            ),
-                            chat_live_burn_policy,
-                        ),
-                        default_responses_streaming_live_burn_policy(),
-                    ),
-                    rate_limit_policy,
-                ),
-                external_tool_policy,
-            ),
+            metadata_json=metadata_json,
             created_by_admin_user_id=payload.created_by_admin_id,
             hmac_key_version=int(active_hmac_version),
         )
