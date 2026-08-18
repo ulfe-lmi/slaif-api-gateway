@@ -65,6 +65,13 @@ def test_policy_model_choice_exposes_safe_codex_qualification_label() -> None:
     assert "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1" in choice.label
     assert "real provider E2E not run" in choice.label
 
+    not_declared = _build_policy_model_choices(
+        [route],
+        provider_labels={"openai": "OpenAI"},
+    )[0]
+    assert not_declared.label.endswith("Not declared")
+    assert "real provider E2E not run" not in not_declared.label
+
 
 def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) -> None:
     settings = Settings(

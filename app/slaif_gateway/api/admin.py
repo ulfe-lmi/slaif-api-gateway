@@ -6709,7 +6709,7 @@ def _build_policy_model_choices(
         label_parts.append(qualification_badge)
         if qualification_state not in {"protocol_qualified", "not_declared"}:
             label_parts.append(", ".join(qualification_reasons))
-        if qualification is not None:
+        if qualification is not None and qualification_state != "not_declared":
             label_parts.append("real provider E2E not run")
         choices.append(
             _PolicyModelChoice(

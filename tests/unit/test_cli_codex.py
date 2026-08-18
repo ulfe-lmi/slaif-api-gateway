@@ -4,6 +4,7 @@ import json
 import uuid
 
 from typer.testing import CliRunner
+from typer.main import get_command
 
 from slaif_gateway.cli import codex as codex_cli
 from slaif_gateway.cli.main import app
@@ -44,7 +45,14 @@ def test_codex_help_registers_only_read_only_commands_and_no_key_argument() -> N
     assert "inspect" in result.stdout
     assert "profile" in result.stdout
     assert profile_help.exit_code == 0
-    assert "--base-url" in profile_help.stdout
+    root_command = get_command(app)
+    codex_command = root_command.commands["codex"]
+    profile_command = codex_command.commands["profile"]
+    base_url_parameter = next(
+        parameter for parameter in profile_command.params if parameter.name == "base_url"
+    )
+    assert "--base-url" in base_url_parameter.opts
+    assert all(parameter.name not in {"api_key", "secret"} for parameter in profile_command.params)
     assert "api-key" not in profile_help.stdout.lower()
     assert "secret" not in profile_help.stdout.lower()
 
