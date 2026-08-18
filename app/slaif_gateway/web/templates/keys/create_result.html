@@ -125,6 +125,23 @@
         </dd>
         <dt>Chat streaming live-burn</dt>
         <dd>{{ policy.chat_streaming_live_burn_policy_summary }}</dd>
+        {% if policy.responses_policy_summary %}
+        <dt>Responses policy</dt>
+        <dd>
+          <div>Allowed capabilities:</div>
+          <ul>
+            {% for capability in policy.responses_policy_summary.allowed_capabilities %}
+            <li><code>{{ capability }}</code></li>
+            {% endfor %}
+          </ul>
+          <div>Allowed local tool types:</div>
+          <ul>
+            {% for tool_type in policy.responses_policy_summary.allowed_local_tool_types %}
+            <li><code>{{ tool_type }}</code></li>
+            {% endfor %}
+          </ul>
+        </dd>
+        {% endif %}
       </dl>
     </section>
   </div>

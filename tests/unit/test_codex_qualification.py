@@ -26,6 +26,9 @@ from slaif_gateway.services.codex_qualification import (
     validate_codex_gateway_base_url,
     validate_codex_pilot_key_input,
 )
+from slaif_gateway.services.responses_route_capabilities import (
+    enforce_responses_route_capabilities,
+)
 
 NOW = datetime(2026, 8, 18, tzinfo=UTC)
 
@@ -33,6 +36,7 @@ NOW = datetime(2026, 8, 18, tzinfo=UTC)
 def _capabilities(companion: uuid.UUID) -> dict[str, object]:
     return {
         "responses": {
+            "text": True,
             "stateless": True,
             "streaming": True,
             "compact": True,
@@ -199,6 +203,59 @@ async def test_exact_route_pair_is_protocol_qualified_and_safe() -> None:
         "real_provider_e2e",
         "ready",
     }
+
+
+def test_positive_pair_maps_are_accepted_by_exact_runtime_operations() -> None:
+    responses, compact = _pair()
+
+    enforce_responses_route_capabilities(
+        route_capabilities=responses.capabilities,
+        streaming_requested=True,
+        route_supports_streaming=True,
+        codex_request_envelope_requested=True,
+        codex_client_tools_requested=True,
+        codex_streaming_tool_events_requested=True,
+        codex_encrypted_reasoning_replay_requested=True,
+        codex_extended_limits_requested=True,
+        codex_compaction_requested=True,
+    )
+    enforce_responses_route_capabilities(
+        route_capabilities=compact.capabilities,
+        compact_requested=True,
+        codex_request_envelope_requested=True,
+        codex_client_tools_requested=True,
+        codex_streaming_tool_events_requested=True,
+        codex_encrypted_reasoning_replay_requested=True,
+        codex_extended_limits_requested=True,
+        codex_compaction_requested=True,
+    )
+
+
+@pytest.mark.parametrize("target_endpoint", [CODEX_RESPONSES_ENDPOINT, CODEX_COMPACT_ENDPOINT])
+@pytest.mark.parametrize("mutation", ["missing_text", "false_text", "unknown", "non_boolean"])
+@pytest.mark.asyncio
+async def test_runtime_rejected_nested_responses_maps_cannot_qualify(
+    target_endpoint: str,
+    mutation: str,
+) -> None:
+    responses, compact = _pair()
+    target = responses if target_endpoint == CODEX_RESPONSES_ENDPOINT else compact
+    nested = target.capabilities["responses"]
+    assert isinstance(nested, dict)
+    if mutation == "missing_text":
+        nested.pop("text")
+    elif mutation == "false_text":
+        nested["text"] = False
+    elif mutation == "unknown":
+        nested["unknown_runtime_flag"] = True
+    else:
+        nested["text"] = "true"
+
+    results = await _service([responses, compact]).inspect(now=NOW)
+
+    selected = next(result for result in results if result.endpoint == target_endpoint)
+    assert selected.state == "not_ready"
+    assert "responses_runtime_capabilities_invalid" in selected.reason_codes
 
 
 @pytest.mark.asyncio
@@ -415,6 +472,20 @@ def test_manual_profile_verifier_reduces_request_to_safe_facts() -> None:
     )
 
 
+def test_manual_profile_verifier_rejects_every_argument_without_reflection() -> None:
+    for arguments in (
+        ["--base-url", "http://127.0.0.1:8123/v1"],
+        ["--unknown"],
+        ["sk-sensitive-operator-text"],
+    ):
+        with pytest.raises(
+            profile_verifier.VerificationError,
+            match=r"^Verifier accepts no arguments\.$",
+        ) as exc_info:
+            profile_verifier.parse_verifier_arguments(arguments)
+        assert all(argument not in str(exc_info.value) for argument in arguments)
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -441,6 +512,8 @@ def test_base_url_accepts_https_and_numeric_loopback_http(value: str) -> None:
         "https://gateway.example.org/%2e%2e/v1",
         "https://gateway.example.org//v1",
         "https://gateway.example.org\\evil/v1",
+        "https://gateway .example.org/v1",
+        "https://gateway.example.org/path with space/v1",
         " https://gateway.example.org/v1",
         "https://gateway.example.org/v1\n",
         "https://gateway.example.org/sk-proj-abcdefghijklmnop/v1",

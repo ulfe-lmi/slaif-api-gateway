@@ -879,6 +879,9 @@ async def create_admin_key(
                 "key_result": _safe_created_key_result(created),
                 "delivery": delivery_result,
                 "celery_task_id": celery_task_id,
+                "responses_policy_summary": _safe_codex_responses_policy_summary(
+                    parsed_input.responses_policy
+                ),
             },
         )
         _set_no_store_headers(response)
@@ -911,6 +914,9 @@ async def create_admin_key(
                         CHAT_STREAMING_LIVE_BURN_SURFACE,
                         created.chat_streaming_live_burn_policy,
                     )
+                ),
+                "responses_policy_summary": _safe_codex_responses_policy_summary(
+                    parsed_input.responses_policy
                 ),
             },
             "key_purpose": created.key_purpose,
@@ -8947,6 +8953,31 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
             CHAT_STREAMING_LIVE_BURN_SURFACE,
             created.chat_streaming_live_burn_policy,
         ),
+    }
+
+
+def _safe_codex_responses_policy_summary(
+    policy: object,
+) -> dict[str, tuple[str, ...]] | None:
+    """Return only the exact reviewed Codex pilot policy vocabulary."""
+
+    if not isinstance(policy, Mapping):
+        return None
+    allowed_capabilities = policy.get("allowed_capabilities")
+    allowed_local_tool_types = policy.get("allowed_local_tool_types")
+    expected_capabilities = tuple(CODEX_RESPONSES_POLICY["allowed_capabilities"])
+    expected_local_tool_types = tuple(CODEX_RESPONSES_POLICY["allowed_local_tool_types"])
+    if not isinstance(allowed_capabilities, list) or (
+        tuple(allowed_capabilities) != expected_capabilities
+    ):
+        return None
+    if not isinstance(allowed_local_tool_types, list) or (
+        tuple(allowed_local_tool_types) != expected_local_tool_types
+    ):
+        return None
+    return {
+        "allowed_capabilities": expected_capabilities,
+        "allowed_local_tool_types": expected_local_tool_types,
     }
 
 

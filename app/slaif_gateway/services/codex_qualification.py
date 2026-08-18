@@ -14,6 +14,8 @@ from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from slaif_gateway.services.responses_route_capabilities import (
+    ResponsesRouteCapabilityError,
+    enforce_responses_route_capabilities,
     parse_codex_compaction_compatible_route_ids,
     parse_codex_route_limits,
 )
@@ -467,6 +469,8 @@ def validate_codex_gateway_base_url(value: str) -> str:
 
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValueError("Gateway base URL must be a canonical absolute URL ending in /v1.")
+    if any(character.isspace() for character in value):
+        raise ValueError("Gateway base URL must not contain whitespace.")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError("Gateway base URL must not contain control characters.")
     if redact_text(value) != value:
@@ -514,6 +518,10 @@ def _route_capability_reasons(route: object, *, capabilities: object) -> list[st
     if not isinstance(responses, Mapping):
         reasons.append("responses_capabilities_invalid")
     else:
+        try:
+            _enforce_codex_runtime_operation(route, capabilities=capabilities)
+        except ResponsesRouteCapabilityError:
+            reasons.append("responses_runtime_capabilities_invalid")
         if any(responses.get(gate) is not True for gate in _CODEX_GATES):
             reasons.append("codex_gates_incomplete")
         endpoint = str(getattr(route, "endpoint", "") or "")
@@ -531,6 +539,39 @@ def _route_capability_reasons(route: object, *, capabilities: object) -> list[st
     except Exception:
         reasons.append("codex_limits_invalid")
     return reasons
+
+
+def _enforce_codex_runtime_operation(
+    route: object,
+    *,
+    capabilities: Mapping[str, object],
+) -> None:
+    """Apply the existing runtime parser with the exact qualified operation flags."""
+
+    endpoint = str(getattr(route, "endpoint", "") or "")
+    if endpoint == CODEX_RESPONSES_ENDPOINT:
+        enforce_responses_route_capabilities(
+            route_capabilities=capabilities,
+            streaming_requested=True,
+            route_supports_streaming=bool(getattr(route, "supports_streaming", False)),
+            codex_request_envelope_requested=True,
+            codex_client_tools_requested=True,
+            codex_streaming_tool_events_requested=True,
+            codex_encrypted_reasoning_replay_requested=True,
+            codex_extended_limits_requested=True,
+            codex_compaction_requested=True,
+        )
+    elif endpoint == CODEX_COMPACT_ENDPOINT:
+        enforce_responses_route_capabilities(
+            route_capabilities=capabilities,
+            compact_requested=True,
+            codex_request_envelope_requested=True,
+            codex_client_tools_requested=True,
+            codex_streaming_tool_events_requested=True,
+            codex_encrypted_reasoning_replay_requested=True,
+            codex_extended_limits_requested=True,
+            codex_compaction_requested=True,
+        )
 
 
 def _is_runtime_selected_route(

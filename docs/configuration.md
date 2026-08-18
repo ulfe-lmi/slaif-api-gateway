@@ -732,9 +732,13 @@ state and reports deterministic safe qualification fields only. A positive
 `gpt-5.6-sol` `/v1/responses` and `/v1/responses/compact` pair, reciprocal
 compatible UUIDs, the five Codex route gates, strict limits, exact pinned
 qualification metadata, an enabled provider, and complete active pricing plus
-FX where required. Each row must be selected by normal provider-constrained
-runtime ranking. Missing metadata is `not_declared`; malformed or stale state
-fails closed. This command does not call providers or mutate catalog state.
+FX where required. Each exact nested Responses map must also be accepted by the
+normal runtime parser: `text=true` and strict known boolean flags are baseline,
+ordinary Responses additionally requires stateless streaming and route
+streaming, and compact requires its compact flag. Each row must be selected by
+normal provider-constrained runtime ranking. Missing metadata is
+`not_declared`; malformed or stale state fails closed. This command does not
+call providers or mutate catalog state.
 
 After exactly one ready Responses route is present, generate the credential-free
 profile artifacts with:
@@ -761,9 +765,22 @@ confirmation, a standard key, exactly one ready provider/model, exact endpoints
 `/v1/models`, `/v1/responses`, and `/v1/responses/compact`, positive finite
 request/token/EUR cost limits, and an audit reason are all required before
 mutation. It sets only the five canonical Codex Responses capabilities and
-local `function`/`custom` tool types through the normal key service. Real
-provider-through-gateway E2E has not run; this remains local
-`protocol_qualified` evidence only.
+local `function`/`custom` tool types through the normal key service. Direct
+plaintext-once and email-delivery creation results show only those fixed names
+when the policy exists; email delivery still suppresses plaintext and ordinary
+no-policy results omit the summary. Real provider-through-gateway E2E has not
+run; this remains local `protocol_qualified` evidence only.
+
+The isolated profile verifier owns its ephemeral numeric-loopback endpoint and
+has exactly one supported invocation:
+
+```bash
+.venv/bin/python scripts/verify_codex_profile.py
+```
+
+It accepts no options or positional arguments and rejects extras without
+reflecting their contents. An operator-supplied gateway URL is never accepted
+by this verifier.
 
 Responses custom-tool settings cap local/client-side custom tool names,
 descriptions, grammar definitions, total custom format bytes, and string-only

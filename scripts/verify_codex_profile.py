@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,13 @@ MAX_SUBPROCESS_OUTPUT_BYTES = 512_000
 
 class VerificationError(RuntimeError):
     """A fixed verifier failure that contains no request, response, or secret data."""
+
+
+def parse_verifier_arguments(arguments: Sequence[str]) -> None:
+    """Reject every argument without reflecting operator-controlled text."""
+
+    if arguments:
+        raise VerificationError("Verifier accepts no arguments.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,8 +423,9 @@ def verify() -> dict[str, object]:
     }
 
 
-def main() -> int:
+def main(arguments: Sequence[str] | None = None) -> int:
     try:
+        parse_verifier_arguments(sys.argv[1:] if arguments is None else arguments)
         summary = verify()
     except (capture.CaptureError, VerificationError) as exc:
         print(f"RESULT=ERROR\nERROR={exc}", file=sys.stderr)

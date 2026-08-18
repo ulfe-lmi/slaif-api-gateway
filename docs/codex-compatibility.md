@@ -60,9 +60,13 @@ enabled `/v1/responses` route and its reciprocal exact
 `codex_limits`, one another's UUID, enabled provider metadata, and active
 complete pricing/accounting (including FX when needed). Both rows must also be
 selected by normal provider-constrained runtime ranking, so a stale qualified
-row shadowed by another matching route fails closed. Missing declaration is
-`not_declared`; malformed, partial, unknown, disabled, stale, or incomplete
-state is invalid/not ready with fixed safe reason codes.
+row shadowed by another matching route fails closed. Each nested Responses map
+must also pass the existing runtime parser for its exact operation: both require
+`text=true` and strict known boolean flags, ordinary Responses requires
+stateless streaming plus route streaming, and compact requires `compact=true`;
+the fully gated operation checks all five Codex gates and strict limits.
+Missing declaration is `not_declared`; malformed, partial, unknown, disabled,
+stale, or incomplete state is invalid/not ready with fixed safe reason codes.
 
 Codex 0.147.0 profile v2 loads a named file over the base user config. The
 gateway renderer therefore returns two separate credential-free artifacts. The
@@ -120,14 +124,20 @@ cost limits, and an audit reason. A fresh readiness check happens before key
 mutation. The resulting Responses policy contains only the five canonical
 Codex gates and local `function`/`custom` tool types. This does not enable
 hosted tools, MCP, background work, provider state, trusted calibration, or
-external execution.
+external execution. The plaintext-once and direct email-delivery creation
+results show only those fixed capability/tool names when the policy exists;
+the email result still contains no plaintext, and ordinary no-policy and
+rotation/template results omit the section.
 
 The profile verifier uses the rendered two-file layout with exact
 `/usr/bin/codex` 0.147.0, a fixed child-only dummy key, dead external proxies,
 and a numeric-loopback Responses server. It proves the named profile selects
 the exact model/provider, bundled catalog, V1 compaction configuration, and
 ordinary uncompressed JSON without legacy-profile/catalog warnings. It prints
-only booleans, counts, and version and discards raw payloads. This is still
+only booleans, counts, and version and discards raw payloads. Its truthful
+interface is exactly `.venv/bin/python scripts/verify_codex_profile.py`: the
+verifier owns its ephemeral loopback URL, accepts no arguments, and rejects
+extras with a fixed error that does not reflect operator text. This is still
 local protocol evidence: objective 011 owns real-provider-through-gateway E2E,
 so `real_provider_e2e` remains false.
 

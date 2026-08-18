@@ -11,6 +11,8 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
+from slaif_gateway.services.codex_qualification import CODEX_RESPONSES_POLICY
+from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_modes import (
@@ -20,6 +22,15 @@ from slaif_gateway.services.key_modes import (
 from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
+
+
+def _assert_codex_responses_policy_summary(html: str) -> None:
+    for capability in CODEX_RESPONSES_POLICY["allowed_capabilities"]:
+        assert f"<code>{capability}</code>" in html
+    for tool_type in CODEX_RESPONSES_POLICY["allowed_local_tool_types"]:
+        assert f"<code>{tool_type}</code>" in html
+    assert '"allowed_capabilities"' not in html
+    assert '"allowed_local_tool_types"' not in html
 
 
 def _owner(owner_id: uuid.UUID | None = None) -> Owner:
@@ -742,6 +753,115 @@ def test_create_codex_protocol_pilot_uses_exact_bounded_policy(monkeypatch) -> N
         ],
         "allowed_local_tool_types": ["function", "custom"],
     }
+    assert response.text.count("sk-slaif-newpublic.once-only-created") == 1
+    _assert_codex_responses_policy_summary(response.text)
+
+
+def test_create_codex_protocol_pilot_email_result_is_safe_and_policy_bounded(
+    monkeypatch,
+) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    created = _created_key(owner_id=owner_id)
+    events: list[str] = []
+
+    async def get_owner_by_id(self, requested_owner_id):
+        return owner if requested_owner_id == owner_id else None
+
+    async def validate_readiness(request, *, provider):
+        assert provider == "openai"
+        events.append("readiness")
+        return SimpleNamespace(ready=True)
+
+    async def create_gateway_key(self, payload):
+        events.append("create")
+        return created
+
+    def delivery(status: str) -> PendingKeyEmailResult:
+        return PendingKeyEmailResult(
+            email_delivery_id=uuid.uuid4(),
+            one_time_secret_id=created.one_time_secret_id,
+            gateway_key_id=created.gateway_key_id,
+            owner_id=created.owner_id,
+            recipient_email="ada@example.org",
+            status=status,
+        )
+
+    async def create_pending_key_email_delivery(self, **kwargs):
+        return delivery("pending")
+
+    async def send_pending_key_email(self, **kwargs):
+        return delivery("sent")
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_codex_protocol_pilot_readiness",
+        validate_readiness,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.create_pending_key_email_delivery",
+        create_pending_key_email_delivery,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.send_pending_key_email",
+        send_pending_key_email,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        ENABLE_EMAIL_DELIVERY=True,
+        SMTP_HOST="localhost",
+        SMTP_FROM="noreply@example.org",
+    )
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+    pilot_data = {
+        "csrf_token": "dashboard-csrf",
+        "owner_id": str(owner_id),
+        "valid_days": "7",
+        "cost_limit_eur": "5.00",
+        "token_limit_total": "50000",
+        "request_limit_total": "20",
+        "allowed_providers": "openai",
+        "allowed_models": "gpt-5.6-sol",
+        "allowed_endpoints": "/v1/models\n/v1/responses\n/v1/responses/compact",
+        "codex_protocol_pilot": "true",
+        "confirm_codex_protocol_pilot": "true",
+        "email_delivery_mode": "send-now",
+        "reason": "bounded Codex protocol pilot",
+    }
+
+    response = client.post("/admin/keys/create", data=pilot_data)
+
+    assert response.status_code == 200
+    assert events[:2] == ["readiness", "create"]
+    assert created.plaintext_key not in response.text
+    _assert_codex_responses_policy_summary(response.text)
+
+    ordinary_response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "email_delivery_mode": "send-now",
+            "reason": "ordinary workshop key",
+        },
+    )
+    assert ordinary_response.status_code == 200
+    assert "Responses Policy" not in ordinary_response.text
+    assert created.plaintext_key not in ordinary_response.text
 
 
 @pytest.mark.parametrize(

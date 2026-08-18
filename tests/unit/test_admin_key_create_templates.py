@@ -265,6 +265,7 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "no Celery task was queued" in html
     assert "Chat streaming live-burn" in html
     assert "Chat live-burn: on" in html
+    assert "Responses policy" not in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html
@@ -273,6 +274,27 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "session-token" not in html
     assert "one_time_secret" not in html
     assert "email action" not in html.lower()
+
+
+def test_creation_result_templates_gate_the_allowlisted_responses_summary() -> None:
+    create_result = (
+        REPO_ROOT / "app" / "slaif_gateway" / "web" / "templates" / "keys" / "create_result.html"
+    ).read_text()
+    email_result = (
+        REPO_ROOT
+        / "app"
+        / "slaif_gateway"
+        / "web"
+        / "templates"
+        / "keys"
+        / "email_delivery_result.html"
+    ).read_text()
+
+    for template in (create_result, email_result):
+        assert "{% if " in template and "responses_policy_summary" in template
+        assert "allowed_capabilities" in template
+        assert "allowed_local_tool_types" in template
+        assert "tojson" not in template
 
 
 def test_create_result_template_marks_trusted_calibration_key(monkeypatch) -> None:

@@ -1369,11 +1369,14 @@ values are invalid. No state is inferred from the model name. A positive
 readiness result additionally requires one reciprocal exact enabled
 `/v1/responses` and `/v1/responses/compact` pair for the same provider,
 requested model, and upstream model; the required endpoint visibility/streaming
-semantics, five Codex route gates, strict `codex_limits`, enabled provider, and
-selection of both rows by normal provider-constrained runtime ranking, complete
-active endpoint pricing/accounting, plus active FX when the currency is
-not EUR. This is validation over existing JSON and rows; objective 010 adds no
-column, table, constraint, or migration.
+semantics; `responses.text=true`; a strict known-boolean nested Responses map
+accepted by existing runtime enforcement for the exact ordinary or compact
+operation; five Codex route gates; strict `codex_limits`; enabled provider;
+selection of both rows by normal provider-constrained runtime ranking; complete
+active endpoint pricing/accounting; plus active FX when the currency is not
+EUR. Unknown nested flags and non-boolean values fail closed. This is validation
+over existing JSON and rows; objective 010 adds no column, table, constraint, or
+migration.
 
 `chat_custom_tools=true` enables only non-streaming local/client-side Chat
 Completions custom tool-call intent. It does not enable hosted tools, MCP or
