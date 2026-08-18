@@ -21,6 +21,7 @@ from slaif_gateway.providers.streaming import (
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
 from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.codex_replay_service import CodexReplayReferenceError
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_client_tool_declarations,
@@ -135,6 +136,88 @@ def _profile() -> ResponsesStreamValidationProfile:
         codex_streaming_tool_events=True,
         declared_client_tools=DECLARATIONS,
     )
+
+
+def _encrypted_profile() -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_streaming_tool_events=True,
+        codex_encrypted_reasoning_replay=True,
+        declared_client_tools=DECLARATIONS,
+    )
+
+
+def _done_reasoning(
+    *,
+    item_id: str = "rs_1",
+    encrypted_content: str = "opaque-ciphertext",
+) -> dict[str, object]:
+    return {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "reasoning",
+            "id": item_id,
+            "summary": [{"type": "summary_text", "text": "safe summary"}],
+            "encrypted_content": encrypted_content,
+        },
+    }
+
+
+def test_encrypted_reasoning_done_event_is_exact_opaque_and_candidate_only() -> None:
+    validator = ResponsesStreamEventValidator(_encrypted_profile())
+    payload = _done_reasoning(encrypted_content=PRIVATE_CANARY)
+    original = copy.deepcopy(payload)
+
+    assert validator.validate(payload)
+    assert payload == original
+    candidates = validator.take_replay_reference_candidates()
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "reasoning"
+    assert candidates[0].item_id == "rs_1"
+    assert not hasattr(candidates[0], "encrypted_content")
+    assert not hasattr(candidates[0], "summary")
+    assert PRIVATE_CANARY not in repr(validator.__dict__)
+    assert PRIVATE_CANARY not in json.dumps(validator.safe_evidence())
+    assert validator.take_replay_reference_candidates() == ()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(content=[]),
+        lambda event: event["item"].update(status="completed"),
+        lambda event: event["item"].update(unknown="authority"),
+        lambda event: event["item"].update(encrypted_content=""),
+        lambda event: event["item"].update(encrypted_content="x" * 262_145),
+        lambda event: event["item"].update(summary=[{"type": "reasoning_text", "text": "private"}]),
+    ],
+)
+def test_encrypted_reasoning_done_event_rejects_plaintext_unknown_and_size(mutation) -> None:
+    validator = ResponsesStreamEventValidator(_encrypted_profile())
+    event = _done_reasoning()
+    mutation(event)
+    assert not validator.validate(event)
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_encrypted_reasoning_requires_gate_done_event_and_cumulative_cap() -> None:
+    assert not ResponsesStreamEventValidator(_profile()).validate(_done_reasoning())
+    added = _done_reasoning()
+    added["type"] = "response.output_item.added"
+    assert not ResponsesStreamEventValidator(_encrypted_profile()).validate(added)
+
+    validator = ResponsesStreamEventValidator(_encrypted_profile())
+    for index in range(4):
+        assert validator.validate(
+            _done_reasoning(
+                item_id=f"rs_{index}",
+                encrypted_content="x" * 262_144,
+            )
+        )
+    assert not validator.validate(
+        _done_reasoning(item_id="rs_over", encrypted_content="x")
+    )
+    assert len(validator.take_replay_reference_candidates()) == 4
 
 
 def _added_tool(
@@ -532,6 +615,7 @@ def test_event_and_replay_size_caps_fail_closed_without_echoing_content() -> Non
         _additional_tools(),
         {
             "type": "custom_tool_call",
+            "id": "ctc_1",
             "name": "exec",
             "call_id": "call_1",
             "input": PRIVATE_CANARY,
@@ -615,9 +699,10 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
         ],
         [
             _additional_tools(),
-            {
-                "type": "function_call",
-                "name": "unknown",
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "name": "unknown",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -625,9 +710,10 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
         ],
         [
             _additional_tools(),
-            {
-                "type": "function_call",
-                "name": "wait",
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "name": "wait",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -635,9 +721,10 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
         ],
         [
             _additional_tools(),
-            {
-                "type": "custom_tool_call",
-                "namespace": "collaboration",
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc_1",
+                    "namespace": "collaboration",
                 "name": "send_message",
                 "call_id": "call_1",
                 "input": PRIVATE_CANARY,
@@ -1034,6 +1121,10 @@ def test_gateway_forwards_frames_in_order_and_holds_completed_until_accounting(
             actual_cost_eur=Decimal("0"),
         )
 
+    async def fake_persist_replay(**kwargs):
+        timeline.append("replay:persist")
+        return 1
+
     monkeypatch.setattr(gateway, "get_provider_adapter", lambda route, settings: FakeAdapter())
     monkeypatch.setattr(
         gateway,
@@ -1041,12 +1132,17 @@ def test_gateway_forwards_frames_in_order_and_holds_completed_until_accounting(
         fake_record_completed,
     )
     monkeypatch.setattr(gateway, "_finalize_successful_response", fake_finalize)
+    monkeypatch.setattr(gateway, "_persist_codex_replay_references", fake_persist_replay)
     monkeypatch.setattr(gateway, "_record_success_metrics", lambda **kwargs: None)
     monkeypatch.setattr(gateway, "record_provider_call_result", lambda **kwargs: None)
 
     response = gateway._streaming_responses_response(
         authenticated_key=SimpleNamespace(gateway_key_id=uuid.uuid4()),
-        route=SimpleNamespace(provider="openai", resolved_model="gpt-test"),
+        route=SimpleNamespace(
+            provider="openai",
+            resolved_model="gpt-test",
+            route_id=uuid.uuid4(),
+        ),
         policy_result=SimpleNamespace(),
         cost_estimate=_estimate(),
         reservation=SimpleNamespace(reservation_id=uuid.uuid4()),
@@ -1074,10 +1170,122 @@ def test_gateway_forwards_frames_in_order_and_holds_completed_until_accounting(
     forwarded = asyncio.run(collect())
 
     assert forwarded == raw_events
-    assert timeline[-3:] == [
+    assert timeline[-4:] == [
         "accounting:record",
         "accounting:finalize",
+        "replay:persist",
         "client:completed",
+    ]
+
+
+def test_replay_persistence_failure_after_accounting_suppresses_completed(monkeypatch) -> None:
+    import asyncio
+
+    import slaif_gateway.services.responses_gateway as gateway
+
+    timeline: list[str] = []
+    tool_done = _done_tool(
+        item_id="ctc_1",
+        call_id="call_1",
+        namespace="functions",
+        name="exec",
+        custom=True,
+        text='text("SAFE")',
+    )
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": None,
+                "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 2,
+            },
+        },
+    }
+    payloads = [tool_done, completed]
+    raw_events = [f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in payloads]
+
+    class FakeAdapter:
+        async def stream_response(self, request):
+            for payload, raw_event in zip(payloads, raw_events, strict=True):
+                yield ProviderStreamChunk(
+                    provider=request.provider,
+                    upstream_model=request.upstream_model,
+                    data=json.dumps(payload),
+                    raw_sse_event=raw_event,
+                    json_body=payload,
+                    usage=(
+                        ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+                        if payload["type"] == "response.completed"
+                        else None
+                    ),
+                )
+
+    async def fake_record_completed(**kwargs):
+        timeline.append("accounting:record")
+        return SimpleNamespace(usage_ledger_id=uuid.uuid4())
+
+    async def fake_finalize(**kwargs):
+        timeline.append("accounting:finalize")
+        return SimpleNamespace(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            actual_cost_eur=Decimal("0"),
+        )
+
+    async def fail_persist(**kwargs):
+        timeline.append("replay:persist-failed")
+        raise CodexReplayReferenceError(
+            "Codex replay references could not be persisted safely.",
+            error_code="responses_codex_replay_persistence_failed",
+        )
+
+    monkeypatch.setattr(gateway, "get_provider_adapter", lambda route, settings: FakeAdapter())
+    monkeypatch.setattr(
+        gateway,
+        "_record_provider_completed_before_finalization",
+        fake_record_completed,
+    )
+    monkeypatch.setattr(gateway, "_finalize_successful_response", fake_finalize)
+    monkeypatch.setattr(gateway, "_persist_codex_replay_references", fail_persist)
+    monkeypatch.setattr(gateway, "_record_success_metrics", lambda **kwargs: None)
+    monkeypatch.setattr(gateway, "record_provider_call_result", lambda **kwargs: None)
+
+    response = gateway._streaming_responses_response(
+        authenticated_key=SimpleNamespace(gateway_key_id=uuid.uuid4()),
+        route=SimpleNamespace(
+            provider="openai",
+            resolved_model="gpt-test",
+            route_id=uuid.uuid4(),
+        ),
+        policy_result=SimpleNamespace(),
+        cost_estimate=_estimate(),
+        reservation=SimpleNamespace(reservation_id=uuid.uuid4()),
+        request_id="req_1",
+        settings=Settings(),
+        request=None,
+        rate_limit_reservation=None,
+        upstream_body={"model": "gpt-test", "stream": True},
+        live_burn_budget=None,
+        stream_validation_profile=_profile(),
+    )
+
+    async def collect() -> list[str]:
+        return [value async for value in response.body_iterator]
+
+    forwarded = asyncio.run(collect())
+    assert forwarded[0] == raw_events[0]
+    assert raw_events[1] not in forwarded
+    assert "responses_codex_replay_persistence_failed" in forwarded[-1]
+    assert timeline == [
+        "accounting:record",
+        "accounting:finalize",
+        "replay:persist-failed",
     ]
 
 
@@ -1115,12 +1323,20 @@ def test_tool_output_interruption_paths_record_estimated_usage(
     async def unexpected_release(**kwargs):
         raise AssertionError("a token-bearing tool stream must not fully release")
 
+    async def unexpected_replay_persistence(**kwargs):
+        raise AssertionError("interrupted streams must not persist replay references")
+
     monkeypatch.setattr(
         gateway,
         "_record_responses_streaming_interrupted_estimate",
         fake_estimate,
     )
     monkeypatch.setattr(gateway, "_record_provider_failure_and_release", unexpected_release)
+    monkeypatch.setattr(
+        gateway,
+        "_persist_codex_replay_references",
+        unexpected_replay_persistence,
+    )
 
     asyncio.run(
         gateway._finalize_responses_stream_interruption_after_output(

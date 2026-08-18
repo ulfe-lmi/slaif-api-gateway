@@ -262,12 +262,17 @@ Responses-specific rules for the current foundation:
   reconstructed as ordinary stateless input for local function-tool follow-up
   requests, and string-only `custom_tool_call_output` items are reconstructed
   as ordinary stateless input for caller-managed custom-tool follow-up
-  requests. With all three Codex key/route capabilities, exact declared
+  requests. With the required Codex key/route capabilities, exact declared
   function-call or `functions.exec` custom-call items and exactly linked
   outputs are reconstructed for the pinned streaming replay. The pinned custom
-  output may be a bounded exact `input_text` part list. Other call items,
-  reasoning/stateful items, hosted-tool items, `input_image.file_id`,
-  `input_file.file_id`, and audio parts are rejected before provider forwarding;
+  output may be a bounded exact `input_text` part list. Independently gated
+  encrypted reasoning replay is reconstructed only from exact `type`, `id`,
+  `summary`, non-empty bounded `encrypted_content`, and the pinned client's
+  optional exact `content=null` fields after an active same-key reference
+  lookup succeeds. Plaintext/non-empty reasoning content, other call
+  items, arbitrary reasoning/stateful items, hosted-tool items,
+  `input_image.file_id`, `input_file.file_id`, and audio parts are rejected
+  before provider forwarding;
 - user-message `input_image` content parts are reconstructed only from
   `type`, `image_url`, and optional `detail` when route/model metadata
   explicitly enables `capabilities.responses.image_input=true`. Supported
@@ -317,7 +322,11 @@ Responses-specific rules for the current foundation:
   continuation, and unapproved Codex reasoning/tool SSE event types remain
   denied. Approved declarations may accompany `stream=true`; streaming calls
   and replay additionally require `codex_streaming_tool_events` on both the key
-  and route, exact request declarations, and strict item/call linkage;
+  and route, exact request declarations, and strict item/call linkage.
+  Encrypted reasoning event/replay additionally requires
+  `codex_encrypted_reasoning_replay` and `codex_request_envelope` on both the
+  key and route. Client replay cannot be combined with
+  `previous_response_id` or conversation state;
 - non-streaming `conversation` is forwarded only after the ID resolves to an
   active local conversation reference owned by the authenticated gateway key,
   the route advertises `capabilities.responses.conversations=true`, and
@@ -363,12 +372,21 @@ Responses-specific rules for the current foundation:
   events; it is not converted into Chat Completions chunks. The independently
   gated Codex slice also validates created/in-progress, output-item added/done,
   function-argument/custom-input delta, reasoning summary-part/text,
-  reasoning-text, and completed events frame by frame against the request's
-  exact declarations. Unknown, duplicate, orphan, mismatched, oversized, or
-  provider failure/error events fail closed;
+  reasoning-text, the exact opaque encrypted-reasoning done event, and
+  completed events frame by frame against the request's exact declarations.
+  The encrypted event is forwarded unchanged after validation; only its byte
+  count and a transient candidate containing linkage identifiers survive
+  parsing. Unknown, duplicate, orphan, mismatched, oversized, plaintext
+  reasoning, or provider failure/error events fail closed;
 - streaming finalization uses provider usage from the completed response event,
   holds `response.completed` until finalization succeeds, and does not forward
-  any upstream `data: [DONE]` marker as success before that finalization;
+  any upstream `data: [DONE]` marker as success before that finalization. For a
+  replayable Codex stream, SLAIF next persists only versioned HMAC digests plus
+  safe key/provider/route/model/kind/name metadata with a fixed 24-hour TTL;
+  normal completion remains held until that persistence succeeds. Missing
+  usage, accounting failure, provider error, or disconnect creates no usable
+  replay reference. Persistence failure after successful accounting is a safe
+  charged failure and suppresses normal completion;
   missing final usage is not finalized as zero cost;
 - structured `stream=true` requests are rejected in this slice; JSON schemas are
   accepted only as bounded opaque payloads inside `text.format`, counted for

@@ -1087,6 +1087,84 @@ Rules:
   encrypted one-time secret payloads, nonces, password hashes, session tokens,
   CSRF tokens, or email bodies.
 
+## 5.13.1 `codex_replay_references`
+
+HMAC-only ownership metadata for bounded Codex client-managed replay. These
+rows authorize a gateway key to resend a previously completed provider
+reasoning item or local-tool call/output pair on the same provider/model route.
+They do not store provider state, response content, or billing truth.
+
+Columns:
+
+```text
+id UUID primary key
+gateway_key_id UUID not null references gateway_keys(id) on delete restrict
+usage_ledger_id UUID not null references usage_ledger(id) on delete restrict
+source_request_id text not null
+provider text not null
+route_id UUID not null references model_routes(id) on delete restrict
+upstream_model text not null
+item_kind text not null
+item_id_hmac varchar(64) not null
+call_id_hmac varchar(64) null
+hmac_key_version integer not null
+tool_namespace text null
+tool_name text null
+created_at timestamptz not null
+expires_at timestamptz not null
+```
+
+Allowed `item_kind` values:
+
+```text
+reasoning
+function_call
+custom_tool_call
+```
+
+Constraints/indexes:
+
+```text
+unique(gateway_key_id, item_kind, item_id_hmac)
+unique(gateway_key_id, item_kind, call_id_hmac)
+index(gateway_key_id, item_kind, item_id_hmac, expires_at)
+index(gateway_key_id, item_kind, call_id_hmac, expires_at)
+index(usage_ledger_id)
+index(expires_at)
+check(item_kind in ('reasoning', 'function_call', 'custom_tool_call'))
+check(item_id_hmac matches exactly 64 lowercase hexadecimal characters)
+check(call_id_hmac is null or matches exactly 64 lowercase hexadecimal characters)
+check(hmac_key_version > 0)
+check(length(btrim(source_request_id)) > 0)
+check(length(btrim(provider)) > 0)
+check(length(btrim(upstream_model)) > 0)
+check(expires_at > created_at)
+check(reasoning rows have no call digest or tool identity; tool-call rows have all three)
+check(tool namespace and name are null or non-empty and at most 256 characters)
+```
+
+Rules:
+
+- The fixed MVP lifetime is 24 hours from successful persistence. Expired rows
+  are unusable even before a future cleanup task removes them.
+- `item_id_hmac` and `call_id_hmac` use HMAC-SHA-256 with separate domain
+  labels and the existing versioned token-HMAC secret. The stored version must
+  remain available for lookup; missing key material fails closed.
+- Rows are inserted idempotently only after a provider stream supplies final
+  usage and PostgreSQL accounting finalization succeeds. The completed SSE
+  event remains held until insertion commits. A persistence failure suppresses
+  normal completion but does not release or reverse finalized usage.
+- Lookups require the same gateway key, unexpired row, exact item/call kind,
+  approved namespace/tool identity, provider, route, and upstream model before
+  Redis, pricing, quota, or provider side effects.
+- References are reusable until expiry for Codex full-history replay. They do
+  not create or imply `previous_response_id`, stored Response, or Conversation
+  ownership and cannot be combined with those provider-state mechanisms.
+- Never store, log, audit, export, metric-label, or expose provider item/call
+  IDs, HMAC digests, encrypted reasoning, summaries, arguments, tool inputs,
+  tool outputs, prompts, completions, or provider event bodies. The source
+  request and usage-ledger links are safe metadata only.
+
 ---
 
 ## 5.13 `provider_configs`

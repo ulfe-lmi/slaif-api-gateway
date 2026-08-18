@@ -1,6 +1,6 @@
 # Codex CLI Compatibility
 
-Status: **PARTIAL STREAMING CLIENT-TOOL ROUND-TRIP SUPPORT, NOT CODEX-COMPATIBLE**.
+Status: **PARTIAL BOUNDED MULTI-TURN REPLAY SUPPORT, NOT CODEX-COMPATIBLE**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -21,7 +21,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | Envelope, bounded client-tool declarations, and one strict streaming client-tool round trip; still `not_compatible` |
+| Current runtime status | Envelope, bounded client-tool declarations, strict streaming events, and 24-hour HMAC-bound encrypted-reasoning/tool replay; still `not_compatible` |
 
 Primary references:
 
@@ -248,7 +248,7 @@ admits only bounded, correctly ordered instances of:
 - `response.custom_tool_call_input.delta`;
 - `response.reasoning_summary_part.added`,
   `response.reasoning_summary_text.delta`, and
-  `response.reasoning_summary_part.done`;
+  `response.reasoning_summary_text.done`;
 - `response.reasoning_text.delta`, `response.output_text.delta`, and
   `response.completed`.
 
@@ -260,14 +260,46 @@ unapproved authority, and provider `response.failed`, `response.incomplete`, or
 `response.completed` event remains held until usage-backed finalization.
 
 A following stateless request may replay only exact validated function calls or
-the declared `functions.exec` custom call together with exactly one matching
-output per call. Orphans, mismatches, duplicates, unknown declarations, hosted
-authority, and over-size payloads fail closed. Function output remains a
-bounded string. For the pinned Code Mode profile only, `functions.exec` output
-may also be the exact bounded list of `input_text` parts emitted by Codex
-0.147.0. Reconstructed replay input is deep-copied, all canonical bytes are
-included in admission estimation, and no call, argument, result, or reasoning
-content is persisted.
+the declared `functions.exec` custom call together with exactly one immediately
+following matching output per call. Orphans, reordered pairs, mismatches,
+duplicates, unknown declarations, hosted authority, and over-size payloads fail
+closed. Function output remains a bounded string. For the pinned Code Mode
+profile only, `functions.exec` output may also be the exact bounded list of
+`input_text` parts emitted by Codex 0.147.0. Reconstructed replay input is
+deep-copied and all canonical bytes are included in admission estimation.
+
+Encrypted reasoning and durable multi-turn replay form a fourth independent
+slice. Encrypted reasoning input and accepted encrypted reasoning done-events
+require `codex_request_envelope` plus the default-off
+`codex_encrypted_reasoning_replay` capability on both key and route. Streaming
+tool generation/replay retains the independent `codex_client_tools` and
+`codex_streaming_tool_events` gates. The strict validator accepts
+`encrypted_content` only as a non-empty capped opaque string on the exact
+`response.output_item.done` reasoning shape with a required safe ID and exact
+summary-text array. The replay request additionally permits only the pinned
+client's exact `content=null`; the done event itself remains the exact
+four-field item. Plaintext/non-empty `content`, unknown/status/authority
+fields, wrong-event placement, and per-item or cumulative overflow fail closed;
+the validated upstream frame is forwarded unchanged.
+
+Only fully validated reasoning and function/custom done items become transient
+reference candidates. After final provider usage and successful PostgreSQL
+accounting, the gateway HMACs item/call IDs with domain-separated use of the
+existing versioned secret and writes only owner key, source ledger/request,
+provider/route/model, kind, approved tool identity, timestamps, and 24-hour
+expiry. Raw IDs and HMAC digests are never logged, exposed, or used as provider
+state. A later request must resolve every reference to the same key before route
+selection, then match provider/route/model before Redis, pricing, quota, or
+provider work. Cross-key, expired, unavailable-secret-version, name/kind, and
+route mismatches use safe denial. Client replay cannot combine with
+`previous_response_id`, stored Responses state, or Conversations. Persistence
+failure occurs after accounting, suppresses normal completion, and preserves
+charged usage truth.
+
+Encrypted reasoning, summaries, call arguments/inputs, outputs, raw IDs, and
+digests never enter PostgreSQL content fields, ledger metadata, logs, metrics,
+audit, exports, or errors. Candidate objects contain IDs only until the
+immediate HMAC operation and contain no encrypted/summary/argument/result data.
 
 Live-burn monitoring counts output text, function arguments, custom input,
 reasoning summary text, and reasoning text. Matching done events are not double
@@ -310,16 +342,27 @@ Only a human or active work order may invoke the installed Codex binary:
   --model gpt-5.6-sol \
   --profile api-key-responses-baseline \
   --fixture tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json
+
+.venv/bin/python scripts/verify_codex_reasoning_replay.py \
+  --codex-binary /usr/bin/codex \
+  --expected-cli-version 0.147.0 \
+  --model gpt-5.6-sol \
+  --profile api-key-responses-baseline \
+  --fixture tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json
 ```
 
-The round-trip verifier uses the same private temporary home/work directory,
+The reasoning-replay verifier uses the same private temporary home/work directory,
 dummy key, stripped environment, and numeric loopback-only network boundary.
-It accepts exactly two in-memory requests: the immutable captured first request,
-then a continuation containing the fixed `functions.exec` call/output pair. Its
-mock stream requests only side-effect-free Code Mode
-`text("SAFE_TOOL_RESULT")` execution and then returns a final assistant message.
-Only a bounded safe summary is printed; request bodies, headers, subprocess
-output, tool input/output, and assistant text are never persisted or printed.
+It accepts exactly three in-memory requests. Fixed streams request only
+side-effect-free Code Mode `text("SAFE_REPLAY_ONE")` and
+`text("SAFE_REPLAY_TWO")`, deliver one synthetic opaque encrypted reasoning
+item, and finish only after the third request proves exact client replay of the
+reasoning and linked call/output history. It provides no shell, filesystem,
+network, or nested-tool authority. Only bounded safe counts/booleans/types are
+printed; request bodies, headers, IDs, ciphertext, summaries, arguments,
+results, prompts, subprocess output, and assistant text are never persisted or
+printed. The older two-request tool-only verifier remains historical focused
+evidence.
 
 Normal pytest, CI, application startup, packaging, Docker, migrations, and HPC
 verification must never run any live action.
@@ -340,11 +383,10 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Objectives 008 through 011 remain separate strategic work-order boundaries.
-The request/envelope, declaration, and narrow streaming round-trip slices grant
-none of them implicitly. Broader state/reasoning replay, Codex compaction,
-quota/accounting work, full CLI-to-gateway end-to-end validation, operator
-guidance, and any release decision each require their own activated scope,
-tests, privacy review, and GitHub acceptance.
+Codex compaction/cache behavior beyond the bounded envelope, full CLI-through-
+gateway end-to-end validation, operator guidance, and any release decision
+remain separate strategic work-order boundaries. The bounded replay slice
+grants none of them implicitly; each requires activated scope, tests, privacy
+review, and GitHub acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.

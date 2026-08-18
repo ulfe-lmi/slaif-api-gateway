@@ -15,6 +15,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -41,6 +42,7 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
 )
 STATUS_VALUES_RESPONSE_REFERENCES = ("active", "deleted")
 STATUS_VALUES_CONVERSATION_REFERENCES = ("active", "deleted")
+KIND_VALUES_CODEX_REPLAY_REFERENCES = ("reasoning", "function_call", "custom_tool_call")
 SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
@@ -292,6 +294,9 @@ class GatewayKey(Base):
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
     response_references: Mapped[list[ResponseReference]] = relationship(back_populates="gateway_key")
     conversation_references: Mapped[list[ConversationReference]] = relationship(back_populates="gateway_key")
+    codex_replay_references: Mapped[list[CodexReplayReference]] = relationship(
+        back_populates="gateway_key"
+    )
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="gateway_key")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
@@ -456,6 +461,114 @@ class ConversationReference(Base):
     )
 
 
+class CodexReplayReference(Base):
+    __tablename__ = "codex_replay_references"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    usage_ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usage_ledger.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    route_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="RESTRICT"), nullable=False
+    )
+    upstream_model: Mapped[str] = mapped_column(Text, nullable=False)
+    item_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    item_id_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    call_id_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hmac_key_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_namespace: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    gateway_key: Mapped[GatewayKey] = relationship(back_populates="codex_replay_references")
+    usage_ledger: Mapped[UsageLedger] = relationship(back_populates="codex_replay_references")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"item_kind in {KIND_VALUES_CODEX_REPLAY_REFERENCES}",
+            name="codex_replay_references_item_kind_allowed_values",
+        ),
+        CheckConstraint(
+            "item_id_hmac ~ '^[0-9a-f]{64}$'",
+            name="codex_replay_references_item_hmac_format",
+        ),
+        CheckConstraint(
+            "call_id_hmac is null or call_id_hmac ~ '^[0-9a-f]{64}$'",
+            name="codex_replay_references_call_hmac_format",
+        ),
+        CheckConstraint(
+            "hmac_key_version > 0",
+            name="codex_replay_references_hmac_version_positive",
+        ),
+        CheckConstraint(
+            "length(btrim(source_request_id)) > 0",
+            name="codex_replay_references_source_request_non_empty",
+        ),
+        CheckConstraint(
+            "length(btrim(provider)) > 0",
+            name="codex_replay_references_provider_non_empty",
+        ),
+        CheckConstraint(
+            "length(btrim(upstream_model)) > 0",
+            name="codex_replay_references_upstream_model_non_empty",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="codex_replay_references_expiry_after_creation",
+        ),
+        CheckConstraint(
+            "((item_kind = 'reasoning' and call_id_hmac is null and "
+            "tool_namespace is null and tool_name is null) or "
+            "(item_kind in ('function_call', 'custom_tool_call') and "
+            "call_id_hmac is not null and tool_namespace is not null and tool_name is not null))",
+            name="codex_replay_references_kind_shape",
+        ),
+        CheckConstraint(
+            "tool_namespace is null or "
+            "(length(btrim(tool_namespace)) > 0 and length(tool_namespace) <= 256)",
+            name="codex_replay_references_tool_namespace_bounded",
+        ),
+        CheckConstraint(
+            "tool_name is null or (length(btrim(tool_name)) > 0 and length(tool_name) <= 256)",
+            name="codex_replay_references_tool_name_bounded",
+        ),
+        UniqueConstraint(
+            "gateway_key_id",
+            "item_kind",
+            "item_id_hmac",
+            name="uq_codex_replay_references_key_kind_item",
+        ),
+        UniqueConstraint(
+            "gateway_key_id",
+            "item_kind",
+            "call_id_hmac",
+            name="uq_codex_replay_references_key_kind_call",
+        ),
+        Index(
+            "ix_codex_replay_references_key_kind_item_expiry",
+            "gateway_key_id",
+            "item_kind",
+            "item_id_hmac",
+            "expires_at",
+        ),
+        Index(
+            "ix_codex_replay_references_key_kind_call_expiry",
+            "gateway_key_id",
+            "item_kind",
+            "call_id_hmac",
+            "expires_at",
+        ),
+        Index("ix_codex_replay_references_usage_ledger_id", "usage_ledger_id"),
+        Index("ix_codex_replay_references_expires_at", "expires_at"),
+    )
+
+
 class QuotaReservation(Base):
     __tablename__ = "quota_reservations"
 
@@ -562,6 +675,9 @@ class UsageLedger(Base):
     institution: Mapped[Institution | None] = relationship(back_populates="usage_ledger_rows")
     cohort: Mapped[Cohort | None] = relationship(back_populates="usage_ledger_rows")
     usage_profile: Mapped[UsageProfile | None] = relationship(back_populates="usage_ledger")
+    codex_replay_references: Mapped[list[CodexReplayReference]] = relationship(
+        back_populates="usage_ledger"
+    )
 
     __table_args__ = (
         CheckConstraint(

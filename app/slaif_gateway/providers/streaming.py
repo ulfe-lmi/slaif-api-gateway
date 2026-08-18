@@ -39,6 +39,8 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _MAX_STREAM_DELTA_BYTES = 65_536
 _MAX_STREAM_ITEM_TEXT_BYTES = 1_048_576
 _MAX_STREAM_CUMULATIVE_ITEM_BYTES = 1_048_576
+_MAX_STREAM_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
+_MAX_STREAM_ENCRYPTED_REASONING_BYTES = 1_048_576
 _MAX_STREAM_CONTENT_PARTS = 64
 _MAX_STREAM_INDEX = 1_000_000
 _MAX_STREAM_TOKEN_COUNT = 2**63 - 1
@@ -51,6 +53,7 @@ class ResponsesStreamValidationProfile:
     """Request-scoped permission profile for typed Responses SSE validation."""
 
     codex_streaming_tool_events: bool = False
+    codex_encrypted_reasoning_replay: bool = False
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
 
 
@@ -61,6 +64,17 @@ class _StreamItemState:
     name: str | None
     call_id: str | None
     delta_text: str = ""
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class CodexReplayStreamCandidate:
+    """Transient validated IDs for immediate post-accounting HMAC persistence."""
+
+    item_kind: str
+    item_id: str
+    call_id: str | None
+    tool_namespace: str | None
+    tool_name: str | None
 
 
 class ResponsesStreamEventValidator:
@@ -74,6 +88,8 @@ class ResponsesStreamEventValidator:
         self._reasoning_deltas: dict[tuple[str, str, int], str] = {}
         self._safe_event_counts: Counter[str] = Counter()
         self._safe_event_bytes: Counter[str] = Counter()
+        self._encrypted_reasoning_bytes = 0
+        self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
 
     @property
     def profile(self) -> ResponsesStreamValidationProfile:
@@ -85,6 +101,13 @@ class ResponsesStreamEventValidator:
             "event_counts": dict(sorted(self._safe_event_counts.items())),
             "event_bytes": dict(sorted(self._safe_event_bytes.items())),
         }
+
+    def take_replay_reference_candidates(self) -> tuple[CodexReplayStreamCandidate, ...]:
+        """Move validated IDs to the immediate HMAC step and clear validator state."""
+
+        candidates = tuple(self._replay_reference_candidates)
+        self._replay_reference_candidates.clear()
+        return candidates
 
     def validate(self, payload: Mapping[str, Any] | None) -> bool:
         """Return whether one event is allowed by this request's gated profile."""
@@ -150,13 +173,25 @@ class ResponsesStreamEventValidator:
         ):
             return False
         item = payload.get("item")
-        state = self._validate_item_shape(item)
+        state = self._validate_item_shape(item, event_type=event_type)
         if state is None or not isinstance(item, Mapping):
             return False
         item_id = item.get("id")
         if not _bounded_identifier(item_id, required=False):
             return False
         if event_type == "response.output_item.added" and not isinstance(item_id, str):
+            return False
+        if (
+            event_type == "response.output_item.done"
+            and (
+                state.item_type in {"function_call", "custom_tool_call"}
+                or (
+                    state.item_type == "reasoning"
+                    and self._profile.codex_encrypted_reasoning_replay
+                )
+            )
+            and not isinstance(item_id, str)
+        ):
             return False
 
         if isinstance(item_id, str):
@@ -181,6 +216,7 @@ class ResponsesStreamEventValidator:
                     if final_text != active.delta_text:
                         return False
                 del self._active_items[item_id]
+                self._capture_replay_candidate(item_id=item_id, state=state)
                 return True
             if item_id in self._seen_item_ids:
                 return False
@@ -190,9 +226,16 @@ class ResponsesStreamEventValidator:
             if state.call_id in self._seen_call_ids:
                 return False
             self._seen_call_ids.add(state.call_id)
+        if event_type == "response.output_item.done" and isinstance(item_id, str):
+            self._capture_replay_candidate(item_id=item_id, state=state)
         return True
 
-    def _validate_item_shape(self, item: Any) -> _StreamItemState | None:
+    def _validate_item_shape(
+        self,
+        item: Any,
+        *,
+        event_type: str,
+    ) -> _StreamItemState | None:
         if not isinstance(item, Mapping):
             return None
         item_type = item.get("type")
@@ -225,8 +268,20 @@ class ResponsesStreamEventValidator:
                 return None
             return _StreamItemState("message", None, None, None)
         elif item_type == "reasoning":
-            if not _validate_reasoning_item(item):
+            encrypted_bytes = _validate_reasoning_item(
+                item,
+                event_type=event_type,
+                encrypted_replay=self._profile.codex_encrypted_reasoning_replay,
+            )
+            if encrypted_bytes is None:
                 return None
+            if encrypted_bytes:
+                if (
+                    self._encrypted_reasoning_bytes + encrypted_bytes
+                    > _MAX_STREAM_ENCRYPTED_REASONING_BYTES
+                ):
+                    return None
+                self._encrypted_reasoning_bytes += encrypted_bytes
             return _StreamItemState("reasoning", None, None, None)
         else:
             return None
@@ -262,6 +317,25 @@ class ResponsesStreamEventValidator:
             resolved_namespace,
             resolved_name,
             str(call_id),
+        )
+
+    def _capture_replay_candidate(self, *, item_id: str, state: _StreamItemState) -> None:
+        if state.item_type == "reasoning":
+            if not self._profile.codex_encrypted_reasoning_replay:
+                return
+            kind = "reasoning"
+        elif state.item_type in {"function_call", "custom_tool_call"}:
+            kind = state.item_type
+        else:
+            return
+        self._replay_reference_candidates.append(
+            CodexReplayStreamCandidate(
+                item_kind=kind,
+                item_id=item_id,
+                call_id=state.call_id,
+                tool_namespace=state.namespace,
+                tool_name=state.name,
+            )
         )
 
     def _resolve_declared_tool(
@@ -565,32 +639,61 @@ def _validate_reasoning_text_part(part: Mapping[str, Any], *, expected_type: str
     return isinstance(text, str) and _bounded_utf8(text, _MAX_STREAM_ITEM_TEXT_BYTES)
 
 
-def _validate_reasoning_item(item: Mapping[str, Any]) -> bool:
-    if not _only_fields(item, {"type", "id", "status", "summary", "content"}):
-        return False
-    if not _optional_item_status(item):
-        return False
+def _validate_reasoning_item(
+    item: Mapping[str, Any],
+    *,
+    event_type: str,
+    encrypted_replay: bool,
+) -> int | None:
+    if encrypted_replay:
+        if event_type == "response.output_item.done":
+            if set(item) != {"type", "id", "summary", "encrypted_content"}:
+                return None
+            if not _bounded_identifier(item.get("id"), required=True):
+                return None
+            encrypted_content = item.get("encrypted_content")
+            if not isinstance(encrypted_content, str) or not _bounded_utf8(
+                encrypted_content,
+                _MAX_STREAM_ENCRYPTED_REASONING_ITEM_BYTES,
+                nonempty=True,
+            ):
+                return None
+            encrypted_bytes = len(encrypted_content.encode("utf-8"))
+        else:
+            if not _only_fields(item, {"type", "id", "status", "summary"}):
+                return None
+            if not _optional_item_status(item):
+                return None
+            encrypted_bytes = 0
+    else:
+        if not _only_fields(item, {"type", "id", "status", "summary", "content"}):
+            return None
+        if not _optional_item_status(item):
+            return None
+        encrypted_bytes = 0
     summary = item.get("summary")
     if not isinstance(summary, list) or len(summary) > _MAX_STREAM_CONTENT_PARTS:
-        return False
+        return None
     total_bytes = 0
     for part in summary:
         if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
             part, expected_type="summary_text"
         ):
-            return False
+            return None
         total_bytes += len(str(part["text"]).encode("utf-8"))
     content = item.get("content")
     if content is not None:
         if not isinstance(content, list) or len(content) > _MAX_STREAM_CONTENT_PARTS:
-            return False
+            return None
         for part in content:
             if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
                 part, expected_type="reasoning_text"
             ):
-                return False
+                return None
             total_bytes += len(str(part["text"]).encode("utf-8"))
-    return total_bytes <= _MAX_STREAM_ITEM_TEXT_BYTES
+    if total_bytes > _MAX_STREAM_ITEM_TEXT_BYTES:
+        return None
+    return encrypted_bytes
 
 
 def _same_stream_item(first: _StreamItemState, second: _StreamItemState) -> bool:
@@ -621,6 +724,9 @@ def _event_generated_bytes(payload: Mapping[str, Any]) -> int:
         value = item.get(field)
         if isinstance(value, str):
             total += len(value.encode("utf-8"))
+    encrypted_content = item.get("encrypted_content")
+    if isinstance(encrypted_content, str):
+        total += len(encrypted_content.encode("utf-8"))
     for field in ("content", "summary"):
         parts = item.get(field)
         if isinstance(parts, list):
