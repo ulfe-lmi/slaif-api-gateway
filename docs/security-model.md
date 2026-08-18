@@ -544,6 +544,13 @@ default-off and policy-first:
   gated taxonomy receive the fixed 20,000-byte description qualification cap;
   all descriptions together remain capped at 32,768 bytes. Namespace and
   ordinary function/custom descriptions remain capped at 4,096 bytes.
+  The singular schema key `header` is allowed only at the complete pinned
+  `functions.request_user_input` UI-label path
+  `parameters.properties.questions.items.properties.header`. The detector
+  continues recursively below that key and through its siblings. `headers`,
+  alternate paths/tools, and all authorization, secret, connector, server,
+  approval, MCP, and hosted markers remain denied; ordinary tools receive no
+  exception.
 - Codex client-tool streaming and replay additionally require
   `codex_streaming_tool_events` on both the key and route. A request-scoped
   validator accepts only bounded declared event/call shapes and exact call-to-

@@ -229,6 +229,15 @@ top-level function/custom tools remain capped at 4,096 bytes; model names,
 headers, endpoint permission, and ordinary tool capabilities cannot reach the
 Codex-only allowance.
 
+The same exact taxonomy permits the singular JSON-schema property `header`
+only for `functions.request_user_input` at
+`parameters.properties.questions.items.properties.header`. Pinned source uses
+it as a short UI label, not an HTTP header. The recursive scan continues below
+that schema property and across every sibling; plural/alternate header keys,
+the singular key at any other path/tool, and authorization, secret, connector,
+server, approval, MCP, and hosted-type markers remain denied. This exception
+does not apply to ordinary Responses tools.
+
 With these declarations, `tool_choice` is limited to the strings `none`,
 `auto`, or `required`; the pinned profile uses `auto`. Named/object choices are
 denied. The declarations, descriptions, schemas, grammar, and choice are

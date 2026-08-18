@@ -54,11 +54,30 @@ def _compact_body() -> dict[str, object]:
 
 def _pinned_compact_additional_tools(description_bytes: int) -> dict[str, object]:
     def function(name: str) -> dict[str, object]:
+        parameters: dict[str, object] = {"type": "object", "properties": {}}
+        if name == "request_user_input":
+            parameters = {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "header": {"type": "string"},
+                                "question": {"type": "string"},
+                                "options": {"type": "array", "items": {"type": "object"}},
+                            },
+                        },
+                    }
+                },
+            }
         return {
             "type": "function",
             "name": name,
             "description": f"bounded-{name}",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": parameters,
         }
 
     return {

@@ -311,7 +311,13 @@ fail closed. Child function/custom descriptions use a fixed 20,000-byte per-
 description qualification cap only in this exact gated taxonomy, with 32,768
 bytes total across namespace and child descriptions. Namespace and ordinary
 top-level function/custom descriptions keep their 4,096-byte limits. Approved
-envelope, message-ID, declaration, description, schema, grammar, and choice
+`functions.request_user_input` may use singular schema property `header` only
+at `parameters.properties.questions.items.properties.header`, where it is a
+short UI label. Recursive scanning remains active below and beside that exact
+property; plural/alternate header fields, other paths/tools, and every provider
+authority marker still fail closed. Ordinary tool behavior is unchanged.
+All approved envelope, message-ID, declaration, description, schema, grammar,
+and choice
 bytes increase the conservative admission estimate; safe estimation evidence
 contains only approved categories and aggregate bytes/tokens, never private
 values. Dropped client metadata is size-capped but is not provider-billed input.

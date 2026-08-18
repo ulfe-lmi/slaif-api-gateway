@@ -216,6 +216,18 @@ _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES = 256
 _CODEX_MAX_CLIENT_TOOL_DESCRIPTION_BYTES = 20_000
 _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES = 32_768
 _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES = 589_824
+_CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS = frozenset(
+    {
+        (
+            "parameters",
+            "properties",
+            "questions",
+            "items",
+            "properties",
+            "header",
+        )
+    }
+)
 _CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
 _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES = 1_048_576
 _CODEX_MAX_REASONING_SUMMARY_BYTES = 65_536
@@ -1302,7 +1314,17 @@ class ResponsesRequestPolicy:
                         "responses_codex_client_tools_invalid",
                         "This Codex client tool has an invalid declaration type.",
                     )
-                if _contains_recursive_codex_authority_marker(tool):
+                allowed_authority_key_paths = (
+                    _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS
+                    if namespace_name == "functions"
+                    and tool_name == "request_user_input"
+                    and tool.get("type") == "function"
+                    else frozenset()
+                )
+                if _contains_recursive_codex_authority_marker(
+                    tool,
+                    allowed_key_paths=allowed_authority_key_paths,
+                ):
                     _raise(
                         tool_param,
                         "responses_codex_client_tools_provider_authority_not_supported",
@@ -4290,7 +4312,12 @@ def _contains_provider_authority_marker(value: Mapping[str, Any]) -> bool:
     return any(field in value for field in forbidden)
 
 
-def _contains_recursive_codex_authority_marker(value: Any) -> bool:
+def _contains_recursive_codex_authority_marker(
+    value: Any,
+    *,
+    allowed_key_paths: frozenset[tuple[str, ...]] = frozenset(),
+    _path: tuple[str, ...] = (),
+) -> bool:
     forbidden_fields = {
         "allowed_tools",
         "approval",
@@ -4329,7 +4356,8 @@ def _contains_recursive_codex_authority_marker(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, nested in value.items():
             normalized_key = str(key).strip().lower().replace("-", "_")
-            if normalized_key in forbidden_fields or any(
+            key_path = (*_path, normalized_key)
+            authority_key = normalized_key in forbidden_fields or any(
                 marker in normalized_key
                 for marker in (
                     "approval",
@@ -4339,17 +4367,29 @@ def _contains_recursive_codex_authority_marker(value: Any) -> bool:
                     "header",
                     "secret",
                 )
-            ):
+            )
+            if authority_key and key_path not in allowed_key_paths:
                 return True
             if normalized_key == "type" and isinstance(nested, str):
                 normalized_type = nested.strip().lower().replace("-", "_")
                 if normalized_type in _HOSTED_TOOL_TYPES:
                     return True
-            if _contains_recursive_codex_authority_marker(nested):
+            if _contains_recursive_codex_authority_marker(
+                nested,
+                allowed_key_paths=allowed_key_paths,
+                _path=key_path,
+            ):
                 return True
         return False
     if isinstance(value, (list, tuple)):
-        return any(_contains_recursive_codex_authority_marker(item) for item in value)
+        return any(
+            _contains_recursive_codex_authority_marker(
+                item,
+                allowed_key_paths=allowed_key_paths,
+                _path=_path,
+            )
+            for item in value
+        )
     return False
 
 
