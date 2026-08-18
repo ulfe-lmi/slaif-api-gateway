@@ -33,6 +33,17 @@ from slaif_gateway.services.pricing_errors import (
 
 _ONE_MILLION: Final[Decimal] = Decimal("1000000")
 _EUR: Final[str] = "EUR"
+_CODEX_ACCOUNTING_METADATA_KEY: Final[str] = "codex_accounting"
+_CODEX_ACCOUNTING_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "long_context_threshold_tokens",
+        "long_context_input_multiplier",
+        "long_context_output_multiplier",
+    }
+)
+_CODEX_ACCOUNTING_CACHE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"cache_write_input_price_per_1m", "cache_write_input_multiplier"}
+)
 
 
 class PricingService:
@@ -117,15 +128,34 @@ class PricingService:
         if audio_output_requested and pricing.audio_output_price_per_1m is None:
             raise AudioOutputPricingNotSupportedError(param="audio")
 
-        input_cost_native = (
-            Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
-        )
+        codex_accounting = bool(getattr(policy, "codex_limits_applied", False))
+        input_price = pricing.input_price_per_1m
         output_price = pricing.output_price_per_1m
+        if codex_accounting:
+            if (
+                pricing.cache_write_input_price_per_1m is None
+                or pricing.long_context_threshold_tokens is None
+                or pricing.long_context_input_multiplier is None
+                or pricing.long_context_output_multiplier is None
+                or pricing.reasoning_price_per_1m is None
+                or pricing.cached_input_price_per_1m is None
+            ):
+                raise InvalidPricingDataError(
+                    "Complete Codex cache, reasoning, and long-context pricing is required."
+                )
+            input_price = max(
+                pricing.input_price_per_1m,
+                pricing.cache_write_input_price_per_1m,
+            ) * max(Decimal("1"), pricing.long_context_input_multiplier)
+            output_price = max(
+                pricing.output_price_per_1m,
+                pricing.reasoning_price_per_1m,
+            ) * max(Decimal("1"), pricing.long_context_output_multiplier)
+
+        input_cost_native = Decimal(input_tokens) / _ONE_MILLION * input_price
         if audio_output_requested and pricing.audio_output_price_per_1m is not None:
             output_price = max(output_price, pricing.audio_output_price_per_1m)
-        output_cost_native = (
-            Decimal(output_tokens) / _ONE_MILLION * output_price
-        )
+        output_cost_native = Decimal(output_tokens) / _ONE_MILLION * output_price
         total_native = input_cost_native + output_cost_native
         total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
 
@@ -149,6 +179,12 @@ class PricingService:
             audio_output_price_per_1m=pricing.audio_output_price_per_1m,
             request_price=pricing.request_price,
             fx_rate=fx.rate,
+            cache_write_input_price_per_1m=pricing.cache_write_input_price_per_1m,
+            cache_write_input_multiplier=pricing.cache_write_input_multiplier,
+            long_context_threshold_tokens=pricing.long_context_threshold_tokens,
+            long_context_input_multiplier=pricing.long_context_input_multiplier,
+            long_context_output_multiplier=pricing.long_context_output_multiplier,
+            codex_accounting=codex_accounting,
         )
 
     async def estimate_audio_operation_cost(
@@ -169,9 +205,7 @@ class PricingService:
         input_tokens = policy.estimated_input_tokens
         output_tokens = 0
 
-        input_cost_native = (
-            Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
-        )
+        input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
         total_native = input_cost_native
         if pricing.request_price is not None:
             total_native = pricing.request_price
@@ -219,9 +253,7 @@ class PricingService:
         )
 
         input_tokens = policy.estimated_input_tokens
-        input_cost_native = (
-            Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
-        )
+        input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
         total_eur, fx = await self.convert_to_eur(input_cost_native, pricing.currency, at=at)
 
         return ChatCostEstimate(
@@ -357,6 +389,16 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
         row.pricing_metadata,
         field_name="audio_output_price_per_1m",
     )
+    (
+        cache_write_input_price,
+        cache_write_input_multiplier,
+        long_context_threshold,
+        long_context_input_multiplier,
+        long_context_output_multiplier,
+    ) = _codex_accounting_metadata(
+        row.pricing_metadata,
+        input_price_per_1m=input_price,
+    )
 
     return PricingLookupResult(
         provider=row.provider,
@@ -372,10 +414,89 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
             row.request_price,
             field_name="request_price",
         ),
+        cache_write_input_price_per_1m=cache_write_input_price,
+        cache_write_input_multiplier=cache_write_input_multiplier,
+        long_context_threshold_tokens=long_context_threshold,
+        long_context_input_multiplier=long_context_input_multiplier,
+        long_context_output_multiplier=long_context_output_multiplier,
         pricing_rule_id=row.id,
         valid_from=row.valid_from,
         valid_until=row.valid_until,
     )
+
+
+def _codex_accounting_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    input_price_per_1m: Decimal,
+) -> tuple[Decimal | None, Decimal | None, int | None, Decimal | None, Decimal | None]:
+    if not isinstance(metadata, Mapping) or _CODEX_ACCOUNTING_METADATA_KEY not in metadata:
+        return None, None, None, None, None
+    raw = metadata.get(_CODEX_ACCOUNTING_METADATA_KEY)
+    if not isinstance(raw, Mapping):
+        raise InvalidPricingDataError("Configured Codex accounting metadata must be an object.")
+    fields = {str(key) for key in raw}
+    cache_fields = fields.intersection(_CODEX_ACCOUNTING_CACHE_FIELDS)
+    expected = _CODEX_ACCOUNTING_REQUIRED_FIELDS.union(cache_fields)
+    if len(cache_fields) != 1 or fields != expected:
+        raise InvalidPricingDataError(
+            "Configured Codex accounting metadata is partial or contains unknown fields."
+        )
+
+    threshold = raw.get("long_context_threshold_tokens")
+    if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
+        raise InvalidPricingDataError(
+            "Configured Codex long-context threshold must be a positive integer."
+        )
+    long_input = _strict_positive_decimal_string(
+        raw.get("long_context_input_multiplier"),
+        field_name="long_context_input_multiplier",
+    )
+    long_output = _strict_positive_decimal_string(
+        raw.get("long_context_output_multiplier"),
+        field_name="long_context_output_multiplier",
+    )
+    cache_price: Decimal | None = None
+    cache_multiplier: Decimal | None = None
+    if "cache_write_input_price_per_1m" in raw:
+        cache_price = _strict_non_negative_decimal_string(
+            raw.get("cache_write_input_price_per_1m"),
+            field_name="cache_write_input_price_per_1m",
+        )
+    else:
+        cache_multiplier = _strict_positive_decimal_string(
+            raw.get("cache_write_input_multiplier"),
+            field_name="cache_write_input_multiplier",
+        )
+        cache_price = input_price_per_1m * cache_multiplier
+    return cache_price, cache_multiplier, threshold, long_input, long_output
+
+
+def _strict_non_negative_decimal_string(value: object, *, field_name: str) -> Decimal:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidPricingDataError(
+            f"Configured Codex pricing field '{field_name}' must be a decimal string."
+        )
+    try:
+        parsed = Decimal(value)
+    except Exception as exc:
+        raise InvalidPricingDataError(
+            f"Configured Codex pricing field '{field_name}' must be a decimal string."
+        ) from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise InvalidPricingDataError(
+            f"Configured Codex pricing field '{field_name}' must be non-negative."
+        )
+    return parsed
+
+
+def _strict_positive_decimal_string(value: object, *, field_name: str) -> Decimal:
+    parsed = _strict_non_negative_decimal_string(value, field_name=field_name)
+    if parsed <= 0:
+        raise InvalidPricingDataError(
+            f"Configured Codex pricing field '{field_name}' must be positive."
+        )
+    return parsed
 
 
 def _fx_conversion_result(row: FxRate) -> FxConversionResult:
@@ -419,7 +540,9 @@ def _optional_metadata_price_per_1m(
     if value is None:
         return None
     if isinstance(value, bool):
-        raise InvalidPricingDataError(f"Configured pricing metadata field '{field_name}' must be numeric.")
+        raise InvalidPricingDataError(
+            f"Configured pricing metadata field '{field_name}' must be numeric."
+        )
     if isinstance(value, Decimal):
         return _optional_non_negative_decimal(value, field_name=field_name)
     if isinstance(value, int | float | str):
@@ -430,7 +553,9 @@ def _optional_metadata_price_per_1m(
                 f"Configured pricing metadata field '{field_name}' must be numeric."
             ) from exc
         return _optional_non_negative_decimal(parsed, field_name=field_name)
-    raise InvalidPricingDataError(f"Configured pricing metadata field '{field_name}' must be numeric.")
+    raise InvalidPricingDataError(
+        f"Configured pricing metadata field '{field_name}' must be numeric."
+    )
 
 
 def _uses_audio_output(payload: Mapping[str, Any]) -> bool:

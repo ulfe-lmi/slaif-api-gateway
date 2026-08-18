@@ -17,10 +17,15 @@ from slaif_gateway.services.codex_replay_service import (
     CodexReplayAuthorization,
 )
 from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_replay_request_candidates,
 )
+
+
+_INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
+_PRIVATE_METADATA_CANARY = "PRIVATE-REPLAY-METADATA-CANARY"
 
 
 def _function(name: str) -> dict[str, object]:
@@ -111,6 +116,17 @@ def _apply_tools(body: dict[str, object]):
     )
 
 
+def _apply_fully_gated(body: dict[str, object]):
+    return ResponsesRequestPolicy(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        allow_codex_encrypted_reasoning_replay=True,
+        allow_codex_compaction_replay=True,
+    )
+
+
 def test_encrypted_reasoning_replay_is_canonical_metered_and_id_only_for_lookup() -> None:
     body = _body(
         [
@@ -130,6 +146,62 @@ def test_encrypted_reasoning_replay_is_canonical_metered_and_id_only_for_lookup(
     assert candidates[0].item_id == "rs_1"
     assert not hasattr(candidates[0], "encrypted_content")
     assert not hasattr(candidates[0], "summary")
+
+
+def test_dropped_internal_chat_metadata_never_enters_replay_or_hmac_candidates() -> None:
+    body = _body(
+        [
+            {
+                **_reasoning(),
+                _INTERNAL_CHAT_METADATA_FIELD: {
+                    "turn_id": "private-turn",
+                    "executed_tool_calls": [
+                        {
+                            "name": "exec",
+                            "arguments": {"private": _PRIVATE_METADATA_CANARY},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": "next turn",
+                _INTERNAL_CHAT_METADATA_FIELD: None,
+            },
+        ]
+    )
+    original = copy.deepcopy(body)
+    clean_body = copy.deepcopy(body)
+    clean_items = clean_body["input"]
+    assert isinstance(clean_items, list)
+    for item in clean_items:
+        assert isinstance(item, dict)
+        item.pop(_INTERNAL_CHAT_METADATA_FIELD)
+
+    result = _apply_fully_gated(body)
+    clean_result = _apply_fully_gated(clean_body)
+    candidates = codex_replay_request_candidates(result.effective_body)
+    clean_candidates = codex_replay_request_candidates(clean_result.effective_body)
+
+    assert body == original
+    assert result.effective_body == clean_result.effective_body
+    assert result.estimated_input_tokens == clean_result.estimated_input_tokens
+    assert result.estimated_non_message_input_bytes == clean_result.estimated_non_message_input_bytes
+    assert result.estimated_non_message_input_fields == clean_result.estimated_non_message_input_fields
+    assert candidates == clean_candidates
+    assert len(candidates) == 1
+    assert candidates[0].item_id == "rs_1"
+    assert not hasattr(candidates[0], _INTERNAL_CHAT_METADATA_FIELD)
+    safe_evidence = repr(
+        (
+            result.estimated_input_tokens,
+            result.estimated_non_message_input_bytes,
+            result.estimated_non_message_input_fields,
+            candidates,
+        )
+    )
+    assert _PRIVATE_METADATA_CANARY not in safe_evidence
 
 
 def test_pinned_reasoning_replay_accepts_only_exact_null_content() -> None:
@@ -269,12 +341,213 @@ def test_tool_replay_requires_exact_adjacent_pair_and_exposes_only_linkage_ids()
             _additional_tools(),
             call,
             {"type": "message", "role": "user", "content": "gap"},
-            output,
+            {**output, "id": "ctco_reordered"},
         ]
     )
     with pytest.raises(RequestPolicyError) as exc_info:
         _apply_tools(reordered)
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_output_item_id_bytes_are_canonical_metered_and_not_hmac_authority() -> None:
+    output_id = "ctco_" + "a" * 36
+    assert len(output_id) == len(output_id.encode("ascii")) == 41
+    call = {
+        "type": "custom_tool_call",
+        "id": "ctc_1",
+        "namespace": "functions",
+        "name": "exec",
+        "call_id": "call_1",
+        "input": "bounded",
+    }
+    output = {
+        "type": "custom_tool_call_output",
+        "id": output_id,
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    with_id_body = _body([_additional_tools(), call, output])
+    without_id_body = copy.deepcopy(with_id_body)
+    without_id_items = without_id_body["input"]
+    assert isinstance(without_id_items, list)
+    assert isinstance(without_id_items[2], dict)
+    without_id_items[2].pop("id")
+
+    with_id = _apply_tools(with_id_body)
+    without_id = _apply_tools(without_id_body)
+    with_output = with_id.effective_body["input"][2]
+    without_output = without_id.effective_body["input"][2]
+    canonical_delta = len(canonical_json_bytes(with_output)) - len(
+        canonical_json_bytes(without_output)
+    )
+    id_field_bytes = len(canonical_json_bytes({"id": output_id}))
+    policy = ResponsesRequestPolicy(Settings())
+    _, with_material_bytes = policy._validate_input(
+        with_id.effective_body["input"],
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        allow_codex_encrypted_reasoning_replay=True,
+    )
+    _, without_material_bytes = policy._validate_input(
+        without_id.effective_body["input"],
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        allow_codex_encrypted_reasoning_replay=True,
+    )
+
+    assert with_material_bytes - without_material_bytes == canonical_delta
+    assert (
+        with_id.estimated_non_message_input_bytes
+        - without_id.estimated_non_message_input_bytes
+        == id_field_bytes
+    )
+    assert with_id.estimated_input_tokens == max(
+        1,
+        (
+            with_material_bytes
+            + with_id.estimated_non_message_input_bytes
+            + 2
+        )
+        // 3,
+    )
+    assert without_id.estimated_input_tokens == max(
+        1,
+        (
+            without_material_bytes
+            + without_id.estimated_non_message_input_bytes
+            + 2
+        )
+        // 3,
+    )
+    with_candidates = codex_replay_request_candidates(with_id.effective_body)
+    without_candidates = codex_replay_request_candidates(without_id.effective_body)
+    assert with_candidates == without_candidates
+    assert len(with_candidates) == 1
+    assert with_candidates[0].item_id == "ctc_1"
+    safe_evidence = repr(
+        (
+            with_id.estimated_input_tokens,
+            with_id.estimated_non_message_input_tokens,
+            with_id.estimated_non_message_input_bytes,
+            with_id.estimated_non_message_input_fields,
+            with_candidates,
+        )
+    )
+    assert output_id not in safe_evidence
+
+
+@pytest.mark.parametrize("collision_kind", ["call", "reasoning", "message"])
+def test_output_item_ids_are_unique_across_all_codex_history(collision_kind: str) -> None:
+    shared_id = "item_shared"
+    items: list[object] = [_additional_tools()]
+    if collision_kind == "reasoning":
+        items.append(_reasoning(item_id=shared_id))
+    elif collision_kind == "message":
+        items.append(
+            {"type": "message", "id": shared_id, "role": "user", "content": "bounded"}
+        )
+    call_id = shared_id if collision_kind == "call" else "ctc_unique"
+    items.extend(
+        [
+            {
+                "type": "custom_tool_call",
+                "id": call_id,
+                "namespace": "functions",
+                "name": "exec",
+                "call_id": "call_1",
+                "input": "bounded",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "id": shared_id,
+                "call_id": "call_1",
+                "output": "bounded result",
+            },
+        ]
+    )
+    output_index = len(items) - 1
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_tools(_body(items))
+
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+    assert exc_info.value.param == f"input[{output_index}].id"
+
+
+def test_duplicate_output_item_ids_are_rejected_request_wide() -> None:
+    duplicate_id = "output_shared"
+    items = [
+        _additional_tools(),
+        {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "namespace": "functions",
+            "name": "exec",
+            "call_id": "call_1",
+            "input": "bounded",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "id": duplicate_id,
+            "call_id": "call_1",
+            "output": "bounded result",
+        },
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "namespace": "functions",
+            "name": "wait",
+            "call_id": "call_2",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "id": duplicate_id,
+            "call_id": "call_2",
+            "output": "bounded result",
+        },
+    ]
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_tools(_body(items))
+
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+    assert exc_info.value.param == "input[4].id"
+
+
+@pytest.mark.parametrize(
+    ("output_type", "expected_code"),
+    [
+        ("function_call_output", "responses_function_call_output_invalid"),
+        ("custom_tool_call_output", "responses_custom_tool_call_output_invalid"),
+    ],
+)
+def test_ordinary_non_codex_outputs_continue_to_reject_id(
+    output_type: str,
+    expected_code: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            {
+                "model": "classroom",
+                "input": [
+                    {
+                        "type": output_type,
+                        "id": "output_ordinary",
+                        "call_id": "call_1",
+                        "output": "ok",
+                    },
+                    {"type": "message", "role": "user", "content": "continue"},
+                ],
+                "stream": False,
+                "max_output_tokens": 16,
+            }
+        )
+
+    assert exc_info.value.error_code == expected_code
+    assert exc_info.value.param == "input[0].id"
 
 
 def test_ordinary_non_codex_function_output_remains_separate() -> None:

@@ -37,3 +37,5 @@ class ResponsesPolicyResult(BaseModel):
     estimated_non_message_input_bytes: int = 0
     estimated_non_message_input_fields: tuple[str, ...] = ()
     injected_default_output_tokens: bool
+    codex_context_window_tokens: int | None = None
+    codex_limits_applied: bool = False

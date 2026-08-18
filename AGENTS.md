@@ -722,6 +722,22 @@ Current behavior:
   arguments, and results are never persisted or exposed. Client-managed replay
   cannot be combined with `previous_response_id` or Conversations. This
   remains a partial client-side tool loop, not a full Codex compatibility claim.
+- Fully gated Codex requests additionally require strict route-local
+  `codex_limits` metadata and operator ceilings. The reviewed qualification
+  profile uses a bounded 32,768 default output, 1,050,000 context, and 128,000
+  maximum output; these are configured model data, not universal facts or an
+  unlimited-output promise. Ordinary Responses remains on its existing 1,024
+  default. Cache-read, cache-write, uncached input, ordinary output, reasoning
+  output, and configured long-context tiers are separate accounting
+  dimensions; locally calculated cache-write/long-context cost is not
+  provider-invoice truth.
+- V1 Codex compaction is available only with all four prior Codex gates plus
+  the independent default-off `codex_compaction` key and route capability. The
+  gateway validates exactly one opaque compaction item, finalizes accounting,
+  and persists only a versioned composite HMAC over its ID and ciphertext for
+  same-key/provider/model/explicitly-compatible-route replay. Neither raw value
+  is stored. V2 compaction triggers, background mode, and hosted tools remain
+  unsupported.
 - Responses streaming live-burn is implemented for the supported stateless
   text-output subset and the explicitly gated Codex client-tool event slice.
   It counts visible output text, function arguments, custom-tool input, and
@@ -734,7 +750,8 @@ Current behavior:
   conversations, and conversation items are supported only after local
   ownership and compatible-provider checks against safe reference metadata.
 - `POST /v1/responses/input_tokens` and the bounded
-  `POST /v1/responses/compact` subset are implemented.
+  `POST /v1/responses/compact` subsets are implemented, including the
+  independently gated opaque Codex V1 compact/replay slice above.
 - The gateway stores only safe provider reference metadata for these lifecycle
   surfaces, never response/input/conversation item content.
 
@@ -749,7 +766,7 @@ Explicit exclusions:
 - Codex client headers, model names, and endpoint permission never substitute
   for the independent `codex_request_envelope`, `codex_client_tools`,
   `codex_streaming_tool_events`, and `codex_encrypted_reasoning_replay` key and
-  route gates. Client metadata, cache
+  route gates; compaction also requires `codex_compaction`. Client metadata, cache
   keys, message IDs, tool descriptions, schemas, grammar definitions,
   arguments, results, streamed deltas, and reasoning content must not be
   persisted, logged, audited, or exported. Approved cache keys, message IDs,

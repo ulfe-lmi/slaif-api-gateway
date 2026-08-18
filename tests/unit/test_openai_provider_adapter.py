@@ -193,7 +193,10 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
                     "input_tokens": 10,
                     "output_tokens": 3,
                     "total_tokens": 13,
-                    "input_tokens_details": {"cached_tokens": 2},
+                    "input_tokens_details": {
+                        "cached_tokens": 2,
+                        "cache_write_tokens": 1,
+                    },
                     "output_tokens_details": {"reasoning_tokens": 1},
                 },
             },
@@ -232,7 +235,9 @@ async def test_openai_response_posts_non_streaming_request(respx_mock) -> None:
     assert response.usage.completion_tokens == 3
     assert response.usage.total_tokens == 13
     assert response.usage.cached_tokens == 2
+    assert response.usage.cache_write_tokens == 1
     assert response.usage.reasoning_tokens == 1
+    assert "content-encoding" not in sent_request.headers
     assert route.called
 
 

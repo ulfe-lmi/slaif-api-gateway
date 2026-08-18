@@ -41,9 +41,21 @@ Core invariants:
   never envelope values. Size-capped `client_metadata` is validated and dropped
   before provider forwarding, so it is not provider-billed input. Provider
   final usage/cost remains authoritative.
+- Fully key-gated Codex create/compact history may contain pinned
+  `internal_chat_message_metadata_passthrough` only on message, reasoning,
+  function/custom call and output, or compaction items. A null or canonical JSON
+  object of at most 32,768 bytes is validated and discarded before canonical
+  input estimation. It contributes zero model-input tokens/bytes and never
+  reaches provider input, replay/HMAC material, accounting metadata, safe
+  evidence, logs, audits, metrics, or exports. Ordinary, partially gated,
+  additional-tools, hosted, and unknown item paths remain rejected.
 - Separately gated Codex client-tool declarations count their canonical
   namespace/tool containers, descriptions, function schemas, `exec` grammar,
-  and bounded string `tool_choice` as provider/model request input. Safe
+  and bounded string `tool_choice` as provider/model request input. Pinned
+  qualification permits at most 20,000 bytes for each exact child-tool
+  description and 32,768 description bytes in aggregate; namespace and
+  ordinary function/custom descriptions retain their 4,096-byte limits. Every
+  admitted description byte remains part of the conservative estimate. Safe
   evidence contains only approved category names and aggregate
   byte/token/count data, never descriptions, property names, grammar,
   arguments, results, or client identifiers. SLAIF does not execute the tools
@@ -56,6 +68,13 @@ Core invariants:
   live-burn estimation count their bounded canonical bytes, but safe evidence
   retains only category/count/byte totals. It never retains call IDs, item IDs,
   arguments, results, reasoning, or message text.
+- Fully gated Codex function/custom output items may carry the pinned optional
+  bounded `id`. When present, its complete canonical bytes are included in
+  model-input admission and cost estimation, including the existing item-ID
+  estimate, while provider final usage/cost remains authoritative. The ID is
+  transient upstream history only: it creates no separate replay/HMAC
+  reference and never enters ledger metadata, safe evidence, logs, audits,
+  metrics, or exports. Ordinary function/custom outputs continue to reject it.
 - Provider-encrypted Codex reasoning generation/replay requires the independent
   default-off `codex_encrypted_reasoning_replay` key and route capability.
   Encrypted and summary bytes are bounded and counted conservatively as model
@@ -67,6 +86,35 @@ Core invariants:
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
+- Fully gated Codex admission replaces only the injected ordinary 1,024 output
+  default with the strict route default (32,768 in the qualification profile),
+  then enforces route/operator output and context bounds before Redis, pricing,
+  quota, or provider work. Ordinary non-Codex admission remains unchanged.
+  Gated V1 compact is the deliberate exception: because the pinned client does
+  not send `max_output_tokens`, SLAIF keeps that field absent upstream but uses
+  the validated route maximum (128,000 in the qualification profile) as the
+  effective/requested output exposure for context checks, reservation, pricing,
+  and safe admission evidence. Ordinary compact and ordinary Responses retain
+  their existing defaults.
+  The 1,050,000 context and 128,000 output qualification ceilings are configured
+  model data, not hardcoded universal limits.
+- Codex pricing partitions provider input into cached reads, cache writes, and
+  ordinary uncached tokens, and output into ordinary and reasoning tokens.
+  Required cache-write and long-context price/multiplier metadata is strict and
+  route-model specific. Admission reserves every estimated input/output token
+  at the maximum plausible configured rate; finalization charges the disjoint
+  provider-reported components and applies the long-context tier to the full
+  request only above its configured threshold. Provider-reported OpenRouter
+  cost authority is unchanged. SLAIF-calculated cache-write/long-context cost
+  remains local conservative accounting, not invoice truth.
+- A gated V1 compact response becomes replayable only after final provider
+  usage and finalized PostgreSQL accounting. SLAIF then persists only a
+  versioned HMAC over the opaque compaction ID plus ciphertext and safe
+  ownership/routing metadata. Only after that persistence succeeds does SLAIF
+  emit its normal compact success metric and response. Persistence failure is a
+  charged safe failure with no normal success metric or response.
+  Raw compact history, IDs, ciphertext, prompt-cache keys, and HMACs never enter
+  accounting metadata.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,

@@ -205,6 +205,14 @@ class ProviderAdapter(ABC):
                     _nested_key("input_tokens_details", "cached_tokens"),
                 )
             ),
+            cache_write_tokens=_optional_int(
+                _first_present(
+                    usage,
+                    "cache_write_tokens",
+                    _nested_key("prompt_tokens_details", "cache_write_tokens"),
+                    _nested_key("input_tokens_details", "cache_write_tokens"),
+                )
+            ),
             reasoning_tokens=_optional_int(
                 _first_present(
                     usage,

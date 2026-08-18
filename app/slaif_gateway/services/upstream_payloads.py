@@ -100,6 +100,11 @@ RESPONSES_COMPACT_UPSTREAM_FIELDS: tuple[str, ...] = (
     "model",
     "input",
     "instructions",
+    "tools",
+    "parallel_tool_calls",
+    "reasoning",
+    "prompt_cache_key",
+    "text",
 )
 SPEECH_UPSTREAM_FIELDS: tuple[str, ...] = (
     "model",

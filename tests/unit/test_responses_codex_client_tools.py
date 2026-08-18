@@ -68,6 +68,44 @@ def _function_tool(name: str) -> dict[str, object]:
     }
 
 
+def _request_user_input_parameters() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "header": {
+                            "type": "string",
+                            "description": f"short-ui-label-{DESCRIPTION_CANARY}",
+                        },
+                        "question": {"type": "string"},
+                        "options": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string"},
+                                    "description": {"type": "string"},
+                                },
+                                "required": ["label", "description"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["id", "header", "question", "options"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["questions"],
+        "additionalProperties": False,
+    }
+
+
 def _additional_tools_item(*, reverse: bool = False) -> dict[str, object]:
     namespaces: list[dict[str, object]] = []
     for namespace_name, declared_tools in TAXONOMY.items():
@@ -173,6 +211,19 @@ def _namespaces(item: dict[str, object]) -> list[dict[str, object]]:
     namespaces = item["tools"]
     assert isinstance(namespaces, list)
     return namespaces
+
+
+def _child_tool(
+    body: dict[str, object],
+    *,
+    namespace_index: int,
+    tool_index: int,
+) -> dict[str, object]:
+    tools = _namespaces(_first_item(body))[namespace_index]["tools"]
+    assert isinstance(tools, list)
+    tool = tools[tool_index]
+    assert isinstance(tool, dict)
+    return tool
 
 
 def test_pinned_fixture_taxonomy_is_exact_and_immutable() -> None:
@@ -477,6 +528,318 @@ def test_exec_requires_allowlisted_bounded_grammar_but_description_may_describe_
             invalid_exec["format"] = invalid_format
         with pytest.raises(RequestPolicyError):
             _apply(invalid)
+
+
+@pytest.mark.parametrize("description_bytes", [18_137, 20_000])
+@pytest.mark.parametrize(
+    ("namespace_index", "tool_index"),
+    [(0, 0), (1, 0)],
+)
+def test_codex_child_description_accepts_pinned_and_reviewed_boundary(
+    description_bytes: int,
+    namespace_index: int,
+    tool_index: int,
+) -> None:
+    body = _body()
+    tool = _child_tool(
+        body,
+        namespace_index=namespace_index,
+        tool_index=tool_index,
+    )
+    tool["description"] = "d" * description_bytes
+
+    result = _apply(body)
+
+    description = result.effective_body["input"][0]["tools"][namespace_index]["tools"][
+        tool_index
+    ]["description"]
+    assert len(description.encode("utf-8")) == description_bytes
+
+
+@pytest.mark.parametrize(
+    ("namespace_index", "tool_index"),
+    [(0, 0), (1, 0)],
+)
+def test_codex_custom_and_function_child_description_reject_20_001_safely(
+    namespace_index: int,
+    tool_index: int,
+) -> None:
+    body = _body()
+    tool = _child_tool(
+        body,
+        namespace_index=namespace_index,
+        tool_index=tool_index,
+    )
+    tool["description"] = f"{DESCRIPTION_CANARY}:" + "d" * (
+        20_001 - len(DESCRIPTION_CANARY) - 1
+    )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert exc_info.value.error_code == "responses_tool_invalid_shape"
+    assert exc_info.value.param == (
+        f"input[0].tools[{namespace_index}].tools[{tool_index}].description"
+    )
+    assert DESCRIPTION_CANARY not in exc_info.value.safe_message
+
+
+def test_codex_child_descriptions_keep_32_768_aggregate_cap() -> None:
+    body = _body()
+    _child_tool(body, namespace_index=0, tool_index=0)["description"] = "a" * 17_000
+    _child_tool(body, namespace_index=0, tool_index=1)["description"] = "b" * 17_000
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert exc_info.value.error_code == "responses_codex_client_tools_too_large"
+    assert exc_info.value.param == "input[0].tools"
+
+
+@pytest.mark.parametrize("tool_type", ["function", "custom"])
+def test_ordinary_tool_description_still_rejects_4_097_bytes(tool_type: str) -> None:
+    tool: dict[str, object] = {
+        "type": tool_type,
+        "name": "ordinary",
+        "description": f"{DESCRIPTION_CANARY}:" + "d" * (
+            4_097 - len(DESCRIPTION_CANARY) - 1
+        ),
+    }
+    if tool_type == "function":
+        tool["parameters"] = {"type": "object", "properties": {}}
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(
+            {
+                "model": "ordinary",
+                "input": "bounded",
+                "tools": [tool],
+                "max_output_tokens": 1,
+            }
+        )
+
+    assert exc_info.value.error_code == "responses_tool_invalid_shape"
+    assert exc_info.value.param == "tools[0].description"
+    assert DESCRIPTION_CANARY not in exc_info.value.safe_message
+
+
+def test_codex_namespace_description_still_rejects_4_097_bytes() -> None:
+    body = _body()
+    _namespaces(_first_item(body))[0]["description"] = "d" * 4_097
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+    assert exc_info.value.param == "input[0].tools[0].description"
+
+
+def test_large_codex_description_is_fully_metered_but_absent_from_safe_evidence() -> None:
+    baseline_body = _body()
+    baseline_tool = _child_tool(baseline_body, namespace_index=0, tool_index=0)
+    baseline_tool["description"] = ""
+    baseline = _apply(baseline_body)
+
+    large_body = _body()
+    large_tool = _child_tool(large_body, namespace_index=0, tool_index=0)
+    large_description = f"{DESCRIPTION_CANARY}:" + "d" * (
+        18_137 - len(DESCRIPTION_CANARY) - 1
+    )
+    large_tool["description"] = large_description
+    large = _apply(large_body)
+
+    assert large.effective_body["input"][0]["tools"][0]["tools"][0][
+        "description"
+    ] == large_description
+    assert (
+        large.estimated_non_message_input_bytes - baseline.estimated_non_message_input_bytes
+        == 18_137
+    )
+    assert large.estimated_input_tokens - baseline.estimated_input_tokens >= 18_137 // 3
+    safe_evidence = repr(
+        (
+            large.estimated_non_message_input_bytes,
+            large.estimated_non_message_input_tokens,
+            large.estimated_non_message_input_fields,
+        )
+    )
+    assert DESCRIPTION_CANARY not in safe_evidence
+
+
+@pytest.mark.parametrize(
+    "authority_shape",
+    [
+        {"server_url": "https://private.invalid"},
+        {"type": "mcp"},
+        {"connector_id": "private-connector"},
+    ],
+)
+def test_large_description_does_not_bypass_recursive_provider_authority_denial(
+    authority_shape: dict[str, object],
+) -> None:
+    body = _body()
+    function_tool = _child_tool(body, namespace_index=1, tool_index=0)
+    function_tool["description"] = f"{DESCRIPTION_CANARY}:" + "d" * 18_000
+    parameters = function_tool["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    property_schema = properties[PROPERTY_CANARY]
+    assert isinstance(property_schema, dict)
+    property_schema.update(authority_shape)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert (
+        exc_info.value.error_code
+        == "responses_codex_client_tools_provider_authority_not_supported"
+    )
+    assert DESCRIPTION_CANARY not in exc_info.value.safe_message
+
+
+def test_request_user_input_exact_ui_header_path_passes_and_is_fully_metered() -> None:
+    baseline = _apply(_body())
+    body = _body()
+    request_user_input = _child_tool(body, namespace_index=0, tool_index=2)
+    request_user_input["parameters"] = _request_user_input_parameters()
+
+    result = _apply(body)
+
+    canonical_parameters = result.effective_body["input"][0]["tools"][0]["tools"][2][
+        "parameters"
+    ]
+    assert canonical_parameters == _request_user_input_parameters()
+    assert result.estimated_non_message_input_bytes > baseline.estimated_non_message_input_bytes
+    assert result.estimated_input_tokens > baseline.estimated_input_tokens
+    safe_evidence = repr(
+        (
+            result.estimated_non_message_input_bytes,
+            result.estimated_non_message_input_tokens,
+            result.estimated_non_message_input_fields,
+        )
+    )
+    assert DESCRIPTION_CANARY not in safe_evidence
+
+
+def test_request_user_input_plural_headers_at_exact_location_still_fails() -> None:
+    body = _body()
+    request_user_input = _child_tool(body, namespace_index=0, tool_index=2)
+    parameters = _request_user_input_parameters()
+    question_properties = parameters["properties"]["questions"]["items"]["properties"]
+    question_properties["headers"] = question_properties.pop("header")
+    request_user_input["parameters"] = parameters
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert (
+        exc_info.value.error_code
+        == "responses_codex_client_tools_provider_authority_not_supported"
+    )
+    assert DESCRIPTION_CANARY not in exc_info.value.safe_message
+
+
+@pytest.mark.parametrize("location", ["higher", "lower"])
+def test_request_user_input_singular_header_at_alternate_path_fails(location: str) -> None:
+    body = _body()
+    request_user_input = _child_tool(body, namespace_index=0, tool_index=2)
+    parameters = _request_user_input_parameters()
+    if location == "higher":
+        parameters["header"] = {"type": "string"}
+    else:
+        question_properties = parameters["properties"]["questions"]["items"]["properties"]
+        question_properties["header"]["properties"] = {
+            "header": {"type": "string"}
+        }
+    request_user_input["parameters"] = parameters
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert (
+        exc_info.value.error_code
+        == "responses_codex_client_tools_provider_authority_not_supported"
+    )
+
+
+@pytest.mark.parametrize(
+    ("namespace_index", "tool_index"),
+    [(0, 1), (1, 0)],
+)
+def test_ui_header_exact_schema_path_fails_for_every_other_codex_tool(
+    namespace_index: int,
+    tool_index: int,
+) -> None:
+    body = _body()
+    other_tool = _child_tool(
+        body,
+        namespace_index=namespace_index,
+        tool_index=tool_index,
+    )
+    other_tool["parameters"] = _request_user_input_parameters()
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert (
+        exc_info.value.error_code
+        == "responses_codex_client_tools_provider_authority_not_supported"
+    )
+
+
+@pytest.mark.parametrize(
+    ("sibling_key", "sibling_value"),
+    [
+        ("authorization", {"type": "string"}),
+        ("secret", {"type": "string"}),
+        ("connector_id", {"type": "string"}),
+        ("server_url", {"type": "string"}),
+        ("approval_mode", {"type": "string"}),
+        ("mcp", {"type": "object"}),
+        ("hosted_sibling", {"type": "web_search"}),
+    ],
+)
+def test_ui_header_exception_keeps_every_sibling_authority_denial(
+    sibling_key: str,
+    sibling_value: dict[str, object],
+) -> None:
+    body = _body()
+    request_user_input = _child_tool(body, namespace_index=0, tool_index=2)
+    parameters = _request_user_input_parameters()
+    question_properties = parameters["properties"]["questions"]["items"]["properties"]
+    question_properties[sibling_key] = sibling_value
+    request_user_input["parameters"] = parameters
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(body)
+
+    assert (
+        exc_info.value.error_code
+        == "responses_codex_client_tools_provider_authority_not_supported"
+    )
+    assert DESCRIPTION_CANARY not in exc_info.value.safe_message
+
+
+def test_ordinary_request_user_input_schema_behavior_is_unchanged() -> None:
+    result = ResponsesRequestPolicy(Settings()).apply(
+        {
+            "model": "ordinary",
+            "input": "bounded",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "request_user_input",
+                    "parameters": _request_user_input_parameters(),
+                }
+            ],
+            "max_output_tokens": 1,
+        }
+    )
+
+    assert result.effective_body["tools"][0]["parameters"] == (
+        _request_user_input_parameters()
+    )
 
 
 def test_description_schema_grammar_depth_and_property_caps_fail_closed() -> None:

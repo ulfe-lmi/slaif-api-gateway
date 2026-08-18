@@ -122,8 +122,12 @@ the gateway remains stateless even when an upstream default would store
 responses. Explicit `store=true` requires `stream=false` and
 `capabilities.responses.stored_responses=true`; it persists only safe provider
 response reference metadata after a successful provider create response with an
-ID. If `max_output_tokens` is omitted, SLAIF injects the existing default
-output cap. Streaming uses typed Responses SSE events such as
+ID. If `max_output_tokens` is omitted, ordinary Responses injects the existing
+1,024 default output cap. A request with all four existing Codex gates uses its
+strict route numeric default instead (32,768 for the qualification profile),
+bounded by route/operator maximums and the route context window. The
+1,050,000/128,000 qualification limits and pricing multipliers are configured
+model data, not universal hardcoded facts. Streaming uses typed Responses SSE events such as
 `response.created`, `response.output_text.delta`, `response.completed`, and
 `error`; SLAIF does not translate Responses streams into Chat Completions
 chunks.
@@ -158,6 +162,62 @@ requires `capabilities.responses.compact=true`, uses endpoint-specific pricing,
 reserves quota with `RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS`, and
 finalizes from provider usage. Provider compact responses without usage fail
 safely and are not finalized as zero-cost success.
+
+An independently gated Codex V1 compact request requires all four existing
+Codex key/route capabilities plus default-off `codex_compaction`, strict
+`codex_limits`, and the ordinary endpoint/model/provider/pricing policy. It may
+carry only the exact pinned model, history, instructions, tools,
+`parallel_tool_calls`, reasoning, `prompt_cache_key`, and text controls. It
+rejects `stream`, `store`, `include`, `tool_choice`, background, hosted/MCP
+authority, V2 `compaction_trigger`, provider-state IDs, media, and unknown
+fields. Prior reasoning/tool/compaction history must pass same-key HMAC lookup
+before side effects. A different compact route row requires explicit same-
+provider/same-upstream-model compatible-route metadata.
+
+With all five Codex key capabilities, pinned create/compact history may also
+contain exact `internal_chat_message_metadata_passthrough` on message (including
+omitted `type`), reasoning, function/custom call and output, or compaction
+items. The value must be null or a canonical JSON object no larger than 32,768
+bytes. The gateway copies the item, validates only that type/size boundary, and
+drops the field before ordinary item validation, canonicalization, metering,
+replay/HMAC extraction, or forwarding. It contributes zero input tokens and
+cannot reach provider bodies, persistence, logs, audits, metrics, exports,
+errors, or safe evidence. `additional_tools`, hosted or unknown item types,
+ordinary requests, missing-gate requests, and other endpoints continue to
+reject the field rather than dropping or forwarding it.
+
+Fully gated Codex client-tool history may preserve optional bounded `id` on
+`function_call_output` and `custom_tool_call_output`. A present value must pass
+the existing 128-character ASCII-safe Codex item-ID validator, is canonicalized
+unchanged, contributes its complete canonical bytes to input-token/cost
+estimation, and must be unique across every request history item ID. It is not
+a separate replay/HMAC reference: the output remains authorized only by the
+immediately preceding matching HMAC-owned call and `call_id`. Absent IDs retain
+the prior canonical shape. Ordinary outputs, malformed or duplicate IDs,
+unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
+denied. Raw output IDs are transient provider input and never enter safe
+evidence or persistence.
+
+The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
+that field absent in the provider request while using the validated Codex route
+maximum (128,000 for the qualification profile) as effective/requested output
+exposure for context admission, quota reservation, pricing, and safe evidence.
+This exception changes neither ordinary compact's configured default nor
+ordinary Responses output-default behavior.
+
+The Codex provider response must contain supported final usage and exactly one
+opaque `compaction` item with a safe ID and non-empty capped encrypted content.
+Its top level allows only required `output` and `usage` plus optional validated
+`id`, `object`, and `created_at`; unknown fields, malformed metadata or usage,
+extra output, and plaintext item fields are rejected.
+After finalized PostgreSQL accounting, SLAIF stores only a versioned composite
+HMAC over both opaque values plus safe ownership/routing/expiry metadata before
+recording the normal compact success metric and returning success. HMAC
+persistence failure remains charged but returns a safe 500-class error and no
+normal success metric. Neither raw value is stored or inspected. Later gated create
+or compact history must prove that composite HMAC. This is client-managed
+opaque V1 history, not local content storage; V2, background, and hosted tools
+remain unsupported.
 
 Structured text output is a text-output constraint, not a tool or hosted
 provider-side authority. JSON object mode uses
@@ -271,11 +331,20 @@ Namespace/tool placement and types are exact, schemas/grammar/descriptions are
 bounded, `exec` must use an allowlisted grammar, and `tool_choice` is limited to
 `none`, `auto`, or `required`. Hosted/MCP/provider authority, arbitrary or
 nested namespaces, gateway execution, and background/storage expansion still
-fail closed. Approved
-envelope, message-ID, declaration, schema, grammar, and choice bytes increase
-the conservative admission estimate; safe estimation evidence contains only
-approved categories and aggregate bytes/tokens, never private values. Dropped
-client metadata is size-capped but is not provider-billed input.
+fail closed. Child function/custom descriptions use a fixed 20,000-byte per-
+description qualification cap only in this exact gated taxonomy, with 32,768
+bytes total across namespace and child descriptions. Namespace and ordinary
+top-level function/custom descriptions keep their 4,096-byte limits. Approved
+`functions.request_user_input` may use singular schema property `header` only
+at `parameters.properties.questions.items.properties.header`, where it is a
+short UI label. Recursive scanning remains active below and beside that exact
+property; plural/alternate header fields, other paths/tools, and every provider
+authority marker still fail closed. Ordinary tool behavior is unchanged.
+All approved envelope, message-ID, declaration, description, schema, grammar,
+and choice
+bytes increase the conservative admission estimate; safe estimation evidence
+contains only approved categories and aggregate bytes/tokens, never private
+values. Dropped client metadata is size-capped but is not provider-billed input.
 
 Streaming call events and replay require a third capability,
 `codex_streaming_tool_events`, on both the key and route in addition to the two
@@ -319,8 +388,8 @@ or appear in logs/metrics/audit/errors. Cross-key, expired, unavailable HMAC
 version, and compatibility mismatches deny safely. Client-managed replay cannot
 combine with `previous_response_id`, stored Response state, or `conversation`.
 Codex/the downstream client owns local tool execution; SLAIF does not execute
-the call. Codex compaction and full CLI-through-gateway validation remain
-separately scoped work.
+the call. The bounded V1 compact slice above does not establish full
+CLI-through-production-provider compatibility.
 
 ## Stored Response Lifecycle
 
@@ -611,7 +680,8 @@ For `/v1/responses`, a template revision may carry
 `input_token_count`, `stored_responses`, `previous_response_id`,
 `list_input_items`, `compact`, `conversations`, `conversation_items`,
 `codex_request_envelope`, `codex_client_tools`,
-`codex_streaming_tool_events`, `codex_encrypted_reasoning_replay`), allowed local
+`codex_streaming_tool_events`, `codex_encrypted_reasoning_replay`,
+`codex_compaction`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
 `previous_response_id`, `list_input_items`, and `compact` are only safe
@@ -627,13 +697,14 @@ conversation state, background, raw image URLs/data, raw file URLs/names/data/ba
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
 out of scope for template metadata and are rejected.
 
-The four Codex capabilities may appear in that capability list only when the
+The five Codex capabilities may appear in that capability list only when the
 reviewed template snapshot explicitly includes each one. Template normalization
 and calibration discovery never add them by default. The streaming capability
 is rejected unless both prerequisite capabilities are also present.
 Client-tool declarations require the first two capabilities on the created key
 and route; streaming call/replay requires all three. Encrypted reasoning replay
-requires its fourth capability plus the request envelope. Copying any
+requires its fourth capability plus the request envelope. Compaction requires
+all four earlier gates plus its fifth independent capability. Copying any
 capability does not enable hosted tools, storage, background, MCP, gateway
 execution, or a Codex compatibility claim.
 

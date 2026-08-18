@@ -25,6 +25,7 @@ from slaif_gateway.services.key_policy_validation import (
 from slaif_gateway.services.responses_route_capabilities import (
     RESPONSES_CAPABILITY_COMPACT,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    RESPONSES_CAPABILITY_CODEX_COMPACTION,
     RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
@@ -88,6 +89,7 @@ _RESPONSES_POLICY_ALLOWED_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
         RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+        RESPONSES_CAPABILITY_CODEX_COMPACTION,
     }
 )
 _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES = frozenset(
@@ -678,6 +680,14 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
         raise KeyTemplateError(
             "Codex encrypted reasoning replay requires the request-envelope capability."
         )
+
+    if RESPONSES_CAPABILITY_CODEX_COMPACTION in capabilities and not {
+        RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+    }.issubset(capabilities):
+        raise KeyTemplateError("Codex compaction requires every prior Codex capability.")
 
     local_tool_types = _clean_string_list(
         raw_policy.get("allowed_local_tool_types", []),

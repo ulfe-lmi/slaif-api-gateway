@@ -1091,8 +1091,9 @@ Rules:
 
 HMAC-only ownership metadata for bounded Codex client-managed replay. These
 rows authorize a gateway key to resend a previously completed provider
-reasoning item or local-tool call/output pair on the same provider/model route.
-They do not store provider state, response content, or billing truth.
+reasoning item, local-tool call/output pair, or opaque V1 compaction item on a
+compatible provider/model route. They do not store provider state, response
+content, or billing truth.
 
 Columns:
 
@@ -1120,6 +1121,7 @@ Allowed `item_kind` values:
 reasoning
 function_call
 custom_tool_call
+compaction
 ```
 
 Constraints/indexes:
@@ -1131,7 +1133,7 @@ index(gateway_key_id, item_kind, item_id_hmac, expires_at)
 index(gateway_key_id, item_kind, call_id_hmac, expires_at)
 index(usage_ledger_id)
 index(expires_at)
-check(item_kind in ('reasoning', 'function_call', 'custom_tool_call'))
+check(item_kind in ('reasoning', 'function_call', 'custom_tool_call', 'compaction'))
 check(item_id_hmac matches exactly 64 lowercase hexadecimal characters)
 check(call_id_hmac is null or matches exactly 64 lowercase hexadecimal characters)
 check(hmac_key_version > 0)
@@ -1139,7 +1141,7 @@ check(length(btrim(source_request_id)) > 0)
 check(length(btrim(provider)) > 0)
 check(length(btrim(upstream_model)) > 0)
 check(expires_at > created_at)
-check(reasoning rows have no call digest or tool identity; tool-call rows have all three)
+check(reasoning and compaction rows have no call digest or tool identity; tool-call rows have all three)
 check(tool namespace and name are null or non-empty and at most 256 characters)
 ```
 
@@ -1150,10 +1152,14 @@ Rules:
 - `item_id_hmac` and `call_id_hmac` use HMAC-SHA-256 with separate domain
   labels and the existing versioned token-HMAC secret. The stored version must
   remain available for lookup; missing key material fails closed.
-- Rows are inserted idempotently only after a provider stream supplies final
-  usage and PostgreSQL accounting finalization succeeds. The completed SSE
-  event remains held until insertion commits. A persistence failure suppresses
-  normal completion but does not release or reverse finalized usage.
+- A compaction row's `item_id_hmac` is a domain-separated, length-delimited
+  HMAC over both the provider item ID and its opaque encrypted content. Neither
+  raw component nor a reversible form is stored. Changing either component
+  therefore fails same-key replay lookup.
+- Rows are inserted idempotently only after final provider usage and PostgreSQL
+  accounting finalization succeed. A streaming completed event or unary V1
+  compact response remains held until insertion commits. A persistence failure
+  suppresses normal success but does not release or reverse finalized usage.
 - Lookups require the same gateway key, unexpired row, exact item/call kind,
   approved namespace/tool identity, provider, route, and upstream model before
   Redis, pricing, quota, or provider side effects.
@@ -1162,8 +1168,13 @@ Rules:
   ownership and cannot be combined with those provider-state mechanisms.
 - Never store, log, audit, export, metric-label, or expose provider item/call
   IDs, HMAC digests, encrypted reasoning, summaries, arguments, tool inputs,
-  tool outputs, prompts, completions, or provider event bodies. The source
-  request and usage-ledger links are safe metadata only.
+  tool outputs, compaction ciphertext, prompts, completions, or provider event
+  bodies. The source request and usage-ledger links are safe metadata only.
+
+Migration `0014_codex_context_accounting_compaction` is the successor to
+`0013_codex_replay_references`. It expands only the replay-kind and kind/shape
+checks for `compaction`; it adds no raw-content column and does not rewrite
+0013. Downgrade removes compaction rows before restoring the 0013 checks.
 
 ---
 
@@ -1303,6 +1314,31 @@ unknown keys or non-boolean values are invalid and fail closed. Hosted tools,
 external MCP/connectors, non-default service tiers, multiple choices, and
 non-streaming audio output remain disabled unless a route explicitly enables the
 dedicated capability and the request passes gateway caps.
+
+For the independently gated Codex Responses slice, the top-level route
+`capabilities` object may also contain this strict numeric object alongside the
+boolean `responses` registry:
+
+```json
+{
+  "codex_limits": {
+    "context_window_tokens": 1050000,
+    "default_max_output_tokens": 32768,
+    "max_output_tokens": 128000
+  }
+}
+```
+
+All three keys are required positive integers (booleans, floats, strings, and
+unknown keys are invalid), with `default_max_output_tokens <=
+max_output_tokens < context_window_tokens`. The object is meaningful only when
+the key and route enable the complete Codex envelope gate. Values are also
+bounded by operator absolute ceilings. The qualification values above describe
+one reviewed model profile; they are not universal provider facts or an
+unlimited output promise. A compact route may explicitly name a bounded list
+of compatible ordinary/compact route UUIDs in top-level
+`codex_compaction_compatible_route_ids`; compatibility still requires the same
+provider and upstream model and is not a general route relaxation.
 
 `chat_custom_tools=true` enables only non-streaming local/client-side Chat
 Completions custom tool-call intent. It does not enable hosted tools, MCP or
@@ -1469,6 +1505,29 @@ Rules:
   row before the request can reserve quota. This metadata value is a decimal
   price per one million provider-reported audio output tokens; it is not derived
   from audio bytes, transcript length, duration, format, or voice.
+- Codex cache-write and long-context accounting uses an exact nested object;
+  it is never inferred from a model name:
+
+  ```json
+  {
+    "codex_accounting": {
+      "long_context_threshold_tokens": 272000,
+      "long_context_input_multiplier": "2",
+      "long_context_output_multiplier": "1.5",
+      "cache_write_input_multiplier": "1.25"
+    }
+  }
+  ```
+
+  The threshold is a positive integer. Multipliers are positive decimal
+  strings and explicit prices are non-negative decimal strings, not JSON
+  numbers or booleans. Exactly one of
+  `cache_write_input_multiplier` or `cache_write_input_price_per_1m` must be
+  present, and unknown/partial fields fail closed. The long-context tier applies
+  to the full request only when provider input is strictly greater than the
+  threshold. These qualification values are configured model data, not
+  hardcoded universal facts; SLAIF-calculated cache-write/long-context cost is
+  conservative local accounting, not provider-invoice truth.
 
 ---
 

@@ -254,6 +254,8 @@ ignored at runtime. Cost and token thresholds are enforced independently.
 | `RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER` | `1.15` | Multiplier applied to provisional visible-output token estimates for the supported Responses typed-SSE streaming subset. |
 | `RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR` | `1000000` | Absolute bound for per-key positive or negative Responses streaming cost margins. |
 | `RESPONSES_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN` | `1000000000` | Absolute bound for per-key positive or negative Responses streaming token margins. |
+| `CODEX_ABSOLUTE_MAX_INPUT_TOKENS` | `1050000` | Operator ceiling for estimated input/context exposure, used only by fully gated Codex Responses routes with valid numeric route metadata. |
+| `CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS` | `128000` | Operator ceiling for effective output exposure, used only by fully gated Codex Responses routes with valid numeric route metadata. |
 
 Live estimates are provisional only and are not invoice-grade billing truth.
 PostgreSQL remains authoritative for hard quota/accounting, Redis or in-memory
@@ -705,6 +707,22 @@ Responses compact settings control admission-time output reservation for
 compact without explicit key permission, a `/v1/responses/compact` route and
 pricing row, and `capabilities.responses.compact=true`. Compact input/output
 and encrypted compaction content remain outside logs and durable metadata.
+
+Ordinary Responses keeps `DEFAULT_MAX_OUTPUT_TOKENS=1024`. A request with all
+four prior Codex gates instead requires strict route `codex_limits` and replaces
+only the injected ordinary default with
+`codex_limits.default_max_output_tokens` (32,768 in the qualification profile).
+The result remains bounded by the route maximum, route context window, and the
+operator ceilings above. The qualification 1,050,000/128,000 values are
+configured model data, not universal provider facts or unlimited output.
+
+Codex V1 compact is a separate default-off slice. The key and route must enable
+`codex_request_envelope`, `codex_client_tools`,
+`codex_streaming_tool_events`, `codex_encrypted_reasoning_replay`, and
+`codex_compaction`; the route must also supply strict `codex_limits`. An
+explicit `codex_compaction_compatible_route_ids` list may permit a different
+ordinary/compact route row only for the same provider and upstream model. V2
+`compaction_trigger` must remain disabled in the SLAIF Codex profile.
 
 Responses custom-tool settings cap local/client-side custom tool names,
 descriptions, grammar definitions, total custom format bytes, and string-only

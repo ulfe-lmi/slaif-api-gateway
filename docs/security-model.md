@@ -540,7 +540,17 @@ default-off and policy-first:
   authenticated key and resolved route. Only the exact pinned `functions` and
   `collaboration` taxonomy is accepted. Recursive provider-authority/hosted
   markers fail closed, schemas and grammar are capped, and SLAIF does not
-  execute the declared client-local tools.
+  execute the declared client-local tools. Only exact child tools in this fully
+  gated taxonomy receive the fixed 20,000-byte description qualification cap;
+  all descriptions together remain capped at 32,768 bytes. Namespace and
+  ordinary function/custom descriptions remain capped at 4,096 bytes.
+  The singular schema key `header` is allowed only at the complete pinned
+  `functions.request_user_input` UI-label path
+  `parameters.properties.questions.items.properties.header`. The detector
+  continues recursively below that key and through its siblings. `headers`,
+  alternate paths/tools, and all authorization, secret, connector, server,
+  approval, MCP, and hosted markers remain denied; ordinary tools receive no
+  exception.
 - Codex client-tool streaming and replay additionally require
   `codex_streaming_tool_events` on both the key and route. A request-scoped
   validator accepts only bounded declared event/call shapes and exact call-to-
@@ -551,6 +561,14 @@ default-off and policy-first:
   audited, or exported. Only versioned HMAC-SHA-256 digests of replay item/call
   identifiers plus safe ownership/routing/kind/name metadata may be persisted
   after successful usage-backed accounting, with a fixed 24-hour expiry.
+- Fully gated Codex requests also require strict numeric route limits bounded
+  by operator ceilings. An omitted output maximum becomes the bounded route
+  default (32,768 for the qualification profile), never an unbounded request;
+  ordinary Responses retains 1,024. Route/model names and headers cannot grant
+  these limits. Gated pinned V1 compact instead keeps `max_output_tokens`
+  absent upstream and uses the validated route maximum (128,000 in the
+  qualification profile) as its bounded output exposure for context, quota,
+  pricing, and safe evidence; ordinary compact is unchanged.
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
@@ -573,6 +591,25 @@ default-off and policy-first:
   finalizes from provider usage. Provider compact responses without usage fail
   safely instead of becoming zero-cost successes. SLAIF does not store or log
   compact input, compact output, encrypted compaction content, or raw bodies.
+- The independently gated Codex V1 compact slice requires all four prior Codex
+  capabilities plus default-off `codex_compaction` on the key and route. It
+  verifies every replay item before side effects and permits a different route
+  row only through explicit same-provider/same-model compatibility metadata.
+  Provider success is accepted only with one exact opaque item, strict usage,
+  and a top-level allowlist of required `output`/`usage` plus optional validated
+  `id`, `object`, and `created_at`.
+  After final usage and PostgreSQL accounting, SLAIF stores only a
+  domain-separated HMAC over the opaque compaction ID plus ciphertext with safe
+  ownership/routing/expiry metadata. Raw IDs, ciphertext, digests, cache keys,
+  history, and bodies never persist or enter logs/audit/metrics/exports/errors.
+  Normal compact success metrics and the response occur only after HMAC
+  persistence; persistence failure remains charged and produces a safe error
+  without either normal success signal.
+  V2 triggers, background, hosted tools, MCP, and provider authority remain
+  unsupported.
+- `/v1/responses` and `/v1/responses/compact` reject non-identity
+  `Content-Encoding` before body processing; the gateway adds no transparent
+  decompression.
 - Stored create requires explicit `capabilities.responses.stored_responses=true`
   and must be non-streaming. SLAIF stores only safe provider response reference
   metadata after successful provider create responses with IDs. Retrieve/delete
@@ -675,6 +712,27 @@ metrics, ledger metadata, exports, or errors.
 Safe admission evidence contains only approved field names and aggregate
 byte/token counts.
 
+Pinned `internal_chat_message_metadata_passthrough` has an even narrower
+history-only privacy boundary. It is accepted only with every Codex key gate and
+only on message, reasoning, function/custom call and output, or compaction
+items, as null or a canonical JSON object capped at 32,768 bytes. The gateway
+does not inspect nested turn/tool details for authority; it copies the item and
+discards the entire field before strict canonical validation and every provider,
+metering, replay, HMAC, persistence, logging, audit, metric, export, error, or
+evidence surface. The dropped bytes count as zero model input. Partial gates,
+ordinary requests, `additional_tools`, hosted/provider items, unknown types, and
+all other endpoint shapes remain fail-closed.
+
+Pinned optional IDs on fully gated Codex function/custom output items remain
+transient provider/model history. They use the same bounded non-secret ASCII
+item-ID validation and request-wide uniqueness check as other Codex history
+IDs, and their canonical bytes are metered. They do not grant tool, execution,
+route, provider, replay, or HMAC authority; the immediately preceding
+HMAC-owned call and exact `call_id` remain mandatory. Raw output IDs never enter
+persistence, logs, audits, metrics, exports, errors, or safe evidence. Ordinary
+outputs, malformed/duplicate IDs, unknown fields, and broken or cross-type
+linkage remain denied.
+
 The separate client-tool declaration slice accepts at most one developer
 `additional_tools` item only when `codex_request_envelope` and
 `codex_client_tools` are each present on both the key and route. It admits
@@ -687,8 +745,10 @@ caps; `exec` requires a bounded allowlisted grammar. SLAIF executes no declared
 tool, and accepted declarations do not authorize provider-hosted tools.
 
 Declarations, descriptions, schemas, grammar, and `none`/`auto`/`required`
-choice are transient provider input and conservatively metered. They, tool
-arguments/results, and client IDs never enter persistence, logs, audits, or
+choice are transient provider input and conservatively metered, including the
+complete bytes of any pinned 18,137-byte child description admitted under the
+20,000-byte Codex-only cap. Declarations, tool arguments/results, and client IDs
+never enter persistence, logs, audits, or
 exports; safe evidence contains only approved category names and aggregate
 byte/token/count data.
 

@@ -121,7 +121,10 @@ def test_openai_responses_streaming_preserves_typed_events_and_parses_completed_
                 "input_tokens": 5,
                 "output_tokens": 6,
                 "total_tokens": 11,
-                "input_tokens_details": {"cached_tokens": 2},
+                "input_tokens_details": {
+                    "cached_tokens": 2,
+                    "cache_write_tokens": 1,
+                },
                 "output_tokens_details": {"reasoning_tokens": 1},
             },
         },
@@ -153,6 +156,7 @@ def test_openai_responses_streaming_preserves_typed_events_and_parses_completed_
     assert chunks[2].usage.completion_tokens == 6
     assert chunks[2].usage.total_tokens == 11
     assert chunks[2].usage.cached_tokens == 2
+    assert chunks[2].usage.cache_write_tokens == 1
     assert chunks[2].usage.reasoning_tokens == 1
 
     sent = upstream.calls[0].request

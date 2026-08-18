@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import uuid
 
 from slaif_gateway.services.policy_errors import RequestPolicyError
 
@@ -32,6 +33,12 @@ RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE = "codex_request_envelope"
 RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS = "codex_client_tools"
 RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS = "codex_streaming_tool_events"
 RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY = "codex_encrypted_reasoning_replay"
+RESPONSES_CAPABILITY_CODEX_COMPACTION = "codex_compaction"
+CODEX_LIMITS_KEY = "codex_limits"
+CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY = "codex_compaction_compatible_route_ids"
+_CODEX_LIMIT_FIELDS = frozenset(
+    {"context_window_tokens", "default_max_output_tokens", "max_output_tokens"}
+)
 
 KNOWN_RESPONSES_CAPABILITIES = frozenset(
     {
@@ -59,6 +66,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
         RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+        RESPONSES_CAPABILITY_CODEX_COMPACTION,
     }
 )
 
@@ -91,6 +99,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS: False,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS: False,
         RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY: False,
+        RESPONSES_CAPABILITY_CODEX_COMPACTION: False,
     }
 
 
@@ -125,6 +134,90 @@ class ResponsesRouteCapabilityError(RequestPolicyError):
         super().__init__(finding.safe_message, param=finding.field)
 
 
+@dataclass(frozen=True, slots=True)
+class CodexRouteLimits:
+    """Strict route-local numeric limits for fully gated Codex requests."""
+
+    context_window_tokens: int
+    default_max_output_tokens: int
+    max_output_tokens: int
+
+
+def parse_codex_route_limits(
+    route_capabilities: Mapping[str, object] | None,
+) -> CodexRouteLimits:
+    """Parse the separate numeric Codex route contract without coercion."""
+
+    raw = route_capabilities.get(CODEX_LIMITS_KEY) if route_capabilities else None
+    if not isinstance(raw, Mapping) or set(raw) != _CODEX_LIMIT_FIELDS:
+        raise _codex_limits_error()
+    values: dict[str, int] = {}
+    for field in _CODEX_LIMIT_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise _codex_limits_error()
+        values[field] = value
+    context = values["context_window_tokens"]
+    default_output = values["default_max_output_tokens"]
+    maximum_output = values["max_output_tokens"]
+    if default_output > maximum_output or maximum_output >= context:
+        raise _codex_limits_error()
+    return CodexRouteLimits(
+        context_window_tokens=context,
+        default_max_output_tokens=default_output,
+        max_output_tokens=maximum_output,
+    )
+
+
+def parse_codex_compaction_compatible_route_ids(
+    route_capabilities: Mapping[str, object] | None,
+) -> frozenset[uuid.UUID]:
+    """Parse an optional bounded explicit compact/Responses route allowlist."""
+
+    if (
+        not route_capabilities
+        or CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY not in route_capabilities
+    ):
+        return frozenset()
+    raw = route_capabilities.get(CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY)
+    if not isinstance(raw, list) or len(raw) > 32:
+        raise _codex_compaction_compatibility_error()
+    parsed: set[uuid.UUID] = set()
+    for value in raw:
+        if not isinstance(value, str):
+            raise _codex_compaction_compatibility_error()
+        try:
+            route_id = uuid.UUID(value)
+        except ValueError:
+            raise _codex_compaction_compatibility_error() from None
+        if route_id in parsed:
+            raise _codex_compaction_compatibility_error()
+        parsed.add(route_id)
+    return frozenset(parsed)
+
+
+def _codex_limits_error() -> ResponsesRouteCapabilityError:
+    return ResponsesRouteCapabilityError(
+        ResponsesRouteCapabilityFinding(
+            capability=CODEX_LIMITS_KEY,
+            field="model",
+            error_code="responses_codex_limits_invalid",
+            safe_message="This model route has invalid or missing Codex numeric limits.",
+        )
+    )
+
+
+def _codex_compaction_compatibility_error() -> ResponsesRouteCapabilityError:
+    return ResponsesRouteCapabilityError(
+        ResponsesRouteCapabilityFinding(
+            capability=CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+            field="model",
+            error_code="responses_codex_compaction_route_compatibility_invalid",
+            safe_message="This route has invalid Codex compaction compatibility metadata.",
+        )
+    )
+
+
 def enforce_responses_route_capabilities(
     *,
     route_capabilities: Mapping[str, object] | None,
@@ -147,6 +240,8 @@ def enforce_responses_route_capabilities(
     codex_client_tools_requested: bool = False,
     codex_streaming_tool_events_requested: bool = False,
     codex_encrypted_reasoning_replay_requested: bool = False,
+    codex_extended_limits_requested: bool = False,
+    codex_compaction_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -291,7 +386,10 @@ def enforce_responses_route_capabilities(
                 safe_message="This model route does not support Responses structured output.",
             )
         )
-    if function_tools_requested and capabilities.get(RESPONSES_CAPABILITY_FUNCTION_TOOLS) is not True:
+    if (
+        function_tools_requested
+        and capabilities.get(RESPONSES_CAPABILITY_FUNCTION_TOOLS) is not True
+    ):
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
                 capability=RESPONSES_CAPABILITY_FUNCTION_TOOLS,
@@ -340,14 +438,13 @@ def enforce_responses_route_capabilities(
             )
         )
     if (
-        (
-            codex_request_envelope_requested
-            or codex_client_tools_requested
-            or codex_streaming_tool_events_requested
-            or codex_encrypted_reasoning_replay_requested
-        )
-        and capabilities.get(RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE) is not True
-    ):
+        codex_request_envelope_requested
+        or codex_client_tools_requested
+        or codex_streaming_tool_events_requested
+        or codex_encrypted_reasoning_replay_requested
+        or codex_extended_limits_requested
+        or codex_compaction_requested
+    ) and capabilities.get(RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE) is not True:
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
                 capability=RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
@@ -357,9 +454,11 @@ def enforce_responses_route_capabilities(
             )
         )
     if (
-        (codex_client_tools_requested or codex_streaming_tool_events_requested)
-        and capabilities.get(RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS) is not True
-    ):
+        codex_client_tools_requested
+        or codex_streaming_tool_events_requested
+        or codex_extended_limits_requested
+        or codex_compaction_requested
+    ) and capabilities.get(RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS) is not True:
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
                 capability=RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
@@ -370,22 +469,22 @@ def enforce_responses_route_capabilities(
         )
     if (
         codex_streaming_tool_events_requested
-        and capabilities.get(RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS) is not True
-    ):
+        or codex_extended_limits_requested
+        or codex_compaction_requested
+    ) and capabilities.get(RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS) is not True:
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
                 capability=RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
                 field="stream",
                 error_code="responses_route_capability_not_supported",
-                safe_message=(
-                    "This model route does not support Codex streaming tool events."
-                ),
+                safe_message=("This model route does not support Codex streaming tool events."),
             )
         )
     if (
         codex_encrypted_reasoning_replay_requested
-        and capabilities.get(RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY) is not True
-    ):
+        or codex_extended_limits_requested
+        or codex_compaction_requested
+    ) and capabilities.get(RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY) is not True:
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
                 capability=RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
@@ -396,6 +495,20 @@ def enforce_responses_route_capabilities(
                 ),
             )
         )
+    if (
+        codex_compaction_requested
+        and capabilities.get(RESPONSES_CAPABILITY_CODEX_COMPACTION) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_CODEX_COMPACTION,
+                field="model",
+                error_code="responses_codex_compaction_capability_not_supported",
+                safe_message="This model route does not support Codex V1 compaction.",
+            )
+        )
+    if codex_extended_limits_requested or codex_compaction_requested:
+        parse_codex_route_limits(route_capabilities)
 
 
 def _parse_route_capabilities(route_capabilities: Mapping[str, object] | None) -> dict[str, bool]:

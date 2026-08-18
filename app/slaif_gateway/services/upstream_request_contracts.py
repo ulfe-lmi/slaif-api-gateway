@@ -89,6 +89,11 @@ RESPONSES_COMPACT_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "model",
         "input",
         "instructions",
+        "tools",
+        "parallel_tool_calls",
+        "reasoning",
+        "prompt_cache_key",
+        "text",
     }
 )
 SPEECH_UPSTREAM_ALLOWED_FIELDS = frozenset(
@@ -162,7 +167,9 @@ def _deepcopy_or_unset(value: object) -> object:
     return copy.deepcopy(value)
 
 
-def _ensure_required_text_model(requested_model: str, upstream_model: str, *, endpoint: str) -> None:
+def _ensure_required_text_model(
+    requested_model: str, upstream_model: str, *, endpoint: str
+) -> None:
     if not requested_model.strip():
         raise ValueError(f"{endpoint} request is missing a requested model.")
     if not upstream_model.strip():
@@ -315,6 +322,11 @@ class NormalizedResponsesCompactUpstreamRequest:
     input: str | tuple[Mapping[str, Any], ...]
 
     instructions: object = _UNSET
+    tools: object = _UNSET
+    parallel_tool_calls: object = _UNSET
+    reasoning: object = _UNSET
+    prompt_cache_key: object = _UNSET
+    text: object = _UNSET
 
     def as_upstream_fields(self) -> dict[str, Any]:
         input_value: Any
@@ -323,8 +335,17 @@ class NormalizedResponsesCompactUpstreamRequest:
         else:
             input_value = self.input
         fields: dict[str, Any] = {"input": input_value}
-        if _is_set(self.instructions):
-            fields["instructions"] = _select_field(self.instructions)
+        for name in (
+            "instructions",
+            "tools",
+            "parallel_tool_calls",
+            "reasoning",
+            "prompt_cache_key",
+            "text",
+        ):
+            value = getattr(self, name)
+            if _is_set(value):
+                fields[name] = _select_field(value)
         return fields
 
 
@@ -640,6 +661,11 @@ def normalize_responses_compact_upstream_request(
             else copy.deepcopy(body["input"])
         ),
         instructions=_select_field(body.get("instructions", _UNSET)),
+        tools=_select_field(body.get("tools", _UNSET)),
+        parallel_tool_calls=_select_field(body.get("parallel_tool_calls", _UNSET)),
+        reasoning=_select_field(body.get("reasoning", _UNSET)),
+        prompt_cache_key=_select_field(body.get("prompt_cache_key", _UNSET)),
+        text=_select_field(body.get("text", _UNSET)),
     )
 
 
@@ -821,9 +847,7 @@ def normalize_conversation_update_upstream_request(
     metadata = body.get("metadata")
     if not isinstance(metadata, Mapping):
         raise ValueError("Conversation update request is missing metadata.")
-    return NormalizedConversationUpdateUpstreamRequest(
-        metadata=copy.deepcopy(dict(metadata))
-    )
+    return NormalizedConversationUpdateUpstreamRequest(metadata=copy.deepcopy(dict(metadata)))
 
 
 def normalize_conversation_items_query_request(

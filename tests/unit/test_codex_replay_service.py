@@ -22,6 +22,7 @@ class Candidate:
     call_id: str | None = None
     tool_namespace: str | None = None
     tool_name: str | None = None
+    encrypted_content: str | None = None
 
 
 class FakeRepository:
@@ -98,6 +99,73 @@ def _tool() -> Candidate:
         tool_namespace="functions",
         tool_name="exec",
     )
+
+
+def _compaction(*, content: str = "opaque-value") -> Candidate:
+    return Candidate(
+        item_kind="compaction",
+        item_id="cmp_safe_1",
+        encrypted_content=content,
+    )
+
+
+@pytest.mark.asyncio
+async def test_compaction_digest_binds_id_and_ciphertext_after_finalized_accounting() -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    await service.persist_validated_references(
+        candidates=(_compaction(),),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_compact_safe",
+        provider="openai",
+        route_id=route_id,
+        upstream_model="gpt-test",
+        now=now,
+    )
+    row = repository.rows[0]
+    assert row.item_kind == "compaction"
+    assert row.call_id_hmac is None
+    assert "opaque-value" not in row.item_id_hmac
+    assert "cmp_safe_1" not in row.item_id_hmac
+
+    for altered in (
+        _compaction(content="altered"),
+        Candidate(
+            item_kind="compaction",
+            item_id="cmp_safe_2",
+            encrypted_content="opaque-value",
+        ),
+    ):
+        with pytest.raises(CodexReplayReferenceError):
+            await service.verify_owned_replay(
+                candidates=(altered,), gateway_key_id=key_id, now=now + timedelta(minutes=1)
+            )
+
+    authorization = await service.verify_owned_replay(
+        candidates=(_compaction(),),
+        gateway_key_id=key_id,
+        now=now + timedelta(minutes=1),
+    )
+    compatible_route = uuid.uuid4()
+    service.verify_route_compatibility(
+        authorization,
+        provider="openai",
+        route_id=compatible_route,
+        upstream_model="gpt-test",
+        compatible_route_ids=frozenset({route_id}),
+    )
+    with pytest.raises(CodexReplayReferenceError):
+        service.verify_route_compatibility(
+            authorization,
+            provider="openai",
+            route_id=compatible_route,
+            upstream_model="other-model",
+            compatible_route_ids=frozenset({route_id}),
+        )
 
 
 @pytest.mark.asyncio

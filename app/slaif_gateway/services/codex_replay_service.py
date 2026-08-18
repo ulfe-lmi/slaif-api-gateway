@@ -19,7 +19,9 @@ from slaif_gateway.utils.crypto import hmac_sha256_token
 
 
 CODEX_REPLAY_REFERENCE_TTL = timedelta(hours=24)
-CODEX_REPLAY_ITEM_KINDS = frozenset({"reasoning", "function_call", "custom_tool_call"})
+CODEX_REPLAY_ITEM_KINDS = frozenset(
+    {"reasoning", "function_call", "custom_tool_call", "compaction"}
+)
 _MAX_ACTIVE_HMAC_VERSIONS = 8
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 
@@ -186,12 +188,23 @@ class CodexReplayService:
         provider: str,
         route_id: uuid.UUID,
         upstream_model: str,
+        compatible_route_ids: frozenset[uuid.UUID] = frozenset(),
+        allow_compact_endpoint_route_compatibility: bool = False,
     ) -> None:
         """Fail closed unless every owned reference matches the selected route."""
 
         if any(
             reference.provider != provider
-            or reference.route_id != route_id
+            or (
+                reference.route_id != route_id
+                and not (
+                    (
+                        reference.item_kind == "compaction"
+                        or allow_compact_endpoint_route_compatibility
+                    )
+                    and reference.route_id in compatible_route_ids
+                )
+            )
             or reference.upstream_model != upstream_model
             for reference in authorization.references
         ):
@@ -303,13 +316,25 @@ def _validated_candidates(
         if item_key in seen_items:
             raise _ownership_error()
         seen_items.add(item_key)
-        if candidate.item_kind == "reasoning":
+        if candidate.item_kind in {"reasoning", "compaction"}:
             if any(
                 value is not None
                 for value in (candidate.call_id, candidate.tool_namespace, candidate.tool_name)
             ):
                 raise _ownership_error()
+            encrypted_content = getattr(candidate, "encrypted_content", None)
+            if candidate.item_kind == "compaction":
+                if (
+                    not isinstance(encrypted_content, str)
+                    or not encrypted_content
+                    or len(encrypted_content.encode("utf-8")) > 1_048_576
+                ):
+                    raise _ownership_error()
+            elif encrypted_content is not None:
+                raise _ownership_error()
             continue
+        if getattr(candidate, "encrypted_content", None) is not None:
+            raise _ownership_error()
         if candidate.call_id is None or _IDENTIFIER_RE.fullmatch(candidate.call_id) is None:
             raise _ownership_error()
         if candidate.tool_namespace is None or candidate.tool_name is None:
@@ -330,6 +355,15 @@ def _bounded_safe_tool_name(value: str) -> bool:
 
 
 def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
+    if candidate.item_kind == "compaction":
+        encrypted_content = getattr(candidate, "encrypted_content", None)
+        assert encrypted_content is not None
+        token = (
+            "slaif-codex-replay:v2:compaction:"
+            f"{len(candidate.item_id.encode('utf-8'))}:{candidate.item_id}:"
+            f"{len(encrypted_content.encode('utf-8'))}:{encrypted_content}"
+        )
+        return hmac_sha256_token(token=token, secret=secret)
     return hmac_sha256_token(
         token=f"slaif-codex-replay:v1:item:{candidate.item_kind}:{candidate.item_id}",
         secret=secret,
