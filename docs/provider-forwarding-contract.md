@@ -240,6 +240,13 @@ Responses-specific rules for the current foundation:
   They are forwarded after validation and counted conservatively, but are not
   persisted, logged, audited, exported, echoed, or treated as routing,
   ownership, cache, or state authority;
+- a fully gated Codex request requires strict top-level route `codex_limits`
+  metadata. After route resolution, SLAIF replaces only the injected ordinary
+  output default with the route default, then rejects output above route or
+  operator maximum and rejects estimated input plus output above context before
+  Redis, pricing, quota, or provider work. The qualification profile's 32,768
+  default and 1,050,000/128,000 limits are configured model data, not universal
+  facts; ordinary Responses remains at 1,024;
 - one Codex `additional_tools` input item is reconstructed only when both the
   key and route independently enable both `codex_request_envelope` and
   `codex_client_tools`. Its canonical shape is `role=developer` with exactly
@@ -367,6 +374,20 @@ Responses-specific rules for the current foundation:
   compact as a model operation using endpoint-specific pricing, conservative
   admission reservation, and provider usage finalization, but does not store or
   log compact input, output, encrypted compaction content, or raw bodies;
+- with all four earlier Codex gates plus default-off `codex_compaction` on the
+  key and route, compact instead accepts the exact pinned V1 model, history,
+  instructions, tools, parallel-tool, reasoning, prompt-cache, and text control
+  fields. It still rejects stream/store/include/tool-choice/background,
+  hosted/MCP/provider authority, V2 triggers, provider-state IDs, and unknown
+  fields. Prior replay ownership is checked before side effects. A compact
+  route can differ only through an explicit bounded same-provider,
+  same-upstream-model compatible-route UUID list;
+- a Codex compact provider success must contain supported final usage and
+  exactly one bounded opaque compaction item with a safe ID and non-empty
+  ciphertext. Accounting finalizes first; SLAIF then HMACs the length-delimited
+  ID/ciphertext composite and persists only the digest plus safe ownership,
+  route, model, and expiry metadata before releasing unary success. Neither raw
+  component is stored, logged, audited, exported, or metric-labelled;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe gateway `error`
   events; it is not converted into Chat Completions chunks. The independently
@@ -476,6 +497,22 @@ capability flags fail closed.
 | Provider request ID headers | Not sent by client | Not generated except gateway `X-Request-ID` | Safe provider request IDs may be retained in metadata/headers | Useful for diagnostics when provider returns them |
 
 Outbound provider header construction uses a small allowlist. Header names containing authorization, cookie, CSRF, session, password, token, secret, admin, gateway, API key, or set-cookie fragments are blocked.
+
+JSON `/v1/responses` and `/v1/responses/compact` ingress accepts no content
+coding other than absent or exact `identity`. `gzip`, `zstd`, combined, and
+unknown `Content-Encoding` values fail safely without body echo; SLAIF does not
+decompress them. The pinned Codex 0.147.0 API-key custom-provider profile emits
+uncompressed JSON.
+
+For fully gated Codex accounting, provider usage carries disjoint cached-read,
+cache-write, uncached-input, ordinary-output, and reasoning-output components.
+Strict `pricing_metadata.codex_accounting` supplies cache-write pricing and the
+long-context threshold/input/output multipliers. Admission uses the maximum
+configured plausible rates; actual local cost uses exact supported components
+and the full-request long tier only above the threshold. Malformed, partial,
+unknown, or contradictory dimensions fail closed. Valid OpenRouter
+provider-reported cost authority remains unchanged, and SLAIF-calculated
+cache-write/long-context cost is not provider-invoice truth.
 
 ## Body Mutation Contract
 

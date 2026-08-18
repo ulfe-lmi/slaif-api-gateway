@@ -42,7 +42,12 @@ STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
 )
 STATUS_VALUES_RESPONSE_REFERENCES = ("active", "deleted")
 STATUS_VALUES_CONVERSATION_REFERENCES = ("active", "deleted")
-KIND_VALUES_CODEX_REPLAY_REFERENCES = ("reasoning", "function_call", "custom_tool_call")
+KIND_VALUES_CODEX_REPLAY_REFERENCES = (
+    "reasoning",
+    "function_call",
+    "custom_tool_call",
+    "compaction",
+)
 SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
 KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
@@ -523,7 +528,7 @@ class CodexReplayReference(Base):
             name="codex_replay_references_expiry_after_creation",
         ),
         CheckConstraint(
-            "((item_kind = 'reasoning' and call_id_hmac is null and "
+            "((item_kind in ('reasoning', 'compaction') and call_id_hmac is null and "
             "tool_namespace is null and tool_name is null) or "
             "(item_kind in ('function_call', 'custom_tool_call') and "
             "call_id_hmac is not null and tool_namespace is not null and tool_name is not null))",

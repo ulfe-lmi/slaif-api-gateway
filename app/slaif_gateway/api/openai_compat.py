@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, Depends, Request
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
 from slaif_gateway.api.endpoint_policy_errors import openai_error_from_endpoint_policy_error
+from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
@@ -65,6 +66,17 @@ from slaif_gateway.services.responses_gateway import (
 router = APIRouter()
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
+
+
+def _reject_non_identity_content_encoding(request: Request) -> None:
+    encoding = request.headers.get("content-encoding", "").strip().lower()
+    if encoding not in {"", "identity"}:
+        raise OpenAICompatibleError(
+            "Compressed request bodies are not supported for this endpoint.",
+            status_code=415,
+            error_type="invalid_request_error",
+            code="request_content_encoding_not_supported",
+        )
 
 
 @router.get("/v1/models", response_model=OpenAIModelList)
@@ -178,6 +190,7 @@ async def create_realtime_client_secret(
 async def create_response(
     request: Request,
     payload: ResponsesCreateRequest,
+    _: None = Depends(_reject_non_identity_content_encoding),
     authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
 ):
     _ensure_endpoint_allowed(authenticated_key, RESPONSES)
@@ -212,6 +225,7 @@ async def count_response_input_tokens(
 async def compact_response(
     request: Request,
     payload: ResponsesCreateRequest,
+    _: None = Depends(_reject_non_identity_content_encoding),
     authenticated_key: AuthenticatedGatewayKey = Depends(get_authenticated_gateway_key),
 ):
     _ensure_endpoint_allowed(authenticated_key, RESPONSES_COMPACT)

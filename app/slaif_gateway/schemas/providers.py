@@ -16,6 +16,7 @@ class ProviderUsage:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
     other_usage: Mapping[str, Any] = field(default_factory=dict)
 

@@ -21,7 +21,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | Envelope, bounded client-tool declarations, strict streaming events, and 24-hour HMAC-bound encrypted-reasoning/tool replay; still `not_compatible` |
+| Current runtime status | Envelope, route-bounded 32,768 qualification output default, strict cache/reasoning/long-context accounting, bounded client-tool streaming/replay, and opaque V1 compaction replay; still `not_compatible` |
 
 Primary references:
 
@@ -45,14 +45,14 @@ without a remote refresh. Codex also supports `model_catalog_json` to replace
 the startup catalog; using a replacement would be a different profile and
 requires a distinct fixture and review.
 
-## Future user configuration
+## Bounded profile configuration target
 
 Codex custom-provider selection belongs in the user's Codex configuration, not
 in a repository checkout. The official configuration reference states that
 project-local config cannot safely override provider/authentication settings,
 including `model_provider` and `model_providers`.
 
-The intended configuration after a future compatibility objective succeeds is:
+The reviewed custom-provider shape is:
 
 ```toml
 model = "gpt-5.6-sol"
@@ -74,8 +74,10 @@ export OPENAI_API_KEY="sk-slaif-..."
 ```
 
 SLAIF validates that gateway key and later substitutes the server-side upstream
-provider credential. The example is a target configuration only: the captured
-0.147.0 profile is currently rejected and must not be presented as working.
+provider credential. This remains a configuration target, not a deployment
+claim: objective 010 still owns route/pricing/profile materialization, including
+disabling V2 compaction. Objective 009 proved only the isolated loopback profile;
+no real provider or production SLAIF route was qualified.
 
 ## Capture and privacy boundary
 
@@ -308,8 +310,39 @@ that crosses a threshold is withheld. Provider final usage/cost remains
 authoritative; missing usage, provider error, or disconnect after any counted
 output finalizes as estimated interrupted accounting.
 
-This is one partial client-side streaming tool loop, not general Codex
-compatibility. Codex/the downstream client owns and performs the local tool
+Fully gated Codex admission additionally requires a strict top-level route
+`codex_limits` object with positive integer `context_window_tokens`,
+`default_max_output_tokens`, and `max_output_tokens`, where default <= maximum
+< context. It is checked after route resolution and before Redis/pricing/quota.
+The qualification profile uses 32,768 default output, 128,000 maximum output,
+and 1,050,000 context, also bounded by operator ceilings. These are configured
+qualified-model values, not universal hardcoded facts or an unlimited-output
+promise; ordinary Responses remains at the 1,024 default.
+
+Codex usage accounting strictly separates cached reads, cache writes, uncached
+input, ordinary output, and reasoning output. Route-model pricing metadata must
+provide the cache-write rate and long-context threshold/input/output
+multipliers. The qualification data uses a 272,000 threshold, 1.25x cache
+write, 2x long input, and 1.5x long output. Admission reserves the maximum
+plausible rates; actual local accounting uses exact provider components and
+applies the long tier to the full request only above the threshold. These are
+configuration, not model-name inference, and local calculated cost is not
+provider-invoice truth. OpenRouter provider-cost authority remains unchanged.
+
+V1 remote compaction forms a fifth independent slice. Both key and route must
+enable `codex_compaction` plus all four earlier Codex capabilities. The request
+is rebuilt from the exact pinned compact fields and history, and all prior
+HMAC ownership is verified before side effects. The provider must return one
+bounded opaque compaction item and supported final usage. After PostgreSQL
+accounting, SLAIF persists only a versioned, length-delimited HMAC over both
+the item ID and encrypted content plus safe ownership/routing/expiry metadata;
+neither raw component is stored, logged, audited, exported, or exposed. Later
+create/compact replay must prove the same composite for the same key/provider/
+model and an explicitly compatible route. V2 `compaction_trigger`, background,
+hosted tools, MCP, and provider-side authority remain unsupported.
+
+This is one partial client-side streaming tool loop plus opaque V1 compaction,
+not general Codex compatibility. Codex/the downstream client owns and performs the local tool
 execution; SLAIF only validates and forwards the bounded model protocol.
 Hosted tools, MCP/connectors, provider-side authorization,
 arbitrary namespaces, shell/patch/computer/web/file-search authority, gateway
@@ -349,6 +382,12 @@ Only a human or active work order may invoke the installed Codex binary:
   --model gpt-5.6-sol \
   --profile api-key-responses-baseline \
   --fixture tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json
+
+.venv/bin/python scripts/verify_codex_context_compaction.py \
+  --codex-binary /usr/bin/codex \
+  --expected-cli-version 0.147.0 \
+  --model gpt-5.6-sol \
+  --profile api-key-responses-baseline
 ```
 
 The reasoning-replay verifier uses the same private temporary home/work directory,
@@ -363,6 +402,16 @@ printed; request bodies, headers, IDs, ciphertext, summaries, arguments,
 results, prompts, subprocess output, and assistant text are never persisted or
 printed. The older two-request tool-only verifier remains historical focused
 evidence.
+
+The context/compaction verifier is also numeric-loopback-only, uses a dummy
+key and private temporary directories, and calls no real provider. Its fixed
+safe mock exercises prompt-cache reuse, cache-write/cached/reasoning usage on
+both sides of the configured long-context threshold, exactly one V1 compact
+request, opaque compaction replay, and post-compact continuation. Only safe
+counts/booleans/types are emitted; requests, responses, headers, IDs, cache
+keys, ciphertext, prompts, tool payloads, subprocess output, and assistant text
+are neither printed nor persisted. This is local protocol qualification only;
+no production or real-provider qualification occurred.
 
 Normal pytest, CI, application startup, packaging, Docker, migrations, and HPC
 verification must never run any live action.
@@ -383,10 +432,10 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Codex compaction/cache behavior beyond the bounded envelope, full CLI-through-
-gateway end-to-end validation, operator guidance, and any release decision
-remain separate strategic work-order boundaries. The bounded replay slice
-grants none of them implicitly; each requires activated scope, tests, privacy
-review, and GitHub acceptance.
+Operator/model-profile materialization, full CLI-through-production-provider
+validation, V2 compaction, and any release decision remain separate strategic
+work-order boundaries. The bounded replay/compaction slices grant none of them
+implicitly; each requires activated scope, tests, privacy review, and GitHub
+acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.

@@ -3,6 +3,15 @@
 **Project:** SLAIF API Gateway
 **Status:** Chat Completions streaming implemented; Responses live-burn implemented for the supported stateless text-output streaming subset
 **Implementation order:** Chat Completions first, Responses second
+
+For fully gated Codex routes, admission reserves the final route-bounded output
+exposure at the maximum configured ordinary/reasoning and long-context rate.
+Provider final usage then separates cached-read, cache-write, uncached-input,
+ordinary-output, and reasoning-output components. Live-burn remains a
+provisional byte/token brake and does not attempt invoice-grade cache-write,
+reasoning, or long-context reconstruction from SSE deltas. The configured
+32,768 qualification default and 1.05M/128K limits do not change ordinary
+Responses defaults.
 **Primary intent:** reduce streaming quota-overrun risk by interrupting active streams when live output estimates cross a per-key margin
 **Non-goal:** replacing final provider-usage accounting or turning chunk estimates into invoice-grade billing truth
 

@@ -16,6 +16,7 @@ class ActualUsage:
     completion_tokens: int
     total_tokens: int
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
     other_usage: Mapping[str, Any] = field(default_factory=dict)
 

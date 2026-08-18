@@ -99,6 +99,10 @@ class AccountingService:
         )
         total_tokens = _optional_token_count(usage.total_tokens, "total_tokens")
         cached_tokens = _optional_token_count(usage.cached_tokens, "cached_tokens")
+        cache_write_tokens = _optional_token_count(
+            usage.cache_write_tokens,
+            "cache_write_tokens",
+        )
         reasoning_tokens = _optional_token_count(usage.reasoning_tokens, "reasoning_tokens")
 
         if total_tokens is None:
@@ -123,6 +127,7 @@ class AccountingService:
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
             reasoning_tokens=reasoning_tokens,
             other_usage=_safe_json_mapping(usage.other_usage),
         )
@@ -139,8 +144,8 @@ class AccountingService:
         _ = at
         native_currency = _normalize_currency(pricing_estimate.native_currency)
         warnings: list[str] = []
-        provider_reported_cost, provider_reported_currency, provider_warning = _provider_reported_cost(
-            provider_response
+        provider_reported_cost, provider_reported_currency, provider_warning = (
+            _provider_reported_cost(provider_response)
         )
         if provider_warning is not None:
             warnings.append(provider_warning)
@@ -186,9 +191,7 @@ class AccountingService:
             actual_native = slaif_native
             actual_native_currency = native_currency
             cost_source = _COST_SOURCE_SLAIF
-            cost_confidence = (
-                "slaif_calculated_with_fallbacks" if warnings else "slaif_calculated"
-            )
+            cost_confidence = "slaif_calculated_with_fallbacks" if warnings else "slaif_calculated"
             if provider_reported_cost is not None and provider_response.provider != "openrouter":
                 warnings.append("provider_reported_cost_not_supported_for_provider")
 
@@ -637,9 +640,11 @@ class AccountingService:
                 tokens_reserved_total=reservation.reserved_tokens,
                 requests_reserved_total=reservation.reserved_requests,
             )
-            reservation = await self._quota_reservations_repository.mark_pending_reservation_released(
-                reservation,
-                released_at=finished,
+            reservation = (
+                await self._quota_reservations_repository.mark_pending_reservation_released(
+                    reservation,
+                    released_at=finished,
+                )
             )
             released = True
 
@@ -666,7 +671,9 @@ class AccountingService:
             gateway_key_id=authenticated_key.gateway_key_id,
             request_id=request_id,
             released=released,
-            accounting_status=ledger.accounting_status if ledger is not None else reservation.status,
+            accounting_status=ledger.accounting_status
+            if ledger is not None
+            else reservation.status,
             error_type=error_type,
             error_code=error_code,
         )
@@ -705,7 +712,9 @@ class AccountingService:
             raise ReservationFinalizationError("Gateway key was not found during finalization")
 
         total_tokens = _non_negative_int(estimated_total_tokens, "estimated_total_tokens")
-        input_tokens = min(_non_negative_int(estimated_input_tokens, "estimated_input_tokens"), total_tokens)
+        input_tokens = min(
+            _non_negative_int(estimated_input_tokens, "estimated_input_tokens"), total_tokens
+        )
         output_tokens = min(
             _non_negative_int(estimated_output_tokens, "estimated_output_tokens"),
             max(total_tokens - input_tokens, 0),
@@ -741,9 +750,7 @@ class AccountingService:
         )
         safe_metadata = {
             **(
-                sanitized_response_metadata
-                if isinstance(sanitized_response_metadata, dict)
-                else {}
+                sanitized_response_metadata if isinstance(sanitized_response_metadata, dict) else {}
             ),
             **overrun_metadata,
             "accounting_estimate_reason": estimate_reason,
@@ -996,7 +1003,9 @@ def _optional_token_count(value: int | None, field_name: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise InvalidUsageError("Provider usage token counts must be integers", param=field_name)
     if value < 0:
-        raise InvalidUsageError("Provider usage token counts must be non-negative", param=field_name)
+        raise InvalidUsageError(
+            "Provider usage token counts must be non-negative", param=field_name
+        )
     return value
 
 
@@ -1045,6 +1054,11 @@ def _component_slaif_costs(
     pricing_estimate: ChatCostEstimate,
     allow_unpriced_audio_output: bool = False,
 ) -> tuple[dict[str, Decimal], dict[str, int], list[str]]:
+    if pricing_estimate.codex_accounting:
+        return _codex_component_slaif_costs(
+            usage=usage,
+            pricing_estimate=pricing_estimate,
+        )
     input_price = _price_per_1m(
         pricing_estimate.input_price_per_1m,
         fallback_cost=pricing_estimate.estimated_input_cost_native,
@@ -1088,7 +1102,9 @@ def _component_slaif_costs(
     _validate_price(cached_input_price, param="cached_input_price_per_1m")
 
     audio_output_tokens = min(_audio_output_tokens(usage.other_usage) or 0, usage.completion_tokens)
-    reasoning_tokens = min(usage.reasoning_tokens or 0, usage.completion_tokens - audio_output_tokens)
+    reasoning_tokens = min(
+        usage.reasoning_tokens or 0, usage.completion_tokens - audio_output_tokens
+    )
     non_reasoning_output_tokens = usage.completion_tokens - reasoning_tokens - audio_output_tokens
     reasoning_price = pricing_estimate.reasoning_price_per_1m
     if reasoning_tokens and reasoning_price is None:
@@ -1136,6 +1152,189 @@ def _component_slaif_costs(
         "output_audio": _tokens_to_cost(audio_output_tokens, audio_output_price),
     }
     return component_costs, component_tokens, warnings
+
+
+def _codex_component_slaif_costs(
+    *,
+    usage: ActualUsage,
+    pricing_estimate: ChatCostEstimate,
+) -> tuple[dict[str, Decimal], dict[str, int], list[str]]:
+    """Compute strict disjoint Codex cache/output components without fallback."""
+
+    input_price = pricing_estimate.input_price_per_1m
+    cached_price = pricing_estimate.cached_input_price_per_1m
+    cache_write_price = pricing_estimate.cache_write_input_price_per_1m
+    output_price = pricing_estimate.output_price_per_1m
+    reasoning_price = pricing_estimate.reasoning_price_per_1m
+    threshold = pricing_estimate.long_context_threshold_tokens
+    input_multiplier = pricing_estimate.long_context_input_multiplier
+    output_multiplier = pricing_estimate.long_context_output_multiplier
+    required_prices = {
+        "input_price_per_1m": input_price,
+        "cached_input_price_per_1m": cached_price,
+        "cache_write_input_price_per_1m": cache_write_price,
+        "output_price_per_1m": output_price,
+        "reasoning_price_per_1m": reasoning_price,
+        "long_context_input_multiplier": input_multiplier,
+        "long_context_output_multiplier": output_multiplier,
+    }
+    for field, value in required_prices.items():
+        if value is None:
+            raise UnsupportedProviderCostError(
+                "Complete Codex accounting prices are required.",
+                param=field,
+            )
+        _validate_price(value, param=field)
+    if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
+        raise UnsupportedProviderCostError(
+            "A positive Codex long-context threshold is required.",
+            param="long_context_threshold_tokens",
+        )
+    assert input_price is not None
+    assert cached_price is not None
+    assert cache_write_price is not None
+    assert output_price is not None
+    assert reasoning_price is not None
+    assert input_multiplier is not None
+    assert output_multiplier is not None
+
+    _validate_codex_usage_detail_shape(usage)
+    if usage.prompt_tokens + usage.completion_tokens != usage.total_tokens:
+        raise UnsupportedProviderCostError(
+            "Codex provider input and output tokens do not exactly match total tokens.",
+            param="total_tokens",
+        )
+    cached_tokens = usage.cached_tokens or 0
+    cache_write_tokens = usage.cache_write_tokens or 0
+    if cached_tokens + cache_write_tokens > usage.prompt_tokens:
+        raise UnsupportedProviderCostError(
+            "Codex cached-read and cache-write tokens exceed provider input tokens.",
+            param="input_tokens_details",
+        )
+    reasoning_tokens = usage.reasoning_tokens or 0
+    if reasoning_tokens > usage.completion_tokens:
+        raise UnsupportedProviderCostError(
+            "Codex reasoning tokens exceed provider output tokens.",
+            param="output_tokens_details.reasoning_tokens",
+        )
+    audio_tokens = _audio_output_tokens(usage.other_usage) or 0
+    if audio_tokens:
+        raise UnsupportedProviderCostError(
+            "Codex accounting received an unsupported output token dimension.",
+            param="output_tokens_details",
+        )
+
+    ordinary_input_tokens = usage.prompt_tokens - cached_tokens - cache_write_tokens
+    ordinary_output_tokens = usage.completion_tokens - reasoning_tokens
+    long_context = usage.prompt_tokens > threshold
+    applied_input_multiplier = input_multiplier if long_context else Decimal("1")
+    applied_output_multiplier = output_multiplier if long_context else Decimal("1")
+    component_tokens = {
+        "input_uncached_tokens": ordinary_input_tokens,
+        "input_cached_tokens": cached_tokens,
+        "input_cache_write_tokens": cache_write_tokens,
+        "output_non_reasoning_tokens": ordinary_output_tokens,
+        "output_reasoning_tokens": reasoning_tokens,
+        "output_audio_tokens": 0,
+        "long_context_tier_applied": int(long_context),
+        "total_tokens": usage.total_tokens,
+    }
+    component_costs = {
+        "input_uncached": _tokens_to_cost(
+            ordinary_input_tokens,
+            input_price * applied_input_multiplier,
+        ),
+        "input_cached": _tokens_to_cost(
+            cached_tokens,
+            cached_price * applied_input_multiplier,
+        ),
+        "input_cache_write": _tokens_to_cost(
+            cache_write_tokens,
+            cache_write_price * applied_input_multiplier,
+        ),
+        "output_non_reasoning": _tokens_to_cost(
+            ordinary_output_tokens,
+            output_price * applied_output_multiplier,
+        ),
+        "output_reasoning": _tokens_to_cost(
+            reasoning_tokens,
+            reasoning_price * applied_output_multiplier,
+        ),
+        "output_audio": Decimal("0"),
+    }
+    warnings = ["codex_long_context_tier_applied"] if long_context else []
+    return component_costs, component_tokens, warnings
+
+
+def _validate_codex_usage_detail_shape(usage: ActualUsage) -> None:
+    input_shapes: list[Mapping[str, Any]] = []
+    for field in ("input_tokens_details", "prompt_tokens_details"):
+        raw = usage.other_usage.get(field)
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping):
+            raise UnsupportedProviderCostError(
+                "Codex input token details are malformed.",
+                param=field,
+            )
+        if set(raw) - {"cached_tokens", "cache_write_tokens"}:
+            raise UnsupportedProviderCostError(
+                "Codex input token details contain an unknown billable dimension.",
+                param=field,
+            )
+        input_shapes.append(raw)
+    if len(input_shapes) > 1 and dict(input_shapes[0]) != dict(input_shapes[1]):
+        raise UnsupportedProviderCostError(
+            "Codex input token detail aliases are contradictory.",
+            param="input_tokens_details",
+        )
+    if input_shapes:
+        raw = input_shapes[0]
+        _validate_raw_usage_count(raw, "cached_tokens", usage.cached_tokens)
+        _validate_raw_usage_count(raw, "cache_write_tokens", usage.cache_write_tokens)
+
+    output_shapes: list[Mapping[str, Any]] = []
+    for field in ("output_tokens_details", "completion_tokens_details"):
+        raw = usage.other_usage.get(field)
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping) or set(raw) - {"reasoning_tokens"}:
+            raise UnsupportedProviderCostError(
+                "Codex output token details are malformed or contain an unknown dimension.",
+                param=field,
+            )
+        output_shapes.append(raw)
+    if len(output_shapes) > 1 and dict(output_shapes[0]) != dict(output_shapes[1]):
+        raise UnsupportedProviderCostError(
+            "Codex output token detail aliases are contradictory.",
+            param="output_tokens_details",
+        )
+    if output_shapes:
+        _validate_raw_usage_count(
+            output_shapes[0],
+            "reasoning_tokens",
+            usage.reasoning_tokens,
+        )
+
+
+def _validate_raw_usage_count(
+    raw: Mapping[str, Any],
+    field: str,
+    typed_value: int | None,
+) -> None:
+    if field not in raw:
+        if typed_value is not None:
+            raise UnsupportedProviderCostError(
+                "Codex typed usage contradicts provider detail metadata.",
+                param=field,
+            )
+        return
+    value = raw.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or typed_value != value:
+        raise UnsupportedProviderCostError(
+            "Codex token detail metadata is invalid.",
+            param=field,
+        )
 
 
 def _price_per_1m(
@@ -1220,14 +1419,18 @@ def _convert_estimate_native_to_eur(
     estimated_total_native: Decimal,
     estimated_total_eur: Decimal,
 ) -> Decimal:
-    if not isinstance(estimated_total_native, Decimal) or not isinstance(estimated_total_eur, Decimal):
+    if not isinstance(estimated_total_native, Decimal) or not isinstance(
+        estimated_total_eur, Decimal
+    ):
         raise UnsupportedProviderCostError("Estimated total costs must use Decimal")
     if estimated_total_native < 0 or estimated_total_eur < 0:
         raise UnsupportedProviderCostError("Estimated total costs must be non-negative")
     if estimated_total_native == 0:
         if actual_native == 0:
             return Decimal("0")
-        raise UnsupportedProviderCostError("Actual cost cannot be converted from a zero-cost estimate")
+        raise UnsupportedProviderCostError(
+            "Actual cost cannot be converted from a zero-cost estimate"
+        )
     if native_currency == _EUR and estimated_total_native == estimated_total_eur:
         return actual_native
     fx_ratio = estimated_total_eur / estimated_total_native
@@ -1338,13 +1541,32 @@ def _response_metadata(
             metadata["fx_rate_id"] = str(pricing_estimate.fx_rate_id)
     if usage is not None:
         metadata["actual_cached_tokens"] = usage.cached_tokens
+        metadata["actual_cache_write_tokens"] = usage.cache_write_tokens
         metadata["actual_reasoning_tokens"] = usage.reasoning_tokens
+    if pricing_estimate is not None and pricing_estimate.codex_accounting:
+        metadata["codex_accounting"] = True
+        metadata["long_context_threshold_tokens"] = pricing_estimate.long_context_threshold_tokens
+        metadata["long_context_input_multiplier"] = str(
+            pricing_estimate.long_context_input_multiplier
+        )
+        metadata["long_context_output_multiplier"] = str(
+            pricing_estimate.long_context_output_multiplier
+        )
+        metadata["cache_write_input_price_per_1m"] = str(
+            pricing_estimate.cache_write_input_price_per_1m
+        )
+        if pricing_estimate.cache_write_input_multiplier is not None:
+            metadata["cache_write_input_multiplier"] = str(
+                pricing_estimate.cache_write_input_multiplier
+            )
     if overrun_metadata:
         metadata.update(dict(overrun_metadata))
     return _safe_json_mapping(metadata)
 
 
-def _failure_response_metadata(provider_diagnostic: Mapping[str, object] | None) -> dict[str, object]:
+def _failure_response_metadata(
+    provider_diagnostic: Mapping[str, object] | None,
+) -> dict[str, object]:
     if provider_diagnostic is None:
         return {}
     return _safe_json_mapping({"provider_diagnostic": dict(provider_diagnostic)})

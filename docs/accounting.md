@@ -67,6 +67,27 @@ Core invariants:
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
+- Fully gated Codex admission replaces only the injected ordinary 1,024 output
+  default with the strict route default (32,768 in the qualification profile),
+  then enforces route/operator output and context bounds before Redis, pricing,
+  quota, or provider work. Ordinary non-Codex admission remains unchanged.
+  The 1,050,000 context and 128,000 output qualification ceilings are configured
+  model data, not hardcoded universal limits.
+- Codex pricing partitions provider input into cached reads, cache writes, and
+  ordinary uncached tokens, and output into ordinary and reasoning tokens.
+  Required cache-write and long-context price/multiplier metadata is strict and
+  route-model specific. Admission reserves every estimated input/output token
+  at the maximum plausible configured rate; finalization charges the disjoint
+  provider-reported components and applies the long-context tier to the full
+  request only above its configured threshold. Provider-reported OpenRouter
+  cost authority is unchanged. SLAIF-calculated cache-write/long-context cost
+  remains local conservative accounting, not invoice truth.
+- A gated V1 compact response becomes replayable only after final provider
+  usage and finalized PostgreSQL accounting. SLAIF then persists only a
+  versioned HMAC over the opaque compaction ID plus ciphertext and safe
+  ownership/routing metadata. Persistence failure is a charged safe failure.
+  Raw compact history, IDs, ciphertext, prompt-cache keys, and HMACs never enter
+  accounting metadata.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,

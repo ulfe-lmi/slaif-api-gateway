@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from dataclasses import dataclass
 from decimal import Decimal
@@ -101,7 +102,9 @@ from slaif_gateway.services.responses_streaming_live_burn import (
 )
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.responses_request_policy import (
+    apply_codex_route_limits,
     CodexReplayRequestCandidate,
+    CodexCompactionReplayCandidate,
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA,
     conversation_requested,
@@ -116,6 +119,10 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_encrypted_reasoning_replay_allowed,
     responses_codex_encrypted_reasoning_output_requested,
     responses_codex_encrypted_reasoning_replay_requested,
+    responses_codex_compaction_allowed,
+    responses_codex_compaction_requested,
+    responses_codex_compaction_replay_requested,
+    responses_codex_extended_limits_allowed,
     responses_codex_request_envelope_allowed,
     responses_codex_request_envelope_requested,
     responses_codex_streaming_tool_events_allowed,
@@ -127,6 +134,7 @@ from slaif_gateway.services.responses_request_policy import (
 )
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
+    parse_codex_compaction_compatible_route_ids,
 )
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
@@ -176,7 +184,9 @@ CONVERSATION_ITEMS_CREATE_PROVIDER_ENDPOINT = "conversations.items.create"
 CONVERSATION_ITEMS_LIST_PROVIDER_ENDPOINT = "conversations.items.list"
 CONVERSATION_ITEMS_RETRIEVE_PROVIDER_ENDPOINT = "conversations.items.retrieve"
 CONVERSATION_ITEMS_DELETE_PROVIDER_ENDPOINT = "conversations.items.delete"
-_RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS = frozenset({"after", "include", "include[]", "limit", "order"})
+_RESPONSES_INPUT_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
+    {"after", "include", "include[]", "limit", "order"}
+)
 _RESPONSES_INPUT_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
 _CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
     {"after", "before", "include", "include[]", "limit", "order"}
@@ -322,9 +332,13 @@ def _validate_input_token_count_response(provider_response: ProviderResponse) ->
         )
 
 
-def _validate_compact_response(provider_response: ProviderResponse) -> None:
+def _validate_compact_response(
+    provider_response: ProviderResponse,
+    *,
+    codex_compaction: bool = False,
+) -> CodexCompactionReplayCandidate | None:
     payload = provider_response.json_body
-    if payload.get("object") != "response.compaction":
+    if not codex_compaction and payload.get("object") != "response.compaction":
         raise ProviderError(
             "Provider returned an invalid Responses compact response.",
             provider=provider_response.provider,
@@ -338,6 +352,52 @@ def _validate_compact_response(provider_response: ProviderResponse) -> None:
             upstream_status_code=provider_response.status_code,
             error_code="responses_compact_usage_missing",
         )
+    if not codex_compaction:
+        return None
+    output = payload.get("output")
+    if not isinstance(output, list) or len(output) != 1:
+        raise ProviderError(
+            "Provider returned an invalid Codex compact response.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="responses_codex_compaction_response_invalid",
+        )
+    item = output[0]
+    if not isinstance(item, Mapping) or set(item) != {"type", "id", "encrypted_content"}:
+        raise ProviderError(
+            "Provider returned an invalid Codex compact response.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="responses_codex_compaction_response_invalid",
+        )
+    item_id = item.get("id")
+    encrypted_content = item.get("encrypted_content")
+    if (
+        item.get("type") != "compaction"
+        or not isinstance(item_id, str)
+        or not item_id
+        or len(item_id) > 128
+        or not item_id.isascii()
+        or not all(character.isalnum() or character in "._:-" for character in item_id)
+        or not item_id[0].isalnum()
+        or not isinstance(encrypted_content, str)
+        or not encrypted_content
+        or len(encrypted_content.encode("utf-8")) > 1_048_576
+    ):
+        raise ProviderError(
+            "Provider returned an invalid Codex compact response.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="responses_codex_compaction_response_invalid",
+        )
+    return CodexCompactionReplayCandidate(
+        item_kind="compaction",
+        item_id=item_id,
+        call_id=None,
+        tool_namespace=None,
+        tool_name=None,
+        encrypted_content=encrypted_content,
+    )
 
 
 async def handle_response_input_tokens_count(
@@ -408,12 +468,27 @@ async def handle_response_compact(
     request: Request | None = None,
 ):
     body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+    for field in ("parallel_tool_calls", "reasoning", "prompt_cache_key", "text"):
+        if field in payload.model_fields_set and field not in body:
+            body[field] = None
+    codex_compaction_requested = responses_codex_compaction_requested(body)
+    allow_codex_compaction = responses_codex_compaction_allowed(authenticated_key.responses_policy)
     policy = ResponsesRequestPolicy(settings=settings)
     try:
-        policy_result = policy.apply_compact(body)
+        policy_result = policy.apply_compact(
+            body,
+            allow_codex_compaction=allow_codex_compaction,
+        )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
+    replay_candidates = codex_replay_request_candidates(policy_result.effective_body)
+    replay_authorization = await _verify_owned_codex_replay_references(
+        candidates=replay_candidates,
+        authenticated_key=authenticated_key,
+        settings=settings,
+        request=request,
+    )
     request_id = _request_id_from_request(request)
     route = await _resolve_responses_route(
         authenticated_key=authenticated_key,
@@ -430,7 +505,28 @@ async def handle_response_compact(
         previous_response_id_requested=False,
         compact_requested=True,
         conversations_requested=False,
+        codex_request_envelope_requested=codex_compaction_requested,
+        codex_client_tools_requested=codex_compaction_requested,
+        codex_streaming_tool_events_requested=codex_compaction_requested,
+        codex_encrypted_reasoning_replay_requested=codex_compaction_requested,
+        codex_extended_limits_requested=codex_compaction_requested,
+        codex_compaction_requested=codex_compaction_requested,
         request=request,
+    )
+    if codex_compaction_requested:
+        try:
+            policy_result = apply_codex_route_limits(
+                policy_result,
+                route_capabilities=route.capabilities,
+                settings=settings,
+                include_output_field=False,
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
+    _verify_codex_replay_route(
+        authorization=replay_authorization,
+        route=route,
+        compact_endpoint=codex_compaction_requested,
     )
     upstream_body = _build_safe_responses_compact_upstream_body(
         policy_result=policy_result,
@@ -469,7 +565,10 @@ async def handle_response_compact(
                 endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
                 call=lambda: adapter.compact_response(provider_request),
             )
-            _validate_compact_response(provider_response)
+            compact_candidate = _validate_compact_response(
+                provider_response,
+                codex_compaction=codex_compaction_requested,
+            )
         except ProviderError as exc:
             await _record_provider_failure_and_release(
                 reservation=reservation,
@@ -502,12 +601,24 @@ async def handle_response_compact(
                 accounting_result=accounting_result,
                 provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
             )
+            if compact_candidate is not None:
+                await _persist_codex_replay_references(
+                    candidates=(compact_candidate,),
+                    authenticated_key=authenticated_key,
+                    usage_ledger_id=accounting_result.usage_ledger_id,
+                    request_id=request_id,
+                    route=route,
+                    settings=settings,
+                    request=request,
+                )
         except AccountingError as exc:
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc
         except QuotaError as exc:
             increment_quota_rejection(exc.error_code)
             raise openai_error_from_quota_error(exc) from exc
+        except CodexReplayReferenceError as exc:
+            raise _openai_error_from_codex_replay_error(exc) from exc
 
         response = JSONResponse(
             status_code=provider_response.status_code,
@@ -549,26 +660,27 @@ async def handle_response_create(
     allow_codex_client_tools = responses_codex_client_tools_allowed(
         authenticated_key.responses_policy
     )
-    codex_streaming_tool_events_requested = (
-        responses_codex_streaming_tool_events_requested(body)
-    )
+    codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(body)
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
     )
     codex_encrypted_reasoning_replay_requested = (
         responses_codex_encrypted_reasoning_replay_requested(body)
     )
-    allow_codex_encrypted_reasoning_replay = (
-        responses_codex_encrypted_reasoning_replay_allowed(
-            authenticated_key.responses_policy
-        )
+    allow_codex_encrypted_reasoning_replay = responses_codex_encrypted_reasoning_replay_allowed(
+        authenticated_key.responses_policy
     )
-    codex_encrypted_reasoning_event_requested = (
-        codex_encrypted_reasoning_replay_requested
-        or (
-            allow_codex_encrypted_reasoning_replay
-            and responses_codex_encrypted_reasoning_output_requested(body)
-        )
+    allow_codex_extended_limits = responses_codex_extended_limits_allowed(
+        authenticated_key.responses_policy
+    )
+    allow_codex_compaction = responses_codex_compaction_allowed(authenticated_key.responses_policy)
+    codex_compaction_replay_requested = responses_codex_compaction_replay_requested(body)
+    codex_extended_limits_requested = (
+        codex_request_envelope_requested and allow_codex_extended_limits
+    )
+    codex_encrypted_reasoning_event_requested = codex_encrypted_reasoning_replay_requested or (
+        allow_codex_encrypted_reasoning_replay
+        and responses_codex_encrypted_reasoning_output_requested(body)
     )
     policy = ResponsesRequestPolicy(settings=settings)
     try:
@@ -578,9 +690,9 @@ async def handle_response_create(
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
             allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
-            allow_codex_encrypted_reasoning_replay=(
-                allow_codex_encrypted_reasoning_replay
-            ),
+            allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
+            allow_codex_extended_limits=codex_extended_limits_requested,
+            allow_codex_compaction_replay=allow_codex_compaction,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -617,11 +729,20 @@ async def handle_response_create(
         codex_request_envelope_requested=codex_request_envelope_requested,
         codex_client_tools_requested=codex_client_tools_requested,
         codex_streaming_tool_events_requested=codex_streaming_tool_events_requested,
-        codex_encrypted_reasoning_replay_requested=(
-            codex_encrypted_reasoning_event_requested
-        ),
+        codex_encrypted_reasoning_replay_requested=(codex_encrypted_reasoning_event_requested),
+        codex_extended_limits_requested=codex_extended_limits_requested,
+        codex_compaction_requested=codex_compaction_replay_requested,
         request=request,
     )
+    if codex_extended_limits_requested:
+        try:
+            policy_result = apply_codex_route_limits(
+                policy_result,
+                route_capabilities=route.capabilities,
+                settings=settings,
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
     _verify_codex_replay_route(
         authorization=replay_authorization,
         route=route,
@@ -666,7 +787,10 @@ async def handle_response_create(
         pre_provider_live_burn = pre_provider_responses_streaming_live_burn_error(
             quota.live_burn_budget
         )
-        if policy_result.effective_body.get("stream") is True and pre_provider_live_burn is not None:
+        if (
+            policy_result.effective_body.get("stream") is True
+            and pre_provider_live_burn is not None
+        ):
             try:
                 await _record_streaming_live_burn_abort_estimate(
                     reservation=reservation,
@@ -1304,7 +1428,7 @@ async def handle_conversation_item_delete(
 
 async def _verify_owned_codex_replay_references(
     *,
-    candidates: tuple[CodexReplayRequestCandidate, ...],
+    candidates: tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...],
     authenticated_key: AuthenticatedGatewayKey,
     settings: Settings,
     request: Request | None,
@@ -1336,13 +1460,22 @@ def _verify_codex_replay_route(
     *,
     authorization: CodexReplayAuthorization,
     route: RouteResolutionResult,
+    compact_endpoint: bool = False,
 ) -> None:
     try:
+        compatible_route_ids = (
+            parse_codex_compaction_compatible_route_ids(route.capabilities)
+            if compact_endpoint
+            or any(reference.item_kind == "compaction" for reference in authorization.references)
+            else frozenset()
+        )
         CodexReplayService.verify_route_compatibility(
             authorization,
             provider=route.provider,
             route_id=route.route_id,
             upstream_model=route.resolved_model,
+            compatible_route_ids=compatible_route_ids,
+            allow_compact_endpoint_route_compatibility=compact_endpoint,
         )
     except CodexReplayReferenceError as exc:
         raise _openai_error_from_codex_replay_error(exc) from exc
@@ -1352,17 +1485,21 @@ def _openai_error_from_codex_replay_error(
     error: CodexReplayReferenceError,
 ) -> OpenAICompatibleError:
     unavailable = error.error_code == "responses_codex_replay_hmac_unavailable"
+    persistence = error.error_code == "responses_codex_replay_persistence_failed"
     return OpenAICompatibleError(
         error.safe_message,
-        status_code=503 if unavailable else 404,
-        error_type="server_error" if unavailable else "invalid_request_error",
+        status_code=503 if unavailable else 500 if persistence else 404,
+        error_type="server_error" if unavailable or persistence else "invalid_request_error",
         code=error.error_code,
     )
 
 
 async def _persist_codex_replay_references(
     *,
-    candidates: tuple[CodexReplayStreamCandidate, ...],
+    candidates: tuple[
+        CodexReplayStreamCandidate | CodexReplayRequestCandidate | CodexCompactionReplayCandidate,
+        ...,
+    ],
     authenticated_key: AuthenticatedGatewayKey,
     usage_ledger_id: uuid.UUID,
     request_id: str,
@@ -1431,6 +1568,8 @@ async def _resolve_responses_route(
     codex_client_tools_requested: bool = False,
     codex_streaming_tool_events_requested: bool = False,
     codex_encrypted_reasoning_replay_requested: bool = False,
+    codex_extended_limits_requested: bool = False,
+    codex_compaction_requested: bool = False,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1466,12 +1605,12 @@ async def _resolve_responses_route(
                 conversations_requested=conversations_requested,
                 codex_request_envelope_requested=codex_request_envelope_requested,
                 codex_client_tools_requested=codex_client_tools_requested,
-                codex_streaming_tool_events_requested=(
-                    codex_streaming_tool_events_requested
-                ),
+                codex_streaming_tool_events_requested=(codex_streaming_tool_events_requested),
                 codex_encrypted_reasoning_replay_requested=(
                     codex_encrypted_reasoning_replay_requested
                 ),
+                codex_extended_limits_requested=codex_extended_limits_requested,
+                codex_compaction_requested=codex_compaction_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -1610,9 +1749,7 @@ def _streaming_responses_response(
                     continue
                 if not stream_event_validator.validate(chunk.json_body):
                     event_type = (
-                        chunk.json_body.get("type")
-                        if isinstance(chunk.json_body, dict)
-                        else None
+                        chunk.json_body.get("type") if isinstance(chunk.json_body, dict) else None
                     )
                     provider_failure = event_type in RESPONSES_PROVIDER_FAILURE_EVENT_TYPES
                     error_code = (
@@ -2557,7 +2694,9 @@ async def _provider_route_for_reference(
         if list_input_items_requested:
             if reference.route_id is None:
                 raise _response_not_found_error()
-            model_route = await ModelRoutesRepository(session).get_model_route_by_id(reference.route_id)
+            model_route = await ModelRoutesRepository(session).get_model_route_by_id(
+                reference.route_id
+            )
             if (
                 model_route is None
                 or model_route.enabled is not True
@@ -2655,7 +2794,11 @@ def _select_conversation_provider_config(
 ):
     enabled_by_name = {config.provider: config for config in provider_configs if config.enabled}
     if authenticated_key.allowed_providers is not None:
-        allowed = [provider for provider in authenticated_key.allowed_providers if provider in enabled_by_name]
+        allowed = [
+            provider
+            for provider in authenticated_key.allowed_providers
+            if provider in enabled_by_name
+        ]
         if not allowed:
             return None
         if len(allowed) == 1:
@@ -2663,7 +2806,9 @@ def _select_conversation_provider_config(
         if "openai" in allowed:
             return enabled_by_name["openai"]
         return enabled_by_name[sorted(allowed)[0]]
-    return enabled_by_name.get("openai") or next(iter(sorted(enabled_by_name.values(), key=lambda item: item.provider)), None)
+    return enabled_by_name.get("openai") or next(
+        iter(sorted(enabled_by_name.values(), key=lambda item: item.provider)), None
+    )
 
 
 def _route_like_for_provider_config(provider_config):
@@ -2936,8 +3081,10 @@ def _validate_conversation_create_body(payload: dict[str, object] | None) -> dic
 
 
 def _validate_response_id(response_id: str) -> str:
-    if not response_id or len(response_id.encode("utf-8")) > 512 or any(
-        ord(char) < 32 for char in response_id
+    if (
+        not response_id
+        or len(response_id.encode("utf-8")) > 512
+        or any(ord(char) < 32 for char in response_id)
     ):
         raise OpenAICompatibleError(
             "Response not found.",
@@ -2949,8 +3096,10 @@ def _validate_response_id(response_id: str) -> str:
 
 
 def _validate_conversation_id(conversation_id: str) -> str:
-    if not conversation_id or len(conversation_id.encode("utf-8")) > 512 or any(
-        ord(char) < 32 for char in conversation_id
+    if (
+        not conversation_id
+        or len(conversation_id.encode("utf-8")) > 512
+        or any(ord(char) < 32 for char in conversation_id)
     ):
         raise _conversation_not_found_error()
     return conversation_id

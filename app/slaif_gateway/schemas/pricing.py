@@ -22,6 +22,11 @@ class PricingLookupResult:
     reasoning_price_per_1m: Decimal | None
     audio_output_price_per_1m: Decimal | None
     request_price: Decimal | None
+    cache_write_input_price_per_1m: Decimal | None
+    cache_write_input_multiplier: Decimal | None
+    long_context_threshold_tokens: int | None
+    long_context_input_multiplier: Decimal | None
+    long_context_output_multiplier: Decimal | None
     pricing_rule_id: uuid.UUID | None
     valid_from: datetime
     valid_until: datetime | None
@@ -60,3 +65,9 @@ class ChatCostEstimate:
     audio_output_price_per_1m: Decimal | None = None
     request_price: Decimal | None = None
     fx_rate: Decimal | None = None
+    cache_write_input_price_per_1m: Decimal | None = None
+    cache_write_input_multiplier: Decimal | None = None
+    long_context_threshold_tokens: int | None = None
+    long_context_input_multiplier: Decimal | None = None
+    long_context_output_multiplier: Decimal | None = None
+    codex_accounting: bool = False

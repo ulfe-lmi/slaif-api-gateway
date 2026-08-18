@@ -18,9 +18,11 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_route_capabilities import (
     KNOWN_RESPONSES_CAPABILITIES,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    RESPONSES_CAPABILITY_CODEX_COMPACTION,
     RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+    parse_codex_route_limits,
 )
 
 _SUPPORTED_FIELDS = frozenset(
@@ -66,6 +68,18 @@ _SUPPORTED_COMPACT_FIELDS = frozenset(
         "instructions",
     }
 )
+_SUPPORTED_CODEX_COMPACT_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "parallel_tool_calls",
+        "reasoning",
+        "prompt_cache_key",
+        "text",
+    }
+)
 TEXT_FORMAT_TEXT = "text"
 TEXT_FORMAT_JSON_OBJECT = "json_object"
 TEXT_FORMAT_JSON_SCHEMA = "json_schema"
@@ -99,10 +113,9 @@ _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS = frozenset(
 _SUPPORTED_CODEX_REASONING_REPLAY_FIELDS = frozenset(
     {"type", "id", "summary", "encrypted_content", "content"}
 )
+_SUPPORTED_CODEX_COMPACTION_REPLAY_FIELDS = frozenset({"type", "id", "encrypted_content"})
 _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS = frozenset({"type", "text"})
-_SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
-    {"type", "name", "description", "parameters", "strict"}
-)
+_SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset({"type", "name", "description", "parameters", "strict"})
 _SUPPORTED_CUSTOM_TOOL_FIELDS = frozenset({"type", "name", "description", "format"})
 _SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
@@ -206,6 +219,7 @@ _CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
 _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES = 1_048_576
 _CODEX_MAX_REASONING_SUMMARY_BYTES = 65_536
 _CODEX_MAX_REASONING_SUMMARY_PARTS = 64
+_CODEX_MAX_COMPACTION_ITEM_BYTES = 1_048_576
 _CODEX_CLIENT_TOOL_TAXONOMY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "functions",
@@ -248,6 +262,18 @@ class CodexReplayRequestCandidate:
     tool_name: str | None
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class CodexCompactionReplayCandidate:
+    """Transient composite opaque values used only by the immediate HMAC step."""
+
+    item_kind: str
+    item_id: str
+    call_id: str | None
+    tool_namespace: str | None
+    tool_name: str | None
+    encrypted_content: str
+
+
 class ResponsesRequestPolicy:
     """Apply narrow Responses guardrails before route/rate/quota/provider work."""
 
@@ -263,6 +289,8 @@ class ResponsesRequestPolicy:
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
+        allow_codex_extended_limits: bool = False,
+        allow_codex_compaction_replay: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -274,8 +302,8 @@ class ResponsesRequestPolicy:
                 "responses_codex_client_tools_not_allowed",
                 "Codex client tool namespaces are not enabled for this gateway key.",
             )
-        codex_streaming_tool_events_requested = (
-            responses_codex_streaming_tool_events_requested(effective_body)
+        codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(
+            effective_body
         )
         if codex_streaming_tool_events_requested and not (
             allow_codex_request_envelope
@@ -321,6 +349,7 @@ class ResponsesRequestPolicy:
             allow_codex_client_tools=allow_codex_client_tools,
             allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
             allow_codex_encrypted_reasoning_replay=allow_codex_encrypted_reasoning_replay,
+            allow_codex_compaction_replay=allow_codex_compaction_replay,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -393,7 +422,14 @@ class ResponsesRequestPolicy:
                 "responses_conversation_streaming_not_supported",
                 "Streaming Responses with conversation is not enabled by this gateway.",
             )
-        output_tokens, injected_default = self._resolve_output_token_limit(effective_body)
+        output_tokens, injected_default = self._resolve_output_token_limit(
+            effective_body,
+            hard_max=(
+                self._settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS
+                if allow_codex_extended_limits
+                else self._settings.HARD_MAX_OUTPUT_TOKENS
+            ),
+        )
 
         (
             estimated_input_tokens,
@@ -410,7 +446,12 @@ class ResponsesRequestPolicy:
                 _codex_client_tool_declaration_estimation_bytes(effective_body.get("input"))
             ),
         )
-        if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
+        input_ceiling = (
+            self._settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS
+            if allow_codex_extended_limits
+            else self._settings.HARD_MAX_INPUT_TOKENS
+        )
+        if estimated_input_tokens > input_ceiling:
             _raise(
                 "input",
                 "input_token_limit_exceeded",
@@ -486,13 +527,27 @@ class ResponsesRequestPolicy:
             injected_default_output_tokens=False,
         )
 
-    def apply_compact(self, body: Mapping[str, Any]) -> ResponsesPolicyResult:
+    def apply_compact(
+        self,
+        body: Mapping[str, Any],
+        *,
+        allow_codex_compaction: bool = False,
+    ) -> ResponsesPolicyResult:
         """Validate a bounded text-focused Responses compaction request."""
 
         effective_body = copy.deepcopy(dict(body))
+        codex_requested = responses_codex_compaction_requested(effective_body)
+        if codex_requested and not allow_codex_compaction:
+            _raise(
+                _first_codex_compaction_param(effective_body),
+                "responses_codex_compaction_not_allowed",
+                "Codex V1 compaction is not enabled for this gateway key.",
+            )
         self._reject_unknown_fields(
             effective_body,
-            allowed_fields=_SUPPORTED_COMPACT_FIELDS,
+            allowed_fields=(
+                _SUPPORTED_CODEX_COMPACT_FIELDS if codex_requested else _SUPPORTED_COMPACT_FIELDS
+            ),
         )
 
         model = effective_body.get("model")
@@ -509,28 +564,73 @@ class ResponsesRequestPolicy:
                 "responses_compact_input_required",
                 "Responses compaction requires an explicit input field in this gateway.",
             )
-        canonical_input, input_material_bytes = self._validate_compact_input(
-            effective_body.get("input")
-        )
+        if codex_requested:
+            canonical_input, input_material_bytes = self._validate_input(
+                effective_body.get("input"),
+                allow_codex_request_envelope=True,
+                allow_codex_client_tools=True,
+                allow_codex_streaming_tool_events=True,
+                allow_codex_encrypted_reasoning_replay=True,
+                allow_codex_compaction_replay=True,
+            )
+        else:
+            canonical_input, input_material_bytes = self._validate_compact_input(
+                effective_body.get("input")
+            )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
             effective_body.get("instructions"),
             param="instructions",
             max_bytes=self._settings.RESPONSES_MAX_INSTRUCTIONS_BYTES,
         )
-        estimated_input_tokens, _, _, _ = self._estimate_input_tokens(
+        tools_schema_bytes = 0
+        if codex_requested:
+            self._validate_scalar_controls(effective_body)
+            self._validate_text_config(
+                effective_body.get("text"),
+                stream=False,
+                allow_codex_request_envelope=True,
+            )
+            self._validate_codex_request_envelope(
+                effective_body,
+                allow_codex_request_envelope=True,
+            )
+            self._validate_codex_client_tool_controls(effective_body)
+            tools_schema_bytes = self._validate_tools(effective_body)
+        (
+            estimated_input_tokens,
+            estimated_non_message_tokens,
+            estimated_non_message_bytes,
+            estimated_non_message_fields,
+        ) = self._estimate_input_tokens(
             input_material_bytes=input_material_bytes,
             instructions=instructions,
             body=effective_body,
+            tools_schema_bytes=tools_schema_bytes,
+            codex_client_tool_declaration_bytes=(
+                _codex_client_tool_declaration_estimation_bytes(effective_body.get("input"))
+                if codex_requested
+                else 0
+            ),
         )
-        if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
+        input_ceiling = (
+            self._settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS
+            if codex_requested
+            else self._settings.HARD_MAX_INPUT_TOKENS
+        )
+        if estimated_input_tokens > input_ceiling:
             _raise(
                 "input",
                 "input_token_limit_exceeded",
                 "Estimated Responses compact input size exceeds the configured hard maximum.",
             )
         output_tokens = self._settings.RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
-        if output_tokens > self._settings.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS:
+        compact_output_ceiling = (
+            self._settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS
+            if codex_requested
+            else self._settings.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS
+        )
+        if output_tokens > compact_output_ceiling:
             _raise(
                 "max_output_tokens",
                 "output_token_limit_exceeded",
@@ -542,10 +642,12 @@ class ResponsesRequestPolicy:
             requested_output_tokens=output_tokens,
             effective_output_tokens=output_tokens,
             estimated_input_tokens=estimated_input_tokens,
-            estimated_message_input_tokens=estimated_input_tokens,
-            estimated_non_message_input_tokens=0,
-            estimated_non_message_input_bytes=0,
-            estimated_non_message_input_fields=(),
+            estimated_message_input_tokens=max(
+                0, estimated_input_tokens - estimated_non_message_tokens
+            ),
+            estimated_non_message_input_tokens=estimated_non_message_tokens,
+            estimated_non_message_input_bytes=estimated_non_message_bytes,
+            estimated_non_message_input_fields=estimated_non_message_fields,
             injected_default_output_tokens=True,
         )
 
@@ -573,6 +675,7 @@ class ResponsesRequestPolicy:
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
+        allow_codex_compaction_replay: bool = False,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -594,9 +697,8 @@ class ResponsesRequestPolicy:
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
-                allow_codex_encrypted_reasoning_replay=(
-                    allow_codex_encrypted_reasoning_replay
-                ),
+                allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
+                allow_codex_compaction_replay=allow_codex_compaction_replay,
             )
 
         _raise(
@@ -630,7 +732,9 @@ class ResponsesRequestPolicy:
         )
         raise AssertionError("unreachable")
 
-    def _validate_compact_input_item_array(self, value: list[Any]) -> tuple[list[dict[str, Any]], int]:
+    def _validate_compact_input_item_array(
+        self, value: list[Any]
+    ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
                 "input",
@@ -812,6 +916,7 @@ class ResponsesRequestPolicy:
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
+        allow_codex_compaction_replay: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -867,9 +972,8 @@ class ResponsesRequestPolicy:
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
-                allow_codex_encrypted_reasoning_replay=(
-                    allow_codex_encrypted_reasoning_replay
-                ),
+                allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
+                allow_codex_compaction_replay=allow_codex_compaction_replay,
             )
             if canonical_item.get("type") == "reasoning":
                 encrypted_value = canonical_item["encrypted_content"]
@@ -940,6 +1044,7 @@ class ResponsesRequestPolicy:
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
+        allow_codex_compaction_replay: bool = False,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -950,6 +1055,14 @@ class ResponsesRequestPolicy:
             )
 
         item_type = item.get("type")
+        if item_type == "compaction":
+            if not allow_codex_compaction_replay:
+                _raise(
+                    f"{param}.type",
+                    "responses_codex_compaction_not_allowed",
+                    "Codex compaction replay is not enabled for this gateway key.",
+                )
+            return self._validate_codex_compaction_replay_item(item, param=param)
         if item_type == "additional_tools":
             if not (allow_codex_request_envelope and allow_codex_client_tools):
                 _raise(
@@ -961,9 +1074,7 @@ class ResponsesRequestPolicy:
         if item_type == "reasoning" and (
             "encrypted_content" in item or allow_codex_encrypted_reasoning_replay
         ):
-            if not (
-                allow_codex_request_envelope and allow_codex_encrypted_reasoning_replay
-            ):
+            if not (allow_codex_request_envelope and allow_codex_encrypted_reasoning_replay):
                 _raise(
                     f"{param}.type",
                     "responses_codex_encrypted_reasoning_replay_not_allowed",
@@ -990,9 +1101,7 @@ class ResponsesRequestPolicy:
                 and allow_codex_client_tools
                 and allow_codex_streaming_tool_events
             ):
-                return self._validate_codex_tool_call_output_item(
-                    item, param=param, custom=False
-                )
+                return self._validate_codex_tool_call_output_item(item, param=param, custom=False)
             return self._validate_function_call_output_item(item, param=param)
         if item_type == "custom_tool_call_output":
             if (
@@ -1000,9 +1109,7 @@ class ResponsesRequestPolicy:
                 and allow_codex_client_tools
                 and allow_codex_streaming_tool_events
             ):
-                return self._validate_codex_tool_call_output_item(
-                    item, param=param, custom=True
-                )
+                return self._validate_codex_tool_call_output_item(item, param=param, custom=True)
             return self._validate_custom_tool_call_output_item(item, param=param)
         if item_type is not None and item_type != "message":
             if item_type in _MULTIMODAL_INPUT_ITEM_TYPES:
@@ -1095,9 +1202,7 @@ class ResponsesRequestPolicy:
                 "Codex additional_tools items require the developer role.",
             )
         namespaces = item.get("tools")
-        if not isinstance(namespaces, list) or len(namespaces) != len(
-            _CODEX_CLIENT_TOOL_TAXONOMY
-        ):
+        if not isinstance(namespaces, list) or len(namespaces) != len(_CODEX_CLIENT_TOOL_TAXONOMY):
             _raise(
                 f"{param}.tools",
                 "responses_codex_client_tools_invalid",
@@ -1250,7 +1355,10 @@ class ResponsesRequestPolicy:
             canonical_namespace["tools"] = canonical_tools
             canonical_by_namespace[str(namespace_name)] = canonical_namespace
 
-        if total_function_schema_bytes > self._settings.RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES:
+        if (
+            total_function_schema_bytes
+            > self._settings.RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES
+        ):
             _raise(
                 f"{param}.tools",
                 "responses_function_tool_schema_too_large",
@@ -1342,7 +1450,10 @@ class ResponsesRequestPolicy:
                 "Codex encrypted reasoning replay permits only null content.",
             )
         summary_value = item.get("summary", [])
-        if not isinstance(summary_value, list) or len(summary_value) > _CODEX_MAX_REASONING_SUMMARY_PARTS:
+        if (
+            not isinstance(summary_value, list)
+            or len(summary_value) > _CODEX_MAX_REASONING_SUMMARY_PARTS
+        ):
             _raise(
                 f"{param}.summary",
                 "responses_codex_encrypted_reasoning_replay_invalid",
@@ -1352,7 +1463,10 @@ class ResponsesRequestPolicy:
         summary_bytes = 0
         for summary_index, part in enumerate(summary_value):
             part_param = f"{param}.summary[{summary_index}]"
-            if not isinstance(part, Mapping) or set(part) != _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS:
+            if (
+                not isinstance(part, Mapping)
+                or set(part) != _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS
+            ):
                 _raise(
                     part_param,
                     "responses_codex_encrypted_reasoning_replay_invalid",
@@ -1384,6 +1498,40 @@ class ResponsesRequestPolicy:
         text_bytes = len(encrypted_content.encode("utf-8")) + summary_bytes
         material_bytes = len(canonical_json_bytes(canonical))
         return canonical, text_bytes, material_bytes, 0, 0, 0, 0
+
+    def _validate_codex_compaction_replay_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        if set(item) != _SUPPORTED_CODEX_COMPACTION_REPLAY_FIELDS:
+            _raise(
+                param,
+                "responses_codex_compaction_replay_invalid",
+                "Codex compaction replay requires the exact opaque item shape.",
+            )
+        item_id = self._validate_codex_message_id(item.get("id"), param=f"{param}.id")
+        encrypted_content = item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            _raise(
+                f"{param}.encrypted_content",
+                "responses_codex_compaction_replay_invalid",
+                "Codex compaction replay requires a non-empty opaque value.",
+            )
+        self._validate_string_bytes(
+            encrypted_content,
+            param=f"{param}.encrypted_content",
+            max_bytes=_CODEX_MAX_COMPACTION_ITEM_BYTES,
+            code="responses_codex_compaction_replay_too_large",
+        )
+        canonical = {
+            "type": "compaction",
+            "id": item_id,
+            "encrypted_content": encrypted_content,
+        }
+        material_bytes = len(canonical_json_bytes(canonical))
+        return canonical, material_bytes, material_bytes, 0, 0, 0, 0
 
     def _validate_codex_tool_call_item(
         self,
@@ -1536,7 +1684,9 @@ class ResponsesRequestPolicy:
                     and declaration[2] == tool_type
                     and (namespace is None or declaration[0] == namespace)
                 ]
-                if len(matches) != 1 or (tool_type == "custom" and matches[0] != ("functions", "exec", "custom")):
+                if len(matches) != 1 or (
+                    tool_type == "custom" and matches[0] != ("functions", "exec", "custom")
+                ):
                     _raise(
                         f"input[{index}].name",
                         "responses_codex_tool_roundtrip_invalid",
@@ -1592,10 +1742,7 @@ class ResponsesRequestPolicy:
                     if item_type == "custom_tool_call_output"
                     else "function_call"
                 )
-                if (
-                    previous.get("type") != expected_call_type
-                    or previous.get("call_id") != call_id
-                ):
+                if previous.get("type") != expected_call_type or previous.get("call_id") != call_id:
                     _raise(
                         f"input[{index}]",
                         "responses_codex_tool_roundtrip_invalid",
@@ -1756,11 +1903,19 @@ class ResponsesRequestPolicy:
             code="responses_function_call_output_too_large",
         )
         output_bytes = len(output.encode("utf-8"))
-        return {
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": output,
-        }, output_bytes, output_bytes, 0, 0, 0, 0
+        return (
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output,
+            },
+            output_bytes,
+            output_bytes,
+            0,
+            0,
+            0,
+            0,
+        )
 
     def _validate_custom_tool_call_output_item(
         self,
@@ -1802,11 +1957,19 @@ class ResponsesRequestPolicy:
             code="responses_custom_tool_call_output_too_large",
         )
         output_bytes = len(output.encode("utf-8"))
-        return {
-            "type": "custom_tool_call_output",
-            "call_id": call_id,
-            "output": output,
-        }, output_bytes, output_bytes, 0, 0, 0, 0
+        return (
+            {
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": output,
+            },
+            output_bytes,
+            output_bytes,
+            0,
+            0,
+            0,
+            0,
+        )
 
     def _validate_input_item_content(
         self,
@@ -1902,7 +2065,8 @@ class ResponsesRequestPolicy:
         if part_type != "input_text":
             code = (
                 "responses_input_multimodal_not_supported"
-                if part_type in {"input_image", "input_file", "input_audio", "image", "file", "audio"}
+                if part_type
+                in {"input_image", "input_file", "input_audio", "image", "file", "audio"}
                 else "responses_input_content_part_not_supported"
             )
             _raise(
@@ -2033,7 +2197,9 @@ class ResponsesRequestPolicy:
                 "responses_input_image_url_invalid",
                 "Responses image data URLs must use base64 encoding.",
             )
-        mime_type = header[len(_IMAGE_DATA_URL_PREFIX) : -len(_IMAGE_DATA_URL_BASE64_SUFFIX)].lower()
+        mime_type = header[
+            len(_IMAGE_DATA_URL_PREFIX) : -len(_IMAGE_DATA_URL_BASE64_SUFFIX)
+        ].lower()
         if mime_type not in _allowed_responses_image_mime_types(self._settings):
             _raise(
                 param,
@@ -2133,11 +2299,15 @@ class ResponsesRequestPolicy:
             file_data,
             param=f"{param}.file_data",
         )
-        return {
-            "type": "input_file",
-            "filename": canonical_filename,
-            "file_data": file_data,
-        }, data_url_bytes + len(canonical_filename.encode("utf-8")), data_url_bytes
+        return (
+            {
+                "type": "input_file",
+                "filename": canonical_filename,
+                "file_data": file_data,
+            },
+            data_url_bytes + len(canonical_filename.encode("utf-8")),
+            data_url_bytes,
+        )
 
     def _validate_input_file_url(self, value: str, *, param: str) -> int:
         url_bytes = len(value.encode("utf-8"))
@@ -2168,7 +2338,9 @@ class ResponsesRequestPolicy:
             )
         path = parsed.path.lower()
         allowed_extensions = _allowed_responses_file_extensions(self._settings)
-        if allowed_extensions and not any(path.endswith(extension) for extension in allowed_extensions):
+        if allowed_extensions and not any(
+            path.endswith(extension) for extension in allowed_extensions
+        ):
             _raise(
                 param,
                 "responses_input_file_extension_not_supported",
@@ -2204,7 +2376,9 @@ class ResponsesRequestPolicy:
                 "Responses inline file input requires a safe basename filename.",
             )
         allowed_extensions = _allowed_responses_file_extensions(self._settings)
-        if allowed_extensions and not any(lowered.endswith(extension) for extension in allowed_extensions):
+        if allowed_extensions and not any(
+            lowered.endswith(extension) for extension in allowed_extensions
+        ):
             _raise(
                 param,
                 "responses_input_file_extension_not_supported",
@@ -2321,7 +2495,9 @@ class ResponsesRequestPolicy:
             )
 
     def _validate_scalar_controls(self, body: Mapping[str, Any]) -> None:
-        self._validate_number_range(body.get("temperature"), param="temperature", minimum=0, maximum=2)
+        self._validate_number_range(
+            body.get("temperature"), param="temperature", minimum=0, maximum=2
+        )
         self._validate_number_range(body.get("top_p"), param="top_p", minimum=0, maximum=1)
 
     def _validate_input_token_count_controls(self, body: Mapping[str, Any]) -> None:
@@ -2866,7 +3042,10 @@ class ResponsesRequestPolicy:
                     "responses_function_tool_schema_too_large",
                     "The total Responses function tool schema size exceeds the gateway limit.",
                 )
-            if total_custom_format_bytes > self._settings.RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES:
+            if (
+                total_custom_format_bytes
+                > self._settings.RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES
+            ):
                 _raise(
                     "tools",
                     "responses_custom_tool_format_too_large",
@@ -3266,7 +3445,12 @@ class ResponsesRequestPolicy:
             return len(field_bytes)
         return None
 
-    def _resolve_output_token_limit(self, body: dict[str, Any]) -> tuple[int, bool]:
+    def _resolve_output_token_limit(
+        self,
+        body: dict[str, Any],
+        *,
+        hard_max: int | None = None,
+    ) -> tuple[int, bool]:
         value = body.get("max_output_tokens")
         if value is None:
             body["max_output_tokens"] = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
@@ -3283,7 +3467,8 @@ class ResponsesRequestPolicy:
                 "invalid_output_token_limit",
                 "The 'max_output_tokens' field must be a positive integer.",
             )
-        if value > self._settings.HARD_MAX_OUTPUT_TOKENS:
+        effective_hard_max = hard_max or self._settings.HARD_MAX_OUTPUT_TOKENS
+        if value > effective_hard_max:
             _raise(
                 "max_output_tokens",
                 "output_token_limit_exceeded",
@@ -3349,6 +3534,68 @@ class ResponsesRequestPolicy:
             )
 
 
+def apply_codex_route_limits(
+    policy_result: ResponsesPolicyResult,
+    *,
+    route_capabilities: Mapping[str, object] | None,
+    settings: Settings,
+    include_output_field: bool = True,
+) -> ResponsesPolicyResult:
+    """Finalize fully gated Codex limits after route resolution and before side effects."""
+
+    limits = parse_codex_route_limits(route_capabilities)
+    if limits.default_max_output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
+        _raise(
+            "model",
+            "responses_codex_limits_invalid",
+            "The route Codex output default exceeds the operator ceiling.",
+        )
+    output_tokens = (
+        limits.default_max_output_tokens
+        if policy_result.injected_default_output_tokens
+        else policy_result.requested_output_tokens
+    )
+    if output_tokens > limits.max_output_tokens:
+        _raise(
+            "max_output_tokens",
+            "output_token_limit_exceeded",
+            "The Codex output limit exceeds the selected model route maximum.",
+        )
+    if output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
+        _raise(
+            "max_output_tokens",
+            "output_token_limit_exceeded",
+            "The Codex output limit exceeds the configured operator maximum.",
+        )
+    if policy_result.estimated_input_tokens > settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS:
+        _raise(
+            "input",
+            "input_token_limit_exceeded",
+            "Estimated Codex input exceeds the configured operator maximum.",
+        )
+    if policy_result.estimated_input_tokens + output_tokens > limits.context_window_tokens:
+        _raise(
+            "input",
+            "responses_codex_context_window_exceeded",
+            "Estimated Codex input plus output exposure exceeds the route context window.",
+        )
+
+    effective_body = copy.deepcopy(policy_result.effective_body)
+    if include_output_field:
+        effective_body["max_output_tokens"] = output_tokens
+    else:
+        effective_body.pop("max_output_tokens", None)
+    return policy_result.model_copy(
+        update={
+            "effective_body": effective_body,
+            "requested_output_tokens": output_tokens,
+            "effective_output_tokens": output_tokens,
+            "codex_context_window_tokens": limits.context_window_tokens,
+            "codex_limits_applied": True,
+        }
+    )
+
+
 def responses_codex_request_envelope_requested(body: Mapping[str, Any]) -> bool:
     """Detect the bounded envelope from body shape only, never headers or model names."""
 
@@ -3372,14 +3619,53 @@ def responses_codex_request_envelope_requested(body: Mapping[str, Any]) -> bool:
             isinstance(item, Mapping)
             and (
                 (item.get("type") in (None, "message") and "id" in item)
-                or (
-                    item.get("type") == "reasoning"
-                    and "encrypted_content" in item
-                )
+                or (item.get("type") == "reasoning" and "encrypted_content" in item)
+                or item.get("type") == "compaction"
             )
             for item in input_value
         )
     return False
+
+
+def responses_codex_compaction_requested(body: Mapping[str, Any]) -> bool:
+    """Detect the pinned Codex V1 compact envelope without model-name inference."""
+
+    if any(
+        field in body
+        for field in ("tools", "parallel_tool_calls", "reasoning", "prompt_cache_key", "text")
+    ):
+        return True
+    input_value = body.get("input")
+    return isinstance(input_value, list) and any(
+        isinstance(item, Mapping)
+        and item.get("type")
+        in {
+            "additional_tools",
+            "reasoning",
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "compaction",
+        }
+        for item in input_value
+    )
+
+
+def _first_codex_compaction_param(body: Mapping[str, Any]) -> str:
+    for field in ("tools", "parallel_tool_calls", "reasoning", "prompt_cache_key", "text"):
+        if field in body:
+            return field
+    return "input"
+
+
+def responses_codex_compaction_replay_requested(body: Mapping[str, Any]) -> bool:
+    """Detect an opaque V1 compaction item replay in request history."""
+
+    input_value = body.get("input")
+    return isinstance(input_value, list) and any(
+        isinstance(item, Mapping) and item.get("type") == "compaction" for item in input_value
+    )
 
 
 def responses_codex_request_envelope_allowed(policy: object) -> bool:
@@ -3396,8 +3682,7 @@ def responses_codex_client_tools_requested(body: Mapping[str, Any]) -> bool:
 
     input_value = body.get("input")
     return isinstance(input_value, list) and any(
-        isinstance(item, Mapping) and item.get("type") == "additional_tools"
-        for item in input_value
+        isinstance(item, Mapping) and item.get("type") == "additional_tools" for item in input_value
     )
 
 
@@ -3423,7 +3708,9 @@ def responses_codex_encrypted_reasoning_output_requested(body: Mapping[str, Any]
 def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
     """Require independent envelope and encrypted-replay key grants."""
 
-    return responses_codex_request_envelope_allowed(policy) and _responses_policy_capability_allowed(
+    return responses_codex_request_envelope_allowed(
+        policy
+    ) and _responses_policy_capability_allowed(
         policy,
         RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     )
@@ -3431,7 +3718,7 @@ def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
 
 def codex_replay_request_candidates(
     body: Mapping[str, Any],
-) -> tuple[CodexReplayRequestCandidate, ...]:
+) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
     """Extract only validated IDs and approved identities from canonical input."""
 
     input_value = body.get("input")
@@ -3440,11 +3727,26 @@ def codex_replay_request_candidates(
     declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
     )
-    candidates: list[CodexReplayRequestCandidate] = []
+    candidates: list[CodexReplayRequestCandidate | CodexCompactionReplayCandidate] = []
     for item in input_value:
         if not isinstance(item, Mapping):
             continue
         item_type = item.get("type")
+        if item_type == "compaction":
+            item_id = item.get("id")
+            encrypted_content = item.get("encrypted_content")
+            if isinstance(item_id, str) and isinstance(encrypted_content, str):
+                candidates.append(
+                    CodexCompactionReplayCandidate(
+                        item_kind="compaction",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                        encrypted_content=encrypted_content,
+                    )
+                )
+            continue
         if item_type == "reasoning":
             item_id = item.get("id")
             if isinstance(item_id, str):
@@ -3536,6 +3838,23 @@ def responses_codex_streaming_tool_events_allowed(policy: object) -> bool:
     )
 
 
+def responses_codex_extended_limits_allowed(policy: object) -> bool:
+    """Require the complete pre-compaction Codex key gate set."""
+
+    return responses_codex_streaming_tool_events_allowed(
+        policy
+    ) and responses_codex_encrypted_reasoning_replay_allowed(policy)
+
+
+def responses_codex_compaction_allowed(policy: object) -> bool:
+    """Require all prior Codex gates plus the independent compaction grant."""
+
+    return responses_codex_extended_limits_allowed(policy) and _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_COMPACTION,
+    )
+
+
 def _responses_policy_capability_allowed(policy: object, capability: str) -> bool:
     """Parse the versioned key capability list without accepting partial shapes."""
 
@@ -3575,11 +3894,7 @@ def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
         for index, item in enumerate(input_value):
             if isinstance(item, Mapping) and item.get("type") == "reasoning":
                 return f"input[{index}]"
-            if (
-                isinstance(item, Mapping)
-                and item.get("type") in (None, "message")
-                and "id" in item
-            ):
+            if isinstance(item, Mapping) and item.get("type") in (None, "message") and "id" in item:
                 return f"input[{index}].id"
     return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE
 
@@ -3645,9 +3960,7 @@ def _codex_declarations_from_input_items(
                     and isinstance(tool.get("name"), str)
                     and tool.get("type") in {"function", "custom"}
                 ):
-                    declarations.add(
-                        (str(namespace["name"]), str(tool["name"]), str(tool["type"]))
-                    )
+                    declarations.add((str(namespace["name"]), str(tool["name"]), str(tool["type"])))
     return declarations
 
 
@@ -3659,7 +3972,9 @@ def _looks_secret_like_identifier(value: str) -> bool:
     lowered = value.lower()
     if lowered.startswith(("bearer", "ghp_", "github_pat_", "sk-", "sk_")):
         return True
-    if any(fragment in lowered for fragment in ("api_key", "apikey", "password", "secret", "token")):
+    if any(
+        fragment in lowered for fragment in ("api_key", "apikey", "password", "secret", "token")
+    ):
         return True
     segments = value.split(".")
     return len(segments) == 3 and all(len(segment) >= 8 for segment in segments)
@@ -3753,7 +4068,9 @@ def validate_conversation_items_create_body(
             param="items",
             error_code="conversation_item_create_items_invalid",
         )
-    canonical_items, _ = ResponsesRequestPolicy(settings=settings)._validate_input_item_array(raw_items)
+    canonical_items, _ = ResponsesRequestPolicy(settings=settings)._validate_input_item_array(
+        raw_items
+    )
     for index, item in enumerate(canonical_items):
         _validate_conversation_text_message_item(item, index=index)
     return {"items": canonical_items}
@@ -3991,7 +4308,14 @@ def _contains_recursive_codex_authority_marker(value: Any) -> bool:
             normalized_key = str(key).strip().lower().replace("-", "_")
             if normalized_key in forbidden_fields or any(
                 marker in normalized_key
-                for marker in ("approval", "authorization", "authentication", "connector", "header", "secret")
+                for marker in (
+                    "approval",
+                    "authorization",
+                    "authentication",
+                    "connector",
+                    "header",
+                    "secret",
+                )
             ):
                 return True
             if normalized_key == "type" and isinstance(nested, str):
