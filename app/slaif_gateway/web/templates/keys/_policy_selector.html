@@ -133,6 +133,8 @@
                 data-endpoint="{{ choice.endpoint }}"
                 data-visible-in-models="{{ 'true' if choice.visible_in_models else 'false' }}"
                 data-supports-streaming="{{ 'true' if choice.supports_streaming else 'false' }}"
+                data-codex-qualification-state="{{ choice.codex_qualification_state }}"
+                data-codex-protocol-ready="{{ 'true' if choice.codex_protocol_ready else 'false' }}"
               >{{ choice.label }}</option>
               {% endfor %}
             </optgroup>

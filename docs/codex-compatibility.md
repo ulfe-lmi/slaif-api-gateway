@@ -1,6 +1,6 @@
 # Codex CLI Compatibility
 
-Status: **PARTIAL BOUNDED MULTI-TURN REPLAY SUPPORT, NOT CODEX-COMPATIBLE**.
+Status: **PROTOCOL-QUALIFIED FOR ONE PINNED LOCAL PROFILE; REAL PROVIDER E2E NOT RUN**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -21,7 +21,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | Envelope, route-bounded 32,768 qualification output default, strict cache/reasoning/long-context accounting, bounded client-tool streaming/replay, and opaque V1 compaction replay; still `not_compatible` |
+| Current runtime status | `protocol_qualified` only for an exact ready route/pricing pair and the profile-v2 contract below; real provider-through-gateway E2E remains false and full compatibility is not claimed |
 
 Primary references:
 
@@ -45,39 +45,101 @@ without a remote refresh. Codex also supports `model_catalog_json` to replace
 the startup catalog; using a replacement would be a different profile and
 requires a distinct fixture and review.
 
-## Bounded profile configuration target
+## Protocol qualification and profile-v2 configuration
 
 Codex custom-provider selection belongs in the user's Codex configuration, not
 in a repository checkout. The official configuration reference states that
 project-local config cannot safely override provider/authentication settings,
 including `model_provider` and `model_providers`.
 
-The reviewed custom-provider shape is:
+Objective 010 adds a strict local `protocol_qualified` state. It is neither a
+model-name inference nor a production/real-provider claim. Both an exact
+enabled `/v1/responses` route and its reciprocal exact
+`/v1/responses/compact` route must carry the complete pinned
+`capabilities.codex_qualification` object, exact route gates and
+`codex_limits`, one another's UUID, enabled provider metadata, and active
+complete pricing/accounting (including FX when needed). Both rows must also be
+selected by normal provider-constrained runtime ranking, so a stale qualified
+row shadowed by another matching route fails closed. Each nested Responses map
+must also pass the existing runtime parser for its exact operation: both require
+`text=true` and strict known boolean flags, ordinary Responses requires
+stateless streaming plus route streaming, and compact requires `compact=true`;
+the fully gated operation checks all five Codex gates and strict limits.
+Missing declaration is `not_declared`; malformed, partial, unknown, disabled,
+stale, or incomplete state is invalid/not ready with fixed safe reason codes.
+
+Codex 0.147.0 profile v2 loads a named file over the base user config. The
+gateway renderer therefore returns two separate credential-free artifacts. The
+first is a fragment to merge into `$CODEX_HOME/config.toml`:
+
+```toml
+[model_providers.slaif]
+name = "OpenAI"
+base_url = "https://api.ulfe.slaif.si/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+```
+
+The second is the complete gateway-owned content for
+`$CODEX_HOME/slaif.config.toml`:
 
 ```toml
 model = "gpt-5.6-sol"
 model_provider = "slaif"
 
-[model_providers.slaif]
-name = "SLAIF API Gateway"
-base_url = "https://api.ulfe.slaif.si/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "responses"
-requires_openai_auth = false
+[features]
+remote_compaction_v2 = false
 ```
+
+Do not add `profile = "slaif"`, `[profiles.slaif]`,
+`[profiles.slaif.features]`, or `model_catalog_json`. Those are not the
+reviewed profile-v2 contract. Exact bundled slug `gpt-5.6-sol` supplies the
+pinned model catalog and instructions.
 
 The user would set the normal OpenAI-compatible variable to a gateway-issued
 key:
 
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."
+
+codex --profile slaif
 ```
 
 SLAIF validates that gateway key and later substitutes the server-side upstream
-provider credential. This remains a configuration target, not a deployment
-claim: objective 010 still owns route/pricing/profile materialization, including
-disabling V2 compaction. Objective 009 proved only the isolated loopback profile;
-no real provider or production SLAIF route was qualified.
+provider credential. `slaif-gateway codex inspect` reports only deterministic
+safe qualification fields from local configuration.
+`slaif-gateway codex profile --base-url https://api.ulfe.slaif.si/v1` prints
+the two distinct artifacts after requiring exactly one ready Responses pair;
+`--json` returns the same fixed targets and contents without credentials. The
+commands never write Codex config or accept/read a key. The admin route pages
+show the parsed badge/reasons while retaining raw capabilities for audit.
+
+The admin key-creation Codex protocol-pilot checkbox is confirmed and
+standard-key-only. It requires exactly one ready provider, model
+`gpt-5.6-sol`, endpoints `/v1/models`, `/v1/responses`, and
+`/v1/responses/compact`, no allow-all policy, positive finite request/token/EUR
+cost limits, and an audit reason. A fresh readiness check happens before key
+mutation. The resulting Responses policy contains only the five canonical
+Codex gates and local `function`/`custom` tool types. This does not enable
+hosted tools, MCP, background work, provider state, trusted calibration, or
+external execution. The plaintext-once and direct email-delivery creation
+results show only those fixed capability/tool names when the policy exists;
+the email result still contains no plaintext, and ordinary no-policy and
+rotation/template results omit the section.
+
+The profile verifier uses the rendered two-file layout with exact
+`/usr/bin/codex` 0.147.0, a fixed child-only dummy key, dead external proxies,
+and a numeric-loopback Responses server. It proves the named profile selects
+the exact model/provider, bundled catalog, V1 compaction configuration, and
+ordinary uncompressed JSON without legacy-profile/catalog warnings. It prints
+only booleans, counts, and version and discards raw payloads. Its truthful
+interface is exactly `.venv/bin/python scripts/verify_codex_profile.py`: the
+verifier owns its ephemeral loopback URL, accepts no arguments, and rejects
+extras with a fixed error that does not reflect operator text. This is still
+local protocol evidence: objective 011 owns real-provider-through-gateway E2E,
+so `real_provider_e2e` remains false.
 
 ## Capture and privacy boundary
 
@@ -441,6 +503,8 @@ Only a human or active work order may invoke the installed Codex binary:
   --expected-cli-version 0.147.0 \
   --model gpt-5.6-sol \
   --profile api-key-responses-baseline
+
+.venv/bin/python scripts/verify_codex_profile.py
 ```
 
 The reasoning-replay verifier uses the same private temporary home/work directory,
@@ -467,6 +531,14 @@ keys, ciphertext, prompts, tool payloads, subprocess output, and assistant text
 are neither printed nor persisted. This is local protocol qualification only;
 no production or real-provider qualification occurred.
 
+The objective-010 profile verifier is distinct: it writes the renderer's two
+credential-free documents into a private temporary `CODEX_HOME`, passes the
+dummy key only in the child environment, and invokes exact Codex 0.147.0 with
+`--profile slaif`. Its one ordinary uncompressed Responses request proves that
+profile v2 selected the base provider and named-profile model without legacy
+profile or replacement-catalog warnings. It discards the request and subprocess
+output and prints only the fixed version/boolean/count summary.
+
 Normal pytest, CI, application startup, packaging, Docker, migrations, and HPC
 verification must never run any live action.
 
@@ -486,9 +558,9 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Operator/model-profile materialization, full CLI-through-production-provider
-validation, V2 compaction, and any release decision remain separate strategic
-work-order boundaries. The bounded replay/compaction slices grant none of them
+Real provider-through-gateway validation (objective 011), V2 compaction, and any
+release decision remain separate strategic work-order boundaries. The local
+profile materialization and `protocol_qualified` state grant none of them
 implicitly; each requires activated scope, tests, privacy review, and GitHub
 acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility

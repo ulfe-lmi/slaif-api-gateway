@@ -506,8 +506,11 @@ def test_admin_key_policy_selector_browser_flow() -> None:
             page.click('[data-policy-add="endpoints"]')
             page.select_option(
                 "#create-policy-models-available",
-                label=f"browser-gpt-{data['suffix']} | {data['provider_slug']} | /v1/chat/completions | exact | browser-upstream-{data['suffix']} | visible in /v1/models | streaming | capabilities: browser",
+                label=f"browser-gpt-{data['suffix']} | {data['provider_slug']} | /v1/chat/completions | exact | browser-upstream-{data['suffix']} | visible in /v1/models | streaming | capabilities: browser | Not declared",
             )
+            available_model = page.locator("#create-policy-models-available option:checked")
+            assert available_model.get_attribute("data-codex-qualification-state") == "not_declared"
+            assert available_model.get_attribute("data-codex-protocol-ready") == "false"
             page.click('[data-policy-add="models"]')
 
             assert page.locator('#create-policy-providers-selected option[value]').count() == 1
@@ -516,6 +519,8 @@ def test_admin_key_policy_selector_browser_flow() -> None:
             assert page.locator('textarea[name="allowed_providers"]').input_value() == data["provider_slug"]
             assert page.locator('textarea[name="allowed_endpoints"]').input_value() == "/v1/chat/completions"
             assert page.locator('textarea[name="allowed_models"]').input_value() == f"browser-gpt-{data['suffix']}"
+            assert page.locator('input[name="codex_protocol_pilot"]').count() == 1
+            assert page.locator('input[name="confirm_codex_protocol_pilot"]').count() == 1
 
             page.goto(f"/admin/keys/{data['key_id']}")
             assert "Update Request Policy" in page.content()

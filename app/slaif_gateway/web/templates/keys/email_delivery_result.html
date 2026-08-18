@@ -100,6 +100,30 @@
     {% endif %}
   </div>
 
+  {% if responses_policy_summary %}
+  <section class="action-panel" aria-labelledby="email-result-responses-policy-heading">
+    <h2 id="email-result-responses-policy-heading">Responses Policy</h2>
+    <dl>
+      <dt>Allowed capabilities</dt>
+      <dd>
+        <ul>
+          {% for capability in responses_policy_summary.allowed_capabilities %}
+          <li><code>{{ capability }}</code></li>
+          {% endfor %}
+        </ul>
+      </dd>
+      <dt>Allowed local tool types</dt>
+      <dd>
+        <ul>
+          {% for tool_type in responses_policy_summary.allowed_local_tool_types %}
+          <li><code>{{ tool_type }}</code></li>
+          {% endfor %}
+        </ul>
+      </dd>
+    </dl>
+  </section>
+  {% endif %}
+
   <section class="action-panel" aria-labelledby="email-result-safety-heading">
     <h2 id="email-result-safety-heading">Safety Notes</h2>
     {% if email_delivery_mode == "send-now" %}

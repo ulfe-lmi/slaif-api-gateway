@@ -738,6 +738,27 @@ Current behavior:
   same-key/provider/model/explicitly-compatible-route replay. Neither raw value
   is stored. V2 compaction triggers, background mode, and hosted tools remain
   unsupported.
+- Objective 010 adds an exact local `protocol_qualified` state for pinned Codex
+  0.147.0 and bundled model `gpt-5.6-sol`. Qualification is never inferred from
+  a model name: it requires exact fixed route metadata, the reciprocal enabled
+  Responses/compact pair, baseline `responses.text=true`, strict known boolean
+  Responses metadata accepted by the existing runtime parser for both exact
+  operations, all five route gates, strict limits, enabled provider, both rows
+  winning normal provider-constrained runtime ranking, and complete active
+  pricing/accounting plus FX when needed. The read-only
+  `slaif-gateway codex inspect` command and admin route views expose only safe
+  parsed state/reasons. `slaif-gateway codex profile` prints a credential-free
+  base-config merge fragment and separate complete
+  `$CODEX_HOME/slaif.config.toml` profile-v2 file; it does not write config,
+  accept a key, or replace the bundled model catalog. The confirmed admin Codex
+  protocol-pilot option remains standard-key-only, exact-provider/model/
+  endpoint, no-allow-all, finite-limit, freshly ready, and audited before normal
+  KeyService mutation. Direct creation results show only the fixed canonical
+  Responses capability/tool summary when that policy was stored; email results
+  continue to suppress plaintext. The exact local loopback verifier takes no
+  arguments and rejects extras rather than implying that an unused URL was
+  tested. Local profile evidence passed, but real provider-through-gateway E2E
+  remains false and objective 011 owns that proof.
 - Responses streaming live-burn is implemented for the supported stateless
   text-output subset and the explicitly gated Codex client-tool event slice.
   It counts visible output text, function arguments, custom-tool input, and
@@ -1268,6 +1289,8 @@ Required pages/features:
 - usage by key/user/institution/cohort/model/provider
 - pricing table management
 - routing table management
+- safe Codex protocol qualification badges and the confirmed bounded pilot-key
+  option; neither is a real-provider or production-readiness claim
 - provider health/status page
 - email delivery history
 - audit log
@@ -1316,6 +1339,9 @@ slaif-gateway pricing disable-model
 slaif-gateway routes add
 slaif-gateway routes list
 slaif-gateway routes disable
+
+slaif-gateway codex inspect
+slaif-gateway codex profile --base-url https://api.ulfe.slaif.si/v1
 
 slaif-gateway email test
 slaif-gateway email send-pending-key

@@ -4,12 +4,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
+from slaif_gateway.services.codex_qualification import CODEX_RESPONSES_POLICY
+from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_modes import (
@@ -19,6 +22,15 @@ from slaif_gateway.services.key_modes import (
 from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy
 
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
+
+
+def _assert_codex_responses_policy_summary(html: str) -> None:
+    for capability in CODEX_RESPONSES_POLICY["allowed_capabilities"]:
+        assert f"<code>{capability}</code>" in html
+    for tool_type in CODEX_RESPONSES_POLICY["allowed_local_tool_types"]:
+        assert f"<code>{tool_type}</code>" in html
+    assert '"allowed_capabilities"' not in html
+    assert '"allowed_local_tool_types"' not in html
 
 
 def _owner(owner_id: uuid.UUID | None = None) -> Owner:
@@ -136,6 +148,8 @@ async def _fake_options(request):
                     visible_in_models=True,
                     supports_streaming=True,
                     capability_summary=None,
+                    codex_qualification_state="not_declared",
+                    codex_protocol_ready=False,
                 ),
                 SimpleNamespace(
                     route_key="openrouter|/v1/chat/completions|gpt-4o-*|glob|openrouter/gpt-4o",
@@ -150,6 +164,8 @@ async def _fake_options(request):
                     visible_in_models=False,
                     supports_streaming=True,
                     capability_summary=None,
+                    codex_qualification_state="not_declared",
+                    codex_protocol_ready=False,
                 ),
             ],
             "model_choices_by_group": {
@@ -162,6 +178,8 @@ async def _fake_options(request):
                         label="gpt-4.1-mini | openai | /v1/chat/completions | exact | gpt-4.1-mini | visible in /v1/models | streaming",
                         visible_in_models=True,
                         supports_streaming=True,
+                        codex_qualification_state="not_declared",
+                        codex_protocol_ready=False,
                     )
                 ],
                 "/v1/chat/completions | OpenRouter": [
@@ -173,6 +191,8 @@ async def _fake_options(request):
                         label="gpt-4o-* | openrouter | /v1/chat/completions | glob | openrouter/gpt-4o | hidden from /v1/models | streaming",
                         visible_in_models=False,
                         supports_streaming=True,
+                        codex_qualification_state="not_declared",
+                        codex_protocol_ready=False,
                     )
                 ],
             },
@@ -255,6 +275,11 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert "gpt-4o-* | openrouter | /v1/chat/completions | glob" in response.text
     assert "hidden from /v1/models" in response.text
     assert 'name="rate_limit_requests_per_minute"' in response.text
+    assert 'name="codex_protocol_pilot"' in response.text
+    assert 'name="confirm_codex_protocol_pilot"' in response.text
+    assert "real-provider E2E has not run" in response.text
+    assert 'data-codex-qualification-state="not_declared"' in response.text
+    assert 'data-codex-protocol-ready="false"' in response.text
     assert "Email delivery mode" in response.text
     assert "Send-now and enqueue suppress browser plaintext display" in response.text
     assert "token_hash" not in response.text
@@ -651,6 +676,290 @@ def test_create_unchecked_chat_live_burn_checkbox_disables_policy(monkeypatch) -
         "cost_margin_eur": "0.000000000",
         "token_margin": 0,
     }
+
+
+def test_create_codex_protocol_pilot_uses_exact_bounded_policy(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def validate_readiness(request, *, provider):
+        seen["readiness_provider"] = provider
+        return SimpleNamespace(ready=True)
+
+    async def create_gateway_key(self, payload):
+        seen["payload"] = payload
+        return _created_key(owner_id=owner_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_codex_protocol_pilot_readiness",
+        validate_readiness,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "7",
+            "cost_limit_eur": "5.00",
+            "token_limit_total": "50000",
+            "request_limit_total": "20",
+            "allowed_providers": "openai",
+            "allowed_models": "gpt-5.6-sol",
+            "allowed_endpoints": "/v1/models\n/v1/responses\n/v1/responses/compact",
+            "codex_protocol_pilot": "true",
+            "confirm_codex_protocol_pilot": "true",
+            "reason": "bounded Codex protocol pilot",
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen["readiness_provider"] == "openai"
+    payload = seen["payload"]
+    assert payload.key_purpose == "standard"
+    assert payload.allowed_providers == ["openai"]
+    assert payload.allowed_models == ["gpt-5.6-sol"]
+    assert payload.allowed_endpoints == [
+        "/v1/models",
+        "/v1/responses",
+        "/v1/responses/compact",
+    ]
+    assert payload.allow_all_models is False
+    assert payload.allow_all_endpoints is False
+    assert payload.responses_policy == {
+        "version": 1,
+        "allowed_capabilities": [
+            "codex_request_envelope",
+            "codex_client_tools",
+            "codex_streaming_tool_events",
+            "codex_encrypted_reasoning_replay",
+            "codex_compaction",
+        ],
+        "allowed_local_tool_types": ["function", "custom"],
+    }
+    assert response.text.count("sk-slaif-newpublic.once-only-created") == 1
+    _assert_codex_responses_policy_summary(response.text)
+
+
+def test_create_codex_protocol_pilot_email_result_is_safe_and_policy_bounded(
+    monkeypatch,
+) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    created = _created_key(owner_id=owner_id)
+    events: list[str] = []
+
+    async def get_owner_by_id(self, requested_owner_id):
+        return owner if requested_owner_id == owner_id else None
+
+    async def validate_readiness(request, *, provider):
+        assert provider == "openai"
+        events.append("readiness")
+        return SimpleNamespace(ready=True)
+
+    async def create_gateway_key(self, payload):
+        events.append("create")
+        return created
+
+    def delivery(status: str) -> PendingKeyEmailResult:
+        return PendingKeyEmailResult(
+            email_delivery_id=uuid.uuid4(),
+            one_time_secret_id=created.one_time_secret_id,
+            gateway_key_id=created.gateway_key_id,
+            owner_id=created.owner_id,
+            recipient_email="ada@example.org",
+            status=status,
+        )
+
+    async def create_pending_key_email_delivery(self, **kwargs):
+        return delivery("pending")
+
+    async def send_pending_key_email(self, **kwargs):
+        return delivery("sent")
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_codex_protocol_pilot_readiness",
+        validate_readiness,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.create_pending_key_email_delivery",
+        create_pending_key_email_delivery,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.email_delivery_service.EmailDeliveryService.send_pending_key_email",
+        send_pending_key_email,
+    )
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+        ENABLE_EMAIL_DELIVERY=True,
+        SMTP_HOST="localhost",
+        SMTP_FROM="noreply@example.org",
+    )
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+    pilot_data = {
+        "csrf_token": "dashboard-csrf",
+        "owner_id": str(owner_id),
+        "valid_days": "7",
+        "cost_limit_eur": "5.00",
+        "token_limit_total": "50000",
+        "request_limit_total": "20",
+        "allowed_providers": "openai",
+        "allowed_models": "gpt-5.6-sol",
+        "allowed_endpoints": "/v1/models\n/v1/responses\n/v1/responses/compact",
+        "codex_protocol_pilot": "true",
+        "confirm_codex_protocol_pilot": "true",
+        "email_delivery_mode": "send-now",
+        "reason": "bounded Codex protocol pilot",
+    }
+
+    response = client.post("/admin/keys/create", data=pilot_data)
+
+    assert response.status_code == 200
+    assert events[:2] == ["readiness", "create"]
+    assert created.plaintext_key not in response.text
+    _assert_codex_responses_policy_summary(response.text)
+
+    ordinary_response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "email_delivery_mode": "send-now",
+            "reason": "ordinary workshop key",
+        },
+    )
+    assert ordinary_response.status_code == 200
+    assert "Responses Policy" not in ordinary_response.text
+    assert created.plaintext_key not in ordinary_response.text
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"confirm_codex_protocol_pilot": ""}, "Confirm Codex protocol pilot mode"),
+        ({"allow_all_providers": "true"}, "exactly one provider"),
+        ({"allow_all_models": "true"}, "must not use allow-all policy"),
+        ({"allowed_providers": "openai\nopenrouter"}, "exactly one provider"),
+        ({"allowed_models": "gpt-5.6-sol\ngpt-other"}, "exactly model gpt-5.6-sol"),
+        ({"allowed_endpoints": "/v1/models\n/v1/responses"}, "exactly the three pilot endpoints"),
+        ({"cost_limit_eur": ""}, "positive finite hard limits"),
+    ],
+)
+def test_create_codex_protocol_pilot_rejects_widened_or_unbounded_input_before_mutation(
+    monkeypatch,
+    overrides,
+    message,
+) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+    data = {
+        "csrf_token": "dashboard-csrf",
+        "owner_id": str(uuid.uuid4()),
+        "valid_days": "7",
+        "cost_limit_eur": "5.00",
+        "token_limit_total": "50000",
+        "request_limit_total": "20",
+        "allowed_providers": "openai",
+        "allowed_models": "gpt-5.6-sol",
+        "allowed_endpoints": "/v1/models\n/v1/responses\n/v1/responses/compact",
+        "codex_protocol_pilot": "true",
+        "confirm_codex_protocol_pilot": "true",
+        "reason": "bounded Codex protocol pilot",
+    }
+    data.update(overrides)
+
+    response = client.post("/admin/keys/create", data=data)
+
+    assert response.status_code == 400
+    assert message in response.text
+    assert called is False
+
+
+def test_create_codex_protocol_pilot_rejects_stale_readiness_before_mutation(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    called = False
+
+    async def reject_readiness(request, *, provider):
+        raise ValueError("Exactly one ready Codex protocol route pair is required.")
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._validate_admin_codex_protocol_pilot_readiness",
+        reject_readiness,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "7",
+            "cost_limit_eur": "5.00",
+            "token_limit_total": "50000",
+            "request_limit_total": "20",
+            "allowed_providers": "openai",
+            "allowed_models": "gpt-5.6-sol",
+            "allowed_endpoints": "/v1/models\n/v1/responses\n/v1/responses/compact",
+            "codex_protocol_pilot": "true",
+            "confirm_codex_protocol_pilot": "true",
+            "reason": "bounded Codex protocol pilot",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Exactly one ready Codex protocol route pair is required" in response.text
+    assert called is False
 
 
 def test_create_trusted_calibration_calls_key_service_and_renders_warning(monkeypatch) -> None:

@@ -5,7 +5,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from slaif_gateway.config import Settings
+from slaif_gateway.api.admin import _build_policy_model_choices
 from slaif_gateway.schemas.keys import CreatedGatewayKey
+from slaif_gateway.services.codex_qualification import CodexQualificationResult
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
@@ -16,6 +18,59 @@ from tests.unit.test_admin_key_create_routes import _cohort, _owner, _patch_opti
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_policy_model_choice_exposes_safe_codex_qualification_label() -> None:
+    route_id = uuid.uuid4()
+    paired_route_id = uuid.uuid4()
+    route = type(
+        "Route",
+        (),
+        {
+            "id": route_id,
+            "provider": "openai",
+            "endpoint": "/v1/responses",
+            "requested_model": "gpt-5.6-sol",
+            "upstream_model": "gpt-5.6-sol",
+            "match_type": "exact",
+            "visible_in_models": True,
+            "supports_streaming": True,
+            "capabilities": {},
+        },
+    )()
+    qualification = CodexQualificationResult(
+        state="protocol_qualified",
+        requested_model="gpt-5.6-sol",
+        provider="openai",
+        endpoint="/v1/responses",
+        route_id=route_id,
+        paired_route_id=paired_route_id,
+        reason_codes=(),
+        profile_version=1,
+        cli_version="0.147.0",
+        profile="api-key-responses-v1",
+        catalog_source="bundled",
+        wire_api="responses",
+        real_provider_e2e=False,
+    )
+
+    choice = _build_policy_model_choices(
+        [route],
+        provider_labels={"openai": "OpenAI"},
+        qualification_by_route={route_id: qualification},
+    )[0]
+
+    assert choice.codex_qualification_state == "protocol_qualified"
+    assert choice.codex_protocol_ready is True
+    assert "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1" in choice.label
+    assert "real provider E2E not run" in choice.label
+
+    not_declared = _build_policy_model_choices(
+        [route],
+        provider_labels={"openai": "OpenAI"},
+    )[0]
+    assert not_declared.label.endswith("Not declared")
+    assert "real provider E2E not run" not in not_declared.label
 
 
 def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) -> None:
@@ -64,6 +119,11 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "Trusted Calibration Key" in html
     assert 'name="trusted_calibration" value="true"' in html
     assert 'name="confirm_trusted_calibration" value="true"' in html
+    assert "Codex Protocol Pilot" in html
+    assert 'name="codex_protocol_pilot" value="true"' in html
+    assert 'name="confirm_codex_protocol_pilot" value="true"' in html
+    assert "real-provider E2E has not run" in html
+    assert "five canonical Codex Responses capabilities" in html
     assert str(settings.TRUSTED_CALIBRATION_MAX_REQUESTS) in html
     assert str(settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS) in html
     assert "key plaintext is shown once" not in html.lower()
@@ -205,6 +265,7 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "no Celery task was queued" in html
     assert "Chat streaming live-burn" in html
     assert "Chat live-burn: on" in html
+    assert "Responses policy" not in html
     assert "token_hash" not in html
     assert "encrypted_payload" not in html
     assert "nonce" not in html
@@ -213,6 +274,27 @@ def test_create_result_template_shows_plaintext_once_without_email_action(monkey
     assert "session-token" not in html
     assert "one_time_secret" not in html
     assert "email action" not in html.lower()
+
+
+def test_creation_result_templates_gate_the_allowlisted_responses_summary() -> None:
+    create_result = (
+        REPO_ROOT / "app" / "slaif_gateway" / "web" / "templates" / "keys" / "create_result.html"
+    ).read_text()
+    email_result = (
+        REPO_ROOT
+        / "app"
+        / "slaif_gateway"
+        / "web"
+        / "templates"
+        / "keys"
+        / "email_delivery_result.html"
+    ).read_text()
+
+    for template in (create_result, email_result):
+        assert "{% if " in template and "responses_policy_summary" in template
+        assert "allowed_capabilities" in template
+        assert "allowed_local_tool_types" in template
+        assert "tojson" not in template
 
 
 def test_create_result_template_marks_trusted_calibration_key(monkeypatch) -> None:
