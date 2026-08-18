@@ -655,6 +655,20 @@ Provider errors are normalized to safe OpenAI-shaped client errors. Raw provider
 
 Unsupported endpoints and unsupported provider adapter endpoints are explicit errors; they are not silently proxied.
 
+Objective 012 records OpenAI's current Responses tool aliases in a pure,
+versioned authority contract. It classifies client-operated tools separately
+from provider web/file search, code interpreter, hosted shell, image generation,
+computer use, tool search, skills, remote MCP/connectors, provider URL fetch,
+and `unknown_external_authority`. This taxonomy is not an OpenAI compatibility
+claim and does not enable a request field. Current runtime remains deny-only.
+
+`strict_bounded` is the default mode. `external_tool_fenced` is a future opt-in
+that requires exact key/route/operator intersection and the documented
+exclusive-fence, single-request-overrun, following-block, and unresolved-cost
+hold obligations. Client-provided MCP URLs/connector IDs/authorization are never
+approved destinations, and local/client tools do not imply provider authority.
+Objectives 013–017 own any runtime or provider-specific implementation.
+
 ## What Is Not Implemented
 
 - Responses cancel/list endpoints,

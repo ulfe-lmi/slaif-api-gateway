@@ -832,11 +832,24 @@ formats outside the configured allowlist.
 
 ## Planned Responses Tool Configuration
 
-Hosted/provider-side Responses tool settings remain future work unless a future
-PR adds matching code, tests, and `.env.example` entries. Local function-tool
-request caps listed above are active validation caps, but they do not enable
-hosted tools, MCP/connectors, web search, file search, code interpreter,
-computer use, image generation, tool search, storage, or background mode.
+Objective 012 defines the pure `strict_bounded` / `external_tool_fenced`
+contract, exact future key/route JSON schemas, and immutable absolute contract
+maxima of 16 capabilities, 8 reviewed destinations, 16 provider tool
+declarations, and 16 provider calls/iterations per request. It deliberately adds
+no settings, environment variables, `.env.example` entries, persisted policy,
+admin/CLI surface, or runtime behavior. Current runtime remains deny-only for
+provider-hosted tools, remote MCP/connectors, provider URL fetch, and unknown
+authority.
+
+Objectives 013–017 own durable operator configuration and may only narrow the
+absolute maxima. Local function/custom and gated Codex client-tool request caps
+listed above remain active independent controls; they do not enable hosted
+tools, MCP/connectors, web/file search, code interpreter, hosted shell, computer
+use, image generation, tool search, skills, storage, provider authentication,
+or background mode. The future fenced mode also requires the exact exclusive-
+key fence, single-request-overrun acknowledgement, following-request block, and
+missing/ambiguous-cost hold contract documented in
+[`accounting.md`](accounting.md).
 
 Possible future setting names:
 

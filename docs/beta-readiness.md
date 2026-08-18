@@ -30,6 +30,17 @@ bounded `POST /v1/realtime/client_secrets` foundation are now implemented; the
 remaining deferred Realtime sub-surfaces are tracked precisely in
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
+Current external-tool boundary (2026-08-18): objective 012 defines a pure
+version-1 taxonomy and `strict_bounded` / `external_tool_fenced` admission
+contract only. Runtime remains deny-only for provider-hosted tools, remote MCP/
+connectors, provider URL fetch, and unknown authority. No migration, stored
+policy, settings, admin/CLI, fence/hold, forwarding, or provider call is added.
+The future fenced promise acknowledges one admitted request may cross remaining
+quota, requires an exclusive per-key fence, blocks following requests after
+exhaustion, and retains a blocking hold for missing/ambiguous final cost.
+Objectives 013–017 remain separately required; this historical readiness report
+does not represent that future behavior as implemented.
+
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
 baseline. It supports RC-beta readiness for the implemented scope and identifies
 production-readiness work tracked beyond the original RC1 baseline. The

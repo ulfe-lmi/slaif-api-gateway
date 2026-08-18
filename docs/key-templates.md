@@ -257,6 +257,25 @@ If `chat_streaming_live_burn_enabled` is false, cost and token margins are
 preserved in key metadata when supplied but ignored at runtime. Positive,
 zero, and negative margin semantics match normal per-key configuration.
 
+## External-tool contract boundary
+
+Objective 012 defines `strict_bounded` and `external_tool_fenced` as a pure
+future policy contract. It does not add those objects to template snapshots,
+template import, key creation, existing-key mutation, admin/CLI, or database
+storage. Current standard keys and template-created keys remain deny-only for
+provider-hosted/external authority. Trusted-calibration observations remain
+review input and never silently become standard-key permission.
+
+A future template revision may carry external-tool policy only after objectives
+013–017 add the reviewed storage and operator workflow. Such a snapshot must
+preserve exact versioned key/route schemas, opaque reviewed destination IDs,
+operator ceilings, positive finite request/token/EUR limits, explicit
+single-request-overrun acknowledgement, exclusive-key fencing, following-
+request blocking after exhaustion, and a blocking hold when final cost is
+missing, ambiguous, interrupted, or awaiting reconciliation. It must never
+store raw URLs, connector/provider names, authorization, cookies, bearer values,
+tool inputs/outputs, prompts, or arbitrary request labels.
+
 ## Security Boundaries
 
 Templates must not contain plaintext gateway keys, provider API keys, SMTP

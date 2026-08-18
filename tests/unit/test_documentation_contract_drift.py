@@ -5,6 +5,15 @@ from fastapi.routing import APIRoute
 
 from slaif_gateway.api.openai_compat import router
 from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
+from slaif_gateway.services.external_tool_policy_contract import (
+    ABSOLUTE_MAX_APPROVED_DESTINATIONS,
+    ABSOLUTE_MAX_DISTINCT_CAPABILITIES,
+    ABSOLUTE_MAX_PROVIDER_TOOL_CALLS,
+    ABSOLUTE_MAX_PROVIDER_TOOL_DECLARATIONS,
+    EXTERNAL_TOOL_FENCED,
+    KNOWN_EXTERNAL_CAPABILITIES,
+    STRICT_BOUNDED,
+)
 from slaif_gateway.services.responses_route_capabilities import KNOWN_RESPONSES_CAPABILITIES
 
 
@@ -14,6 +23,21 @@ RESPONSES_COMPATIBILITY = REPO_ROOT / "docs" / "responses-compatibility.md"
 RC2_FEATURE_SCOPE = REPO_ROOT / "docs" / "rc2-feature-scope.md"
 REPORT_HEAD = "24431512a993df81f15de4e0268c40ad61e0ad57"
 MERGE_COMMIT = "adaefdc45ddd13e172955c14e02cb6c97d49b629"
+EXTERNAL_TOOL_CONTRACT_DOCS = (
+    "AGENTS.md",
+    "docs/accounting.md",
+    "docs/beta-readiness.md",
+    "docs/compatibility-matrix.md",
+    "docs/configuration.md",
+    "docs/database-schema.md",
+    "docs/key-templates.md",
+    "docs/openai-compatibility.md",
+    "docs/product-scope.md",
+    "docs/provider-forwarding-contract.md",
+    "docs/rc-beta.md",
+    "docs/responses-compatibility.md",
+    "docs/security-model.md",
+)
 
 
 def _read(relative_path: str) -> str:
@@ -169,3 +193,92 @@ def test_beta_readiness_separates_historical_status_from_current_future_work() -
     assert "separately scoped work" in remaining_pre_ga
     assert "Continue Responses API as scoped RC2 work" not in remaining_pre_ga
     assert "historical first RC-beta tag" in beta_readiness
+
+
+def test_external_tool_contract_docs_use_both_modes_and_preserve_future_status() -> None:
+    for relative_path in EXTERNAL_TOOL_CONTRACT_DOCS:
+        content = _read(relative_path)
+        assert STRICT_BOUNDED in content, relative_path
+        assert EXTERNAL_TOOL_FENCED in content, relative_path
+        assert re.search(r"deny-only|denies provider-hosted|denied", content, re.IGNORECASE), (
+            relative_path
+        )
+
+        folded = content.casefold()
+        for contradiction in (
+            "external_tool_fenced is implemented",
+            "external_tool_fenced is active",
+            "hard quota means no request can overrun",
+            "hard quota guarantees no request can overrun",
+        ):
+            assert contradiction not in folded, (relative_path, contradiction)
+
+
+def test_external_tool_schema_and_taxonomy_match_the_pure_contract() -> None:
+    schema = _read("docs/database-schema.md")
+
+    for capability in KNOWN_EXTERNAL_CAPABILITIES:
+        assert re.search(rf"(?<![A-Za-z0-9_]){re.escape(capability)}(?![A-Za-z0-9_])", schema), (
+            capability
+        )
+
+    for key_field in (
+        '"version": 1',
+        '"mode": "strict_bounded"',
+        '"allowed_capabilities": []',
+        '"allowed_destination_ids": []',
+        '"max_provider_tool_calls_per_request": 0',
+        '"single_request_overrun_acknowledged": false',
+    ):
+        assert key_field in schema
+    for route_field in (
+        '"supported_capabilities": []',
+        '"approved_destination_ids": []',
+        '"call_limit_enforced": false',
+        '"final_usage_required": false',
+        '"final_cost_required": false',
+    ):
+        assert route_field in schema
+
+    assert str(ABSOLUTE_MAX_DISTINCT_CAPABILITIES) in schema
+    assert str(ABSOLUTE_MAX_APPROVED_DESTINATIONS) in schema
+    assert str(ABSOLUTE_MAX_PROVIDER_TOOL_DECLARATIONS) in schema
+    assert str(ABSOLUTE_MAX_PROVIDER_TOOL_CALLS) in schema
+    assert "adds no column, table, constraint, migration" in schema
+
+
+def test_external_tool_fenced_promise_and_official_evidence_are_explicit() -> None:
+    exact_fragments = (
+        "one admitted provider-hosted external-tool request",
+        "reject concurrent requests",
+        "reject following requests after exhaustion",
+        "blocking accounting hold",
+        "missing, ambiguous, interrupted, or awaiting reconciliation",
+    )
+    for relative_path in (
+        "AGENTS.md",
+        "docs/accounting.md",
+        "docs/product-scope.md",
+    ):
+        content = _read(relative_path)
+        normalized = re.sub(r"\s+", " ", content)
+        for fragment in exact_fragments:
+            assert fragment in normalized, (relative_path, fragment)
+
+    forwarding = _read("docs/provider-forwarding-contract.md")
+    assert "https://developers.openai.com/api/docs/models/gpt-5.6-sol" in forwarding
+    assert "https://developers.openai.com/api/docs/guides/tools-connectors-mcp" in forwarding
+    assert "require_approval` can never lower" in forwarding
+
+
+def test_external_tool_contract_is_not_wired_to_runtime_settings_or_migrations() -> None:
+    module_path = REPO_ROOT / "app/slaif_gateway/services/external_tool_policy_contract.py"
+    for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
+        if path == module_path:
+            continue
+        assert "external_tool_policy_contract" not in path.read_text(encoding="utf-8"), path
+
+    assert "EXTERNAL_TOOL_" not in _read(".env.example")
+    assert "EXTERNAL_TOOL_" not in _read("app/slaif_gateway/config.py")
+    for path in (REPO_ROOT / "migrations/versions").glob("*.py"):
+        assert "external_tool_policy" not in path.read_text(encoding="utf-8"), path

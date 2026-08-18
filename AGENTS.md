@@ -834,6 +834,24 @@ exposure, privacy/storage policy, capability gates, negative tests, and
 documentation before it can be enabled. PostgreSQL must block subsequent
 admission after a finalized overrun.
 
+Objective 012 now defines, but does not activate, the version-1 pure contract
+for that future expansion. It separates client-operated authority from
+provider-hosted/external authority and unknown authority, with two quota modes:
+`strict_bounded` (the default) and `external_tool_fenced` (future explicit
+opt-in). Current runtime behavior remains deny-only for provider-hosted tools,
+remote MCP/connectors, provider URL fetch, and unknown authority. No objective-
+012 policy is stored, forwarded, configured, or exposed through admin/CLI.
+
+The future fenced mode carries this exact product promise: one admitted
+provider-hosted external-tool request may exceed the key's remaining token or
+cost quota before SLAIF regains control. SLAIF will reject concurrent requests
+for that key while the request is unresolved, finalize authoritative provider
+usage/cost when available, reject following requests after exhaustion, and
+retain a blocking accounting hold when final cost is missing, ambiguous,
+interrupted, or awaiting reconciliation. Client-operated tools keep their
+existing independent gates and do not acquire provider authority. Trusted
+calibration observation remains separate from standard-key permission.
+
 Key templates are versioned snapshots for the currently implemented safe
 policy vocabulary. A reviewed template revision can create one normal gateway
 key and records template/revision provenance. Editing a template never silently

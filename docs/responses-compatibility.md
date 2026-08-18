@@ -617,15 +617,32 @@ Responses input item text and item wrappers are included in the normal
 admission-time input estimate. They do not create a new billing category; final
 accounting still uses provider-reported usage/cost once.
 
-With tool-enabled Responses, a request that starts under a key limit may exceed
-the remaining limit because the model can spend the bounded tool budget before
-final usage is known. RC2 may allow this only when:
+Objective 012 defines two future external-tool quota modes without enabling
+either forwarding or storage. `strict_bounded` is current/default and denies
+provider-hosted/external authority. Existing client-operated `function`,
+`custom`, gated `namespace`, `local_shell`, and client-side `apply_patch`
+workflows remain under their independent policies. `external_tool_fenced` is a
+future standard-key opt-in requiring exact key/route capability and reviewed-
+destination intersections, operator ceilings, finite positive request/token/EUR
+limits, final-usage/final-cost evidence, and literal overrun acknowledgement.
 
-- the maximum possible single-request overrun is bounded by policy;
-- the bound is displayed to admins before enabling the policy;
-- the bound is stored or traceable with the key/template revision;
-- after an overrun, PostgreSQL accounting blocks future requests until limits
-  are restored, raised, or reset.
+The fenced promise is exact: one admitted provider-hosted external-tool request
+may exceed the key's remaining token or cost quota before SLAIF regains control.
+SLAIF will reject concurrent requests for that key while the request is
+unresolved, finalize authoritative provider usage/cost when available, reject
+following requests after exhaustion, and retain a blocking accounting hold
+when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
+
+Provider web/file search, code interpreter, hosted shell, image generation,
+computer use, tool search, skills, remote MCP, connectors, and provider URL
+fetch have separate canonical capability IDs. Unknown/malformed/mixed authority
+fails closed. Client MCP/network behavior outside provider wire authority is a
+client responsibility; SLAIF cannot claim to observe or block undeclared client
+action. Provider background execution, stored/previous-response state, and
+provider authentication remain distinct unsupported surfaces and are not
+implicitly enabled. Objectives 013–017 own the fence, hold, persistent policy,
+selected-provider contracts, and runtime integration. Current Responses
+runtime remains deny-only for every provider-hosted/external tool.
 
 ## Key Policy
 
