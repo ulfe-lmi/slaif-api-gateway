@@ -40,6 +40,9 @@ Runbooks:
 - [Docker and Nginx troubleshooting](docker-nginx-troubleshooting.md)
 - [Admin access and lockout](admin-access.md)
 - [RC-beta upgrade checklist](rc-beta-upgrade.md)
+- [Codex 0.147.0 bounded OpenAI pilot](codex-openai-pilot.md) is a
+  separately authorized, non-production human procedure. It is prepared but
+  was not executed; `real_provider_e2e=false` remains authoritative.
 - [HPC verification and local tool bootstrap](../testing-hpc.md)
   documents the Codex-inside-HPC workflow, user-local PostgreSQL/Redis/Compose
   provisioning, and the two-table validation/test-suite summary format.

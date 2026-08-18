@@ -822,7 +822,7 @@ not enabled. Direct creation results receive an allowlisted summary containing
 only those fixed names. The email-delivery result preserves plaintext
 suppression, and no raw JSON or arbitrary policy metadata is rendered.
 
-This positive state is only `protocol_qualified`. The isolated exact-0.147.0
+The route declaration remains only `protocol_qualified`. The isolated exact-0.147.0
 profile verifier uses private temporary 0700 directories, 0600 credential-free
 files, a child-only fixed dummy key, dead external proxies, and a numeric
 loopback listener. Raw request/subprocess data is held only for bounded in-memory
@@ -830,8 +830,26 @@ validation and discarded; output is fixed booleans/counts/version. It makes no
 real provider call. The verifier accepts no arguments, owns its ephemeral
 loopback URL, rejects extras without reflecting them, and therefore cannot
 misrepresent an unused operator-supplied endpoint. It does not establish
-production or provider-E2E readiness. Objective 011 owns that separate
-evidence, and `real_provider_e2e` remains false.
+production or provider-E2E readiness.
+
+Objective 011 adds a separate manual local gateway phase gate. It requires a
+validated disposable PostgreSQL test URL on numeric loopback, refuses ambient
+`DATABASE_URL` and real-provider variables, generates ordinary keys through
+`KeyService`, and runs five exact-Codex children through the real app, private
+no-persistence Redis, and a scripted numeric-loopback upstream. All client
+homes/workspaces are private temporary roots; external proxies fail closed;
+retries are disabled; and only the tool scenario uses workspace-write. The
+mock proves the gateway replaced client auth with its dummy server key and
+removed client/admin/internal headers. Raw HTTP/SSE, subprocess output,
+prompts, completion, tool payloads, and opaque reasoning/compaction material
+remain bounded in memory and are discarded. Database proof scans known
+text/JSON columns for per-run sentinels and requires replay rows to contain only
+HMACs plus safe ownership/routing/expiry metadata.
+
+That gate establishes local gateway qualification and prepares—but does not
+execute—the separately authorized bounded OpenAI runbook. It does not make
+production, full-compatibility, or real-provider claims;
+`real_provider_e2e=false` remains authoritative.
 
 ## Codex Protocol Capture Evidence
 

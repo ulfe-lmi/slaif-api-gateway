@@ -318,3 +318,20 @@ Final report requirements:
 - final git status --short
 - safety confirmations: no code modified; no DATABASE_URL destructive setup; isolated TEST_DATABASE_URL per DB shard; no real upstream calls; no real email; no secrets printed or committed.
 ```
+
+## Manual Codex local gateway phase gate
+
+`scripts/verify_codex_gateway_e2e.py` is deliberately outside every normal,
+parallel, integration, browser, Docker, CI, and HPC suite. Neither pytest
+collection nor importing the module invokes Codex. The script itself owns five
+sequential actual-Codex scenarios because each has a distinct deterministic
+upstream state machine and standard gateway key.
+
+It requires an operator-created empty PostgreSQL test database on
+`127.0.0.1`, addressed only through `TEST_DATABASE_URL`; refuses ambient
+`DATABASE_URL` and real-provider variables; and starts private no-persistence
+Redis plus the gateway and mock on ephemeral numeric-loopback ports. Run it
+once, never as a shard or retry loop, then drop only the exact disposable
+database. See [`codex-compatibility.md`](codex-compatibility.md) for the command
+and [the pilot runbook](runbooks/codex-openai-pilot.md) for the distinct,
+separately authorized human real-provider procedure.

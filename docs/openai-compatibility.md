@@ -17,6 +17,13 @@ export OPENAI_BASE_URL="https://api.ulfe.slaif.si/v1"
 
 The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenAI or OpenRouter provider key. The server-side upstream OpenAI secret must use `OPENAI_UPSTREAM_API_KEY`; production validation rejects likely upstream provider keys placed in server `OPENAI_API_KEY`. The gateway authenticates the gateway key, applies policy and quota, resolves a provider route, and substitutes the real provider key server-side before forwarding.
 
+The pinned Codex 0.147.0 / `gpt-5.6-sol` profile has a local-only gateway E2E
+qualification using disposable PostgreSQL, private Redis, and a
+numeric-loopback scripted provider. Its prepared real-OpenAI pilot was not run,
+so this evidence does not change `real_provider_e2e=false` or authorize a real
+provider call. See [`codex-compatibility.md`](codex-compatibility.md) and the
+human-only [bounded pilot runbook](runbooks/codex-openai-pilot.md).
+
 ## Endpoint Support
 
 | Endpoint | Status | Auth | Quota/accounting | Streaming | Test coverage |

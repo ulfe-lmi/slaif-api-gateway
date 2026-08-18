@@ -768,8 +768,11 @@ mutation. It sets only the five canonical Codex Responses capabilities and
 local `function`/`custom` tool types through the normal key service. Direct
 plaintext-once and email-delivery creation results show only those fixed names
 when the policy exists; email delivery still suppresses plaintext and ordinary
-no-policy results omit the summary. Real provider-through-gateway E2E has not
-run; this remains local `protocol_qualified` evidence only.
+no-policy results omit the summary. The objective-011 local phase gate
+additionally qualifies the exact pinned profile through a real local gateway
+with disposable PostgreSQL, private Redis, and a numeric-loopback provider
+mock. A bounded real-OpenAI pilot is prepared but was not run;
+`real_provider_e2e=false` remains authoritative.
 
 The isolated profile verifier owns its ephemeral numeric-loopback endpoint and
 has exactly one supported invocation:
@@ -781,6 +784,24 @@ has exactly one supported invocation:
 It accepts no options or positional arguments and rejects extras without
 reflecting their contents. An operator-supplied gateway URL is never accepted
 by this verifier.
+
+The distinct unified local gateway verifier is manual and requires an
+explicitly disposable `TEST_DATABASE_URL` on `127.0.0.1`. It refuses ambient
+`DATABASE_URL` and all real-provider variables, starts its own loopback
+gateway/mock and private no-persistence Redis, and emits fixed facts only:
+
+```bash
+unset DATABASE_URL OPENAI_API_KEY OPENAI_UPSTREAM_API_KEY OPENROUTER_API_KEY
+unset RUN_UPSTREAM_TESTS
+TEST_DATABASE_URL='postgresql+asyncpg://...@127.0.0.1/..._test_...' \
+  .venv/bin/python scripts/verify_codex_gateway_e2e.py
+```
+
+The database must be created empty and dropped by the operator as an exact
+validated target. This command is not a real-provider switch and must not be
+placed in pytest, CI, startup, packaging, Docker, or HPC automation. The later
+human-only provider procedure is
+[`runbooks/codex-openai-pilot.md`](runbooks/codex-openai-pilot.md).
 
 Responses custom-tool settings cap local/client-side custom tool names,
 descriptions, grammar definitions, total custom format bytes, and string-only

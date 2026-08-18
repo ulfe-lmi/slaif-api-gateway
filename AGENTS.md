@@ -492,14 +492,15 @@ pastes the verification prompt below. Codex is the caller: it uses its shell
 tool to run the repository harness. Repository scripts must never invoke
 `codex`.
 
-The only narrow exception is `scripts/capture_codex_protocol.py`, which is a
-manually invoked, version-pinned loopback evidence tool rather than an HPC/test
-runner. Only a human or active OAP work order may invoke its explicit live
-capture/verify actions. Normal pytest, CI, application startup, packaging,
-Docker, migrations, production, and every HPC helper/harness must never invoke
-Codex. Each supported Codex CLI/model/profile combination requires a separate
-versioned, sanitized fixture and reviewed compatibility diff; captured evidence
-must not be described as compatibility when required elements remain rejected.
+The only narrow exception is the manually invoked, version-pinned Codex
+evidence-tool family: `scripts/capture_codex_protocol.py` and the explicit
+`scripts/verify_codex_*.py` verifiers. They are not HPC/test runners. Only a
+human or active OAP work order may invoke their live actions. Normal pytest,
+CI, application startup, packaging, Docker, migrations, production, and every
+HPC helper/harness must never invoke Codex. Each supported Codex
+CLI/model/profile combination requires separate versioned evidence and a
+reviewed compatibility boundary; evidence must not be described as broader
+compatibility when required elements remain rejected.
 
 If Codex shell execution fails before Bash starts with a message like
 `bwrap: execvp ... codex: No such file or directory`, that is a Codex
@@ -757,8 +758,22 @@ Current behavior:
   Responses capability/tool summary when that policy was stored; email results
   continue to suppress plaintext. The exact local loopback verifier takes no
   arguments and rejects extras rather than implying that an unused URL was
-  tested. Local profile evidence passed, but real provider-through-gateway E2E
-  remains false and objective 011 owns that proof.
+  tested. Local profile evidence passed, but this declaration does not itself
+  establish local gateway or real-provider E2E.
+- Objective 011 adds one manual five-scenario phase gate for exact Codex 0.147.0
+  and `gpt-5.6-sol`. It uses the credential-free profile-v2 renderer, standard
+  finite keys from `KeyService`, the real local app, an explicitly disposable
+  numeric-loopback PostgreSQL test database, private no-persistence Redis, and
+  a scripted numeric-loopback OpenAI mock. It proves client-side exec/edit and
+  multi-round encrypted replay, cache read/write plus below/edge/above
+  long-context accounting, V1 compact continuation, pre-provider quota
+  rejection, interruption/error accounting, auth substitution, zero pending
+  reservations, HMAC-only replay state, and no sentinel/raw-payload
+  persistence. It is opt-in only and must not be invoked by pytest, CI,
+  startup, packaging, Docker, or HPC. This establishes only
+  `local_gateway_e2e_qualified=true` and
+  `bounded_real_openai_pilot_prepared=true`; the separately authorized human
+  pilot was not executed and `real_provider_e2e=false` remains authoritative.
 - Responses streaming live-burn is implemented for the supported stateless
   text-output subset and the explicitly gated Codex client-tool event slice.
   It counts visible output text, function arguments, custom-tool input, and
