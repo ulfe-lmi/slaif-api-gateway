@@ -82,11 +82,18 @@ class AdminRouteListRow:
     notes: str | None
     created_at: datetime
     updated_at: datetime
+    codex_qualification_state: str = "not_declared"
+    codex_qualification_badge: str = "Not declared"
+    codex_qualification_reason_codes: tuple[str, ...] = (
+        "codex_qualification_not_declared",
+    )
+    codex_paired_route_id: uuid.UUID | None = None
+    codex_protocol_ready: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class AdminRouteDetail(AdminRouteListRow):
-    provider_config: AdminProviderSummary | None
+    provider_config: AdminProviderSummary | None = None
 
 
 @dataclass(frozen=True, slots=True)

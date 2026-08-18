@@ -60,7 +60,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Priority</th><th>Status</th></tr>
+        <tr><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Codex qualification</th><th>Priority</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for route in routes %}
@@ -68,6 +68,15 @@
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.provider }}</td>
           <td>{{ route.upstream_model }}</td>
+          <td>
+            <div>{{ route.codex_qualification_badge }}</div>
+            {% if route.codex_qualification_reason_codes %}
+            <div class="muted small">{{ route.codex_qualification_reason_codes | join(", ") }}</div>
+            {% endif %}
+            {% if route.codex_protocol_ready %}
+            <div class="muted small">Exact protocol/profile locally qualified; real provider-through-gateway E2E not yet run.</div>
+            {% endif %}
+          </td>
           <td>{{ route.priority }}</td>
           <td>
             <div>{{ "enabled" if route.enabled else "disabled" }}</div>
@@ -75,7 +84,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="empty-state">No model routes found.</td></tr>
+        <tr><td colspan="6" class="empty-state">No model routes found.</td></tr>
         {% endfor %}
       </tbody>
     </table>

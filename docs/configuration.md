@@ -724,6 +724,47 @@ explicit `codex_compaction_compatible_route_ids` list may permit a different
 ordinary/compact route row only for the same provider and upstream model. V2
 `compaction_trigger` must remain disabled in the SLAIF Codex profile.
 
+### Codex protocol qualification and profile v2
+
+`slaif-gateway codex inspect` reads provider, route, active pricing, and FX
+state and reports deterministic safe qualification fields only. A positive
+`protocol_qualified` result requires the exact enabled
+`gpt-5.6-sol` `/v1/responses` and `/v1/responses/compact` pair, reciprocal
+compatible UUIDs, the five Codex route gates, strict limits, exact pinned
+qualification metadata, an enabled provider, and complete active pricing plus
+FX where required. Each row must be selected by normal provider-constrained
+runtime ranking. Missing metadata is `not_declared`; malformed or stale state
+fails closed. This command does not call providers or mutate catalog state.
+
+After exactly one ready Responses route is present, generate the credential-free
+profile artifacts with:
+
+```bash
+slaif-gateway codex profile \
+  --base-url https://api.ulfe.slaif.si/v1
+```
+
+Merge the printed `[model_providers.slaif]` fragment into
+`$CODEX_HOME/config.toml`. Put the separately printed complete profile content,
+whose top-level keys are `model="gpt-5.6-sol"` and
+`model_provider="slaif"` plus `[features] remote_compaction_v2=false`, in
+`$CODEX_HOME/slaif.config.toml`. Set the gateway-issued key only through
+`OPENAI_API_KEY`, then run `codex --profile slaif`. The JSON form uses
+`--json`. Neither form accepts a key, writes either file, emits a user-specific
+home path, or installs a replacement model catalog. Legacy `profile =
+"slaif"`/`[profiles.slaif]` layouts are invalid for this named profile-v2
+workflow.
+
+The admin model selector displays the same parsed qualification badge and safe
+reason codes. Its explicit Codex protocol-pilot checkbox does not relax policy:
+confirmation, a standard key, exactly one ready provider/model, exact endpoints
+`/v1/models`, `/v1/responses`, and `/v1/responses/compact`, positive finite
+request/token/EUR cost limits, and an audit reason are all required before
+mutation. It sets only the five canonical Codex Responses capabilities and
+local `function`/`custom` tool types through the normal key service. Real
+provider-through-gateway E2E has not run; this remains local
+`protocol_qualified` evidence only.
+
 Responses custom-tool settings cap local/client-side custom tool names,
 descriptions, grammar definitions, total custom format bytes, and string-only
 `custom_tool_call_output` follow-up input. They do not enable hosted tools,

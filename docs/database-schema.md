@@ -1340,6 +1340,41 @@ of compatible ordinary/compact route UUIDs in top-level
 `codex_compaction_compatible_route_ids`; compatibility still requires the same
 provider and upstream model and is not a general route relaxation.
 
+An objective-010 Codex route pair may additionally declare exactly one strict
+top-level qualification object inside `model_routes.capabilities`:
+
+```json
+{
+  "codex_qualification": {
+    "support_level": "protocol_qualified",
+    "profile_version": 1,
+    "cli_version": "0.147.0",
+    "model": "gpt-5.6-sol",
+    "profile": "api-key-responses-v1",
+    "catalog_source": "bundled",
+    "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+    "evidence_date": "2026-08-18",
+    "wire_api": "responses",
+    "provider_display_name": "OpenAI",
+    "remote_compaction": "v1",
+    "remote_compaction_v2": false,
+    "real_provider_e2e": false
+  }
+}
+```
+
+The nested object must contain exactly those keys, types, and values. Missing
+metadata means `not_declared`; partial, unknown, coerced, aliased, or changed
+values are invalid. No state is inferred from the model name. A positive
+readiness result additionally requires one reciprocal exact enabled
+`/v1/responses` and `/v1/responses/compact` pair for the same provider,
+requested model, and upstream model; the required endpoint visibility/streaming
+semantics, five Codex route gates, strict `codex_limits`, enabled provider, and
+selection of both rows by normal provider-constrained runtime ranking, complete
+active endpoint pricing/accounting, plus active FX when the currency is
+not EUR. This is validation over existing JSON and rows; objective 010 adds no
+column, table, constraint, or migration.
+
 `chat_custom_tools=true` enables only non-streaming local/client-side Chat
 Completions custom tool-call intent. It does not enable hosted tools, MCP or
 connectors, web search, file search, code interpreter, computer use, image

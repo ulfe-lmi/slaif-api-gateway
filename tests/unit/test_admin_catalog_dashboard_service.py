@@ -101,6 +101,9 @@ class _ProvidersRepo:
         self.list_kwargs = kwargs
         return [self.row]
 
+    async def list_provider_configs(self, **kwargs):
+        return [self.row]
+
     async def get_provider_config_for_admin_detail(self, provider_config_id):
         return self.row if provider_config_id == self.row.id else None
 
@@ -115,6 +118,9 @@ class _RoutesRepo:
 
     async def list_model_routes_for_admin(self, **kwargs):
         self.list_kwargs = kwargs
+        return [self.row]
+
+    async def list_model_routes(self, **kwargs):
         return [self.row]
 
     async def get_model_route_for_admin_detail(self, route_id):
@@ -133,6 +139,9 @@ class _PricingRepo:
     async def get_pricing_rule_for_admin_detail(self, pricing_rule_id):
         return self.row if pricing_rule_id == self.row.id else None
 
+    async def find_active_pricing_rule(self, **kwargs):
+        return self.row
+
 
 class _FxRepo:
     def __init__(self, row=None):
@@ -145,6 +154,9 @@ class _FxRepo:
 
     async def get_fx_rate_for_admin_detail(self, fx_rate_id):
         return self.row if fx_rate_id == self.row.id else None
+
+    async def find_latest_rate(self, **kwargs):
+        return self.row
 
 
 def _service(providers=None, routes=None, pricing=None, fx_rates=None) -> AdminCatalogDashboardService:
@@ -197,6 +209,8 @@ async def test_catalog_lists_return_safe_rows_and_pass_filters() -> None:
 
     assert provider_rows[0].api_key_env_var == "OPENAI_UPSTREAM_API_KEY"
     assert route_rows[0].capabilities_summary == "vision"
+    assert route_rows[0].codex_qualification_state == "not_declared"
+    assert route_rows[0].codex_protocol_ready is False
     assert pricing_rows[0].metadata_summary == "source"
     assert fx_rows[0].rate == Decimal("0.920000000")
     assert providers.list_kwargs == {"provider": "openai", "enabled": True, "limit": 25, "offset": 5}

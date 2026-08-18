@@ -21,6 +21,10 @@ from slaif_gateway.schemas.admin_catalog import (
     AdminRouteListRow,
     AdminRouteSummary,
 )
+from slaif_gateway.services.codex_qualification import (
+    CodexQualificationResult,
+    CodexQualificationService,
+)
 
 
 class AdminCatalogNotFoundError(Exception):
@@ -28,6 +32,14 @@ class AdminCatalogNotFoundError(Exception):
 
 
 class _ProviderConfigsAdminRepository(Protocol):
+    async def list_provider_configs(
+        self,
+        *,
+        enabled: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ProviderConfig]: ...
+
     async def list_provider_configs_for_admin(
         self,
         *,
@@ -43,6 +55,15 @@ class _ProviderConfigsAdminRepository(Protocol):
 
 
 class _ModelRoutesAdminRepository(Protocol):
+    async def list_model_routes(
+        self,
+        *,
+        endpoint: str | None = None,
+        provider: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ModelRoute]: ...
+
     async def list_model_routes_for_admin(
         self,
         *,
@@ -59,6 +80,15 @@ class _ModelRoutesAdminRepository(Protocol):
 
 
 class _PricingRulesAdminRepository(Protocol):
+    async def find_active_pricing_rule(
+        self,
+        *,
+        provider: str,
+        upstream_model: str,
+        endpoint: str,
+        at_time: datetime,
+    ) -> PricingRule | None: ...
+
     async def list_pricing_rules_for_admin(
         self,
         *,
@@ -77,6 +107,14 @@ class _PricingRulesAdminRepository(Protocol):
 
 
 class _FxRatesAdminRepository(Protocol):
+    async def find_latest_rate(
+        self,
+        *,
+        base_currency: str,
+        quote_currency: str,
+        at_time: datetime | None = None,
+    ) -> FxRate | None: ...
+
     async def list_fx_rates_for_admin(
         self,
         *,
@@ -157,18 +195,35 @@ class AdminCatalogDashboardService:
             limit=limit,
             offset=offset,
         )
-        return [_to_route_list_row(row) for row in rows]
+        qualification_by_route = await self._codex_qualification_by_route()
+        return [
+            _to_route_list_row(row, qualification=qualification_by_route.get(row.id))
+            for row in rows
+        ]
 
     async def get_route_detail(self, route_id: uuid.UUID) -> AdminRouteDetail:
         row = await self._routes.get_model_route_for_admin_detail(route_id)
         if row is None:
             raise AdminCatalogNotFoundError("Model route not found")
-        list_row = _to_route_list_row(row)
+        qualification_by_route = await self._codex_qualification_by_route()
+        list_row = _to_route_list_row(
+            row,
+            qualification=qualification_by_route.get(row.id),
+        )
         provider_config = await self._providers.get_provider_config_by_provider(row.provider)
         return AdminRouteDetail(
             **asdict(list_row),
             provider_config=_to_provider_summary(provider_config) if provider_config is not None else None,
         )
+
+    async def _codex_qualification_by_route(self) -> dict[uuid.UUID, CodexQualificationResult]:
+        results = await CodexQualificationService(
+            provider_configs_repository=self._providers,
+            model_routes_repository=self._routes,
+            pricing_rules_repository=self._pricing,
+            fx_rates_repository=self._fx_rates,
+        ).inspect()
+        return {result.route_id: result for result in results}
 
     async def list_pricing_rules(
         self,
@@ -268,7 +323,20 @@ def _to_provider_summary(row: ProviderConfig) -> AdminProviderSummary:
     )
 
 
-def _to_route_list_row(row: ModelRoute) -> AdminRouteListRow:
+def _to_route_list_row(
+    row: ModelRoute,
+    *,
+    qualification: CodexQualificationResult | None,
+) -> AdminRouteListRow:
+    qualification = qualification or CodexQualificationResult(
+        state="not_declared",
+        requested_model=row.requested_model,
+        provider=row.provider,
+        endpoint=row.endpoint,
+        route_id=row.id,
+        paired_route_id=None,
+        reason_codes=("codex_qualification_not_declared",),
+    )
     return AdminRouteListRow(
         id=row.id,
         requested_model=row.requested_model,
@@ -282,6 +350,11 @@ def _to_route_list_row(row: ModelRoute) -> AdminRouteListRow:
         supports_streaming=row.supports_streaming,
         capabilities=row.capabilities or {},
         capabilities_summary=_json_summary(row.capabilities),
+        codex_qualification_state=qualification.state,
+        codex_qualification_badge=qualification.badge,
+        codex_qualification_reason_codes=qualification.reason_codes,
+        codex_paired_route_id=qualification.paired_route_id,
+        codex_protocol_ready=qualification.ready,
         notes=row.notes,
         created_at=row.created_at,
         updated_at=row.updated_at,

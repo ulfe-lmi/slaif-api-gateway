@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import OpenAIModel
+from slaif_gateway.services.codex_qualification import CODEX_QUALIFICATION_METADATA
 
 
 def _fake_authenticated_gateway_key(
@@ -49,6 +50,7 @@ class _FakeModelRoute:
     provider: str
     enabled: bool = True
     visible_in_models: bool = True
+    capabilities: dict[str, object] | None = None
 
 
 @dataclass
@@ -175,6 +177,73 @@ def test_authenticated_request_returns_openai_model_objects(monkeypatch) -> None
         "object": "model",
         "created": 0,
         "owned_by": "openai",
+    }
+
+
+def test_codex_qualified_route_does_not_leak_qualification_in_v1_models(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependencies_module
+    from slaif_gateway.api.dependencies import get_authenticated_gateway_key
+    import slaif_gateway.api.openai_compat as main_module
+
+    app = create_app()
+
+    async def _fake_auth_dependency() -> AuthenticatedGatewayKey:
+        return _fake_authenticated_gateway_key(
+            allow_all_models=False,
+            allowed_models=("gpt-5.6-sol",),
+            allowed_providers=("openai",),
+        )
+
+    async def _dummy_db_session():
+        yield object()
+
+    class _FakeModelRoutesRepository:
+        def __init__(self, session) -> None:
+            _ = session
+
+        async def list_visible_model_routes(self) -> list[_FakeModelRoute]:
+            return [
+                _FakeModelRoute(
+                    requested_model="gpt-5.6-sol",
+                    provider="openai",
+                    capabilities={"codex_qualification": CODEX_QUALIFICATION_METADATA},
+                )
+            ]
+
+    class _FakeProviderConfigsRepository:
+        def __init__(self, session) -> None:
+            _ = session
+
+        async def list_provider_configs(self) -> list[_FakeProviderConfig]:
+            return [_FakeProviderConfig(provider="openai", enabled=True)]
+
+    app.dependency_overrides[get_authenticated_gateway_key] = _fake_auth_dependency
+    monkeypatch.setattr(
+        dependencies_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(main_module, "ModelRoutesRepository", _FakeModelRoutesRepository)
+    monkeypatch.setattr(main_module, "ProviderConfigsRepository", _FakeProviderConfigsRepository)
+
+    response = TestClient(app).get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "object": "list",
+        "data": [
+            {
+                "id": "gpt-5.6-sol",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+            }
+        ],
     }
 
 

@@ -1,5 +1,5 @@
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -278,8 +278,51 @@ def test_admin_route_routes_return_html_and_accept_filters(monkeypatch) -> None:
     assert detail.status_code == 200
     assert route.requested_model in response.text
     assert route.upstream_model in detail.text
+    assert "Not declared" in response.text
+    assert "codex_qualification_not_declared" in response.text
+    assert "Raw capabilities" in detail.text
+    assert "vision" in detail.text
     assert seen["requested_model"] == "gpt"
     assert seen["visible"] is True
+
+
+def test_admin_route_views_label_protocol_qualification_without_e2e_claim(monkeypatch) -> None:
+    paired_route_id = uuid.uuid4()
+    route = replace(
+        _route(),
+        codex_qualification_state="protocol_qualified",
+        codex_qualification_badge=(
+            "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1"
+        ),
+        codex_qualification_reason_codes=(),
+        codex_paired_route_id=paired_route_id,
+        codex_protocol_ready=True,
+    )
+
+    async def list_routes(self, **kwargs):
+        return [route]
+
+    async def get_route_detail(self, route_id):
+        return route
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.list_routes",
+        list_routes,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_route_detail,
+    )
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get("/admin/routes")
+    detail = client.get(f"/admin/routes/{route.id}")
+
+    assert "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1" in response.text
+    assert "real provider-through-gateway E2E not yet run" in response.text
+    assert "Real provider-through-gateway E2E has not yet run" in detail.text
+    assert f'/admin/routes/{paired_route_id}' in detail.text
 
 
 def test_admin_pricing_and_fx_routes_return_html_and_accept_filters(monkeypatch) -> None:

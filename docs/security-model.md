@@ -780,6 +780,50 @@ counted conservatively. The gateway never executes the tool. Key templates
 propagate any Codex capability only from an explicit reviewed snapshot, enforce
 its prerequisites, and defaults/trusted calibration discovery add none.
 
+## Codex Qualification, Profile, And Pilot-Key Boundary
+
+`capabilities.codex_qualification` is parsed as an exact fixed object. It does
+not grant authority by itself and is never inferred from a model name, header,
+provider, or single capability flag. Qualification also validates the complete
+reciprocal route pair, route gates/limits, provider state, active endpoint
+pricing/accounting, FX, and that both rows win normal provider-constrained
+runtime ranking. Missing declarations are reported as
+`not_declared`; any malformed, extra, partial, disabled, mismatched, or stale
+state fails closed with enumerated low-cardinality reason codes. Safe CLI/admin
+results contain only state, fixed pinned identifiers, route UUIDs, and those
+reason codes. They exclude provider secrets, gateway keys, arbitrary notes,
+unsafe URLs, raw pricing metadata, prompts, and content. Admin route detail
+retains the pre-existing raw capabilities view for authenticated operator audit
+without adding raw pricing bodies or a qualification mutation shortcut.
+
+The profile renderer accepts only a validated credential-free gateway base URL
+and returns two logical TOML artifacts: a provider fragment for
+`$CODEX_HOME/config.toml` and a complete named profile-v2 file for
+`$CODEX_HOME/slaif.config.toml`. It never accepts or reads a key, expands the
+home path, writes config, selects project-local auth, or emits
+`model_catalog_json`. The user supplies the gateway key only through the
+standard `OPENAI_API_KEY` child environment and invokes
+`codex --profile slaif`.
+
+The admin Codex protocol-pilot checkbox remains within ordinary key creation,
+CSRF, KeyService, and audit paths. Before any key mutation, the server requires
+explicit confirmation, a standard key, exactly one selected ready provider and
+`gpt-5.6-sol`, the exact three endpoints, no allow-all switches, positive finite
+request/token/EUR cost limits, and an audit reason, then performs a fresh route/
+pricing readiness check. It writes only the five canonical Codex key gates and
+local `function`/`custom` tool types. Trusted calibration, hosted tools, MCP,
+background execution, provider-managed state, and gateway tool execution are
+not enabled.
+
+This positive state is only `protocol_qualified`. The isolated exact-0.147.0
+profile verifier uses private temporary 0700 directories, 0600 credential-free
+files, a child-only fixed dummy key, dead external proxies, and a numeric
+loopback listener. Raw request/subprocess data is held only for bounded in-memory
+validation and discarded; output is fixed booleans/counts/version. It makes no
+real provider call and does not establish production or provider-E2E readiness.
+Objective 011 owns that separate evidence, and `real_provider_e2e` remains
+false.
+
 ## Codex Protocol Capture Evidence
 
 The versioned Codex evidence process is documented in

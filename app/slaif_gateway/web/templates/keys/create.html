@@ -104,6 +104,21 @@
       {% include "keys/_policy_selector.html" %}
     </section>
 
+    <section class="action-panel" aria-labelledby="create-codex-pilot-heading">
+      <h2 id="create-codex-pilot-heading">Codex Protocol Pilot</h2>
+      <p class="warning-text">This creates a standard, finite pilot key only after the selected route pair and current pricing qualify for Codex 0.147.0 with <code>gpt-5.6-sol</code>. This is local protocol qualification; real-provider E2E has not run.</p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %}>
+        Apply the bounded Codex protocol-pilot policy
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_codex_protocol_pilot" value="true" {% if form.confirm_codex_protocol_pilot %}checked{% endif %}>
+        I confirm this standard key is for the bounded Codex protocol pilot
+      </label>
+      <p class="muted small">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
+      <p class="muted small">The preset enables only the five canonical Codex Responses capabilities and local <code>function</code>/<code>custom</code> tools. It does not enable hosted tools, MCP, background work, provider state, or trusted-calibration behavior.</p>
+    </section>
+
     <section class="action-panel" aria-labelledby="create-rate-limit-heading">
       <h2 id="create-rate-limit-heading">Redis Operational Rate Limits</h2>
       <p class="muted">These optional Redis counters are separate from PostgreSQL hard quota limits. Leave fields blank for default behavior.</p>

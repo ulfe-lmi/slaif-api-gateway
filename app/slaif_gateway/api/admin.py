@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -40,6 +40,12 @@ from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_activity_dashboard import AdminActivityDashboardService, AdminActivityNotFoundError
 from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
+from slaif_gateway.services.codex_qualification import (
+    CODEX_RESPONSES_POLICY,
+    CodexQualificationResult,
+    CodexQualificationService,
+    validate_codex_pilot_key_input,
+)
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
 from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
@@ -226,6 +232,9 @@ class _PolicyModelChoice:
     visible_in_models: bool
     supports_streaming: bool
     capability_summary: str | None
+    codex_qualification_state: str
+    codex_qualification_reason_codes: tuple[str, ...]
+    codex_protocol_ready: bool
 
 _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_created": ("success", "Gateway key created."),
@@ -610,6 +619,8 @@ async def create_admin_key(
     chat_streaming_live_burn_token_margin: str = Form("0"),
     trusted_calibration: str = Form(""),
     confirm_trusted_calibration: str = Form(""),
+    codex_protocol_pilot: str = Form(""),
+    confirm_codex_protocol_pilot: str = Form(""),
     email_delivery_mode: str = Form("none"),
     reason: str = Form(""),
 ) -> Response:
@@ -645,6 +656,8 @@ async def create_admin_key(
         "chat_streaming_live_burn_token_margin": chat_streaming_live_burn_token_margin,
         "trusted_calibration": trusted_calibration,
         "confirm_trusted_calibration": confirm_trusted_calibration,
+        "codex_protocol_pilot": codex_protocol_pilot,
+        "confirm_codex_protocol_pilot": confirm_codex_protocol_pilot,
         "email_delivery_mode": email_delivery_mode,
         "reason": reason,
     }
@@ -671,6 +684,27 @@ async def create_admin_key(
             allow_all_models=validated_request_policy.allow_all_models,
             allow_all_endpoints=validated_request_policy.allow_all_endpoints,
         )
+        if _is_checked(codex_protocol_pilot):
+            validate_codex_pilot_key_input(
+                parsed_input,
+                confirmed=_is_checked(confirm_codex_protocol_pilot),
+            )
+            await _validate_admin_codex_protocol_pilot_readiness(
+                request,
+                provider=parsed_input.allowed_providers[0],
+            )
+            parsed_input = replace(
+                parsed_input,
+                responses_policy={
+                    "version": CODEX_RESPONSES_POLICY["version"],
+                    "allowed_capabilities": list(
+                        CODEX_RESPONSES_POLICY["allowed_capabilities"]
+                    ),
+                    "allowed_local_tool_types": list(
+                        CODEX_RESPONSES_POLICY["allowed_local_tool_types"]
+                    ),
+                },
+            )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
         if (
@@ -6548,6 +6582,12 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
             async with session.begin():
                 providers = await ProviderConfigsRepository(session).list_provider_configs(enabled=True, limit=500)
                 routes = await ModelRoutesRepository(session).list_enabled_model_routes()
+                qualification_results = await CodexQualificationService(
+                    provider_configs_repository=ProviderConfigsRepository(session),
+                    model_routes_repository=ModelRoutesRepository(session),
+                    pricing_rules_repository=PricingRulesRepository(session),
+                    fx_rates_repository=FxRatesRepository(session),
+                ).inspect()
     except (AttributeError, RuntimeError):
         return _empty_policy_catalog()
 
@@ -6561,7 +6601,12 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
         for route in routes
         if route.endpoint in IMPLEMENTED_CLIENT_ENDPOINTS and route.provider in enabled_provider_set
     ]
-    model_choices = _build_policy_model_choices(filtered_routes, provider_labels=provider_labels)
+    qualification_by_route = {result.route_id: result for result in qualification_results}
+    model_choices = _build_policy_model_choices(
+        filtered_routes,
+        provider_labels=provider_labels,
+        qualification_by_route=qualification_by_route,
+    )
     model_choices_by_group: dict[str, list[_PolicyModelChoice]] = {}
     for choice in model_choices:
         model_choices_by_group.setdefault(choice.group_label, []).append(choice)
@@ -6622,7 +6667,9 @@ def _build_policy_model_choices(
     routes: Sequence[object],
     *,
     provider_labels: dict[str, str],
+    qualification_by_route: Mapping[uuid.UUID, CodexQualificationResult] | None = None,
 ) -> list[_PolicyModelChoice]:
+    qualification_by_route = qualification_by_route or {}
     choices: list[_PolicyModelChoice] = []
     for route in routes:
         provider = str(getattr(route, "provider", "") or "").strip()
@@ -6637,6 +6684,17 @@ def _build_policy_model_choices(
         visibility_text = "visible in /v1/models" if visible_in_models else "hidden from /v1/models"
         streaming_text = "streaming" if supports_streaming else "non-streaming"
         capability_summary = _policy_route_capability_summary(getattr(route, "capabilities", None))
+        route_id = getattr(route, "id", None)
+        qualification = (
+            qualification_by_route.get(route_id) if isinstance(route_id, uuid.UUID) else None
+        )
+        qualification_state = qualification.state if qualification is not None else "not_declared"
+        qualification_reasons = (
+            qualification.reason_codes
+            if qualification is not None
+            else ("codex_qualification_not_declared",)
+        )
+        qualification_badge = qualification.badge if qualification is not None else "Not declared"
         label_parts = [
             token,
             provider,
@@ -6648,6 +6706,11 @@ def _build_policy_model_choices(
         ]
         if capability_summary:
             label_parts.append(capability_summary)
+        label_parts.append(qualification_badge)
+        if qualification_state not in {"protocol_qualified", "not_declared"}:
+            label_parts.append(", ".join(qualification_reasons))
+        if qualification is not None:
+            label_parts.append("real provider E2E not run")
         choices.append(
             _PolicyModelChoice(
                 route_key=route_key,
@@ -6662,6 +6725,9 @@ def _build_policy_model_choices(
                 visible_in_models=visible_in_models,
                 supports_streaming=supports_streaming,
                 capability_summary=capability_summary,
+                codex_qualification_state=qualification_state,
+                codex_qualification_reason_codes=qualification_reasons,
+                codex_protocol_ready=bool(qualification and qualification.ready),
             )
         )
     return sorted(
@@ -7144,6 +7210,8 @@ def _default_key_create_form() -> dict[str, str]:
         "chat_streaming_live_burn_token_margin": "0",
         "trusted_calibration": "",
         "confirm_trusted_calibration": "",
+        "codex_protocol_pilot": "",
+        "confirm_codex_protocol_pilot": "",
         "email_delivery_mode": "none",
         "reason": "",
     }
@@ -8787,6 +8855,23 @@ async def _validate_admin_request_policy(
             ),
             model_routes_repository=ModelRoutesRepository(session),
         )
+
+
+async def _validate_admin_codex_protocol_pilot_readiness(
+    request: Request,
+    *,
+    provider: str,
+) -> CodexQualificationResult:
+    """Re-check the selected provider's exact route pair before key mutation."""
+
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        return await CodexQualificationService(
+            provider_configs_repository=ProviderConfigsRepository(session),
+            model_routes_repository=ModelRoutesRepository(session),
+            pricing_rules_repository=PricingRulesRepository(session),
+            fx_rates_repository=FxRatesRepository(session),
+        ).ready_responses_profile(provider=provider)
 
 
 def _parse_admin_email_delivery_mode(value: str | None) -> str:

@@ -9,6 +9,7 @@ import uuid
 import pytest
 
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.services.codex_qualification import CODEX_QUALIFICATION_METADATA
 from slaif_gateway.services.model_catalog import ModelCatalogService
 
 
@@ -18,6 +19,7 @@ class _FakeModelRoute:
     provider: str
     enabled: bool = True
     visible_in_models: bool = True
+    capabilities: dict[str, object] | None = None
 
 
 @dataclass
@@ -234,6 +236,37 @@ async def test_does_not_include_models_when_provider_config_is_missing() -> None
     result = await service.list_visible_models(_auth_key())
 
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_codex_qualification_metadata_does_not_change_public_model_shape() -> None:
+    service = ModelCatalogService(
+        model_routes_repository=_FakeModelRoutesRepository(
+            [
+                _FakeModelRoute(
+                    requested_model="gpt-5.6-sol",
+                    provider="openai",
+                    capabilities={"codex_qualification": CODEX_QUALIFICATION_METADATA},
+                )
+            ]
+        ),
+        provider_configs_repository=_FakeProviderConfigsRepository(
+            [_FakeProviderConfig(provider="openai", enabled=True)]
+        ),
+    )
+
+    result = await service.list_visible_models(
+        _auth_key(allow_all_models=False, allowed_models=("gpt-5.6-sol",))
+    )
+
+    assert [model.model_dump() for model in result] == [
+        {
+            "id": "gpt-5.6-sol",
+            "object": "model",
+            "created": 0,
+            "owned_by": "openai",
+        }
+    ]
 
 
 def test_model_catalog_service_safety_constraints() -> None:
