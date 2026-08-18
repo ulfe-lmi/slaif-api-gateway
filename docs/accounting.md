@@ -56,6 +56,17 @@ Core invariants:
   live-burn estimation count their bounded canonical bytes, but safe evidence
   retains only category/count/byte totals. It never retains call IDs, item IDs,
   arguments, results, reasoning, or message text.
+- Provider-encrypted Codex reasoning generation/replay requires the independent
+  default-off `codex_encrypted_reasoning_replay` key and route capability.
+  Encrypted and summary bytes are bounded and counted conservatively as model
+  input, while provider final usage/cost remains authoritative. After a stream
+  supplies final usage, the gateway finalizes PostgreSQL accounting first,
+  verifies the same finalized key/request ledger row, then writes 24-hour
+  HMAC-only item/call ownership references before releasing the held
+  `response.completed`. Reference-persistence failure emits safe failure and
+  suppresses normal completion without releasing or reversing charged usage.
+  Missing usage, malformed/error events, and disconnects create no usable
+  replay reference. Reference rows are control metadata, never billing truth.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,

@@ -7,6 +7,7 @@ import binascii
 import copy
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -17,6 +18,7 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_route_capabilities import (
     KNOWN_RESPONSES_CAPABILITIES,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
 )
@@ -94,6 +96,10 @@ _SUPPORTED_CODEX_FUNCTION_CALL_FIELDS = frozenset(
 _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS = frozenset(
     {"type", "id", "status", "namespace", "name", "input", "call_id"}
 )
+_SUPPORTED_CODEX_REASONING_REPLAY_FIELDS = frozenset(
+    {"type", "id", "summary", "encrypted_content", "content"}
+)
+_SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS = frozenset({"type", "text"})
 _SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
     {"type", "name", "description", "parameters", "strict"}
 )
@@ -196,6 +202,10 @@ _CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH = 16
 _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES = 256
 _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES = 32_768
 _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES = 589_824
+_CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
+_CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES = 1_048_576
+_CODEX_MAX_REASONING_SUMMARY_BYTES = 65_536
+_CODEX_MAX_REASONING_SUMMARY_PARTS = 64
 _CODEX_CLIENT_TOOL_TAXONOMY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "functions",
@@ -227,6 +237,17 @@ class ResponsesRequestPolicyError(RequestPolicyError):
         super().__init__(safe_message, param=param)
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class CodexReplayRequestCandidate:
+    """Transient validated replay identifiers for the immediate HMAC lookup."""
+
+    item_kind: str
+    item_id: str
+    call_id: str | None
+    tool_namespace: str | None
+    tool_name: str | None
+
+
 class ResponsesRequestPolicy:
     """Apply narrow Responses guardrails before route/rate/quota/provider work."""
 
@@ -241,6 +262,7 @@ class ResponsesRequestPolicy:
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
+        allow_codex_encrypted_reasoning_replay: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -272,6 +294,17 @@ class ResponsesRequestPolicy:
                 "responses_codex_envelope_not_allowed",
                 "The Codex request envelope is not enabled for this gateway key.",
             )
+        codex_encrypted_reasoning_replay_requested = (
+            responses_codex_encrypted_reasoning_replay_requested(effective_body)
+        )
+        if codex_encrypted_reasoning_replay_requested and not (
+            allow_codex_request_envelope and allow_codex_encrypted_reasoning_replay
+        ):
+            _raise(
+                _first_codex_encrypted_reasoning_param(effective_body),
+                "responses_codex_encrypted_reasoning_replay_not_allowed",
+                "Codex encrypted reasoning replay is not enabled for this gateway key.",
+            )
         self._reject_unknown_fields(effective_body)
 
         model = effective_body.get("model")
@@ -287,6 +320,7 @@ class ResponsesRequestPolicy:
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
             allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+            allow_codex_encrypted_reasoning_replay=allow_codex_encrypted_reasoning_replay,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -302,6 +336,14 @@ class ResponsesRequestPolicy:
                 "conversation",
                 "responses_conversation_previous_response_not_supported",
                 "Responses conversation and previous_response_id cannot be combined in this gateway.",
+            )
+        if codex_replay_request_candidates(effective_body) and (
+            "conversation" in effective_body or "previous_response_id" in effective_body
+        ):
+            _raise(
+                "input",
+                "responses_codex_replay_provider_state_not_supported",
+                "Codex client-managed replay cannot be combined with provider-managed state.",
             )
         self._validate_scalar_controls(effective_body)
         self._validate_metadata(effective_body.get("metadata"))
@@ -530,6 +572,7 @@ class ResponsesRequestPolicy:
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
+        allow_codex_encrypted_reasoning_replay: bool = False,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -551,6 +594,9 @@ class ResponsesRequestPolicy:
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+                allow_codex_encrypted_reasoning_replay=(
+                    allow_codex_encrypted_reasoning_replay
+                ),
             )
 
         _raise(
@@ -765,6 +811,7 @@ class ResponsesRequestPolicy:
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
+        allow_codex_encrypted_reasoning_replay: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -788,6 +835,8 @@ class ResponsesRequestPolicy:
         total_file_data_url_bytes = 0
         codex_client_tool_items = 0
         codex_tool_call_items = 0
+        codex_reasoning_items = 0
+        encrypted_reasoning_bytes = 0
         for index, item in enumerate(value):
             if isinstance(item, Mapping) and item.get("type") == "additional_tools":
                 codex_client_tool_items += 1
@@ -802,6 +851,8 @@ class ResponsesRequestPolicy:
                 "custom_tool_call",
             }:
                 codex_tool_call_items += 1
+            if isinstance(item, Mapping) and item.get("type") == "reasoning":
+                codex_reasoning_items += 1
             (
                 canonical_item,
                 item_text_bytes,
@@ -816,7 +867,20 @@ class ResponsesRequestPolicy:
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+                allow_codex_encrypted_reasoning_replay=(
+                    allow_codex_encrypted_reasoning_replay
+                ),
             )
+            if canonical_item.get("type") == "reasoning":
+                encrypted_value = canonical_item["encrypted_content"]
+                assert isinstance(encrypted_value, str)
+                encrypted_reasoning_bytes += len(encrypted_value.encode("utf-8"))
+                if encrypted_reasoning_bytes > _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES:
+                    _raise(
+                        "input",
+                        "responses_codex_encrypted_reasoning_replay_too_large",
+                        "Codex encrypted reasoning replay exceeds the gateway size limit.",
+                    )
             total_text_bytes += item_text_bytes
             total_material_bytes += item_material_bytes
             total_image_parts += item_image_parts
@@ -860,7 +924,7 @@ class ResponsesRequestPolicy:
                 "responses_codex_tool_roundtrip_invalid",
                 "Codex tool-call continuation requires the exact client-tool declarations.",
             )
-        if codex_client_tool_items:
+        if codex_client_tool_items or codex_reasoning_items:
             self._validate_codex_tool_roundtrip_items(
                 canonical_items,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
@@ -875,6 +939,7 @@ class ResponsesRequestPolicy:
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
         allow_codex_streaming_tool_events: bool = False,
+        allow_codex_encrypted_reasoning_replay: bool = False,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -893,6 +958,18 @@ class ResponsesRequestPolicy:
                     "Codex client tool namespaces are not enabled for this gateway key.",
                 )
             return self._validate_codex_additional_tools_item(item, param=param)
+        if item_type == "reasoning" and (
+            "encrypted_content" in item or allow_codex_encrypted_reasoning_replay
+        ):
+            if not (
+                allow_codex_request_envelope and allow_codex_encrypted_reasoning_replay
+            ):
+                _raise(
+                    f"{param}.type",
+                    "responses_codex_encrypted_reasoning_replay_not_allowed",
+                    "Codex encrypted reasoning replay is not enabled for this gateway key.",
+                )
+            return self._validate_codex_reasoning_replay_item(item, param=param)
         if item_type == "function_call":
             if (
                 allow_codex_request_envelope
@@ -1218,6 +1295,96 @@ class ResponsesRequestPolicy:
                 "Codex additional_tools cannot be combined with top-level Responses tools.",
             )
 
+    def _validate_codex_reasoning_replay_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        unknown = set(item) - _SUPPORTED_CODEX_REASONING_REPLAY_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "This Codex encrypted reasoning field is not enabled.",
+            )
+        if item.get("type") != "reasoning":
+            _raise(
+                f"{param}.type",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "Codex encrypted reasoning replay requires type reasoning.",
+            )
+        item_id_value = item.get("id")
+        if item_id_value is None:
+            _raise(
+                f"{param}.id",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "Codex encrypted reasoning replay requires a bounded item ID.",
+            )
+        item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
+        encrypted_content = item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            _raise(
+                f"{param}.encrypted_content",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "Codex encrypted reasoning replay requires an opaque encrypted value.",
+            )
+        self._validate_string_bytes(
+            encrypted_content,
+            param=f"{param}.encrypted_content",
+            max_bytes=_CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES,
+            code="responses_codex_encrypted_reasoning_replay_too_large",
+        )
+        if "content" in item and item.get("content") is not None:
+            _raise(
+                f"{param}.content",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "Codex encrypted reasoning replay permits only null content.",
+            )
+        summary_value = item.get("summary", [])
+        if not isinstance(summary_value, list) or len(summary_value) > _CODEX_MAX_REASONING_SUMMARY_PARTS:
+            _raise(
+                f"{param}.summary",
+                "responses_codex_encrypted_reasoning_replay_invalid",
+                "Codex reasoning summaries must use the bounded summary-text array.",
+            )
+        canonical_summary: list[dict[str, str]] = []
+        summary_bytes = 0
+        for summary_index, part in enumerate(summary_value):
+            part_param = f"{param}.summary[{summary_index}]"
+            if not isinstance(part, Mapping) or set(part) != _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS:
+                _raise(
+                    part_param,
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Codex reasoning summaries require exact summary-text parts.",
+                )
+            if part.get("type") != "summary_text" or not isinstance(part.get("text"), str):
+                _raise(
+                    part_param,
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Codex reasoning summaries require exact summary-text parts.",
+                )
+            text_value = str(part["text"])
+            summary_bytes += len(text_value.encode("utf-8"))
+            if summary_bytes > _CODEX_MAX_REASONING_SUMMARY_BYTES:
+                _raise(
+                    f"{param}.summary",
+                    "responses_codex_encrypted_reasoning_replay_too_large",
+                    "Codex reasoning summaries exceed the gateway size limit.",
+                )
+            canonical_summary.append({"type": "summary_text", "text": text_value})
+        canonical = {
+            "type": "reasoning",
+            "id": item_id,
+            "summary": canonical_summary,
+            "encrypted_content": encrypted_content,
+        }
+        if "content" in item:
+            canonical["content"] = None
+        text_bytes = len(encrypted_content.encode("utf-8")) + summary_bytes
+        material_bytes = len(canonical_json_bytes(canonical))
+        return canonical, text_bytes, material_bytes, 0, 0, 0, 0
+
     def _validate_codex_tool_call_item(
         self,
         item: Mapping[str, Any],
@@ -1289,9 +1456,14 @@ class ResponsesRequestPolicy:
                 "responses_codex_tool_roundtrip_invalid",
                 "Codex tool-call continuation status is not supported.",
             )
-        item_id = item.get("id")
-        if item_id is not None:
-            self._validate_codex_message_id(item_id, param=f"{param}.id")
+        item_id_value = item.get("id")
+        if item_id_value is None:
+            _raise(
+                f"{param}.id",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation requires a bounded item ID.",
+            )
+        item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         text_field = "input" if custom else "arguments"
         text_value = item.get(text_field)
         if not isinstance(text_value, str):
@@ -1315,8 +1487,7 @@ class ResponsesRequestPolicy:
             "call_id": call_id,
             "name": name,
         }
-        if item_id is not None:
-            canonical["id"] = item_id
+        canonical["id"] = item_id
         if status is not None:
             canonical["status"] = status
         if namespace is not None:
@@ -1337,6 +1508,17 @@ class ResponsesRequestPolicy:
         item_ids: set[str] = set()
         for index, item in enumerate(items):
             item_type = item.get("type")
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                if item_id in item_ids:
+                    _raise(
+                        f"input[{index}].id",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex replay item IDs must be unique within one request.",
+                    )
+                item_ids.add(item_id)
+            if item_type == "reasoning":
+                continue
             if item_type in {"function_call", "custom_tool_call"}:
                 if not allow_codex_streaming_tool_events:
                     _raise(
@@ -1368,15 +1550,27 @@ class ResponsesRequestPolicy:
                         "Codex tool-call IDs must be unique.",
                     )
                 calls[call_id] = matches[0]
-                item_id = item.get("id")
-                if isinstance(item_id, str):
-                    if item_id in item_ids:
-                        _raise(
-                            f"input[{index}].id",
-                            "responses_codex_tool_roundtrip_invalid",
-                            "Codex tool-call item IDs must be unique.",
-                        )
-                    item_ids.add(item_id)
+                if index + 1 >= len(items):
+                    _raise(
+                        "input",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Each Codex tool call must be followed immediately by its output.",
+                    )
+                next_item = items[index + 1]
+                expected_output_type = (
+                    "custom_tool_call_output"
+                    if item_type == "custom_tool_call"
+                    else "function_call_output"
+                )
+                if (
+                    next_item.get("type") != expected_output_type
+                    or next_item.get("call_id") != call_id
+                ):
+                    _raise(
+                        f"input[{index + 1}]",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Each Codex tool output must immediately follow its matching call.",
+                    )
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 call_id = str(item["call_id"])
                 if call_id in outputs:
@@ -1386,6 +1580,27 @@ class ResponsesRequestPolicy:
                         "Codex tool-call output IDs must be unique.",
                     )
                 outputs[call_id] = str(item_type)
+                if index == 0:
+                    _raise(
+                        f"input[{index}]",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool outputs must follow their matching call.",
+                    )
+                previous = items[index - 1]
+                expected_call_type = (
+                    "custom_tool_call"
+                    if item_type == "custom_tool_call_output"
+                    else "function_call"
+                )
+                if (
+                    previous.get("type") != expected_call_type
+                    or previous.get("call_id") != call_id
+                ):
+                    _raise(
+                        f"input[{index}]",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool outputs must immediately follow their matching call.",
+                    )
 
         for call_id, output_type in outputs.items():
             declaration = calls.get(call_id)
@@ -3155,8 +3370,13 @@ def responses_codex_request_envelope_requested(body: Mapping[str, Any]) -> bool:
     if isinstance(input_value, list):
         return any(
             isinstance(item, Mapping)
-            and item.get("type") in (None, "message")
-            and "id" in item
+            and (
+                (item.get("type") in (None, "message") and "id" in item)
+                or (
+                    item.get("type") == "reasoning"
+                    and "encrypted_content" in item
+                )
+            )
             for item in input_value
         )
     return False
@@ -3179,6 +3399,95 @@ def responses_codex_client_tools_requested(body: Mapping[str, Any]) -> bool:
         isinstance(item, Mapping) and item.get("type") == "additional_tools"
         for item in input_value
     )
+
+
+def responses_codex_encrypted_reasoning_replay_requested(body: Mapping[str, Any]) -> bool:
+    """Detect a prior encrypted reasoning item being replayed as request input."""
+
+    input_value = body.get("input")
+    return isinstance(input_value, list) and any(
+        isinstance(item, Mapping)
+        and item.get("type") == "reasoning"
+        and "encrypted_content" in item
+        for item in input_value
+    )
+
+
+def responses_codex_encrypted_reasoning_output_requested(body: Mapping[str, Any]) -> bool:
+    """Detect the legacy envelope request for provider encrypted reasoning output."""
+
+    include = body.get("include")
+    return isinstance(include, list) and _CODEX_INCLUDE_VALUE in include
+
+
+def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
+    """Require independent envelope and encrypted-replay key grants."""
+
+    return responses_codex_request_envelope_allowed(policy) and _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+    )
+
+
+def codex_replay_request_candidates(
+    body: Mapping[str, Any],
+) -> tuple[CodexReplayRequestCandidate, ...]:
+    """Extract only validated IDs and approved identities from canonical input."""
+
+    input_value = body.get("input")
+    if not isinstance(input_value, list):
+        return ()
+    declarations = _codex_declarations_from_input_items(
+        [dict(item) for item in input_value if isinstance(item, Mapping)]
+    )
+    candidates: list[CodexReplayRequestCandidate] = []
+    for item in input_value:
+        if not isinstance(item, Mapping):
+            continue
+        item_type = item.get("type")
+        if item_type == "reasoning":
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                candidates.append(
+                    CodexReplayRequestCandidate(
+                        item_kind="reasoning",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                    )
+                )
+            continue
+        if item_type not in {"function_call", "custom_tool_call"}:
+            continue
+        item_id = item.get("id")
+        call_id = item.get("call_id")
+        name = item.get("name")
+        tool_type = "custom" if item_type == "custom_tool_call" else "function"
+        namespace = item.get("namespace")
+        matches = [
+            declaration
+            for declaration in declarations
+            if declaration[1] == name
+            and declaration[2] == tool_type
+            and (namespace is None or declaration[0] == namespace)
+        ]
+        if (
+            isinstance(item_id, str)
+            and isinstance(call_id, str)
+            and isinstance(name, str)
+            and len(matches) == 1
+        ):
+            candidates.append(
+                CodexReplayRequestCandidate(
+                    item_kind=str(item_type),
+                    item_id=item_id,
+                    call_id=call_id,
+                    tool_namespace=matches[0][0],
+                    tool_name=name,
+                )
+            )
+    return tuple(candidates)
 
 
 def responses_codex_client_tools_allowed(policy: object) -> bool:
@@ -3264,6 +3573,8 @@ def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
     input_value = body.get("input")
     if isinstance(input_value, list):
         for index, item in enumerate(input_value):
+            if isinstance(item, Mapping) and item.get("type") == "reasoning":
+                return f"input[{index}]"
             if (
                 isinstance(item, Mapping)
                 and item.get("type") in (None, "message")
@@ -3271,6 +3582,15 @@ def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
             ):
                 return f"input[{index}].id"
     return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE
+
+
+def _first_codex_encrypted_reasoning_param(body: Mapping[str, Any]) -> str:
+    input_value = body.get("input")
+    if isinstance(input_value, list):
+        for index, item in enumerate(input_value):
+            if isinstance(item, Mapping) and item.get("type") == "reasoning":
+                return f"input[{index}]"
+    return "include"
 
 
 def _first_codex_client_tools_param(body: Mapping[str, Any]) -> str:

@@ -31,6 +31,7 @@ RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS = "structured_outputs"
 RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE = "codex_request_envelope"
 RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS = "codex_client_tools"
 RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS = "codex_streaming_tool_events"
+RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY = "codex_encrypted_reasoning_replay"
 
 KNOWN_RESPONSES_CAPABILITIES = frozenset(
     {
@@ -57,6 +58,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     }
 )
 
@@ -88,6 +90,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE: False,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS: False,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS: False,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY: False,
     }
 
 
@@ -143,6 +146,7 @@ def enforce_responses_route_capabilities(
     codex_request_envelope_requested: bool = False,
     codex_client_tools_requested: bool = False,
     codex_streaming_tool_events_requested: bool = False,
+    codex_encrypted_reasoning_replay_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -340,6 +344,7 @@ def enforce_responses_route_capabilities(
             codex_request_envelope_requested
             or codex_client_tools_requested
             or codex_streaming_tool_events_requested
+            or codex_encrypted_reasoning_replay_requested
         )
         and capabilities.get(RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE) is not True
     ):
@@ -374,6 +379,20 @@ def enforce_responses_route_capabilities(
                 error_code="responses_route_capability_not_supported",
                 safe_message=(
                     "This model route does not support Codex streaming tool events."
+                ),
+            )
+        )
+    if (
+        codex_encrypted_reasoning_replay_requested
+        and capabilities.get(RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+                field="input",
+                error_code="responses_route_capability_not_supported",
+                safe_message=(
+                    "This model route does not support Codex encrypted reasoning replay."
                 ),
             )
         )

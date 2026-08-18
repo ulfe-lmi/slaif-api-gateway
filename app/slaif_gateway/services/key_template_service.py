@@ -25,6 +25,7 @@ from slaif_gateway.services.key_policy_validation import (
 from slaif_gateway.services.responses_route_capabilities import (
     RESPONSES_CAPABILITY_COMPACT,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
     RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
@@ -86,6 +87,7 @@ _RESPONSES_POLICY_ALLOWED_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
         RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     }
 )
 _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES = frozenset(
@@ -668,6 +670,13 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
     }.issubset(capabilities):
         raise KeyTemplateError(
             "Codex streaming tool events require the request-envelope and client-tool capabilities."
+        )
+    if (
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY in capabilities
+        and RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE not in capabilities
+    ):
+        raise KeyTemplateError(
+            "Codex encrypted reasoning replay requires the request-envelope capability."
         )
 
     local_tool_types = _clean_string_list(

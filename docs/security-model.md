@@ -95,11 +95,12 @@ OCR, index, extract text from, store/log file URLs, filenames, data URLs, or
 base64 payloads, or treat file bytes as invoice-grade billing truth.
 String-only `function_call_output` and `custom_tool_call_output` items are
 accepted as ordinary stateless input for local-tool follow-up requests.
-Function-call/custom-tool-call items, reasoning/stateful items, hosted-tool
+Outside the independently gated exact Codex replay documented below,
+function-call/custom-tool-call items, reasoning/stateful items, hosted-tool
 items, `input_image.file_id`, `input_file.file_id`, and audio content parts are
 rejected before provider forwarding. Input item text, image/file payload
-material, and string tool outputs are counted for admission estimates but are
-not stored or logged.
+material, opaque encrypted reasoning, and string tool outputs are counted for
+admission estimates but are not stored or logged.
 
 Responses local function tools follow the same boundary. They require explicit
 route/model `capabilities.responses.function_tools=true` metadata and are
@@ -543,9 +544,13 @@ default-off and policy-first:
 - Codex client-tool streaming and replay additionally require
   `codex_streaming_tool_events` on both the key and route. A request-scoped
   validator accepts only bounded declared event/call shapes and exact call-to-
-  output linkage. Calls, arguments, results, reasoning, IDs, and streamed text
-  remain transient and are never persisted, logged, audited, exported, or used
-  as provider/gateway authority.
+  output linkage. Encrypted reasoning event/replay separately requires
+  `codex_encrypted_reasoning_replay` and `codex_request_envelope` on both the
+  key and route. Raw calls, arguments, results, reasoning, identifiers, HMAC
+  digests, and streamed text remain transient and are never persisted, logged,
+  audited, or exported. Only versioned HMAC-SHA-256 digests of replay item/call
+  identifiers plus safe ownership/routing/kind/name metadata may be persisted
+  after successful usage-backed accounting, with a fixed 24-hour expiry.
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
@@ -665,6 +670,8 @@ which may contain workspace URLs or tool mappings. The entire field is dropped
 after validation and never reaches providers, persistence, logs, audits,
 accounting, hashes, metrics, exports, or error echoes. Reasoning request values
 and encrypted reasoning content likewise must not enter those local surfaces.
+Raw replay identifiers and their HMAC digests also must not enter logs, audits,
+metrics, ledger metadata, exports, or errors.
 Safe admission evidence contains only approved field names and aggregate
 byte/token counts.
 
@@ -686,23 +693,32 @@ exports; safe evidence contains only approved category names and aggregate
 byte/token/count data.
 
 Streaming calls and replay additionally require
-`codex_streaming_tool_events` on both the key and route. A request-scoped state
+`codex_streaming_tool_events` on both the key and route. Encrypted reasoning
+event/replay independently requires `codex_encrypted_reasoning_replay` and
+`codex_request_envelope` on both surfaces. A request-scoped state
 machine accepts only bounded created/in-progress, output-item, declared
 function/custom delta, reasoning summary/text, output text, and completed event
 families with exact IDs, indexes, sequence, cumulative values, names,
 namespaces, and call linkage. Provider failure/error terminals and any unknown,
 orphan, duplicate, mismatched, oversized, hosted-authority, or undeclared shape
 fail closed to a safe gateway event. The successful completed event is held
-until final accounting.
+until final accounting and any required replay-reference persistence.
 
-Replay accepts only an exact declared function call or `functions.exec` custom
-call with one matching result. Pinned Code Mode custom output may use its
-bounded exact `input_text` part list; other content arrays remain denied. All
-items are reconstructed through a deep copy and counted as input. The gateway
-never executes the tool and never stores IDs, arguments, results, reasoning, or
-streamed message content. Key templates propagate any Codex capability only
-from an explicit reviewed snapshot, reject the streaming capability without
-both prerequisites, and defaults/trusted calibration discovery add none.
+Replay accepts only an exact encrypted reasoning item or an exact declared
+function call / `functions.exec` custom call with one immediately adjacent
+matching result. Pinned Code Mode custom output may use its bounded exact
+`input_text` part list; other content arrays remain denied. Replay is rejected
+before Redis, pricing, quota, or provider access unless every referenced item
+has an active same-key HMAC row, and provider/route/model/name compatibility is
+checked after route selection but before those later side effects. Raw IDs are
+domain-separated and HMACed with the existing versioned key material; missing
+HMAC key material fails closed. Rows store no encrypted content, summary,
+arguments, results, prompts, bodies, or raw/digest identifiers and expire after
+24 hours. Client replay remains separate from provider-managed
+`previous_response_id` and conversation state. All input items are rebuilt and
+counted conservatively. The gateway never executes the tool. Key templates
+propagate any Codex capability only from an explicit reviewed snapshot, enforce
+its prerequisites, and defaults/trusted calibration discovery add none.
 
 ## Codex Protocol Capture Evidence
 
@@ -725,14 +741,18 @@ property names/values, grammar-definition values, raw bodies, and provider
 traffic. Capture status `not_compatible` is evidence of fail-closed behavior,
 not authority to relax tool, privacy, routing, quota, or accounting controls.
 
-The separate manual round-trip verifier uses the same isolation boundary and
-accepts exactly two loopback requests. It returns one fixed
-`functions.exec` custom call whose Code Mode source is only
-`text("SAFE_TOOL_RESULT")`, verifies the linked continuation in memory, and
-then returns a final assistant event. It prints only fixed safe booleans/counts;
-raw requests, responses, subprocess output, tool input/output, and assistant
-text are neither written nor printed. Pytest, CI, startup, Docker, migrations,
-and HPC verification never invoke the installed Codex binary.
+The separate reasoning-replay manual verifier uses the same isolation boundary
+and accepts exactly three loopback requests. Its fixed in-memory streams cause
+two harmless `functions.exec` calls whose Code Mode sources are only
+`text("SAFE_REPLAY_ONE")` and `text("SAFE_REPLAY_TWO")`; the second stream also
+contains one synthetic opaque encrypted reasoning item. The third request must
+replay that reasoning item and both exactly linked call/output pairs before the
+verifier returns a fixed final assistant event. It prints only fixed safe
+booleans, counts, and types; raw IDs, encrypted content, summaries, arguments,
+results, prompts, headers/bodies, subprocess output, and assistant text are
+neither written nor printed. Pytest exercises only pure harness validators; CI,
+startup, Docker, migrations, and HPC verification never invoke the installed
+Codex binary.
 
 ## Redis Rate Limiting
 

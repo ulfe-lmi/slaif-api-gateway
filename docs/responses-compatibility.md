@@ -203,9 +203,10 @@ conservative admission estimates, while final accounting uses provider
 usage/cost once. `input_file.file_id` remains unsupported until `/v1/files`
 ownership and provider-file lifecycle are implemented.
 Function-call and custom-tool-call items are accepted only for the exact gated
-Codex replay described below. Other call items, reasoning/stateful items,
-hosted-tool items, and audio content parts are rejected before Redis rate
-limiting, pricing lookup, quota reservation, or provider forwarding.
+Codex replay described below. Exact opaque encrypted reasoning is accepted only
+for that separately gated replay. Other call items, arbitrary reasoning/stateful
+items, hosted-tool items, and audio content parts are rejected before Redis
+rate limiting, pricing lookup, quota reservation, or provider forwarding.
 `input_image.file_id` remains
 unsupported until `/v1/files` ownership and provider-file lifecycle are
 implemented. String-only
@@ -289,16 +290,37 @@ orphan/duplicate/mismatched calls, hosted authority, and provider failure/error
 terminals become a safe gateway error rather than unchecked passthrough.
 
 A next stateless request may replay only the exact validated declared function
-or `functions.exec` custom call with one matching output. Function output is a
-bounded string. For the pinned Code Mode `functions.exec` path, custom output
-may also be its bounded exact list of `input_text` parts. Orphans, duplicates,
-unknown names/namespaces/types, mismatched call IDs, unapproved authority, and
-oversize arguments/results are rejected. Reconstructed items are deep-copied,
-all canonical bytes are counted as input, and call IDs, arguments, results,
-reasoning, and message text remain transient and are never persisted.
+or `functions.exec` custom call with one immediately following matching output.
+Function output is a bounded string. For the pinned Code Mode `functions.exec`
+path, custom output may also be its bounded exact list of `input_text` parts.
+Orphans, reorderings, duplicates, unknown names/namespaces/types, mismatched
+call IDs, unapproved authority, and oversize arguments/results are rejected.
+Reconstructed items are deep-copied and all canonical bytes are counted as
+input.
+
+Provider-encrypted reasoning output and replay additionally require the
+independent default-off `codex_encrypted_reasoning_replay` capability on the
+key and route together with `codex_request_envelope`. The exact reasoning
+`response.output_item.done` shape requires a bounded ID, exact summary-text
+array, and non-empty opaque `encrypted_content` under per-item and cumulative
+caps. The replay request additionally permits only the pinned client's exact
+`content=null`; the done event itself remains the exact four-field item.
+Plaintext/non-empty `content`, wrong-event placement, unknown/status/authority
+fields, and malformed or oversized values fail closed. The accepted upstream
+frame remains unchanged in transit.
+
+Fully validated reasoning and function/custom done items receive reusable
+24-hour HMAC-only references after final provider usage and successful
+PostgreSQL accounting. A replay request must resolve every item/call ID to the
+same key before route work and then match provider, route, model, kind, and
+approved tool identity before Redis/pricing/quota/provider work. Raw IDs,
+digests, encrypted reasoning, summaries, arguments, and results never persist
+or appear in logs/metrics/audit/errors. Cross-key, expired, unavailable HMAC
+version, and compatibility mismatches deny safely. Client-managed replay cannot
+combine with `previous_response_id`, stored Response state, or `conversation`.
 Codex/the downstream client owns local tool execution; SLAIF does not execute
-the call. Broader state/reasoning replay, Codex compaction, and full CLI-to-
-gateway end-to-end validation remain separately scoped work.
+the call. Codex compaction and full CLI-through-gateway validation remain
+separately scoped work.
 
 ## Stored Response Lifecycle
 
@@ -491,6 +513,13 @@ request is finalized as estimated interrupted usage when token-bearing output
 was already observed, and the client receives a safe typed `error` event
 instead of a normal terminal success marker.
 
+For a successful gated Codex replay stream, finalized accounting is followed by
+a same-key/source-ledger verification and HMAC-only reference commit while
+`response.completed` remains held. Reference persistence failure emits a safe
+typed error and suppresses normal completion while preserving the already
+charged/finalized usage. Missing usage, malformed/provider-error events, and
+disconnects never create usable references.
+
 Streaming live-burn margin for Responses typed SSE is implemented for the
 currently supported stateless text-output subset and the explicitly gated
 Codex streaming client-tool event slice. The governance
@@ -582,7 +611,7 @@ For `/v1/responses`, a template revision may carry
 `input_token_count`, `stored_responses`, `previous_response_id`,
 `list_input_items`, `compact`, `conversations`, `conversation_items`,
 `codex_request_envelope`, `codex_client_tools`,
-`codex_streaming_tool_events`), allowed local
+`codex_streaming_tool_events`, `codex_encrypted_reasoning_replay`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
 `previous_response_id`, `list_input_items`, and `compact` are only safe
@@ -598,14 +627,15 @@ conversation state, background, raw image URLs/data, raw file URLs/names/data/ba
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
 out of scope for template metadata and are rejected.
 
-The three Codex capabilities may appear in that capability list only when the
+The four Codex capabilities may appear in that capability list only when the
 reviewed template snapshot explicitly includes each one. Template normalization
 and calibration discovery never add them by default. The streaming capability
 is rejected unless both prerequisite capabilities are also present.
 Client-tool declarations require the first two capabilities on the created key
-and route; streaming call/replay requires all three. Copying any capability does
-not enable hosted tools, storage, background, MCP, gateway execution, or a
-Codex compatibility claim.
+and route; streaming call/replay requires all three. Encrypted reasoning replay
+requires its fourth capability plus the request envelope. Copying any
+capability does not enable hosted tools, storage, background, MCP, gateway
+execution, or a Codex compatibility claim.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.

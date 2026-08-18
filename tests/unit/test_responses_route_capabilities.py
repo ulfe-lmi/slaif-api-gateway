@@ -175,6 +175,7 @@ def test_default_responses_capabilities_keep_stored_responses_disabled() -> None
     assert capabilities["codex_request_envelope"] is False
     assert capabilities["codex_client_tools"] is False
     assert capabilities["codex_streaming_tool_events"] is False
+    assert capabilities["codex_encrypted_reasoning_replay"] is False
 
 
 def test_codex_client_tools_require_both_explicit_route_capabilities() -> None:
@@ -186,6 +187,37 @@ def test_codex_client_tools_require_both_explicit_route_capabilities() -> None:
         route_capabilities={"responses": capabilities},
         codex_client_tools_requested=True,
     )
+
+
+def test_codex_encrypted_reasoning_requires_both_explicit_route_capabilities() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["codex_request_envelope"] = True
+    capabilities["codex_encrypted_reasoning_replay"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        codex_encrypted_reasoning_replay_requested=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("envelope", "replay"),
+    [(False, False), (True, False), (False, True)],
+)
+def test_codex_encrypted_reasoning_route_gates_never_imply_each_other(
+    envelope: bool,
+    replay: bool,
+) -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["codex_request_envelope"] = envelope
+    capabilities["codex_encrypted_reasoning_replay"] = replay
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            codex_encrypted_reasoning_replay_requested=True,
+        )
+    assert exc_info.value.error_code == "responses_route_capability_not_supported"
 
 
 @pytest.mark.parametrize(

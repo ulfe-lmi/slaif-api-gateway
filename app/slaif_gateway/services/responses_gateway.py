@@ -28,6 +28,7 @@ from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import ConversationReference, ResponseReference
 from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
+from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
@@ -52,6 +53,7 @@ from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.streaming import (
+    CodexReplayStreamCandidate,
     RESPONSES_PROVIDER_FAILURE_EVENT_TYPES,
     RESPONSES_TEXT_STREAM_EVENT_TYPES,
     ResponsesStreamEventValidator,
@@ -69,6 +71,11 @@ from slaif_gateway.schemas.rate_limits import RateLimitPolicy
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import AccountingError
+from slaif_gateway.services.codex_replay_service import (
+    CodexReplayAuthorization,
+    CodexReplayReferenceError,
+    CodexReplayService,
+)
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
@@ -94,9 +101,11 @@ from slaif_gateway.services.responses_streaming_live_burn import (
 )
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
 from slaif_gateway.services.responses_request_policy import (
+    CodexReplayRequestCandidate,
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA,
     conversation_requested,
+    codex_replay_request_candidates,
     previous_response_id_requested,
     responses_custom_tools_requested,
     responses_file_input_requested,
@@ -104,6 +113,9 @@ from slaif_gateway.services.responses_request_policy import (
     responses_image_input_requested,
     responses_codex_client_tools_allowed,
     responses_codex_client_tools_requested,
+    responses_codex_encrypted_reasoning_replay_allowed,
+    responses_codex_encrypted_reasoning_output_requested,
+    responses_codex_encrypted_reasoning_replay_requested,
     responses_codex_request_envelope_allowed,
     responses_codex_request_envelope_requested,
     responses_codex_streaming_tool_events_allowed,
@@ -543,6 +555,21 @@ async def handle_response_create(
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
     )
+    codex_encrypted_reasoning_replay_requested = (
+        responses_codex_encrypted_reasoning_replay_requested(body)
+    )
+    allow_codex_encrypted_reasoning_replay = (
+        responses_codex_encrypted_reasoning_replay_allowed(
+            authenticated_key.responses_policy
+        )
+    )
+    codex_encrypted_reasoning_event_requested = (
+        codex_encrypted_reasoning_replay_requested
+        or (
+            allow_codex_encrypted_reasoning_replay
+            and responses_codex_encrypted_reasoning_output_requested(body)
+        )
+    )
     policy = ResponsesRequestPolicy(settings=settings)
     try:
         policy_result = policy.apply(
@@ -551,10 +578,20 @@ async def handle_response_create(
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
             allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+            allow_codex_encrypted_reasoning_replay=(
+                allow_codex_encrypted_reasoning_replay
+            ),
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
+    replay_candidates = codex_replay_request_candidates(policy_result.effective_body)
+    replay_authorization = await _verify_owned_codex_replay_references(
+        candidates=replay_candidates,
+        authenticated_key=authenticated_key,
+        settings=settings,
+        request=request,
+    )
     request_id = _request_id_from_request(request)
     route = await _resolve_responses_route(
         authenticated_key=authenticated_key,
@@ -580,7 +617,14 @@ async def handle_response_create(
         codex_request_envelope_requested=codex_request_envelope_requested,
         codex_client_tools_requested=codex_client_tools_requested,
         codex_streaming_tool_events_requested=codex_streaming_tool_events_requested,
+        codex_encrypted_reasoning_replay_requested=(
+            codex_encrypted_reasoning_event_requested
+        ),
         request=request,
+    )
+    _verify_codex_replay_route(
+        authorization=replay_authorization,
+        route=route,
     )
     if previous_response_id_requested(policy_result.effective_body):
         await _verify_previous_response_reference(
@@ -663,6 +707,9 @@ async def handle_response_create(
                     live_burn_budget=quota.live_burn_budget,
                     stream_validation_profile=ResponsesStreamValidationProfile(
                         codex_streaming_tool_events=codex_streaming_tool_events_requested,
+                        codex_encrypted_reasoning_replay=(
+                            codex_encrypted_reasoning_event_requested
+                        ),
                         declared_client_tools=codex_client_tool_declarations(
                             policy_result.effective_body
                         ),
@@ -1255,6 +1302,114 @@ async def handle_conversation_item_delete(
     )
 
 
+async def _verify_owned_codex_replay_references(
+    *,
+    candidates: tuple[CodexReplayRequestCandidate, ...],
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+    request: Request | None,
+) -> CodexReplayAuthorization:
+    if not candidates:
+        return CodexReplayAuthorization(references=())
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        service = CodexReplayService(
+            repository=CodexReplayReferencesRepository(session),
+            settings=settings,
+        )
+        try:
+            return await service.verify_owned_replay(
+                candidates=candidates,
+                gateway_key_id=authenticated_key.gateway_key_id,
+            )
+        except CodexReplayReferenceError as exc:
+            raise _openai_error_from_codex_replay_error(exc) from exc
+    finally:
+        await session_iterator.aclose()
+
+
+def _verify_codex_replay_route(
+    *,
+    authorization: CodexReplayAuthorization,
+    route: RouteResolutionResult,
+) -> None:
+    try:
+        CodexReplayService.verify_route_compatibility(
+            authorization,
+            provider=route.provider,
+            route_id=route.route_id,
+            upstream_model=route.resolved_model,
+        )
+    except CodexReplayReferenceError as exc:
+        raise _openai_error_from_codex_replay_error(exc) from exc
+
+
+def _openai_error_from_codex_replay_error(
+    error: CodexReplayReferenceError,
+) -> OpenAICompatibleError:
+    unavailable = error.error_code == "responses_codex_replay_hmac_unavailable"
+    return OpenAICompatibleError(
+        error.safe_message,
+        status_code=503 if unavailable else 404,
+        error_type="server_error" if unavailable else "invalid_request_error",
+        code=error.error_code,
+    )
+
+
+async def _persist_codex_replay_references(
+    *,
+    candidates: tuple[CodexReplayStreamCandidate, ...],
+    authenticated_key: AuthenticatedGatewayKey,
+    usage_ledger_id: uuid.UUID,
+    request_id: str,
+    route: RouteResolutionResult,
+    settings: Settings,
+    request: Request | None,
+) -> int:
+    if not candidates:
+        return 0
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise CodexReplayReferenceError(
+            "Codex replay references could not be persisted safely.",
+            error_code="responses_codex_replay_persistence_failed",
+        ) from exc
+    try:
+        service = CodexReplayService(
+            repository=CodexReplayReferencesRepository(session),
+            settings=settings,
+        )
+        try:
+            count = await service.persist_validated_references(
+                candidates=candidates,
+                gateway_key_id=authenticated_key.gateway_key_id,
+                usage_ledger_id=usage_ledger_id,
+                source_request_id=request_id,
+                provider=route.provider,
+                route_id=route.route_id,
+                upstream_model=route.resolved_model,
+            )
+            await session.commit()
+            return count
+        except CodexReplayReferenceError:
+            await session.rollback()
+            raise
+        except Exception:
+            await session.rollback()
+            raise CodexReplayReferenceError(
+                "Codex replay references could not be persisted safely.",
+                error_code="responses_codex_replay_persistence_failed",
+            ) from None
+    finally:
+        await session_iterator.aclose()
+
+
 async def _resolve_responses_route(
     *,
     authenticated_key: AuthenticatedGatewayKey,
@@ -1275,6 +1430,7 @@ async def _resolve_responses_route(
     codex_request_envelope_requested: bool = False,
     codex_client_tools_requested: bool = False,
     codex_streaming_tool_events_requested: bool = False,
+    codex_encrypted_reasoning_replay_requested: bool = False,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1312,6 +1468,9 @@ async def _resolve_responses_route(
                 codex_client_tools_requested=codex_client_tools_requested,
                 codex_streaming_tool_events_requested=(
                     codex_streaming_tool_events_requested
+                ),
+                codex_encrypted_reasoning_replay_requested=(
+                    codex_encrypted_reasoning_replay_requested
                 ),
             )
         except RouteResolutionError as exc:
@@ -1563,6 +1722,27 @@ def _streaming_responses_response(
                         request=request,
                     )
                     raise
+                replay_reference_candidates = (
+                    stream_event_validator.take_replay_reference_candidates()
+                )
+                try:
+                    await _persist_codex_replay_references(
+                        candidates=replay_reference_candidates,
+                        authenticated_key=authenticated_key,
+                        usage_ledger_id=provider_completed_record.usage_ledger_id,
+                        request_id=request_id,
+                        route=route,
+                        settings=settings,
+                        request=request,
+                    )
+                except CodexReplayReferenceError as exc:
+                    provider_status = "incomplete"
+                    yield format_responses_error_event(
+                        message=exc.safe_message,
+                        code=exc.error_code,
+                        request_id=request_id,
+                    )
+                    return
                 _record_success_metrics(
                     route=route,
                     provider_response=provider_response,

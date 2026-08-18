@@ -712,8 +712,16 @@ Current behavior:
   round-trip slice additionally requires `codex_streaming_tool_events` on that
   same key and route. Only request-scoped declared function calls and the
   `functions.exec` custom call may cross the strict typed-SSE validator and be
-  replayed with exact call/output linkage. This remains a partial client-side
-  tool loop, not a full Codex compatibility claim.
+  replayed with exact call/output linkage. Provider-encrypted reasoning output
+  and replay additionally require the independent default-off
+  `codex_encrypted_reasoning_replay` capability on the key and route. Fully
+  validated reasoning/tool `response.output_item.done` IDs become reusable
+  24-hour HMAC-only same-key/provider/route references only after final usage
+  and PostgreSQL accounting finalization; normal completion remains held until
+  those references commit. Raw IDs, digests, encrypted reasoning, summaries,
+  arguments, and results are never persisted or exposed. Client-managed replay
+  cannot be combined with `previous_response_id` or Conversations. This
+  remains a partial client-side tool loop, not a full Codex compatibility claim.
 - Responses streaming live-burn is implemented for the supported stateless
   text-output subset and the explicitly gated Codex client-tool event slice.
   It counts visible output text, function arguments, custom-tool input, and
@@ -739,8 +747,9 @@ Explicit exclusions:
   unsupported/fail-closed unless a future approved contract changes them.
 - Endpoint and model permission never imply tool/capability permission.
 - Codex client headers, model names, and endpoint permission never substitute
-  for the independent `codex_request_envelope`, `codex_client_tools`, and
-  `codex_streaming_tool_events` key and route gates. Client metadata, cache
+  for the independent `codex_request_envelope`, `codex_client_tools`,
+  `codex_streaming_tool_events`, and `codex_encrypted_reasoning_replay` key and
+  route gates. Client metadata, cache
   keys, message IDs, tool descriptions, schemas, grammar definitions,
   arguments, results, streamed deltas, and reasoning content must not be
   persisted, logged, audited, or exported. Approved cache keys, message IDs,
