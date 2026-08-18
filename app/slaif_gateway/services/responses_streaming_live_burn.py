@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -131,10 +131,14 @@ class ResponsesStreamingLiveBurnMonitor:
 
     _budget: ResponsesStreamingLiveBurnBudget
     _estimated_output_tokens: int = 0
+    _delta_keys: set[tuple[str, str, int]] = field(default_factory=set)
+    _done_keys: set[tuple[str, str, int]] = field(default_factory=set)
 
     def __init__(self, budget: ResponsesStreamingLiveBurnBudget) -> None:
         self._budget = budget
         self._estimated_output_tokens = 0
+        self._delta_keys = set()
+        self._done_keys = set()
 
     @property
     def estimated_output_tokens(self) -> int:
@@ -156,13 +160,107 @@ class ResponsesStreamingLiveBurnMonitor:
         self,
         chunk_json: Mapping[str, Any] | None,
     ) -> ResponsesStreamingLiveBurnEstimate | None:
-        delta_text = generated_responses_streaming_delta_text(chunk_json)
-        if delta_text:
+        for delta_text in self._generated_text_segments(chunk_json):
             self._estimated_output_tokens += estimate_chat_streaming_output_delta_tokens(
                 delta_text,
                 multiplier=self._budget.estimate_multiplier,
             )
         return self.check()
+
+    def _generated_text_segments(
+        self,
+        chunk_json: Mapping[str, Any] | None,
+    ) -> tuple[str, ...]:
+        if not isinstance(chunk_json, Mapping):
+            return ()
+        event_type = chunk_json.get("type")
+        delta_categories = {
+            "response.output_text.delta": "output_text",
+            "response.function_call_arguments.delta": "function_arguments",
+            "response.custom_tool_call_input.delta": "custom_input",
+            "response.reasoning_summary_text.delta": "reasoning_summary",
+            "response.reasoning_text.delta": "reasoning_text",
+        }
+        category = delta_categories.get(event_type)
+        if category is not None:
+            delta = chunk_json.get("delta")
+            if not isinstance(delta, str) or not delta:
+                return ()
+            key = _responses_stream_generated_key(chunk_json, category=category)
+            self._delta_keys.add(key)
+            return (delta,)
+        if event_type == "response.reasoning_summary_text.done":
+            key = _responses_stream_generated_key(chunk_json, category="reasoning_summary")
+            return self._count_done_text(key, chunk_json.get("text"))
+        if event_type != "response.output_item.done":
+            return ()
+        item = chunk_json.get("item")
+        if not isinstance(item, Mapping):
+            return ()
+        item_type = item.get("type")
+        item_id = item.get("id") if isinstance(item.get("id"), str) else ""
+        if item_type == "function_call":
+            return self._count_done_text(
+                ("function_arguments", item_id, 0), item.get("arguments")
+            )
+        if item_type == "custom_tool_call":
+            return self._count_done_text(("custom_input", item_id, 0), item.get("input"))
+        if item_type == "message":
+            return self._count_done_parts(
+                item.get("content"),
+                category="output_text",
+                item_id=item_id,
+                expected_part_type="output_text",
+            )
+        if item_type == "reasoning":
+            return (
+                *self._count_done_parts(
+                    item.get("summary"),
+                    category="reasoning_summary",
+                    item_id=item_id,
+                    expected_part_type="summary_text",
+                ),
+                *self._count_done_parts(
+                    item.get("content"),
+                    category="reasoning_text",
+                    item_id=item_id,
+                    expected_part_type="reasoning_text",
+                ),
+            )
+        return ()
+
+    def _count_done_parts(
+        self,
+        value: Any,
+        *,
+        category: str,
+        item_id: str,
+        expected_part_type: str,
+    ) -> tuple[str, ...]:
+        if not isinstance(value, list):
+            return ()
+        segments: list[str] = []
+        for index, part in enumerate(value):
+            if not isinstance(part, Mapping) or part.get("type") != expected_part_type:
+                continue
+            segments.extend(
+                self._count_done_text((category, item_id, index), part.get("text"))
+            )
+        return tuple(segments)
+
+    def _count_done_text(
+        self,
+        key: tuple[str, str, int],
+        value: Any,
+    ) -> tuple[str, ...]:
+        if key in self._done_keys:
+            return ()
+        self._done_keys.add(key)
+        category, item_id, index = key
+        anonymous_key = (category, "", index)
+        if key in self._delta_keys or (item_id and anonymous_key in self._delta_keys):
+            return ()
+        return (value,) if isinstance(value, str) and value else ()
 
     def check(self) -> ResponsesStreamingLiveBurnEstimate | None:
         cost_crossed = (
@@ -197,13 +295,38 @@ class ResponsesStreamingLiveBurnMonitor:
 
 
 def generated_responses_streaming_delta_text(chunk_json: Mapping[str, Any] | None) -> str:
-    """Extract generated Responses streamed text and discard it after counting."""
+    """Extract one generated Responses delta string and discard it after counting."""
     if not isinstance(chunk_json, Mapping):
         return ""
-    if chunk_json.get("type") != "response.output_text.delta":
+    if chunk_json.get("type") not in {
+        "response.output_text.delta",
+        "response.function_call_arguments.delta",
+        "response.custom_tool_call_input.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+    }:
         return ""
     delta = chunk_json.get("delta")
     return delta if isinstance(delta, str) else ""
+
+
+def _responses_stream_generated_key(
+    chunk_json: Mapping[str, Any],
+    *,
+    category: str,
+) -> tuple[str, str, int]:
+    item_id = chunk_json.get("item_id")
+    if not isinstance(item_id, str):
+        item_id = ""
+    index_field = (
+        "summary_index"
+        if category == "reasoning_summary"
+        else "content_index" if category in {"output_text", "reasoning_text"} else None
+    )
+    index = chunk_json.get(index_field) if index_field is not None else 0
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        index = 0
+    return category, item_id, index
 
 
 def safe_responses_streaming_live_burn_stop_metadata(

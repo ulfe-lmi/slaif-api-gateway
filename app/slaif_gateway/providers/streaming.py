@@ -3,9 +3,631 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Mapping
+
+
+RESPONSES_TEXT_STREAM_EVENT_TYPES = frozenset(
+    {
+        "response.created",
+        "response.in_progress",
+        "response.output_text.delta",
+    }
+)
+RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
+    {
+        *RESPONSES_TEXT_STREAM_EVENT_TYPES,
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.function_call_arguments.delta",
+        "response.custom_tool_call_input.delta",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.reasoning_text.delta",
+        "response.completed",
+    }
+)
+RESPONSES_PROVIDER_FAILURE_EVENT_TYPES = frozenset(
+    {"response.failed", "response.incomplete", "error"}
+)
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_MAX_STREAM_DELTA_BYTES = 65_536
+_MAX_STREAM_ITEM_TEXT_BYTES = 1_048_576
+_MAX_STREAM_CUMULATIVE_ITEM_BYTES = 1_048_576
+_MAX_STREAM_CONTENT_PARTS = 64
+_MAX_STREAM_INDEX = 1_000_000
+_MAX_STREAM_TOKEN_COUNT = 2**63 - 1
+_ITEM_STATUSES = frozenset({"in_progress", "completed", "incomplete"})
+_MESSAGE_PHASES = frozenset({"commentary", "final_answer"})
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesStreamValidationProfile:
+    """Request-scoped permission profile for typed Responses SSE validation."""
+
+    codex_streaming_tool_events: bool = False
+    declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
+
+
+@dataclass(slots=True)
+class _StreamItemState:
+    item_type: str
+    namespace: str | None
+    name: str | None
+    call_id: str | None
+    delta_text: str = ""
+
+
+class ResponsesStreamEventValidator:
+    """Validate one Responses stream incrementally without persisting payloads."""
+
+    def __init__(self, profile: ResponsesStreamValidationProfile) -> None:
+        self._profile = profile
+        self._active_items: dict[str, _StreamItemState] = {}
+        self._seen_item_ids: set[str] = set()
+        self._seen_call_ids: set[str] = set()
+        self._reasoning_deltas: dict[tuple[str, str, int], str] = {}
+        self._safe_event_counts: Counter[str] = Counter()
+        self._safe_event_bytes: Counter[str] = Counter()
+
+    @property
+    def profile(self) -> ResponsesStreamValidationProfile:
+        return self._profile
+
+    def safe_evidence(self) -> dict[str, dict[str, int]]:
+        """Return content-free, identifier-free event category evidence."""
+        return {
+            "event_counts": dict(sorted(self._safe_event_counts.items())),
+            "event_bytes": dict(sorted(self._safe_event_bytes.items())),
+        }
+
+    def validate(self, payload: Mapping[str, Any] | None) -> bool:
+        """Return whether one event is allowed by this request's gated profile."""
+        if not isinstance(payload, Mapping):
+            return False
+        event_type = payload.get("type")
+        if not isinstance(event_type, str):
+            return False
+        if event_type in RESPONSES_PROVIDER_FAILURE_EVENT_TYPES:
+            return False
+        if not self._profile.codex_streaming_tool_events:
+            return self._validate_existing_text_event(payload, event_type)
+        if event_type not in RESPONSES_CODEX_STREAM_EVENT_TYPES:
+            return False
+
+        valid = self._validate_codex_event(payload, event_type)
+        if valid:
+            self._safe_event_counts[event_type] += 1
+            self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
+        return valid
+
+    def _validate_existing_text_event(
+        self,
+        payload: Mapping[str, Any],
+        event_type: str,
+    ) -> bool:
+        if event_type == "response.completed":
+            return isinstance(payload.get("response"), Mapping)
+        if event_type not in RESPONSES_TEXT_STREAM_EVENT_TYPES:
+            return False
+        if event_type == "response.output_text.delta":
+            return isinstance(payload.get("delta"), str)
+        return True
+
+    def _validate_codex_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
+        if event_type in {"response.created", "response.in_progress"}:
+            return _validate_response_progress_event(payload)
+        if event_type == "response.completed":
+            return _validate_response_completed_event(payload)
+        if event_type == "response.output_text.delta":
+            return _validate_delta_event(payload, require_item=False)
+        if event_type in {
+            "response.function_call_arguments.delta",
+            "response.custom_tool_call_input.delta",
+        }:
+            return self._validate_tool_delta(payload, event_type)
+        if event_type in {
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_text.delta",
+        }:
+            return self._validate_reasoning_event(payload, event_type)
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            return self._validate_output_item(payload, event_type)
+        return False
+
+    def _validate_output_item(self, payload: Mapping[str, Any], event_type: str) -> bool:
+        if not _only_fields(payload, {"type", "output_index", "item", "sequence_number"}):
+            return False
+        if not _optional_index(payload, "output_index") or not _optional_index(
+            payload, "sequence_number"
+        ):
+            return False
+        item = payload.get("item")
+        state = self._validate_item_shape(item)
+        if state is None or not isinstance(item, Mapping):
+            return False
+        item_id = item.get("id")
+        if not _bounded_identifier(item_id, required=False):
+            return False
+        if event_type == "response.output_item.added" and not isinstance(item_id, str):
+            return False
+
+        if isinstance(item_id, str):
+            active = self._active_items.get(item_id)
+            if event_type == "response.output_item.added":
+                if item_id in self._seen_item_ids:
+                    return False
+                if state.call_id is not None and state.call_id in self._seen_call_ids:
+                    return False
+                self._seen_item_ids.add(item_id)
+                if state.call_id is not None:
+                    self._seen_call_ids.add(state.call_id)
+                self._active_items[item_id] = state
+                return True
+            if active is not None:
+                if not _same_stream_item(active, state):
+                    return False
+                if active.delta_text and state.item_type in {"function_call", "custom_tool_call"}:
+                    final_text = item.get(
+                        "arguments" if state.item_type == "function_call" else "input"
+                    )
+                    if final_text != active.delta_text:
+                        return False
+                del self._active_items[item_id]
+                return True
+            if item_id in self._seen_item_ids:
+                return False
+            self._seen_item_ids.add(item_id)
+
+        if state.call_id is not None:
+            if state.call_id in self._seen_call_ids:
+                return False
+            self._seen_call_ids.add(state.call_id)
+        return True
+
+    def _validate_item_shape(self, item: Any) -> _StreamItemState | None:
+        if not isinstance(item, Mapping):
+            return None
+        item_type = item.get("type")
+        if item_type == "function_call":
+            allowed = {
+                "type",
+                "id",
+                "status",
+                "namespace",
+                "name",
+                "arguments",
+                "call_id",
+            }
+            text_field = "arguments"
+            expected_type = "function"
+        elif item_type == "custom_tool_call":
+            allowed = {
+                "type",
+                "id",
+                "status",
+                "namespace",
+                "name",
+                "input",
+                "call_id",
+            }
+            text_field = "input"
+            expected_type = "custom"
+        elif item_type == "message":
+            if not _validate_assistant_message_item(item):
+                return None
+            return _StreamItemState("message", None, None, None)
+        elif item_type == "reasoning":
+            if not _validate_reasoning_item(item):
+                return None
+            return _StreamItemState("reasoning", None, None, None)
+        else:
+            return None
+
+        if not _only_fields(item, allowed):
+            return None
+        if not _optional_item_status(item):
+            return None
+        call_id = item.get("call_id")
+        name = item.get("name")
+        namespace = item.get("namespace")
+        text_value = item.get(text_field)
+        if not _bounded_identifier(call_id, required=True):
+            return None
+        if not isinstance(name, str) or not _bounded_utf8(name, 256, nonempty=True):
+            return None
+        if namespace is not None and (
+            not isinstance(namespace, str) or not _bounded_utf8(namespace, 256, nonempty=True)
+        ):
+            return None
+        if not isinstance(text_value, str) or not _bounded_utf8(
+            text_value, _MAX_STREAM_ITEM_TEXT_BYTES
+        ):
+            return None
+        resolved = self._resolve_declared_tool(namespace, name, expected_type)
+        if resolved is None:
+            return None
+        resolved_namespace, resolved_name, _resolved_type = resolved
+        if expected_type == "custom" and resolved != ("functions", "exec", "custom"):
+            return None
+        return _StreamItemState(
+            str(item_type),
+            resolved_namespace,
+            resolved_name,
+            str(call_id),
+        )
+
+    def _resolve_declared_tool(
+        self,
+        namespace: Any,
+        name: str,
+        tool_type: str,
+    ) -> tuple[str, str, str] | None:
+        if isinstance(namespace, str):
+            candidate = (namespace, name, tool_type)
+            return candidate if candidate in self._profile.declared_client_tools else None
+        matches = [
+            declaration
+            for declaration in self._profile.declared_client_tools
+            if declaration[1] == name and declaration[2] == tool_type
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _validate_tool_delta(self, payload: Mapping[str, Any], event_type: str) -> bool:
+        allowed = {"type", "item_id", "output_index", "delta", "sequence_number"}
+        if event_type == "response.custom_tool_call_input.delta":
+            allowed.add("call_id")
+        if not _only_fields(payload, allowed) or not _validate_delta_event(
+            payload, require_item=True
+        ):
+            return False
+        item_id = payload.get("item_id")
+        if not isinstance(item_id, str):
+            return False
+        state = self._active_items.get(item_id)
+        expected_item_type = (
+            "function_call"
+            if event_type == "response.function_call_arguments.delta"
+            else "custom_tool_call"
+        )
+        if state is None or state.item_type != expected_item_type:
+            return False
+        call_id = payload.get("call_id")
+        if call_id is not None and (
+            not _bounded_identifier(call_id, required=True) or call_id != state.call_id
+        ):
+            return False
+        delta = payload.get("delta")
+        assert isinstance(delta, str)
+        if len((state.delta_text + delta).encode("utf-8")) > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
+            return False
+        state.delta_text += delta
+        return True
+
+    def _validate_reasoning_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
+        common = {"type", "item_id", "output_index", "sequence_number"}
+        if event_type == "response.reasoning_summary_part.added":
+            allowed = common | {"summary_index", "part"}
+        elif event_type == "response.reasoning_summary_text.done":
+            allowed = common | {"summary_index", "text"}
+        elif event_type == "response.reasoning_summary_text.delta":
+            allowed = common | {"summary_index", "delta"}
+        else:
+            allowed = common | {"content_index", "delta"}
+        if not _only_fields(payload, allowed):
+            return False
+        item_id = payload.get("item_id")
+        if not _bounded_identifier(item_id, required=True):
+            return False
+        if not _required_index(payload, "output_index") or not _optional_index(
+            payload, "sequence_number"
+        ):
+            return False
+        state = self._active_items.get(str(item_id))
+        if state is None or state.item_type != "reasoning":
+            return False
+
+        if event_type == "response.reasoning_summary_part.added":
+            if not _required_index(payload, "summary_index"):
+                return False
+            part = payload.get("part")
+            return isinstance(part, Mapping) and _validate_reasoning_text_part(
+                part, expected_type="summary_text"
+            )
+
+        index_name = "content_index" if event_type == "response.reasoning_text.delta" else "summary_index"
+        if not _required_index(payload, index_name):
+            return False
+        index = int(payload[index_name])
+        category = "content" if index_name == "content_index" else "summary"
+        key = (str(item_id), category, index)
+        field = "text" if event_type == "response.reasoning_summary_text.done" else "delta"
+        value = payload.get(field)
+        limit = _MAX_STREAM_ITEM_TEXT_BYTES if field == "text" else _MAX_STREAM_DELTA_BYTES
+        if not isinstance(value, str) or not _bounded_utf8(value, limit):
+            return False
+        if field == "text":
+            prior = self._reasoning_deltas.get(key)
+            return prior is None or prior == value
+        combined = self._reasoning_deltas.get(key, "") + value
+        if len(combined.encode("utf-8")) > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
+            return False
+        self._reasoning_deltas[key] = combined
+        return True
+
+
+def _only_fields(value: Mapping[str, Any], allowed: set[str]) -> bool:
+    return not (set(value) - allowed)
+
+
+def _bounded_utf8(value: str, max_bytes: int, *, nonempty: bool = False) -> bool:
+    if nonempty and not value:
+        return False
+    return len(value.encode("utf-8")) <= max_bytes
+
+
+def _bounded_identifier(value: Any, *, required: bool) -> bool:
+    if value is None:
+        return not required
+    return isinstance(value, str) and _IDENTIFIER_RE.fullmatch(value) is not None
+
+
+def _optional_index(value: Mapping[str, Any], name: str) -> bool:
+    if name not in value:
+        return True
+    return _valid_index(value.get(name))
+
+
+def _required_index(value: Mapping[str, Any], name: str) -> bool:
+    return name in value and _valid_index(value.get(name))
+
+
+def _valid_index(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int)
+        and 0 <= value <= _MAX_STREAM_INDEX
+    )
+
+
+def _optional_item_status(item: Mapping[str, Any]) -> bool:
+    status = item.get("status")
+    return status is None or status in _ITEM_STATUSES
+
+
+def _validate_response_progress_event(payload: Mapping[str, Any]) -> bool:
+    if not _only_fields(payload, {"type", "response", "sequence_number"}):
+        return False
+    if not _optional_index(payload, "sequence_number"):
+        return False
+    response = payload.get("response")
+    if not isinstance(response, Mapping) or not _only_fields(
+        response,
+        {"id", "object", "created_at", "status", "model"},
+    ):
+        return False
+    if not _bounded_identifier(response.get("id"), required=True):
+        return False
+    object_type = response.get("object")
+    if object_type is not None and object_type != "response":
+        return False
+    status = response.get("status")
+    if status is not None and status not in {"queued", "in_progress"}:
+        return False
+    created_at = response.get("created_at")
+    if created_at is not None and (
+        isinstance(created_at, bool) or not isinstance(created_at, int) or created_at < 0
+    ):
+        return False
+    model = response.get("model")
+    return model is None or (isinstance(model, str) and _bounded_utf8(model, 256, nonempty=True))
+
+
+def _validate_response_completed_event(payload: Mapping[str, Any]) -> bool:
+    if not _only_fields(payload, {"type", "response", "sequence_number"}):
+        return False
+    if not _optional_index(payload, "sequence_number"):
+        return False
+    response = payload.get("response")
+    if not isinstance(response, Mapping) or not _only_fields(
+        response,
+        {"id", "object", "status", "usage", "end_turn"},
+    ):
+        return False
+    if not _bounded_identifier(response.get("id"), required=True):
+        return False
+    object_type = response.get("object")
+    if object_type is not None and object_type != "response":
+        return False
+    status = response.get("status")
+    if status is not None and status != "completed":
+        return False
+    end_turn = response.get("end_turn")
+    if end_turn is not None and not isinstance(end_turn, bool):
+        return False
+    usage = response.get("usage")
+    return isinstance(usage, Mapping) and _validate_completed_usage(usage)
+
+
+def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
+    if not _only_fields(
+        usage,
+        {
+            "input_tokens",
+            "input_tokens_details",
+            "output_tokens",
+            "output_tokens_details",
+            "total_tokens",
+        },
+    ):
+        return False
+    for name in ("input_tokens", "output_tokens", "total_tokens"):
+        value = usage.get(name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= _MAX_STREAM_TOKEN_COUNT
+        ):
+            return False
+    input_details = usage.get("input_tokens_details")
+    if input_details is not None:
+        if not isinstance(input_details, Mapping) or not _only_fields(
+            input_details, {"cached_tokens", "cache_write_tokens"}
+        ):
+            return False
+        for value in input_details.values():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= _MAX_STREAM_TOKEN_COUNT
+            ):
+                return False
+    output_details = usage.get("output_tokens_details")
+    if output_details is not None:
+        if not isinstance(output_details, Mapping) or not _only_fields(
+            output_details, {"reasoning_tokens"}
+        ):
+            return False
+        reasoning_tokens = output_details.get("reasoning_tokens")
+        if (
+            isinstance(reasoning_tokens, bool)
+            or not isinstance(reasoning_tokens, int)
+            or not 0 <= reasoning_tokens <= _MAX_STREAM_TOKEN_COUNT
+        ):
+            return False
+    return True
+
+
+def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> bool:
+    allowed = {
+        "type",
+        "item_id",
+        "output_index",
+        "content_index",
+        "delta",
+        "sequence_number",
+    }
+    if payload.get("type") == "response.custom_tool_call_input.delta":
+        allowed.add("call_id")
+    if not _only_fields(payload, allowed):
+        return False
+    delta = payload.get("delta")
+    if not isinstance(delta, str) or not _bounded_utf8(delta, _MAX_STREAM_DELTA_BYTES):
+        return False
+    if not _optional_index(payload, "sequence_number"):
+        return False
+    if require_item:
+        return _bounded_identifier(payload.get("item_id"), required=True) and _required_index(
+            payload, "output_index"
+        )
+    if not _bounded_identifier(payload.get("item_id"), required=False):
+        return False
+    return _optional_index(payload, "output_index") and _optional_index(
+        payload, "content_index"
+    )
+
+
+def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
+    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase"}):
+        return False
+    if item.get("role") != "assistant" or not _optional_item_status(item):
+        return False
+    phase = item.get("phase")
+    if phase is not None and phase not in _MESSAGE_PHASES:
+        return False
+    content = item.get("content")
+    if not isinstance(content, list) or len(content) > _MAX_STREAM_CONTENT_PARTS:
+        return False
+    total_bytes = 0
+    for part in content:
+        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text"}):
+            return False
+        if part.get("type") != "output_text":
+            return False
+        text = part.get("text")
+        if not isinstance(text, str) or not _bounded_utf8(text, _MAX_STREAM_ITEM_TEXT_BYTES):
+            return False
+        total_bytes += len(text.encode("utf-8"))
+    return total_bytes <= _MAX_STREAM_ITEM_TEXT_BYTES
+
+
+def _validate_reasoning_text_part(part: Mapping[str, Any], *, expected_type: str) -> bool:
+    if not _only_fields(part, {"type", "text"}) or part.get("type") != expected_type:
+        return False
+    text = part.get("text")
+    return isinstance(text, str) and _bounded_utf8(text, _MAX_STREAM_ITEM_TEXT_BYTES)
+
+
+def _validate_reasoning_item(item: Mapping[str, Any]) -> bool:
+    if not _only_fields(item, {"type", "id", "status", "summary", "content"}):
+        return False
+    if not _optional_item_status(item):
+        return False
+    summary = item.get("summary")
+    if not isinstance(summary, list) or len(summary) > _MAX_STREAM_CONTENT_PARTS:
+        return False
+    total_bytes = 0
+    for part in summary:
+        if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
+            part, expected_type="summary_text"
+        ):
+            return False
+        total_bytes += len(str(part["text"]).encode("utf-8"))
+    content = item.get("content")
+    if content is not None:
+        if not isinstance(content, list) or len(content) > _MAX_STREAM_CONTENT_PARTS:
+            return False
+        for part in content:
+            if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
+                part, expected_type="reasoning_text"
+            ):
+                return False
+            total_bytes += len(str(part["text"]).encode("utf-8"))
+    return total_bytes <= _MAX_STREAM_ITEM_TEXT_BYTES
+
+
+def _same_stream_item(first: _StreamItemState, second: _StreamItemState) -> bool:
+    return (
+        first.item_type,
+        first.namespace,
+        first.name,
+        first.call_id,
+    ) == (
+        second.item_type,
+        second.namespace,
+        second.name,
+        second.call_id,
+    )
+
+
+def _event_generated_bytes(payload: Mapping[str, Any]) -> int:
+    """Count generated string bytes without retaining or returning any content."""
+    total = 0
+    for field in ("delta", "text"):
+        value = payload.get(field)
+        if isinstance(value, str):
+            total += len(value.encode("utf-8"))
+    item = payload.get("item")
+    if not isinstance(item, Mapping):
+        return total
+    for field in ("arguments", "input"):
+        value = item.get(field)
+        if isinstance(value, str):
+            total += len(value.encode("utf-8"))
+    for field in ("content", "summary"):
+        parts = item.get(field)
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+                    total += len(part["text"].encode("utf-8"))
+    return total
 
 
 @dataclass(frozen=True, slots=True)

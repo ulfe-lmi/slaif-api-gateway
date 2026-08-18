@@ -426,6 +426,7 @@ def test_create_key_from_template_allows_safe_responses_policy_metadata() -> Non
     }
     assert "codex_request_envelope" not in payload.responses_policy["allowed_capabilities"]
     assert "codex_client_tools" not in payload.responses_policy["allowed_capabilities"]
+    assert "codex_streaming_tool_events" not in payload.responses_policy["allowed_capabilities"]
     assert "responses_policy" in audit.rows[-1].new_values
 
 
@@ -442,6 +443,7 @@ def test_create_key_from_template_propagates_only_explicit_codex_capabilities() 
         *policy["allowed_capabilities"],
         "codex_request_envelope",
         "codex_client_tools",
+        "codex_streaming_tool_events",
     ]
     _template, revision = _template_revision(
         templates,
@@ -462,8 +464,38 @@ def test_create_key_from_template_propagates_only_explicit_codex_capabilities() 
     assert copied is not None
     assert copied["allowed_capabilities"].count("codex_request_envelope") == 1
     assert copied["allowed_capabilities"].count("codex_client_tools") == 1
+    assert copied["allowed_capabilities"].count("codex_streaming_tool_events") == 1
     assert copied["hosted_tools_allowed"] == []
     assert copied["storage"] is False
+
+
+def test_create_key_from_template_rejects_stream_events_without_other_codex_gates() -> None:
+    templates = FakeTemplatesRepository()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=FakeAuditRepository(),
+        key_service=FakeKeyService(),
+    )
+    policy = _responses_policy()
+    policy["allowed_capabilities"] = [
+        *policy["allowed_capabilities"],
+        "codex_streaming_tool_events",
+    ]
+    _template, revision = _template_revision(
+        templates,
+        allowed_endpoints=["/v1/responses"],
+        template_snapshot={"responses_policy": policy},
+    )
+
+    with pytest.raises(KeyTemplateError, match="request-envelope and client-tool"):
+        asyncio.run(
+            service.create_key_from_revision(
+                template_revision_id=revision.id,
+                owner_id=uuid.uuid4(),
+                reason="Invalid partial Codex template",
+                confirm_create_key_from_template=True,
+            )
+        )
 
 
 def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> None:

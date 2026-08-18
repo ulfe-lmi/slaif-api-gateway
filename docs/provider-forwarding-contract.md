@@ -262,9 +262,12 @@ Responses-specific rules for the current foundation:
   reconstructed as ordinary stateless input for local function-tool follow-up
   requests, and string-only `custom_tool_call_output` items are reconstructed
   as ordinary stateless input for caller-managed custom-tool follow-up
-  requests. Function-call/custom-tool-call items, reasoning/stateful items,
-  hosted-tool items, `input_image.file_id`, `input_file.file_id`, and audio
-  parts are rejected before provider forwarding;
+  requests. With all three Codex key/route capabilities, exact declared
+  function-call or `functions.exec` custom-call items and exactly linked
+  outputs are reconstructed for the pinned streaming replay. The pinned custom
+  output may be a bounded exact `input_text` part list. Other call items,
+  reasoning/stateful items, hosted-tool items, `input_image.file_id`,
+  `input_file.file_id`, and audio parts are rejected before provider forwarding;
 - user-message `input_image` content parts are reconstructed only from
   `type`, `image_url`, and optional `detail` when route/model metadata
   explicitly enables `capabilities.responses.image_input=true`. Supported
@@ -310,10 +313,11 @@ Responses-specific rules for the current foundation:
   provider/route metadata is compatible. Unknown, non-owned, deleted,
   provider-mismatched, or route-incompatible IDs are not proxied upstream;
 - arbitrary `additional_tools`, arbitrary/nested namespace containers,
-  named/object namespace `tool_choice`, hosted/MCP authority, tool-result
+  named/object namespace `tool_choice`, hosted/MCP authority, unlinked tool
   continuation, and unapproved Codex reasoning/tool SSE event types remain
-  denied. Approved declarations may accompany `stream=true`, but the existing
-  typed text SSE event allowlist is unchanged;
+  denied. Approved declarations may accompany `stream=true`; streaming calls
+  and replay additionally require `codex_streaming_tool_events` on both the key
+  and route, exact request declarations, and strict item/call linkage;
 - non-streaming `conversation` is forwarded only after the ID resolves to an
   active local conversation reference owned by the authenticated gateway key,
   the route advertises `capabilities.responses.conversations=true`, and
@@ -355,8 +359,13 @@ Responses-specific rules for the current foundation:
   admission reservation, and provider usage finalization, but does not store or
   log compact input, output, encrypted compaction content, or raw bodies;
 - streaming preserves Responses event types such as `response.created`,
-  `response.output_text.delta`, `response.completed`, and safe `error` events;
-  it is not converted into Chat Completions chunks;
+  `response.output_text.delta`, `response.completed`, and safe gateway `error`
+  events; it is not converted into Chat Completions chunks. The independently
+  gated Codex slice also validates created/in-progress, output-item added/done,
+  function-argument/custom-input delta, reasoning summary-part/text,
+  reasoning-text, and completed events frame by frame against the request's
+  exact declarations. Unknown, duplicate, orphan, mismatched, oversized, or
+  provider failure/error events fail closed;
 - streaming finalization uses provider usage from the completed response event,
   holds `response.completed` until finalization succeeds, and does not forward
   any upstream `data: [DONE]` marker as success before that finalization;
@@ -586,17 +595,19 @@ Streaming has an extra finalization rule because content may already have reache
   upstream stream when possible, emits a safe SSE error with code
   `streaming_live_burn_limit_exceeded`, suppresses normal `[DONE]`, and
   withholds the threshold-crossing chunk.
-- For the supported stateless text-output Responses streaming subset, per-key
-  live-burn monitoring estimates admission input plus visible generated
-  `response.output_text.delta` text before forwarding typed SSE events. If the
-  estimated request cost or token burn crosses the configured cutoff, SLAIF
-  stops the upstream stream when possible, emits a safe typed Responses error
-  event with code `streaming_live_burn_limit_exceeded`, suppresses normal
-  `response.completed` / `[DONE]` success markers, and withholds the
-  threshold-crossing delta.
+- For the supported stateless text-output Responses subset and independently
+  gated Codex stream slice, per-key live-burn monitoring estimates admission
+  input plus visible output-text, function-argument, custom-input,
+  reasoning-summary, and reasoning-text deltas before forwarding typed SSE
+  events. Matching done values are not double counted. If the estimated request
+  cost or token burn crosses the configured cutoff, SLAIF stops the upstream
+  stream when possible, emits a safe typed Responses error event with code
+  `streaming_live_burn_limit_exceeded`, suppresses normal `response.completed`
+  / `[DONE]` success markers, and withholds the threshold-crossing event.
 - If provider final usage is unavailable because SLAIF intentionally stopped a
-  Chat stream for live-burn, the request is finalized as estimated interrupted
-  accounting with safe metadata. It is not released as normal zero-cost success.
+  Chat or Responses stream for live-burn, the request is finalized as estimated
+  interrupted accounting with safe metadata. It is not released as normal
+  zero-cost success.
 
 Responses streaming uses typed SSE events rather than Chat Completions chunk
 objects. For Responses, the gateway holds `response.completed` until
@@ -604,13 +615,15 @@ usage-backed finalization succeeds; if an upstream provider also sends
 `data: [DONE]`, it is held behind the completed event and is not emitted on
 missing-usage or finalization-failure paths.
 
-Streaming does not expand request policy. Hosted/provider-side tools, custom
-tools, web search, MCP/connectors, external web access, file/audio content,
-non-default `service_tier`, background/provider-state lifecycle
+Streaming does not expand request policy beyond the exact independently gated
+Codex declaration/call/replay slice. Hosted/provider-side tools, arbitrary
+custom tools, web search, MCP/connectors, external web access, file/audio
+content, non-default `service_tier`, background/provider-state lifecycle
 fields, and unknown top-level fields remain rejected before provider
-forwarding. Streaming `n > 1` is supported when route metadata explicitly
-enables multiple choices; SSE chunks, choice indexes, finish reasons, the final
-usage chunk, and `[DONE]` are preserved without buffering the full stream.
+forwarding. Streaming `n > 1` is supported for Chat when route metadata
+explicitly enables multiple choices; SSE chunks, choice indexes, finish
+reasons, the final usage chunk, and `[DONE]` are preserved without buffering
+the full stream.
 
 Live-burn interruption remains gateway-side. Provider-bound request bodies and
 headers must not receive live-burn counters, margins, internal quota state,

@@ -447,13 +447,15 @@ temporary operational state only, and provider final usage/cost remains
 authoritative when available.
 
 Responses streaming live-burn monitoring is implemented for the supported
-stateless text-output `POST /v1/responses` streaming subset. It estimates
-visible `response.output_text.delta` text only, discards the text after
-counting, and may store only safe provisional counters and low-cardinality
-metadata. It does not store prompts, completions, streamed chunk text, raw SSE
-events, tool payloads, media payloads, raw request/response bodies, or
-provider secrets. Background mode, cancel, response listing, Responses audio,
-and stateful streaming remain separate work under
+stateless text-output `POST /v1/responses` subset and the independently gated
+Codex client-tool event slice. It counts visible output text, function
+arguments, custom-tool input, and reasoning summary/text; avoids double
+counting corresponding done values; discards content after counting; and may
+store only safe provisional counters and low-cardinality metadata. It does not
+store prompts, completions, streamed chunk text, raw SSE events, tool payloads,
+reasoning content, media payloads, raw request/response bodies, or provider
+secrets. Background mode, cancel, response listing, Responses audio, and
+stateful streaming remain separate work under
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
 
 If token-bearing output was already observed and the stream then ends through
@@ -538,6 +540,12 @@ default-off and policy-first:
   `collaboration` taxonomy is accepted. Recursive provider-authority/hosted
   markers fail closed, schemas and grammar are capped, and SLAIF does not
   execute the declared client-local tools.
+- Codex client-tool streaming and replay additionally require
+  `codex_streaming_tool_events` on both the key and route. A request-scoped
+  validator accepts only bounded declared event/call shapes and exact call-to-
+  output linkage. Calls, arguments, results, reasoning, IDs, and streamed text
+  remain transient and are never persisted, logged, audited, exported, or used
+  as provider/gateway authority.
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
@@ -675,10 +683,26 @@ Declarations, descriptions, schemas, grammar, and `none`/`auto`/`required`
 choice are transient provider input and conservatively metered. They, tool
 arguments/results, and client IDs never enter persistence, logs, audits, or
 exports; safe evidence contains only approved category names and aggregate
-byte/token/count data. Approved declarations may accompany streaming, but no
-new tool/output/reasoning SSE events or tool-result continuation are enabled.
-Key templates propagate either capability only from an explicit reviewed
-snapshot; defaults and trusted calibration discovery add neither.
+byte/token/count data.
+
+Streaming calls and replay additionally require
+`codex_streaming_tool_events` on both the key and route. A request-scoped state
+machine accepts only bounded created/in-progress, output-item, declared
+function/custom delta, reasoning summary/text, output text, and completed event
+families with exact IDs, indexes, sequence, cumulative values, names,
+namespaces, and call linkage. Provider failure/error terminals and any unknown,
+orphan, duplicate, mismatched, oversized, hosted-authority, or undeclared shape
+fail closed to a safe gateway event. The successful completed event is held
+until final accounting.
+
+Replay accepts only an exact declared function call or `functions.exec` custom
+call with one matching result. Pinned Code Mode custom output may use its
+bounded exact `input_text` part list; other content arrays remain denied. All
+items are reconstructed through a deep copy and counted as input. The gateway
+never executes the tool and never stores IDs, arguments, results, reasoning, or
+streamed message content. Key templates propagate any Codex capability only
+from an explicit reviewed snapshot, reject the streaming capability without
+both prerequisites, and defaults/trusted calibration discovery add none.
 
 ## Codex Protocol Capture Evidence
 
@@ -700,6 +724,15 @@ instructions, client identifiers, description values, arbitrary schema
 property names/values, grammar-definition values, raw bodies, and provider
 traffic. Capture status `not_compatible` is evidence of fail-closed behavior,
 not authority to relax tool, privacy, routing, quota, or accounting controls.
+
+The separate manual round-trip verifier uses the same isolation boundary and
+accepts exactly two loopback requests. It returns one fixed
+`functions.exec` custom call whose Code Mode source is only
+`text("SAFE_TOOL_RESULT")`, verifies the linked continuation in memory, and
+then returns a final assistant event. It prints only fixed safe booleans/counts;
+raw requests, responses, subprocess output, tool input/output, and assistant
+text are neither written nor printed. Pytest, CI, startup, Docker, migrations,
+and HPC verification never invoke the installed Codex binary.
 
 ## Redis Rate Limiting
 

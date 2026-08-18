@@ -4,13 +4,12 @@ Status: limited foundation implemented on current `main`.
 
 Codex CLI wire compatibility is tracked separately in
 [`codex-compatibility.md`](codex-compatibility.md). The pinned Codex CLI 0.147.0
-`gpt-5.6-sol` API-key Responses profile has **PARTIAL REQUEST/CLIENT-TOOL
-DECLARATION SUPPORT AND IS NOT CODEX-COMPATIBLE**. The bounded envelope and
-exact Responses-lite client-tool declaration taxonomy described below are
-implemented behind independent key/route gates. The captured request-side
-shape can be admitted with all gates enabled, while tool-result continuation
-and Codex reasoning/tool/output stream events remain rejected. The capture
-itself does not authorize Codex tools.
+`gpt-5.6-sol` API-key Responses profile has **PARTIAL STREAMING CLIENT-TOOL
+ROUND-TRIP SUPPORT AND IS NOT CODEX-COMPATIBLE**. The bounded envelope, exact
+Responses-lite client-tool declaration taxonomy, strict tool-event stream, and
+one linked replay are implemented behind three independent key/route
+capabilities. The capture itself does not authorize Codex tools or broader
+provider/client authority.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
@@ -203,9 +202,11 @@ URLs, or base64 payloads. File URL/data URL material is included in
 conservative admission estimates, while final accounting uses provider
 usage/cost once. `input_file.file_id` remains unsupported until `/v1/files`
 ownership and provider-file lifecycle are implemented.
-Function-call items, reasoning/stateful items, hosted-tool items, and
-audio content parts are rejected before Redis rate limiting, pricing lookup,
-quota reservation, or provider forwarding. `input_image.file_id` remains
+Function-call and custom-tool-call items are accepted only for the exact gated
+Codex replay described below. Other call items, reasoning/stateful items,
+hosted-tool items, and audio content parts are rejected before Redis rate
+limiting, pricing lookup, quota reservation, or provider forwarding.
+`input_image.file_id` remains
 unsupported until `/v1/files` ownership and provider-file lifecycle are
 implemented. String-only
 `function_call_output` items are supported as ordinary stateless input for local
@@ -215,7 +216,8 @@ capability as string input; image input additionally requires
 `capabilities.responses.image_input=true`, and file input additionally requires
 `capabilities.responses.file_input=true`. They compose with plain text streaming,
 non-streaming structured `text.format`, and local function tools; structured
-streaming and function-tool streaming remain rejected.
+streaming and ordinary top-level function-tool streaming remain rejected. The
+separately gated Codex declaration/event/replay slice is described below.
 
 Responses local function tools are supported only as caller-side intent. SLAIF
 forwards bounded function definitions shaped as
@@ -267,12 +269,36 @@ implies the other or ordinary top-level function/custom-tool permission.
 Namespace/tool placement and types are exact, schemas/grammar/descriptions are
 bounded, `exec` must use an allowlisted grammar, and `tool_choice` is limited to
 `none`, `auto`, or `required`. Hosted/MCP/provider authority, arbitrary or
-nested namespaces, gateway execution, background/storage expansion, tool
-results, and unapproved streaming event types still fail closed. Approved
+nested namespaces, gateway execution, and background/storage expansion still
+fail closed. Approved
 envelope, message-ID, declaration, schema, grammar, and choice bytes increase
 the conservative admission estimate; safe estimation evidence contains only
 approved categories and aggregate bytes/tokens, never private values. Dropped
 client metadata is size-capped but is not provider-billed input.
+
+Streaming call events and replay require a third capability,
+`codex_streaming_tool_events`, on both the key and route in addition to the two
+capabilities above. The key denial occurs before route/database work and route
+denial before Redis, pricing, quota, or provider work. A request-scoped
+validator accepts only the documented created/in-progress, output-item
+added/done, function-argument delta, custom-input delta, reasoning
+summary-part/text, reasoning-text, output-text, and completed event families.
+It enforces bounded IDs, indexes, deltas, cumulative values, sequence, exact
+request declarations, and call/item linkage frame by frame. Unknown events,
+orphan/duplicate/mismatched calls, hosted authority, and provider failure/error
+terminals become a safe gateway error rather than unchecked passthrough.
+
+A next stateless request may replay only the exact validated declared function
+or `functions.exec` custom call with one matching output. Function output is a
+bounded string. For the pinned Code Mode `functions.exec` path, custom output
+may also be its bounded exact list of `input_text` parts. Orphans, duplicates,
+unknown names/namespaces/types, mismatched call IDs, unapproved authority, and
+oversize arguments/results are rejected. Reconstructed items are deep-copied,
+all canonical bytes are counted as input, and call IDs, arguments, results,
+reasoning, and message text remain transient and are never persisted.
+Codex/the downstream client owns local tool execution; SLAIF does not execute
+the call. Broader state/reasoning replay, Codex compaction, and full CLI-to-
+gateway end-to-end validation remain separately scoped work.
 
 ## Stored Response Lifecycle
 
@@ -466,18 +492,20 @@ was already observed, and the client receives a safe typed `error` event
 instead of a normal terminal success marker.
 
 Streaming live-burn margin for Responses typed SSE is implemented for the
-currently supported stateless text-output streaming subset. The governance
+currently supported stateless text-output subset and the explicitly gated
+Codex streaming client-tool event slice. The governance
 milestone is [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md).
-SLAIF estimates visible `response.output_text.delta` text only, discards the
-text after counting, and may intentionally stop the upstream stream when the
-estimated request cost or token burn crosses the configured Responses
-streaming live-burn cutoff. The threshold-crossing delta is withheld rather
-than forwarded. Provider final usage remains authoritative when it arrives
-before an abort. Missing usage, provider error after observed output, and
-client disconnect after observed output finalize as estimated interrupted usage
-rather than normal success, and this feature does not enable background mode,
-cancel, response listing, Responses audio, or stateful streaming with
-`store=true`, `previous_response_id`, or `conversation`.
+SLAIF counts visible output-text, function-argument, custom-input,
+reasoning-summary, and reasoning-text deltas and discards their content after
+counting. Matching done events do not double count prior deltas; a bounded done
+value is counted only when no matching delta was observed. SLAIF may stop the
+upstream stream when estimated request cost or token burn crosses the cutoff,
+and withholds the threshold-crossing event. Provider final usage remains
+authoritative when it arrives before an abort. Missing usage, provider error,
+or client disconnect after any counted output finalizes as estimated
+interrupted usage rather than normal success. This feature does not enable
+background mode, cancel, response listing, Responses audio, or stateful
+streaming with `store=true`, `previous_response_id`, or `conversation`.
 
 Current Chat Completions already uses admission-time budget checks plus
 post-call spend accounting. Successful Chat Completions calls finalize actual
@@ -519,6 +547,10 @@ Required policy controls:
 - explicit unsupported-field rejection for stateful/background features
 - explicit per-key `codex_request_envelope` capability for the bounded non-tool
   envelope; no default or trusted-calibration discovery grant
+- explicit per-key `codex_client_tools` and
+  `codex_streaming_tool_events` capabilities for the pinned declaration and
+  streaming round-trip slices; no default or trusted-calibration discovery
+  grant
 
 Leaving Responses disabled must continue to reject `/v1/responses` before route
 resolution, pricing, quota reservation, or provider forwarding.
@@ -549,7 +581,8 @@ For `/v1/responses`, a template revision may carry
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
 `input_token_count`, `stored_responses`, `previous_response_id`,
 `list_input_items`, `compact`, `conversations`, `conversation_items`,
-`codex_request_envelope`, `codex_client_tools`), allowed local
+`codex_request_envelope`, `codex_client_tools`,
+`codex_streaming_tool_events`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
 `previous_response_id`, `list_input_items`, and `compact` are only safe
@@ -565,12 +598,14 @@ conversation state, background, raw image URLs/data, raw file URLs/names/data/ba
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
 out of scope for template metadata and are rejected.
 
-`codex_request_envelope` and `codex_client_tools` may appear in that capability
-list only when the reviewed template snapshot explicitly includes each one.
-Template normalization and calibration discovery never add either by default.
-Client-tool declarations require both capabilities on the created key and both
-independent route gates. Copying either capability does not enable hosted tools,
-storage, background, MCP, gateway execution, or a Codex compatibility claim.
+The three Codex capabilities may appear in that capability list only when the
+reviewed template snapshot explicitly includes each one. Template normalization
+and calibration discovery never add them by default. The streaming capability
+is rejected unless both prerequisite capabilities are also present.
+Client-tool declarations require the first two capabilities on the created key
+and route; streaming call/replay requires all three. Copying any capability does
+not enable hosted tools, storage, background, MCP, gateway execution, or a
+Codex compatibility claim.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.

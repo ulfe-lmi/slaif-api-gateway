@@ -708,13 +708,18 @@ Current behavior:
   `codex_client_tools` on that same key and route. It accepts exactly the
   pinned `functions` and `collaboration` namespace taxonomy, canonicalizes the
   approved declarations, meters their bytes as model input, and grants no
-  gateway execution or provider-hosted authority. Streaming declarations may
-  be admitted, but the existing text-only SSE event allowlist is unchanged;
-  this is not a full Codex tool-loop compatibility claim.
+  gateway execution or provider-hosted authority. The bounded streaming
+  round-trip slice additionally requires `codex_streaming_tool_events` on that
+  same key and route. Only request-scoped declared function calls and the
+  `functions.exec` custom call may cross the strict typed-SSE validator and be
+  replayed with exact call/output linkage. This remains a partial client-side
+  tool loop, not a full Codex compatibility claim.
 - Responses streaming live-burn is implemented for the supported stateless
-  text-output streaming subset. It is a provisional gateway brake, not
-  invoice-grade truth; final provider usage/cost remains authoritative when
-  available.
+  text-output subset and the explicitly gated Codex client-tool event slice.
+  It counts visible output text, function arguments, custom-tool input, and
+  reasoning summary/text deltas without persisting their content. It is a
+  provisional gateway brake, not invoice-grade truth; final provider
+  usage/cost remains authoritative when available.
 - `store=true` is supported only for the documented non-streaming stored-create
   path and only with explicit route capability.
 - `previous_response_id`, response retrieve/delete/input-item listing,
@@ -734,11 +739,12 @@ Explicit exclusions:
   unsupported/fail-closed unless a future approved contract changes them.
 - Endpoint and model permission never imply tool/capability permission.
 - Codex client headers, model names, and endpoint permission never substitute
-  for the independent `codex_request_envelope` and `codex_client_tools` key and
-  route gates. Client metadata, cache keys, message IDs, tool descriptions,
-  schemas, grammar definitions, arguments, and results must not be persisted,
-  logged, audited, or exported. Approved cache keys, message IDs, and canonical
-  declarations are forwarded transiently after validation.
+  for the independent `codex_request_envelope`, `codex_client_tools`, and
+  `codex_streaming_tool_events` key and route gates. Client metadata, cache
+  keys, message IDs, tool descriptions, schemas, grammar definitions,
+  arguments, results, streamed deltas, and reasoning content must not be
+  persisted, logged, audited, or exported. Approved cache keys, message IDs,
+  declarations, calls, and results are forwarded transiently after validation.
 - Do not blindly pass through unknown request fields or tool types.
 - Local function/custom tool support does not authorize hosted execution by
   SLAIF; the downstream client remains responsible for executing local tools.
@@ -1177,11 +1183,14 @@ Streaming requirements:
   zero cost/token margins, enforces money and token cutoffs independently, and
   remains a provisional operational brake rather than invoice-grade billing
   truth. Responses streaming live-burn monitoring is also implemented for the
-  supported stateless text-output streaming subset and estimates only supported
-  visible text deltas. Preserve provider final usage/cost as authoritative,
-  PostgreSQL as hard quota truth, Redis or in-memory live counters as temporary
-  operational state only, and no storage of prompts, completions, raw bodies,
-  streamed chunks, tool payloads, or media payloads.
+  supported stateless text-output subset and the explicitly gated Codex
+  client-tool event slice. It estimates only supported visible output-text,
+  function-argument, custom-input, and reasoning-summary/text deltas, avoiding
+  duplicate counting when matching done events arrive. Preserve provider final
+  usage/cost as authoritative, PostgreSQL as hard quota truth, Redis or
+  in-memory live counters as temporary operational state only, and no storage
+  of prompts, completions, raw bodies, streamed chunks, tool payloads,
+  reasoning content, or media payloads.
 
 Quota period semantics for v1:
 

@@ -174,6 +174,7 @@ def test_default_responses_capabilities_keep_stored_responses_disabled() -> None
     assert capabilities["conversation_items"] is False
     assert capabilities["codex_request_envelope"] is False
     assert capabilities["codex_client_tools"] is False
+    assert capabilities["codex_streaming_tool_events"] is False
 
 
 def test_codex_client_tools_require_both_explicit_route_capabilities() -> None:
