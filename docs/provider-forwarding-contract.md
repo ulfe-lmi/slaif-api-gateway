@@ -225,7 +225,7 @@ Responses-specific rules for the current foundation:
 
 - text output is supported for stateless create and for non-streaming
   `store=true` when the route explicitly enables stored Responses;
-- the bounded non-tool Codex envelope is reconstructed only when the key's
+- the bounded Codex envelope is reconstructed only when the key's
   sanitized `responses_policy.allowed_capabilities` includes
   `codex_request_envelope` and the route independently sets
   `capabilities.responses.codex_request_envelope=true`. The normalized
@@ -240,6 +240,22 @@ Responses-specific rules for the current foundation:
   They are forwarded after validation and counted conservatively, but are not
   persisted, logged, audited, exported, echoed, or treated as routing,
   ownership, cache, or state authority;
+- one Codex `additional_tools` input item is reconstructed only when both the
+  key and route independently enable both `codex_request_envelope` and
+  `codex_client_tools`. Its canonical shape is `role=developer` with exactly
+  the `functions` namespace (`exec` custom grammar, `wait` function,
+  `request_user_input` function) followed by the `collaboration` namespace
+  (`followup_task`, `interrupt_agent`, `list_agents`, `send_message`,
+  `spawn_agent`, `wait_agent`, all functions). Unknown, duplicate, missing,
+  moved, wrong-type, extra, nested-namespace, hosted/MCP, connector,
+  authorization/header/secret/approval, server, or provider-authority shapes
+  are denied. Function schemas and `exec` grammar are bounded, canonicalized,
+  and carried only as transient provider input; SLAIF executes no client tool;
+- with approved Codex client-tool declarations, `tool_choice` is reconstructed
+  only for the strings `none`, `auto`, or `required`. Named/object choices are
+  rejected. Declaration, description, schema, grammar, and choice bytes are
+  included conservatively in admission estimation, while safe evidence keeps
+  only approved categories and aggregate byte/token counts;
 - `input` may be a string or a bounded message/input item array.
   Supported arrays are reconstructed from message roles plus string content or
   `input_text` content parts; string-only `function_call_output` items are
@@ -293,9 +309,11 @@ Responses-specific rules for the current foundation:
   the route advertises `capabilities.responses.previous_response_id=true`, and
   provider/route metadata is compatible. Unknown, non-owned, deleted,
   provider-mismatched, or route-incompatible IDs are not proxied upstream;
-- `additional_tools`, namespace/nested tool containers, tool-dependent
-  `tool_choice`, hosted/MCP authority, and unapproved Codex reasoning/tool SSE
-  event types remain denied even when both envelope gates are enabled;
+- arbitrary `additional_tools`, arbitrary/nested namespace containers,
+  named/object namespace `tool_choice`, hosted/MCP authority, tool-result
+  continuation, and unapproved Codex reasoning/tool SSE event types remain
+  denied. Approved declarations may accompany `stream=true`, but the existing
+  typed text SSE event allowlist is unchanged;
 - non-streaming `conversation` is forwarded only after the ID resolves to an
   active local conversation reference owned by the authenticated gateway key,
   the route advertises `capabilities.responses.conversations=true`, and

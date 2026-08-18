@@ -41,15 +41,24 @@ Core invariants:
   never envelope values. Size-capped `client_metadata` is validated and dropped
   before provider forwarding, so it is not provider-billed input. Provider
   final usage/cost remains authoritative.
+- Separately gated Codex client-tool declarations count their canonical
+  namespace/tool containers, descriptions, function schemas, `exec` grammar,
+  and bounded string `tool_choice` as provider/model request input. Safe
+  evidence contains only approved category names and aggregate
+  byte/token/count data, never descriptions, property names, grammar,
+  arguments, results, or client identifiers. SLAIF does not execute the tools
+  and records no client tool/service cost; provider final usage/cost remains
+  authoritative for the model request.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,
   session tokens, and email bodies must not be stored for accounting.
 - Codex client metadata, prompt-cache keys, message IDs, reasoning request
-  values, and encrypted reasoning content must not be copied into quota,
-  ledger, audit, usage-profile, reconciliation, metric-label, or export
-  metadata. A prompt-cache key and message ID may exist transiently in the
-  validated provider request only.
+  values, tool descriptions, schemas, grammar, arguments/results, and encrypted
+  reasoning content must not be copied into quota, ledger, audit,
+  usage-profile, reconciliation, metric-label, or export metadata. Approved
+  cache keys, message IDs, and client-tool declarations may exist transiently
+  in the validated provider request only.
 - Current RC2 Chat audio support remains part of ordinary Chat Completions
   accounting: audio input to text output and non-streaming audio output reserve
   quota and finalize through the normal PostgreSQL Chat path. Provider aggregate

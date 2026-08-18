@@ -421,7 +421,7 @@ def test_envelope_validation_errors_never_echo_private_values(
                     {"type": "additional_tools", "tools": [], "role": "developer"}
                 ]
             },
-            "responses_input_item_type_not_supported",
+            "responses_codex_client_tools_not_allowed",
         ),
         (
             {"tools": [{"type": "namespace", "name": "functions", "tools": []}]},

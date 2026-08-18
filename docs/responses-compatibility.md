@@ -4,11 +4,13 @@ Status: limited foundation implemented on current `main`.
 
 Codex CLI wire compatibility is tracked separately in
 [`codex-compatibility.md`](codex-compatibility.md). The pinned Codex CLI 0.147.0
-`gpt-5.6-sol` API-key Responses profile has **PARTIAL REQUEST-ENVELOPE SUPPORT
-AND IS NOT CODEX-COMPATIBLE**. The bounded non-tool envelope described below is
-implemented behind dual key/route gates, while Responses-lite input/tool
-containers, tool-dependent choice, and Codex reasoning/tool stream events
-remain rejected. The capture does not authorize Codex tools.
+`gpt-5.6-sol` API-key Responses profile has **PARTIAL REQUEST/CLIENT-TOOL
+DECLARATION SUPPORT AND IS NOT CODEX-COMPATIBLE**. The bounded envelope and
+exact Responses-lite client-tool declaration taxonomy described below are
+implemented behind independent key/route gates. The captured request-side
+shape can be admitted with all gates enabled, while tool-result continuation
+and Codex reasoning/tool/output stream events remain rejected. The capture
+itself does not authorize Codex tools.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
@@ -256,12 +258,21 @@ explicitly configured `/v1/responses` OpenRouter routes; OpenRouter support
 remains beta/stateless and is not enabled by model allowlist alone.
 
 The bounded Codex envelope composes with this existing route policy but does
-not broaden it. Unknown fields, `additional_tools`, namespace/nested tools,
-hosted/MCP authority, tool-dependent `tool_choice`, background/storage
-expansion, and unapproved streaming event types still fail closed. Approved
-provider-forwarded envelope and message-ID bytes increase the conservative
-admission estimate; safe estimation evidence contains field names and counts
-only. Dropped client metadata is size-capped but is not provider-billed input.
+not broaden it. A separately gated `additional_tools` input slice accepts only
+the pinned `functions` namespace (`exec`, `wait`, `request_user_input`) and
+`collaboration` namespace (`followup_task`, `interrupt_agent`, `list_agents`,
+`send_message`, `spawn_agent`, `wait_agent`). It requires both
+`codex_request_envelope` and `codex_client_tools` on the key and route; neither
+implies the other or ordinary top-level function/custom-tool permission.
+Namespace/tool placement and types are exact, schemas/grammar/descriptions are
+bounded, `exec` must use an allowlisted grammar, and `tool_choice` is limited to
+`none`, `auto`, or `required`. Hosted/MCP/provider authority, arbitrary or
+nested namespaces, gateway execution, background/storage expansion, tool
+results, and unapproved streaming event types still fail closed. Approved
+envelope, message-ID, declaration, schema, grammar, and choice bytes increase
+the conservative admission estimate; safe estimation evidence contains only
+approved categories and aggregate bytes/tokens, never private values. Dropped
+client metadata is size-capped but is not provider-billed input.
 
 ## Stored Response Lifecycle
 
@@ -537,7 +548,8 @@ For `/v1/responses`, a template revision may carry
 (`text`, `stateless`, `streaming`, `json_mode`, `structured_outputs`,
 `function_tools`, `custom_tools`, `image_input`, `file_input`,
 `input_token_count`, `stored_responses`, `previous_response_id`,
-`list_input_items`, `compact`, `conversations`, `conversation_items`), allowed local
+`list_input_items`, `compact`, `conversations`, `conversation_items`,
+`codex_request_envelope`, `codex_client_tools`), allowed local
 tool types (`function`, `custom`), an empty hosted-tool allowlist, and explicit
 false storage, background, and multimodal-output flags. `stored_responses` and
 `previous_response_id`, `list_input_items`, and `compact` are only safe
@@ -553,11 +565,12 @@ conversation state, background, raw image URLs/data, raw file URLs/names/data/ba
 raw tool definitions, schemas, generated tool inputs, and tool outputs remain
 out of scope for template metadata and are rejected.
 
-`codex_request_envelope` may also appear in that capability list, but only when
-the reviewed template snapshot explicitly includes it. Template normalization
-never adds it by default. Copying it to one created key does not enable hosted
-tools, storage, background, namespace tools, MCP, or any Codex compatibility
-claim, and the route gate remains independently required.
+`codex_request_envelope` and `codex_client_tools` may appear in that capability
+list only when the reviewed template snapshot explicitly includes each one.
+Template normalization and calibration discovery never add either by default.
+Client-tool declarations require both capabilities on the created key and both
+independent route gates. Copying either capability does not enable hosted tools,
+storage, background, MCP, gateway execution, or a Codex compatibility claim.
 
 See `docs/key-templates.md` for the current template contract and remaining
 future bulk/template update workflows.

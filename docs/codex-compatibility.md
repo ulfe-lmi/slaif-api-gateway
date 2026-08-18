@@ -1,6 +1,6 @@
 # Codex CLI Compatibility
 
-Status: **PARTIAL REQUEST-ENVELOPE SUPPORT, NOT CODEX-COMPATIBLE**.
+Status: **PARTIAL REQUEST/CLIENT-TOOL DECLARATION SUPPORT, NOT CODEX-COMPATIBLE**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -21,7 +21,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | Non-tool envelope slice only; still `not_compatible` |
+| Current runtime status | Envelope plus bounded client-tool declarations; still `not_compatible` |
 
 Primary references:
 
@@ -32,6 +32,9 @@ Primary references:
 - [Pinned model-catalog schema](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/protocol/src/openai_models.rs)
 - [Pinned loopback Responses server](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/app-server-test-client/src/loopback_responses_server.rs)
 - [Pinned Responses metadata vocabulary](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/core/src/responses_metadata.rs)
+- [Pinned Responses-lite tool serialization](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/tools/src/responses_api.rs)
+- [Pinned Responses-lite namespace construction](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/tools/src/tool_spec.rs)
+- [Pinned Responses-lite request construction](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/core/src/client.rs)
 
 The bundled model metadata is part of the pin. For this binary,
 `gpt-5.6-sol` selects Responses-lite/code-mode behavior, a `shell_command`
@@ -136,16 +139,18 @@ instead of the gateway's required top-level local-tool array.
 The observed namespaces are `functions` and `collaboration`. Sanitized nested
 tool names are `exec`, `wait`, `request_user_input`, `followup_task`,
 `interrupt_agent`, `list_agents`, `send_message`, `spawn_agent`, and
-`wait_agent`. They are evidence of the client request shape, not a SLAIF tool
-allowlist or execution permission. Tool-description values, schema property
+`wait_agent`. In the immutable fixture they are evidence, not authorization;
+the separately gated runtime allowlist is defined below and grants no execution
+permission. Tool-description values, schema property
 names, defaults, examples, grammar-definition values, prompts, instructions,
 client IDs, and authorization values are absent from the fixture.
 
-Because required captured elements are rejected, the overall status is
-`not_compatible`. Endpoint/model permission must not be interpreted as Codex
-tool permission.
+Because required captured elements were rejected by the frozen 004 classifier,
+that historical result remains `not_compatible`. Current runtime support is
+documented separately below; endpoint/model permission still must not be
+interpreted as Codex tool permission.
 
-## Current bounded request-envelope slice
+## Current bounded request and client-tool declaration slices
 
 Current runtime policy can accept a tool-free projection of the captured
 request envelope, but only through two explicit gates using the same capability
@@ -188,11 +193,53 @@ Provider-forwarded envelope and message-ID material is counted conservatively
 in admission estimation. Estimation evidence exposes only safe field names and
 byte/token counts, never values. Provider final usage/cost remains authoritative.
 
-This is not a Codex compatibility claim. The captured profile still includes
-Responses-lite `additional_tools`, namespace/nested tool containers, a
-tool-dependent `tool_choice`, and Codex reasoning/tool stream event families
-that remain denied pending objectives 006 through 008. Hosted tools, MCP,
-background/state expansion, and WebSocket behavior are also not enabled.
+Responses-lite client-tool declarations form a second, independent slice. An
+`additional_tools` input item is accepted only when the key and route each
+enable both `codex_request_envelope` and `codex_client_tools`. Neither
+capability implies the other, neither is added to default or calibration policy,
+and request headers, model names, endpoint permission, or ordinary top-level
+function/custom-tool capabilities cannot substitute for them. Key or shape
+denial occurs before route/database work; route denial occurs before Redis,
+pricing, quota, or provider work.
+
+The accepted input shape is exactly one `type="additional_tools"`,
+`role="developer"` item with exactly two unique namespace containers. The
+gateway accepts and emits them in this deterministic order:
+
+| Namespace | Exact nested tools |
+| --- | --- |
+| `functions` | `exec` (`custom`), `wait` (`function`), `request_user_input` (`function`) |
+| `collaboration` | `followup_task`, `interrupt_agent`, `list_agents`, `send_message`, `spawn_agent`, `wait_agent` (all `function`) |
+
+Namespace names, tool names, types, and placement are exact. Unknown, missing,
+duplicate, moved, wrong-type, nested namespace, extra-field, hosted, MCP,
+connector, authorization, header, secret, approval, server, shell-tool,
+apply-patch-tool, computer, web/file search, code-interpreter, image-generation,
+and tool-search shapes fail closed. Function schemas reuse the bounded local
+function validation plus explicit depth and property-count limits. `exec`
+requires a bounded `lark` or `regex` grammar. Its description may explain
+client-local shell/patch work, but SLAIF and the provider execute nothing.
+
+With these declarations, `tool_choice` is limited to the strings `none`,
+`auto`, or `required`; the pinned profile uses `auto`. Named/object choices are
+denied. The declarations, descriptions, schemas, grammar, and choice are
+conservatively included in admission estimation and provider input. Safe policy
+evidence contains only approved category names and aggregate byte/token counts,
+never descriptions, schema property names, grammar, arguments, results, or
+client identifiers. Those private values must not be persisted, logged,
+audited, or exported, and model-request accounting never claims client tool or
+service cost.
+
+`stream=true` may carry approved declarations, but the gateway's typed SSE
+allowlist is unchanged. Function-call arguments, output-item/tool-call, and
+reasoning-summary event families remain denied, and tool-result continuation is
+not expanded. With all four gates enabled, the complete captured 0.147.0
+request-side field/item shape can now be admitted and canonically reconstructed;
+response/event/tool-roundtrip compatibility remains incomplete. Therefore this
+remains a declaration-only partial slice, not a full Codex tool loop or Codex
+compatibility claim. Hosted tools, MCP,
+background/provider state, arbitrary namespaces, gateway tool execution,
+WebSocket behavior, and any production/release claim remain disabled.
 
 ## Regeneration and verification
 
@@ -234,10 +281,10 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Objectives 006 through 011 remain separate strategic work-order boundaries.
-The request-envelope slice grants none of them implicitly. Responses-lite
-input/tool handling, permission mapping, streaming expansion, quota/accounting
-work, end-to-end validation, operator guidance, and any release decision each
-require their own activated scope, tests, privacy review, and GitHub acceptance.
+Objectives 007 through 011 remain separate strategic work-order boundaries.
+The request/envelope and client-tool declaration slices grant none of them
+implicitly. Streaming expansion, quota/accounting work, end-to-end validation,
+operator guidance, and any release decision each require their own activated
+scope, tests, privacy review, and GitHub acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.

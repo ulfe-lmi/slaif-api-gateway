@@ -172,6 +172,40 @@ def test_default_responses_capabilities_keep_stored_responses_disabled() -> None
     assert capabilities["compact"] is False
     assert capabilities["conversations"] is False
     assert capabilities["conversation_items"] is False
+    assert capabilities["codex_request_envelope"] is False
+    assert capabilities["codex_client_tools"] is False
+
+
+def test_codex_client_tools_require_both_explicit_route_capabilities() -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["codex_request_envelope"] = True
+    capabilities["codex_client_tools"] = True
+
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        codex_client_tools_requested=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("codex_request_envelope", "codex_client_tools"),
+    [(False, False), (True, False), (False, True)],
+)
+def test_one_codex_route_capability_never_implies_the_other(
+    codex_request_envelope: bool,
+    codex_client_tools: bool,
+) -> None:
+    capabilities = default_responses_capabilities()
+    capabilities["codex_request_envelope"] = codex_request_envelope
+    capabilities["codex_client_tools"] = codex_client_tools
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        enforce_responses_route_capabilities(
+            route_capabilities={"responses": capabilities},
+            codex_client_tools_requested=True,
+        )
+
+    assert exc_info.value.error_code == "responses_route_capability_not_supported"
 
 
 def test_streaming_image_input_requires_streaming_capability_too() -> None:

@@ -29,6 +29,7 @@ RESPONSES_CAPABILITY_BACKGROUND = "background"
 RESPONSES_CAPABILITY_JSON_MODE = "json_mode"
 RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS = "structured_outputs"
 RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE = "codex_request_envelope"
+RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS = "codex_client_tools"
 
 KNOWN_RESPONSES_CAPABILITIES = frozenset(
     {
@@ -53,6 +54,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_JSON_MODE,
         RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
     }
 )
 
@@ -82,6 +84,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_JSON_MODE: False,
         RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS: False,
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE: False,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS: False,
     }
 
 
@@ -135,6 +138,7 @@ def enforce_responses_route_capabilities(
     conversations_requested: bool = False,
     conversation_items_requested: bool = False,
     codex_request_envelope_requested: bool = False,
+    codex_client_tools_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -328,7 +332,7 @@ def enforce_responses_route_capabilities(
             )
         )
     if (
-        codex_request_envelope_requested
+        (codex_request_envelope_requested or codex_client_tools_requested)
         and capabilities.get(RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE) is not True
     ):
         raise ResponsesRouteCapabilityError(
@@ -337,6 +341,18 @@ def enforce_responses_route_capabilities(
                 field=RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
                 error_code="responses_route_capability_not_supported",
                 safe_message="This model route does not support the Codex request envelope.",
+            )
+        )
+    if (
+        codex_client_tools_requested
+        and capabilities.get(RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+                field="input",
+                error_code="responses_route_capability_not_supported",
+                safe_message="This model route does not support Codex client tool namespaces.",
             )
         )
 
