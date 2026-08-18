@@ -1,6 +1,7 @@
 # Codex CLI Compatibility
 
-Status: **PROTOCOL-QUALIFIED FOR ONE PINNED LOCAL PROFILE; REAL PROVIDER E2E NOT RUN**.
+Status: **LOCAL GATEWAY E2E QUALIFIED FOR ONE PINNED PROFILE; BOUNDED REAL
+OPENAI PILOT PREPARED; REAL PROVIDER E2E NOT RUN**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -21,7 +22,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | `protocol_qualified` only for an exact ready route/pricing pair and the profile-v2 contract below; real provider-through-gateway E2E remains false and full compatibility is not claimed |
+| Current runtime status | Exact local gateway E2E qualified for the pinned route/key/profile contract below; bounded real-OpenAI pilot prepared but not executed; `real_provider_e2e=false` and full compatibility is not claimed |
 
 Primary references:
 
@@ -137,9 +138,63 @@ ordinary uncompressed JSON without legacy-profile/catalog warnings. It prints
 only booleans, counts, and version and discards raw payloads. Its truthful
 interface is exactly `.venv/bin/python scripts/verify_codex_profile.py`: the
 verifier owns its ephemeral loopback URL, accepts no arguments, and rejects
-extras with a fixed error that does not reflect operator text. This is still
-local protocol evidence: objective 011 owns real-provider-through-gateway E2E,
-so `real_provider_e2e` remains false.
+extras with a fixed error that does not reflect operator text. The unified
+objective-011 local gateway phase gate is distinct, and
+`real_provider_e2e` remains false.
+
+### Unified local gateway phase gate
+
+`scripts/verify_codex_gateway_e2e.py` is the manual objective-011 phase gate.
+It runs exact `/usr/bin/codex` 0.147.0 separately for five bounded scenarios
+through a real local SLAIF app, an explicitly disposable PostgreSQL test
+database, private no-persistence Redis, and a scripted numeric-loopback OpenAI
+mock. It covers text plus client-side exec/edit, multi-round tool and encrypted
+reasoning replay, below/edge/above long-context usage, cache read/write,
+reasoning usage, V1 compact and continuation, pre-provider hard-quota
+rejection, stream interruption, and a structured provider error.
+
+The verifier requires `TEST_DATABASE_URL`, refuses ambient `DATABASE_URL`,
+any scheme other than `postgresql+asyncpg`, non-numeric-loopback hosts,
+implicit ports, query strings, fragments, whitespace/control ambiguity, and
+database names without `test`, `dev`, or `local`. The canonical URL has an
+explicit safe user, optional simple password, `127.0.0.1`, explicit TCP port,
+and one disposable database path; socket/host/options overrides are rejected.
+The operator must create one empty disposable database explicitly and drop
+that exact database after the run. The only supported invocation is:
+
+```bash
+unset DATABASE_URL OPENAI_API_KEY OPENAI_UPSTREAM_API_KEY OPENROUTER_API_KEY
+unset RUN_UPSTREAM_TESTS
+TEST_DATABASE_URL='postgresql+asyncpg://USER:PASSWORD@127.0.0.1:5432/DISPOSABLE_TEST_DB' \
+  .venv/bin/python scripts/verify_codex_gateway_e2e.py
+```
+
+`USER`, `PASSWORD`, and `DISPOSABLE_TEST_DB` are placeholders; set the actual
+dummy DSN through a private environment mechanism and never print or retain it
+in shell history. The script migrates only the validated target, generates
+standard keys through `KeyService`, and uses one shared preparation path to
+create and verify a `0700` temporary root/home/workspace plus two `0600`
+credential-free profile-v2 files before every child. It keeps raw HTTP/SSE/
+subprocess material only in bounded memory. Exact proof requires the linked
+successful exec-output sentinel and exact structured final marker, complete
+Decimal component/native/EUR cost mappings and zero reserved money for every
+successful key/ledger, exact zero-cost failure ledgers, and distinct
+interruption/provider-error body sentinels. All per-run values join the known
+text/JSON-column scan; replay rows must remain HMAC-only. Fixed output contains
+booleans and counts only. Normal pytest, CI, application startup, import,
+packaging, migrations, Docker, and HPC do not invoke it.
+
+This establishes only:
+
+```text
+local_gateway_e2e_qualified=true
+bounded_real_openai_pilot_prepared=true
+real_provider_e2e=false
+```
+
+The separately authorized human procedure is
+[Codex 0.147.0 bounded OpenAI pilot](runbooks/codex-openai-pilot.md). It was not
+run by objective 011 and is not permission to call a real provider.
 
 ## Capture and privacy boundary
 
@@ -558,10 +613,11 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Real provider-through-gateway validation (objective 011), V2 compaction, and any
-release decision remain separate strategic work-order boundaries. The local
-profile materialization and `protocol_qualified` state grant none of them
-implicitly; each requires activated scope, tests, privacy review, and GitHub
+Execution and acceptance of the separately authorized real-provider pilot, V2
+compaction, and any release decision remain future strategic work-order
+boundaries. Local profile materialization, `protocol_qualified`, and the local
+gateway phase gate grant none of them implicitly; each requires activated
+scope, tests, privacy review, human authorization where applicable, and GitHub
 acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.

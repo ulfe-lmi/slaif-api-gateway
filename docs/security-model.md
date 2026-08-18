@@ -822,7 +822,7 @@ not enabled. Direct creation results receive an allowlisted summary containing
 only those fixed names. The email-delivery result preserves plaintext
 suppression, and no raw JSON or arbitrary policy metadata is rendered.
 
-This positive state is only `protocol_qualified`. The isolated exact-0.147.0
+The route declaration remains only `protocol_qualified`. The isolated exact-0.147.0
 profile verifier uses private temporary 0700 directories, 0600 credential-free
 files, a child-only fixed dummy key, dead external proxies, and a numeric
 loopback listener. Raw request/subprocess data is held only for bounded in-memory
@@ -830,8 +830,35 @@ validation and discarded; output is fixed booleans/counts/version. It makes no
 real provider call. The verifier accepts no arguments, owns its ephemeral
 loopback URL, rejects extras without reflecting them, and therefore cannot
 misrepresent an unused operator-supplied endpoint. It does not establish
-production or provider-E2E readiness. Objective 011 owns that separate
-evidence, and `real_provider_e2e` remains false.
+production or provider-E2E readiness.
+
+Objective 011 adds a separate manual local gateway phase gate. It requires a
+canonical disposable `postgresql+asyncpg` URL on numeric loopback with an
+explicit TCP port and rejects query/fragment/control/whitespace and connection-
+override ambiguity. It refuses ambient `DATABASE_URL` and real-provider
+variables, generates ordinary keys through `KeyService`, and runs five exact-
+Codex children through the real app, private no-persistence Redis, and a
+scripted numeric-loopback upstream. One shared helper creates and verifies each
+`0700` root/home/workspace and both `0600` credential-free profile files before
+the child starts; cleanup resolves the platform temp directory and rejects any
+target outside its unique generated root. External proxies fail closed,
+retries are disabled, and only the tool scenario uses workspace-write. The
+mock proves the gateway replaced client auth with its dummy server key and
+removed client/admin/internal headers. Successful local exec requires the exact
+linked per-run output sentinel after a zero-exit `pwd`; final text requires the
+exact structured agent marker. Exact Decimal component/native/EUR money and
+zero reserved money are reconciled for every successful key/ledger, while
+interruption/provider-error rows require their distinct safe error contracts
+and zero actual costs. Raw HTTP/SSE, subprocess output, prompts, completion,
+tool payloads, failure bodies, and opaque reasoning/compaction material remain
+bounded in memory and are discarded. Database proof scans known text/JSON
+columns for every per-run exec/final/failure sentinel and requires replay rows
+to contain only HMACs plus safe ownership/routing/expiry metadata.
+
+That gate establishes local gateway qualification and prepares—but does not
+execute—the separately authorized bounded OpenAI runbook. It does not make
+production, full-compatibility, or real-provider claims;
+`real_provider_e2e=false` remains authoritative.
 
 ## Codex Protocol Capture Evidence
 
