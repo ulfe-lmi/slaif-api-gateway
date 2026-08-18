@@ -44,7 +44,7 @@ class _FakeConnection:
 def test_get_alembic_head_revision_reads_single_head() -> None:
     head = schema_status.get_alembic_head_revision()
 
-    assert head == "0013_codex_replay_references"
+    assert head == "0014_codex_context_accounting_compaction"
 
 
 @pytest.mark.asyncio

@@ -36,4 +36,4 @@ def test_alembic_has_exactly_one_head_revision() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0013_codex_replay_references"]
+    assert heads == ["0014_codex_context_accounting_compaction"]
