@@ -124,6 +124,14 @@
   </section>
   {% endif %}
 
+  {% if key_result.external_tool_policy %}
+  <section class="action-panel" aria-labelledby="email-result-external-tool-policy-heading">
+    <h2 id="email-result-external-tool-policy-heading">External-tool Policy</h2>
+    <p>Mode {{ key_result.external_tool_policy.mode }}; capabilities {{ key_result.external_tool_policy.allowed_capabilities|join(', ') or 'none' }}; destinations {{ key_result.external_tool_policy.allowed_destination_ids|join(', ') or 'none' }}; max calls {{ key_result.external_tool_policy.max_provider_tool_calls_per_request }}.</p>
+    <p class="warning-text">Configuration only. Runtime remains denied pending objectives 014–016.</p>
+  </section>
+  {% endif %}
+
   <section class="action-panel" aria-labelledby="email-result-safety-heading">
     <h2 id="email-result-safety-heading">Safety Notes</h2>
     {% if email_delivery_mode == "send-now" %}

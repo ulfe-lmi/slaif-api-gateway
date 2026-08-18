@@ -110,6 +110,14 @@ async def test_authenticate_authorization_header_happy_path_returns_safe_context
         "cost_margin_eur": "0.000000000",
         "token_margin": 0,
     }
+    assert result.external_tool_policy == {
+        "version": 1,
+        "mode": "strict_bounded",
+        "allowed_capabilities": [],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 0,
+        "single_request_overrun_acknowledged": False,
+    }
     assert not hasattr(result, "plaintext_key")
     assert not hasattr(result, "token_hash")
 
@@ -211,7 +219,7 @@ async def test_digest_mismatch_raises_gateway_key_digest_mismatch_error() -> Non
         id=uuid.uuid4(),
         owner_id=uuid.uuid4(),
         public_key_id="public1234abcd",
-        token_hash=hmac_sha256_token(f"sk-slaif-public1234abcd.{'t'*43}", "h" * 48),
+        token_hash=hmac_sha256_token(f"sk-slaif-public1234abcd.{'t' * 43}", "h" * 48),
         hmac_key_version=1,
         status="active",
         valid_from=now - timedelta(minutes=5),

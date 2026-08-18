@@ -16,11 +16,16 @@ from slaif_gateway.cli.common import (
     require_positive_limit,
     run_async,
 )
+from slaif_gateway.config import get_settings
 from slaif_gateway.db.models import ModelRoute
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.external_tool_policy_contract import (
+    parse_route_external_tool_policy,
+    strict_route_policy,
+)
 from slaif_gateway.services.route_import import (
     build_route_import_execution_plan,
     classify_route_import_preview,
@@ -39,6 +44,18 @@ app = typer.Typer(help="Manage model routes")
 
 
 def _safe_route_dict(row: ModelRoute) -> dict[str, object]:
+    capabilities = dict(row.capabilities or {})
+    parsed_external = parse_route_external_tool_policy(
+        capabilities.get("external_tools"),
+        ceilings=get_settings().get_external_tool_operator_ceilings(),
+    )
+    external_policy = (
+        parsed_external.policy
+        if parsed_external.valid and parsed_external.policy is not None
+        else strict_route_policy()
+    )
+    if "external_tools" in capabilities:
+        capabilities["external_tools"] = external_policy.to_metadata()
     return {
         "id": row.id,
         "requested_model": row.requested_model,
@@ -50,7 +67,9 @@ def _safe_route_dict(row: ModelRoute) -> dict[str, object]:
         "enabled": row.enabled,
         "visible_in_models": row.visible_in_models,
         "supports_streaming": row.supports_streaming,
-        "capabilities": row.capabilities,
+        "capabilities": capabilities,
+        "external_tool_policy": external_policy.to_metadata(),
+        "external_tool_runtime_status": "denied_pending_objectives_014_016",
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -61,6 +80,7 @@ def _service(session) -> ModelRouteService:
     return ModelRouteService(
         model_routes_repository=ModelRoutesRepository(session),
         audit_repository=AuditRepository(session),
+        external_tool_ceilings=get_settings().get_external_tool_operator_ceilings(),
     )
 
 
@@ -128,6 +148,7 @@ async def _preview_route_import(
             rows,
             provider_configs=provider_refs_from_rows(providers),
             max_rows=max(len(rows), 1),
+            external_tool_ceilings=get_settings().get_external_tool_operator_ceilings(),
         )
         valid_rows = [row for row in preview.rows if row.status == "valid"]
         if not valid_rows:
@@ -160,7 +181,9 @@ async def _execute_route_import(
             "Run --dry-run to inspect invalid, duplicate, update, or conflict rows."
         )
 
-    parsed_actor_id = parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
+    parsed_actor_id = (
+        parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
+    )
     async with cli_db_session() as (_, session):
         result = await execute_route_import_plan(
             plan,
@@ -214,7 +237,9 @@ def add(
     ],
     match_type: Annotated[str, typer.Option("--match-type", help="exact, prefix, or glob")],
     provider: Annotated[str, typer.Option("--provider", help="Provider name")],
-    upstream_model: Annotated[str | None, typer.Option("--upstream-model", help="Provider model")] = None,
+    upstream_model: Annotated[
+        str | None, typer.Option("--upstream-model", help="Provider model")
+    ] = None,
     priority: Annotated[int, typer.Option("--priority", help="Lower values win")] = 100,
     visible_in_models: Annotated[
         bool,
@@ -257,8 +282,12 @@ def add(
 @app.command("list")
 def list_routes(
     provider: Annotated[str | None, typer.Option("--provider", help="Provider filter")] = None,
-    enabled_only: Annotated[bool, typer.Option("--enabled-only", help="Only enabled routes")] = False,
-    visible_only: Annotated[bool, typer.Option("--visible-only", help="Only /v1/models visible routes")] = False,
+    enabled_only: Annotated[
+        bool, typer.Option("--enabled-only", help="Only enabled routes")
+    ] = False,
+    visible_only: Annotated[
+        bool, typer.Option("--visible-only", help="Only /v1/models visible routes")
+    ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Maximum rows to return")] = 100,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
@@ -349,15 +378,21 @@ def import_routes(
     file: Annotated[Path, typer.Option("--file", help="Local JSON, CSV, or TSV route file")],
     input_format: Annotated[
         str | None,
-        typer.Option("--format", help="json, csv, or tsv; auto-detected from file extension if omitted"),
+        typer.Option(
+            "--format", help="json, csv, or tsv; auto-detected from file extension if omitted"
+        ),
     ] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate without writing rows")] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Validate without writing rows")
+    ] = False,
     execute: Annotated[bool, typer.Option("--execute", help="Write validated rows")] = False,
     confirm_import: Annotated[
         bool,
         typer.Option("--confirm-import", help="Acknowledge that confirmed import will write rows"),
     ] = False,
-    reason: Annotated[str | None, typer.Option("--reason", help="Audit reason for confirmed import")] = None,
+    reason: Annotated[
+        str | None, typer.Option("--reason", help="Audit reason for confirmed import")
+    ] = None,
     actor_admin_id: Annotated[
         str | None,
         typer.Option("--actor-admin-id", help="Admin actor UUID for audit"),

@@ -141,6 +141,14 @@ async def test_create_gateway_key_happy_path_encrypts_and_audits() -> None:
             "token_margin": 0,
         },
         "rate_limit_policy": {"window_seconds": 30},
+        "external_tool_policy": {
+            "version": 1,
+            "mode": "strict_bounded",
+            "allowed_capabilities": [],
+            "allowed_destination_ids": [],
+            "max_provider_tool_calls_per_request": 0,
+            "single_request_overrun_acknowledged": False,
+        },
     }
     assert result.chat_streaming_live_burn_policy == {
         "version": 1,
@@ -211,6 +219,14 @@ async def test_create_gateway_key_can_persist_allowed_providers_in_metadata() ->
             "enabled": True,
             "cost_margin_eur": "0.000000000",
             "token_margin": 0,
+        },
+        "external_tool_policy": {
+            "version": 1,
+            "mode": "strict_bounded",
+            "allowed_capabilities": [],
+            "allowed_destination_ids": [],
+            "max_provider_tool_calls_per_request": 0,
+            "single_request_overrun_acknowledged": False,
         },
     }
     assert audit_repo.calls[0]["new_values"]["allowed_providers"] == ["openai"]
@@ -343,3 +359,65 @@ def _trusted_calibration_payload(**overrides: object) -> CreateGatewayKeyInput:
     }
     values.update(overrides)
     return CreateGatewayKeyInput(**values)
+
+
+@pytest.mark.asyncio
+async def test_create_fenced_external_tool_key_persists_exact_policy_and_safe_audit() -> None:
+    service, keys_repo, _, audit_repo = _make_service()
+    policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
+    payload = _base_create_payload(
+        cost_limit_eur=Decimal("5"),
+        token_limit_total=1000,
+        request_limit_total=10,
+        external_tool_policy=policy,
+        confirm_external_tool_fenced=True,
+        note="reviewed fenced future search",
+    )
+
+    created = await service.create_gateway_key(payload)
+
+    assert keys_repo.calls[0]["metadata_json"]["external_tool_policy"] == policy
+    assert created.external_tool_policy == policy
+    assert audit_repo.calls[0]["new_values"]["external_tool_policy"] == policy
+
+
+@pytest.mark.asyncio
+async def test_create_fenced_external_tool_key_rejects_unbounded_or_calibration_before_write() -> (
+    None
+):
+    policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
+    service, keys_repo, secrets_repo, audit_repo = _make_service()
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="positive finite"):
+        await service.create_gateway_key(
+            _base_create_payload(
+                external_tool_policy=policy,
+                confirm_external_tool_fenced=True,
+            )
+        )
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="standard keys"):
+        await service.create_gateway_key(
+            _trusted_calibration_payload(
+                cost_limit_eur=Decimal("1"),
+                token_limit_total=10,
+                external_tool_policy=policy,
+                confirm_external_tool_fenced=True,
+            )
+        )
+
+    assert keys_repo.calls == []
+    assert secrets_repo.calls == []
+    assert audit_repo.calls == []

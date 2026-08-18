@@ -13,6 +13,10 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     chat_streaming_live_burn_policy_from_metadata,
     default_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.external_tool_policy_contract import (
+    parse_key_external_tool_policy,
+    strict_key_policy,
+)
 from slaif_gateway.services.responses_streaming_live_burn import (
     ResponsesStreamingLiveBurnPolicyError,
     default_responses_streaming_live_burn_policy,
@@ -95,7 +99,9 @@ class MissingTokenHmacSecretError(GatewayAuthError):
 class GatewayAuthService:
     """Validates Authorization Bearer headers against persisted gateway keys."""
 
-    def __init__(self, *, settings: Settings, gateway_keys_repository: GatewayKeysRepository) -> None:
+    def __init__(
+        self, *, settings: Settings, gateway_keys_repository: GatewayKeysRepository
+    ) -> None:
         self._settings = settings
         self._gateway_keys_repository = gateway_keys_repository
 
@@ -112,7 +118,9 @@ class GatewayAuthService:
         except ValueError as exc:
             raise MalformedGatewayKeyError() from exc
 
-        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_public_key_id(public_key_id)
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_public_key_id(
+            public_key_id
+        )
         if gateway_key is None:
             raise GatewayKeyNotFoundError()
 
@@ -137,6 +145,7 @@ class GatewayAuthService:
         responses_policy: dict[str, object] | None = None
         chat_streaming_live_burn_policy = default_chat_streaming_live_burn_policy()
         responses_streaming_live_burn_policy = default_responses_streaming_live_burn_policy()
+        external_tool_policy = strict_key_policy()
         if isinstance(gateway_key.metadata_json, dict):
             providers = gateway_key.metadata_json.get("allowed_providers")
             if isinstance(providers, list):
@@ -179,6 +188,12 @@ class GatewayAuthService:
                 responses_streaming_live_burn_policy = (
                     default_responses_streaming_live_burn_policy()
                 )
+            parsed_external_policy = parse_key_external_tool_policy(
+                gateway_key.metadata_json.get("external_tool_policy"),
+                ceilings=self._settings.get_external_tool_operator_ceilings(),
+            )
+            if parsed_external_policy.valid and parsed_external_policy.policy is not None:
+                external_tool_policy = parsed_external_policy.policy
 
         window_seconds = rate_limit_metadata.get("window_seconds")
         if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
@@ -222,6 +237,7 @@ class GatewayAuthService:
             ),
             key_purpose=getattr(gateway_key, "key_purpose", "standard"),
             capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
+            external_tool_policy=external_tool_policy.to_metadata(),
         )
 
     @staticmethod

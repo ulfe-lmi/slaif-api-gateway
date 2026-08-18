@@ -5,6 +5,8 @@ from decimal import Decimal
 
 import pytest
 
+from slaif_gateway.config import Settings
+
 from slaif_gateway.services.external_tool_policy_contract import (
     ABSOLUTE_MAX_APPROVED_DESTINATIONS,
     ABSOLUTE_MAX_DISTINCT_CAPABILITIES,
@@ -1025,3 +1027,33 @@ def test_policy_results_decisions_and_errors_never_echo_malformed_raw_values() -
         PROVIDER_CONNECTOR,
         PROVIDER_URL_FETCH,
     }
+
+
+def test_external_tool_settings_default_and_narrow_to_contract_ceilings() -> None:
+    defaults = Settings().get_external_tool_operator_ceilings()
+    narrowed = Settings(
+        EXTERNAL_TOOL_MAX_DISTINCT_CAPABILITIES=4,
+        EXTERNAL_TOOL_MAX_APPROVED_DESTINATIONS=2,
+        EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST=3,
+        EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST=2,
+    ).get_external_tool_operator_ceilings()
+
+    assert defaults == DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    assert narrowed == ExternalToolOperatorCeilings(4, 2, 3, 2)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("EXTERNAL_TOOL_MAX_DISTINCT_CAPABILITIES", 0),
+        ("EXTERNAL_TOOL_MAX_APPROVED_DESTINATIONS", 9),
+        ("EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST", 17),
+        ("EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST", -1),
+    ],
+)
+def test_external_tool_settings_reject_nonpositive_or_above_absolute_maximum(
+    field: str,
+    value: int,
+) -> None:
+    with pytest.raises(ValueError, match="outside the contract bounds"):
+        Settings(**{field: value})

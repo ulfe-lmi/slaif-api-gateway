@@ -68,7 +68,9 @@ def _admin_session(admin_user: AdminUser) -> AdminSession:
     return session
 
 
-def _login_for_actions(monkeypatch, client: TestClient, *, valid_csrf: str = "dashboard-csrf") -> AdminUser:
+def _login_for_actions(
+    monkeypatch, client: TestClient, *, valid_csrf: str = "dashboard-csrf"
+) -> AdminUser:
     admin_user = _admin_user()
     admin_session = _admin_session(admin_user)
 
@@ -283,7 +285,9 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/keys/{gateway_key_id}?message=key_policy_updated"
+    assert (
+        response.headers["location"] == f"/admin/keys/{gateway_key_id}?message=key_policy_updated"
+    )
     payload = seen["payload"]
     assert payload.gateway_key_id == gateway_key_id
     assert payload.actor_admin_id == admin_user.id
@@ -292,6 +296,54 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
     assert payload.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
     assert payload.allow_all_models is False
     assert payload.allow_all_endpoints is False
+
+
+def test_update_external_tool_policy_calls_service_with_safe_confirmed_policy(monkeypatch) -> None:
+    seen = {}
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_external_tool_policy(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_external_tool_policy",
+        update_gateway_key_external_tool_policy,
+    )
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/external-tool-policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "external_tool_mode": "external_tool_fenced",
+            "external_tool_capabilities": ["provider_connector"],
+            "external_tool_destination_ids": "connector:reviewed",
+            "external_tool_max_calls": "1",
+            "external_tool_overrun_acknowledged": "true",
+            "confirm_external_tool_fenced": "true",
+            "reason": "reviewed connector",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/admin/keys/{gateway_key_id}?message=key_external_tool_policy_updated"
+    )
+    payload = seen["payload"]
+    assert payload.gateway_key_id == gateway_key_id
+    assert payload.actor_admin_id == admin_user.id
+    assert payload.reason == "reviewed connector"
+    assert payload.confirm_external_tool_fenced is True
+    assert payload.external_tool_policy == {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_connector"],
+        "allowed_destination_ids": ["connector:reviewed"],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
 
 
 def test_update_chat_live_burn_disabled_blank_margins_preserves_existing(monkeypatch) -> None:
@@ -402,7 +454,10 @@ def test_revoke_requires_reason_before_service_call(monkeypatch) -> None:
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/keys/{gateway_key_id}?message=revoke_reason_required"
+    assert (
+        response.headers["location"]
+        == f"/admin/keys/{gateway_key_id}?message=revoke_reason_required"
+    )
     assert called is False
 
 

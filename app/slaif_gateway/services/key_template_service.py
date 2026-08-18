@@ -18,6 +18,14 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     default_chat_streaming_live_burn_policy,
     normalize_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    EXTERNAL_TOOL_FENCED,
+    ExternalToolKeyPolicy,
+    ExternalToolOperatorCeilings,
+    parse_key_external_tool_policy,
+    strict_key_policy,
+)
 from slaif_gateway.services.key_policy_validation import (
     IMPLEMENTED_CLIENT_ENDPOINTS,
     RESPONSES_ENDPOINT,
@@ -54,6 +62,7 @@ _CHAT_STREAMING_LIVE_BURN_ALLOWED_KEYS = frozenset(
     {"version", "enabled", "cost_margin_eur", "token_margin"}
 )
 _RESPONSES_POLICY_KEY = "responses_policy"
+_EXTERNAL_TOOL_POLICY_KEY = "external_tool_policy"
 _RESPONSES_POLICY_ALLOWED_KEYS = frozenset(
     {
         "version",
@@ -211,10 +220,14 @@ class KeyTemplateService:
         key_templates_repository: _KeyTemplatesRepository,
         audit_repository: _AuditRepository,
         key_service: _KeyService | None = None,
+        external_tool_ceilings: ExternalToolOperatorCeilings = (
+            DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+        ),
     ) -> None:
         self._key_templates = key_templates_repository
         self._audit = audit_repository
         self._key_service = key_service
+        self._external_tool_ceilings = external_tool_ceilings
 
     async def create_from_calibration_proposal(
         self,
@@ -230,6 +243,8 @@ class KeyTemplateService:
         ip_address: str | None = None,
         user_agent: str | None = None,
         request_id: str | None = None,
+        external_tool_policy: dict[str, object] | None = None,
+        confirm_external_tool_fenced: bool = False,
     ) -> KeyTemplateCreationResult:
         cleaned_name = _clean_required_name(name)
         cleaned_reason = _clean_required_reason(reason)
@@ -238,26 +253,50 @@ class KeyTemplateService:
         if not confirm_create_template:
             raise KeyTemplateError("Confirm template creation before continuing.")
         if preview.is_empty or preview.summary.observed_request_count == 0:
-            raise KeyTemplateError("Refusing to create a template from an empty calibration proposal.")
+            raise KeyTemplateError(
+                "Refusing to create a template from an empty calibration proposal."
+            )
         if validity_days_default is not None and validity_days_default <= 0:
             raise KeyTemplateError("validity_days_default must be positive.")
 
         proposal = preview.proposal
-        implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _CALIBRATION_TEMPLATE_UNIMPLEMENTED_ENDPOINTS
-        endpoints = tuple(endpoint for endpoint in proposal.proposed_allowed_endpoints if endpoint in implemented)
+        implemented = (
+            set(IMPLEMENTED_CLIENT_ENDPOINTS) - _CALIBRATION_TEMPLATE_UNIMPLEMENTED_ENDPOINTS
+        )
+        endpoints = tuple(
+            endpoint for endpoint in proposal.proposed_allowed_endpoints if endpoint in implemented
+        )
         if not endpoints:
             raise KeyTemplateError("Calibration proposal has no implemented participant endpoints.")
         dropped_endpoints = set(proposal.proposed_allowed_endpoints) - set(endpoints)
         if dropped_endpoints:
             raise KeyTemplateError("Calibration proposal includes unsupported endpoints.")
         if proposal.proposed_allowed_hosted_capabilities:
-            raise KeyTemplateError("Hosted capabilities must remain review-required in this template workflow.")
+            raise KeyTemplateError(
+                "Hosted capabilities must remain review-required in this template workflow."
+            )
         if proposal.proposed_request_limit_total <= 0:
             raise KeyTemplateError("Calibration proposal request limit must be positive.")
         if proposal.proposed_token_limit_total < 0:
             raise KeyTemplateError("Calibration proposal token limit must be non-negative.")
 
-        snapshot = _safe_snapshot(preview)
+        canonical_external_policy = self._normalize_external_tool_policy(
+            external_tool_policy,
+            confirm_external_tool_fenced=confirm_external_tool_fenced,
+        )
+        if canonical_external_policy.mode == EXTERNAL_TOOL_FENCED:
+            if (
+                proposal.proposed_request_limit_total <= 0
+                or proposal.proposed_token_limit_total <= 0
+                or proposal.proposed_cost_limit_eur is None
+                or not proposal.proposed_cost_limit_eur.is_finite()
+                or proposal.proposed_cost_limit_eur <= 0
+            ):
+                raise KeyTemplateError(
+                    "External-tool fenced templates require positive finite request, token, and EUR limits."
+                )
+
+        snapshot = _safe_snapshot(preview, external_tool_policy=canonical_external_policy)
         template = await self._key_templates.create_template_record(
             name=cleaned_name,
             description=cleaned_description,
@@ -281,6 +320,7 @@ class KeyTemplateService:
                 "hosted_capabilities_requiring_review_count": len(
                     proposal.hosted_capabilities_requiring_review
                 ),
+                "external_tool_policy": canonical_external_policy.to_metadata(),
             },
             ip_address=ip_address,
             user_agent=user_agent,
@@ -356,14 +396,23 @@ class KeyTemplateService:
             raise KeyTemplateError("Template revision is not attached to a template.")
         if getattr(template, "status", None) != "active":
             raise KeyTemplateError("Archived or inactive templates cannot create keys.")
-        if revision.allowed_hosted_capabilities or revision.hosted_capabilities_requiring_review:
+        external_tool_policy = external_tool_policy_for_template_revision(
+            revision,
+            ceilings=self._external_tool_ceilings,
+        )
+        if revision.allowed_hosted_capabilities or (
+            revision.hosted_capabilities_requiring_review
+            and external_tool_policy.mode != EXTERNAL_TOOL_FENCED
+        ):
             raise KeyTemplateError(
                 "This template contains hosted capabilities that require review; "
                 "participant keys are not created from it yet."
             )
 
         implemented = set(IMPLEMENTED_CLIENT_ENDPOINTS) - _TEMPLATE_KEY_UNIMPLEMENTED_ENDPOINTS
-        allowed_endpoints = [endpoint for endpoint in revision.allowed_endpoints if endpoint in implemented]
+        allowed_endpoints = [
+            endpoint for endpoint in revision.allowed_endpoints if endpoint in implemented
+        ]
         if not allowed_endpoints:
             raise KeyTemplateError("Template revision has no implemented participant endpoints.")
         if set(revision.allowed_endpoints) - set(allowed_endpoints):
@@ -400,9 +449,13 @@ class KeyTemplateService:
             capability_policy_mode="standard",
             responses_policy=responses_policy,
             chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
+            external_tool_policy=external_tool_policy.to_metadata(),
+            confirm_external_tool_fenced=(external_tool_policy.mode == EXTERNAL_TOOL_FENCED),
             template_id=template.id,
             template_revision_id=revision.id,
-            allowed_providers=list(revision.allowed_providers) if revision.allowed_providers else None,
+            allowed_providers=list(revision.allowed_providers)
+            if revision.allowed_providers
+            else None,
             rate_limit_policy=_rate_limit_policy_for_key(revision.rate_limit_policy),
             note=cleaned_reason,
         )
@@ -426,6 +479,7 @@ class KeyTemplateService:
                 "cost_limit_eur": str(revision.cost_limit_eur) if revision.cost_limit_eur else None,
                 "responses_policy": responses_policy,
                 "chat_streaming_live_burn_policy": chat_streaming_live_burn_policy.to_metadata(),
+                "external_tool_policy": external_tool_policy.to_metadata(),
             },
             note=cleaned_reason,
         )
@@ -436,8 +490,32 @@ class KeyTemplateService:
             audit_log=audit,
         )
 
+    def _normalize_external_tool_policy(
+        self,
+        value: object,
+        *,
+        confirm_external_tool_fenced: bool,
+    ) -> ExternalToolKeyPolicy:
+        parsed = parse_key_external_tool_policy(
+            value,
+            ceilings=self._external_tool_ceilings,
+        )
+        if not parsed.valid or parsed.policy is None:
+            raise KeyTemplateError(
+                "External-tool template policy is invalid or exceeds installation ceilings."
+            )
+        if parsed.policy.mode == EXTERNAL_TOOL_FENCED and not confirm_external_tool_fenced:
+            raise KeyTemplateError(
+                "Confirm the external-tool fenced overrun and hold policy before creating the template."
+            )
+        return parsed.policy
 
-def _safe_snapshot(preview: CalibrationPreviewResult) -> dict[str, object]:
+
+def _safe_snapshot(
+    preview: CalibrationPreviewResult,
+    *,
+    external_tool_policy: ExternalToolKeyPolicy | None = None,
+) -> dict[str, object]:
     payload = {
         "source_type": "calibration_proposal",
         "summary": asdict(preview.summary),
@@ -454,12 +532,42 @@ def _safe_snapshot(preview: CalibrationPreviewResult) -> dict[str, object]:
         return {
             CHAT_STREAMING_LIVE_BURN_METADATA_KEY: (
                 default_chat_streaming_live_burn_policy().to_metadata()
-            )
+            ),
+            _EXTERNAL_TOOL_POLICY_KEY: (external_tool_policy or strict_key_policy()).to_metadata(),
         }
     cleaned[CHAT_STREAMING_LIVE_BURN_METADATA_KEY] = (
         default_chat_streaming_live_burn_policy().to_metadata()
     )
+    cleaned[_EXTERNAL_TOOL_POLICY_KEY] = (external_tool_policy or strict_key_policy()).to_metadata()
     return cleaned
+
+
+def external_tool_policy_for_template_revision(
+    revision: KeyTemplateRevision,
+    *,
+    ceilings: ExternalToolOperatorCeilings = DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+) -> ExternalToolKeyPolicy:
+    """Return a canonical template policy; historical missing metadata is strict."""
+    snapshot = getattr(revision, "template_snapshot", None)
+    raw_policy = snapshot.get(_EXTERNAL_TOOL_POLICY_KEY) if isinstance(snapshot, dict) else None
+    parsed = parse_key_external_tool_policy(raw_policy, ceilings=ceilings)
+    if not parsed.valid or parsed.policy is None:
+        raise KeyTemplateError("Template revision has an invalid external-tool policy.")
+    return parsed.policy
+
+
+def external_tool_policy_summary_for_template_revision(
+    revision: KeyTemplateRevision,
+    *,
+    ceilings: ExternalToolOperatorCeilings = DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+) -> str:
+    policy = external_tool_policy_for_template_revision(revision, ceilings=ceilings)
+    return (
+        f"External tools: {policy.mode}; capabilities "
+        f"{', '.join(policy.allowed_capabilities) or 'none'}; destinations "
+        f"{', '.join(policy.allowed_destination_ids) or 'none'}; max calls "
+        f"{policy.max_provider_tool_calls_per_request}; runtime denied"
+    )
 
 
 def chat_streaming_live_burn_policy_for_template_revision(
@@ -611,7 +719,9 @@ def _resolve_template_valid_until(
             return valid_until.replace(tzinfo=UTC)
         return valid_until.astimezone(UTC)
     if default_validity_days is None:
-        raise KeyTemplateError("Template revision has no default validity; provide valid_days or valid_until.")
+        raise KeyTemplateError(
+            "Template revision has no default validity; provide valid_days or valid_until."
+        )
     return valid_from + timedelta(days=default_validity_days)
 
 
@@ -665,7 +775,9 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
         field_name="Responses capabilities",
     )
     if not _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES.issubset(capabilities):
-        raise KeyTemplateError("Responses template policy must include text and stateless capabilities.")
+        raise KeyTemplateError(
+            "Responses template policy must include text and stateless capabilities."
+        )
     if RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS in capabilities and not {
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
@@ -695,17 +807,25 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
         field_name="Responses local tool types",
     )
     if RESPONSES_CAPABILITY_FUNCTION_TOOLS in capabilities and "function" not in local_tool_types:
-        raise KeyTemplateError("Responses function-tool capability requires the function local tool type.")
+        raise KeyTemplateError(
+            "Responses function-tool capability requires the function local tool type."
+        )
     if RESPONSES_CAPABILITY_CUSTOM_TOOLS in capabilities and "custom" not in local_tool_types:
-        raise KeyTemplateError("Responses custom-tool capability requires the custom local tool type.")
+        raise KeyTemplateError(
+            "Responses custom-tool capability requires the custom local tool type."
+        )
     if "function" in local_tool_types and RESPONSES_CAPABILITY_FUNCTION_TOOLS not in capabilities:
-        raise KeyTemplateError("Responses function local tool type requires function_tools capability.")
+        raise KeyTemplateError(
+            "Responses function local tool type requires function_tools capability."
+        )
     if "custom" in local_tool_types and RESPONSES_CAPABILITY_CUSTOM_TOOLS not in capabilities:
         raise KeyTemplateError("Responses custom local tool type requires custom_tools capability.")
 
     hosted_tools = raw_policy.get("hosted_tools_allowed", [])
     if hosted_tools not in ([], ()):
-        raise KeyTemplateError("Responses hosted tools remain unsupported for template-created keys.")
+        raise KeyTemplateError(
+            "Responses hosted tools remain unsupported for template-created keys."
+        )
     for flag in _RESPONSES_POLICY_FORBIDDEN_FLAGS:
         value = raw_policy.get(flag, False)
         if value is not False:

@@ -81,6 +81,8 @@
           <td>
             <div>{{ "enabled" if route.enabled else "disabled" }}</div>
             <div class="muted small">{{ "visible" if route.visible_in_models else "hidden" }} / {{ "streaming" if route.supports_streaming else "non-streaming" }}</div>
+            {% set external_policy = route_external_tool_policies.get(route.id|string) %}
+            <div class="muted small">External: {{ external_policy.supported_capabilities|join(', ') or 'strict/none' }}; runtime denied</div>
           </td>
         </tr>
         {% else %}

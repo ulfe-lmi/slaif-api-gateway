@@ -834,13 +834,18 @@ exposure, privacy/storage policy, capability gates, negative tests, and
 documentation before it can be enabled. PostgreSQL must block subsequent
 admission after a finalized overrun.
 
-Objective 012 now defines, but does not activate, the version-1 pure contract
-for that future expansion. It separates client-operated authority from
+Objective 012 defines the version-1 pure contract for that future expansion.
+Objective 013 persists its canonical policy in existing key, immutable
+template-snapshot, and route-capability JSON and adds bounded settings plus
+audited admin/CLI controls, but does not activate runtime forwarding. It
+separates client-operated authority from
 provider-hosted/external authority and unknown authority, with two quota modes:
 `strict_bounded` (the default) and `external_tool_fenced` (future explicit
 opt-in). Current runtime behavior remains deny-only for provider-hosted tools,
 remote MCP/connectors, provider URL fetch, and unknown authority. No objective-
-012 policy is stored, forwarded, configured, or exposed through admin/CLI.
+stored policy is consumed by Chat/Responses admission, quota, accounting, or
+provider code. Missing historical metadata is strict, and direct bulk key
+import is strict-only.
 
 The future fenced mode carries this exact product promise: one admitted
 provider-hosted external-tool request may exceed the key's remaining token or

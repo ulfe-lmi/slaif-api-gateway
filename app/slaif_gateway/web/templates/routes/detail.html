@@ -39,6 +39,8 @@
         <dt>Streaming</dt><dd>{{ "supported" if route.supports_streaming else "not supported" }}</dd>
         <dt>Capabilities</dt><dd>{{ route.capabilities_summary }}</dd>
         <dt>Raw capabilities</dt><dd><code>{{ route.capabilities | tojson }}</code></dd>
+        <dt>External-tool support</dt>
+        <dd>Capabilities {{ external_tool_policy.supported_capabilities|join(', ') or 'none' }}; destinations {{ external_tool_policy.approved_destination_ids|join(', ') or 'none' }}; max calls {{ external_tool_policy.max_provider_tool_calls_per_request }}; call limit enforced {{ 'yes' if external_tool_policy.call_limit_enforced else 'no' }}; final usage required {{ 'yes' if external_tool_policy.final_usage_required else 'no' }}; final cost required {{ 'yes' if external_tool_policy.final_cost_required else 'no' }}.</dd>
         <dt>Codex qualification</dt><dd>{{ route.codex_qualification_badge }}</dd>
         <dt>Codex readiness state</dt><dd>{{ route.codex_qualification_state }}</dd>
         <dt>Codex readiness reasons</dt><dd>{{ route.codex_qualification_reason_codes | join(", ") if route.codex_qualification_reason_codes else "None" }}</dd>
@@ -49,6 +51,7 @@
       {% if route.codex_protocol_ready %}
       <p class="muted small">Exact protocol/profile locally qualified for Codex 0.147.0 and gpt-5.6-sol. Real provider-through-gateway E2E has not yet run.</p>
       {% endif %}
+      <p class="warning-text">External-tool support metadata is not runtime authority. Runtime remains denied pending objectives 014–016.</p>
     </section>
     <section>
       <h2>Provider Config</h2>

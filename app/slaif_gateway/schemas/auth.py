@@ -37,3 +37,4 @@ class AuthenticatedGatewayKey:
     responses_streaming_live_burn_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
+    external_tool_policy: dict[str, object] | None = None

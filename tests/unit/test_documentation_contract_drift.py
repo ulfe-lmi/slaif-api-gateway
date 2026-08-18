@@ -244,7 +244,9 @@ def test_external_tool_schema_and_taxonomy_match_the_pure_contract() -> None:
     assert str(ABSOLUTE_MAX_APPROVED_DESTINATIONS) in schema
     assert str(ABSOLUTE_MAX_PROVIDER_TOOL_DECLARATIONS) in schema
     assert str(ABSOLUTE_MAX_PROVIDER_TOOL_CALLS) in schema
-    assert "adds no column, table, constraint, migration" in schema
+    assert "No column, table, constraint, or migration was added" in schema
+    assert "gateway_keys.metadata.external_tool_policy" in schema
+    assert "model_routes.capabilities.external_tools" in schema
 
 
 def test_external_tool_fenced_promise_and_official_evidence_are_explicit() -> None:
@@ -271,15 +273,33 @@ def test_external_tool_fenced_promise_and_official_evidence_are_explicit() -> No
     assert "require_approval` can never lower" in forwarding
 
 
-def test_external_tool_contract_is_not_wired_to_runtime_settings_or_migrations() -> None:
+def test_external_tool_contract_is_wired_only_to_policy_surfaces_not_runtime_or_migrations() -> (
+    None
+):
     module_path = REPO_ROOT / "app/slaif_gateway/services/external_tool_policy_contract.py"
+    allowed_consumers = {
+        REPO_ROOT / "app/slaif_gateway/config.py",
+        REPO_ROOT / "app/slaif_gateway/api/admin.py",
+        REPO_ROOT / "app/slaif_gateway/cli/keys.py",
+        REPO_ROOT / "app/slaif_gateway/cli/routes.py",
+        REPO_ROOT / "app/slaif_gateway/cli/templates.py",
+        REPO_ROOT / "app/slaif_gateway/services/admin_key_dashboard.py",
+        REPO_ROOT / "app/slaif_gateway/services/auth_service.py",
+        REPO_ROOT / "app/slaif_gateway/services/key_import.py",
+        REPO_ROOT / "app/slaif_gateway/services/key_service.py",
+        REPO_ROOT / "app/slaif_gateway/services/key_template_service.py",
+        REPO_ROOT / "app/slaif_gateway/services/model_route_service.py",
+        REPO_ROOT / "app/slaif_gateway/services/route_import.py",
+    }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
-        if path == module_path:
+        if path == module_path or path in allowed_consumers:
             continue
         assert "external_tool_policy_contract" not in path.read_text(encoding="utf-8"), path
 
-    assert "EXTERNAL_TOOL_" not in _read(".env.example")
-    assert "EXTERNAL_TOOL_" not in _read("app/slaif_gateway/config.py")
+    assert "EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST=16" in _read(".env.example")
+    assert "EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST: int = 16" in _read(
+        "app/slaif_gateway/config.py"
+    )
     for path in (REPO_ROOT / "migrations/versions").glob("*.py"):
         assert "external_tool_policy" not in path.read_text(encoding="utf-8"), path
 

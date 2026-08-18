@@ -71,12 +71,17 @@ def test_valid_tsv_parse_and_auto_detect() -> None:
     text = (
         "requested_model\tmatch_type\tendpoint\tprovider\tupstream_model\tpriority\t"
         "enabled\tvisible_in_models\tsupports_streaming\tcapabilities\tnotes\n"
-        'gpt-4.1-mini\texact\tchat.completions\topenai\tgpt-4.1-mini\t10\t'
+        "gpt-4.1-mini\texact\tchat.completions\topenai\tgpt-4.1-mini\t10\t"
         'true\ttrue\ttrue\t{"vision": false}\treviewed local route\n'
     )
 
     assert detect_route_import_format(filename=None, requested_format="auto", text=text) == "tsv"
-    assert detect_route_import_format(filename="routes.tsv", requested_format="auto", text="requested_model\tprovider\n") == "tsv"
+    assert (
+        detect_route_import_format(
+            filename="routes.tsv", requested_format="auto", text="requested_model\tprovider\n"
+        )
+        == "tsv"
+    )
     rows = parse_route_import_tsv(text)
     preview = _preview(rows)
 
@@ -380,3 +385,32 @@ def test_route_import_execution_plan_allows_null_actor_admin_id() -> None:
 
     assert result.created_count == 1
     assert service.calls[0]["actor_admin_id"] is None
+
+
+def test_route_import_canonicalizes_external_tool_policy_and_rejects_raw_authority() -> None:
+    policy = {
+        "version": 1,
+        "supported_capabilities": ["provider_connector"],
+        "approved_destination_ids": ["connector:reviewed_one"],
+        "max_provider_tool_calls_per_request": 1,
+        "call_limit_enforced": True,
+        "final_usage_required": True,
+        "final_cost_required": True,
+    }
+    valid = _preview([_valid_row(capabilities={"external_tools": policy})])
+    invalid = _preview(
+        [
+            _valid_row(
+                capabilities={
+                    "external_tools": {
+                        **policy,
+                        "server_url": "https://forbidden.invalid",
+                    }
+                }
+            )
+        ]
+    )
+
+    assert valid.rows[0].capabilities["external_tools"] == policy
+    assert invalid.invalid_count == 1
+    assert "forbidden.invalid" not in str(invalid)

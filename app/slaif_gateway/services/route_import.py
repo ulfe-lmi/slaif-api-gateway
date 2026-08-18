@@ -12,6 +12,11 @@ from urllib.parse import urlparse
 
 from slaif_gateway.db.models import MATCH_TYPE_VALUES_MODEL_ROUTES
 from slaif_gateway.services.model_route_service import ModelRouteService, normalize_endpoint
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    ExternalToolOperatorCeilings,
+    parse_route_external_tool_policy,
+)
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 
 ROUTE_IMPORT_ALLOWED_FIELDS = {
@@ -194,7 +199,9 @@ def detect_route_import_format(*, filename: str | None, requested_format: str, t
     return "csv"
 
 
-def provider_refs_from_rows(provider_configs: Sequence[object]) -> tuple[RouteImportProviderRef, ...]:
+def provider_refs_from_rows(
+    provider_configs: Sequence[object],
+) -> tuple[RouteImportProviderRef, ...]:
     """Build safe provider references from provider config rows or DTOs."""
     refs: list[RouteImportProviderRef] = []
     for row in provider_configs:
@@ -210,6 +217,9 @@ def validate_route_import_rows(
     *,
     provider_configs: Sequence[RouteImportProviderRef],
     max_rows: int,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
 ) -> RouteImportPreview:
     """Validate raw import rows and return a non-mutating preview."""
     if max_rows <= 0:
@@ -228,6 +238,7 @@ def validate_route_import_rows(
                 index=index,
                 provider_by_name=provider_by_name,
                 provider_by_id=provider_by_id,
+                external_tool_ceilings=external_tool_ceilings,
             )
             key = (preview.requested_model or "", preview.match_type or "", preview.endpoint or "")
             if key in seen_keys:
@@ -288,7 +299,9 @@ def route_import_preview_to_dict(preview: RouteImportPreview) -> dict[str, objec
                 "match_type": row.match_type,
                 "endpoint": row.endpoint,
                 "provider": row.provider,
-                "provider_config_id": str(row.provider_config_id) if row.provider_config_id else None,
+                "provider_config_id": str(row.provider_config_id)
+                if row.provider_config_id
+                else None,
                 "upstream_model": row.upstream_model,
                 "priority": row.priority,
                 "enabled": row.enabled,
@@ -366,12 +379,24 @@ async def execute_route_import_plan(
     created_rows: list[RouteImportExecutionRow] = []
     for row in plan.rows:
         created = await model_route_service.create_model_route(
-            requested_model=_required_plan_text(row.requested_model, field_name="requested_model", row_number=row.row_number),
-            match_type=_required_plan_text(row.match_type, field_name="match_type", row_number=row.row_number),
-            endpoint=_required_plan_text(row.endpoint, field_name="endpoint", row_number=row.row_number),
-            provider=_required_plan_text(row.provider, field_name="provider", row_number=row.row_number),
-            upstream_model=_required_plan_text(row.upstream_model, field_name="upstream_model", row_number=row.row_number),
-            priority=_required_plan_int(row.priority, field_name="priority", row_number=row.row_number),
+            requested_model=_required_plan_text(
+                row.requested_model, field_name="requested_model", row_number=row.row_number
+            ),
+            match_type=_required_plan_text(
+                row.match_type, field_name="match_type", row_number=row.row_number
+            ),
+            endpoint=_required_plan_text(
+                row.endpoint, field_name="endpoint", row_number=row.row_number
+            ),
+            provider=_required_plan_text(
+                row.provider, field_name="provider", row_number=row.row_number
+            ),
+            upstream_model=_required_plan_text(
+                row.upstream_model, field_name="upstream_model", row_number=row.row_number
+            ),
+            priority=_required_plan_int(
+                row.priority, field_name="priority", row_number=row.row_number
+            ),
             enabled=True if row.enabled is None else row.enabled,
             visible_in_models=True if row.visible_in_models is None else row.visible_in_models,
             supports_streaming=True if row.supports_streaming is None else row.supports_streaming,
@@ -420,7 +445,9 @@ def route_import_execution_result_to_dict(result: RouteImportExecutionResult) ->
                 "match_type": row.match_type,
                 "endpoint": row.endpoint,
                 "provider": row.provider,
-                "provider_config_id": str(row.provider_config_id) if row.provider_config_id else None,
+                "provider_config_id": str(row.provider_config_id)
+                if row.provider_config_id
+                else None,
                 "upstream_model": row.upstream_model,
                 "priority": row.priority,
                 "enabled": row.enabled,
@@ -441,6 +468,7 @@ def _validate_one_row(
     index: int,
     provider_by_name: Mapping[str, RouteImportProviderRef],
     provider_by_id: Mapping[uuid.UUID, RouteImportProviderRef],
+    external_tool_ceilings: ExternalToolOperatorCeilings,
 ) -> RouteImportRowPreview:
     unknown_fields = {str(field) for field in row if field not in ROUTE_IMPORT_ALLOWED_FIELDS}
     if unknown_fields:
@@ -456,13 +484,25 @@ def _validate_one_row(
         allowed = ", ".join(MATCH_TYPE_VALUES_MODEL_ROUTES)
         raise ValueError(f"match_type must be one of: {allowed}")
     endpoint = _parse_endpoint(row.get("endpoint"))
-    provider_ref = _resolve_provider_ref(row, provider_by_name=provider_by_name, provider_by_id=provider_by_id)
+    provider_ref = _resolve_provider_ref(
+        row, provider_by_name=provider_by_name, provider_by_id=provider_by_id
+    )
     upstream_model = _required_import_text(
         row.get("upstream_model"),
         field_name="upstream_model",
         forbid_whitespace=True,
     )
     capabilities = _optional_import_metadata(row.get("capabilities") or row.get("metadata"))
+    if "external_tools" in capabilities:
+        parsed_external_policy = parse_route_external_tool_policy(
+            capabilities.get("external_tools"),
+            ceilings=external_tool_ceilings,
+        )
+        if not parsed_external_policy.valid or parsed_external_policy.policy is None:
+            raise ValueError(
+                "external_tools route policy is invalid or exceeds installation ceilings"
+            )
+        capabilities["external_tools"] = parsed_external_policy.policy.to_metadata()
 
     return RouteImportRowPreview(
         row_number=index,
@@ -498,7 +538,9 @@ def _resolve_provider_ref(
     provider_by_id: Mapping[uuid.UUID, RouteImportProviderRef],
 ) -> RouteImportProviderRef:
     provider_name = _optional_import_text(row.get("provider"), field_name="provider")
-    provider_config_id = _optional_import_uuid(row.get("provider_config_id"), field_name="provider_config_id")
+    provider_config_id = _optional_import_uuid(
+        row.get("provider_config_id"), field_name="provider_config_id"
+    )
 
     provider_ref: RouteImportProviderRef | None = None
     if provider_config_id is not None:
@@ -510,7 +552,9 @@ def _resolve_provider_ref(
         if named_ref is None:
             raise ValueError("provider must reference an existing provider config")
         if provider_ref is not None and named_ref.id != provider_ref.id:
-            raise ValueError("provider and provider_config_id must reference the same provider config")
+            raise ValueError(
+                "provider and provider_config_id must reference the same provider config"
+            )
         provider_ref = named_ref
     if provider_ref is None:
         raise ValueError("provider or provider_config_id is required")
@@ -559,7 +603,10 @@ def _required_plan_int(value: int | None, *, field_name: str, row_number: int) -
 
 
 def _parse_endpoint(value: object) -> str:
-    endpoint = _optional_import_text(value, field_name="endpoint", forbid_whitespace=True) or "chat.completions"
+    endpoint = (
+        _optional_import_text(value, field_name="endpoint", forbid_whitespace=True)
+        or "chat.completions"
+    )
     normalized = normalize_endpoint(endpoint)
     if not normalized.startswith("/v1/"):
         raise ValueError("endpoint must be a /v1 path or chat.completions")
@@ -569,7 +616,9 @@ def _parse_endpoint(value: object) -> str:
     return normalized
 
 
-def _required_import_text(value: object, *, field_name: str, forbid_whitespace: bool = False) -> str:
+def _required_import_text(
+    value: object, *, field_name: str, forbid_whitespace: bool = False
+) -> str:
     text = _optional_import_text(value, field_name=field_name, forbid_whitespace=forbid_whitespace)
     if text is None:
         raise ValueError(f"{field_name} is required")

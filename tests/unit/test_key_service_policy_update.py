@@ -6,11 +6,23 @@ import pytest
 
 from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyPolicyInput,
 )
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
+
+
+def _fenced_policy() -> dict[str, object]:
+    return {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -79,9 +91,14 @@ async def test_update_gateway_key_policy_requires_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_gateway_key_policy_can_update_allowed_providers_without_mutating_quotas() -> None:
+async def test_update_gateway_key_policy_can_update_allowed_providers_without_mutating_quotas() -> (
+    None
+):
     row = FakeGatewayKeyRow(
-        metadata_json={"allowed_providers": ["openai"], "rate_limit_policy": {"window_seconds": 30}},
+        metadata_json={
+            "allowed_providers": ["openai"],
+            "rate_limit_policy": {"window_seconds": 30},
+        },
         cost_limit_eur=None,
     )
     old_tokens_used = row.tokens_used_total
@@ -210,6 +227,53 @@ async def test_update_chat_streaming_live_burn_policy_requires_reason() -> None:
                 reason="",
             )
         )
+
+    assert keys_repo.metadata_calls == []
+    assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_external_tool_policy_is_canonical_preserves_metadata_and_audits_once() -> (
+    None
+):
+    row = FakeGatewayKeyRow(metadata_json={"allowed_providers": ["openai"]})
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_external_tool_policy(
+        UpdateGatewayKeyExternalToolPolicyInput(
+            gateway_key_id=row.id,
+            external_tool_policy=_fenced_policy(),
+            confirm_external_tool_fenced=True,
+            actor_admin_id=uuid.uuid4(),
+            reason="reviewed future search fence",
+        )
+    )
+
+    assert keys_repo.metadata_calls[0]["metadata_json"]["allowed_providers"] == ["openai"]
+    assert keys_repo.metadata_calls[0]["metadata_json"]["external_tool_policy"] == _fenced_policy()
+    assert result.external_tool_policy == _fenced_policy()
+    assert [row["action"] for row in audit_repo.calls] == ["update_external_tool_policy"]
+    assert "provider_web_search" in str(audit_repo.calls[0]["new_values"])
+    assert "http" not in str(audit_repo.calls[0]["new_values"])
+
+
+@pytest.mark.asyncio
+async def test_update_external_tool_policy_rejects_without_reason_or_confirmation_before_mutation() -> (
+    None
+):
+    row = FakeGatewayKeyRow()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    for reason, confirmed in (("", True), ("reviewed", False)):
+        with pytest.raises(InvalidGatewayKeyPolicyError):
+            await service.update_gateway_key_external_tool_policy(
+                UpdateGatewayKeyExternalToolPolicyInput(
+                    gateway_key_id=row.id,
+                    external_tool_policy=_fenced_policy(),
+                    confirm_external_tool_fenced=confirmed,
+                    reason=reason,
+                )
+            )
 
     assert keys_repo.metadata_calls == []
     assert audit_repo.calls == []

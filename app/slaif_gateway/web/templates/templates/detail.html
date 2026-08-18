@@ -101,6 +101,8 @@
           <div>{{ current_revision_chat_live_burn_summary }}</div>
           <div class="muted small">Scope: /v1/chat/completions stream=true. Positive margin stops early; zero stops near the estimated boundary; negative allows bounded estimated overrun. Final provider usage/cost remains authoritative.</div>
         </dd>
+        <dt>External-tool policy</dt>
+        <dd>{{ current_revision_external_tool_summary }}</dd>
       </dl>
     </section>
 
@@ -136,9 +138,10 @@
   <section class="action-panel" aria-labelledby="create-key-from-template-heading">
     <h2 id="create-key-from-template-heading">Create One Key From This Template Revision</h2>
     <p class="warning-text">The created key is a normal standard gateway key that inherits this immutable revision's supported policy and limits. Existing keys and template revisions are not changed. Bulk creation from templates is future work.</p>
-    {% if current_revision.hosted_capabilities_requiring_review or current_revision.allowed_hosted_capabilities %}
+    {% if current_revision.allowed_hosted_capabilities %}
     <p class="warning-text">This revision has hosted capabilities requiring review. Single-key creation is blocked until a later explicit hosted-capability participant policy workflow exists.</p>
     {% endif %}
+    <p class="warning-text">The copied external-tool policy is immutable provenance only; runtime remains denied pending objectives 014–016.</p>
     <form method="post" action="/admin/templates/{{ template.id }}/revisions/{{ current_revision.id }}/create-key">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">

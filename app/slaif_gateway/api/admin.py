@@ -38,8 +38,14 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
-from slaif_gateway.services.admin_activity_dashboard import AdminActivityDashboardService, AdminActivityNotFoundError
-from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogDashboardService, AdminCatalogNotFoundError
+from slaif_gateway.services.admin_activity_dashboard import (
+    AdminActivityDashboardService,
+    AdminActivityNotFoundError,
+)
+from slaif_gateway.services.admin_catalog_dashboard import (
+    AdminCatalogDashboardService,
+    AdminCatalogNotFoundError,
+)
 from slaif_gateway.services.codex_qualification import (
     CODEX_RESPONSES_POLICY,
     CodexQualificationResult,
@@ -47,8 +53,14 @@ from slaif_gateway.services.codex_qualification import (
     validate_codex_pilot_key_input,
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
-from slaif_gateway.services.admin_key_dashboard import AdminKeyDashboardService, AdminKeyNotFoundError
-from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundError, AdminRecordsDashboardService
+from slaif_gateway.services.admin_key_dashboard import (
+    AdminKeyDashboardService,
+    AdminKeyNotFoundError,
+)
+from slaif_gateway.services.admin_records_dashboard import (
+    AdminRecordNotFoundError,
+    AdminRecordsDashboardService,
+)
 from slaif_gateway.services.admin_record_forms import (
     parse_cohort_form,
     parse_institution_form,
@@ -65,9 +77,19 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationSummaryError,
     CalibrationSummaryService,
 )
-from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.email_delivery_service import (
+    EmailDeliveryService,
+    PendingKeyEmailResult,
+)
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
+from slaif_gateway.services.external_tool_policy_contract import (
+    KNOWN_EXTERNAL_CAPABILITIES,
+    STRICT_BOUNDED,
+    parse_route_external_tool_policy,
+    strict_key_policy,
+    strict_route_policy,
+)
 from slaif_gateway.services.fx_rate_service import FxRateService
 from slaif_gateway.services.fx_import import (
     FxImportExecutionPlan,
@@ -103,6 +125,7 @@ from slaif_gateway.services.key_template_service import (
     KeyTemplateError,
     KeyTemplateService,
     chat_streaming_live_burn_policy_summary_for_template_revision,
+    external_tool_policy_summary_for_template_revision,
 )
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
@@ -147,7 +170,11 @@ from slaif_gateway.services.pricing_import import (
 )
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
-from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError, UnsupportedRecordOperationError
+from slaif_gateway.services.record_errors import (
+    DuplicateRecordError,
+    RecordNotFoundError,
+    UnsupportedRecordOperationError,
+)
 from slaif_gateway.services.route_import import (
     RouteImportExecutionPlan,
     RouteImportExecutionResult,
@@ -172,6 +199,7 @@ from slaif_gateway.schemas.keys import (
     RotateGatewayKeyInput,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyValidityInput,
@@ -189,7 +217,9 @@ from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"))
+templates = Jinja2Templates(
+    directory=str(Path(__file__).resolve().parents[1] / "web" / "templates")
+)
 logger = structlog.get_logger(__name__)
 
 _POLICY_SELECTOR_MODEL_BACKED_ENDPOINTS = frozenset(
@@ -236,6 +266,7 @@ class _PolicyModelChoice:
     codex_qualification_reason_codes: tuple[str, ...]
     codex_protocol_ready: bool
 
+
 _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_created": ("success", "Gateway key created."),
     "key_suspended": ("success", "Gateway key suspended."),
@@ -244,26 +275,42 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_policy_updated": ("success", "Gateway key request policy updated."),
+    "key_external_tool_policy_updated": (
+        "success",
+        "External-tool policy updated; runtime remains deny-only.",
+    ),
     "key_chat_streaming_live_burn_updated": (
         "success",
         "Chat Completions streaming live-burn policy updated.",
     ),
     "key_usage_reset": ("success", "Gateway key usage counters reset."),
     "template_created": ("success", "Key template created from reviewed calibration proposal."),
-    "key_created_from_template": ("success", "Gateway key created from selected template revision."),
+    "key_created_from_template": (
+        "success",
+        "Gateway key created from selected template revision.",
+    ),
     "rotation_confirmation_required": ("error", "Confirm key rotation before continuing."),
     "rotation_reason_required": ("error", "Enter an audit reason before rotating this key."),
     "revoke_confirmation_required": ("error", "Confirm permanent revocation before continuing."),
     "revoke_reason_required": ("error", "Enter an audit reason before revoking this key."),
     "validity_reason_required": ("error", "Enter an audit reason before updating validity."),
     "limits_reason_required": ("error", "Enter an audit reason before updating hard quota limits."),
-    "key_policy_reason_required": ("error", "Enter an audit reason before updating request policy."),
+    "key_policy_reason_required": (
+        "error",
+        "Enter an audit reason before updating request policy.",
+    ),
     "chat_streaming_live_burn_reason_required": (
         "error",
         "Enter an audit reason before updating Chat streaming live-burn policy.",
     ),
-    "usage_reset_confirmation_required": ("error", "Confirm usage-counter reset before continuing."),
-    "usage_reset_reason_required": ("error", "Enter an audit reason before resetting usage counters."),
+    "usage_reset_confirmation_required": (
+        "error",
+        "Confirm usage-counter reset before continuing.",
+    ),
+    "usage_reset_reason_required": (
+        "error",
+        "Enter an audit reason before resetting usage counters.",
+    ),
     "reserved_reset_confirmation_required": (
         "error",
         "Confirm reserved-counter repair reset before continuing.",
@@ -275,8 +322,14 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
         "error",
         "Enter a valid Chat Completions streaming live-burn policy.",
     ),
-    "gateway_key_no_validity_change": ("error", "Change at least one validity field before submitting."),
-    "gateway_key_no_limit_change": ("error", "Change or clear at least one hard quota limit before submitting."),
+    "gateway_key_no_validity_change": (
+        "error",
+        "Change at least one validity field before submitting.",
+    ),
+    "gateway_key_no_limit_change": (
+        "error",
+        "Change or clear at least one hard quota limit before submitting.",
+    ),
     "gateway_key_already_active": ("error", "Gateway key is already active."),
     "gateway_key_already_revoked": ("error", "Gateway key is already revoked."),
     "gateway_key_rotation_failed": ("error", "Gateway key rotation failed."),
@@ -294,9 +347,18 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
         "error",
         "This email delivery cannot be sent. Rotate the key and create a new delivery if the secret is unavailable.",
     ),
-    "email_delivery_send_confirmation_required": ("error", "Confirm email delivery before sending."),
-    "email_delivery_enqueue_confirmation_required": ("error", "Confirm queued email delivery before continuing."),
-    "email_delivery_configuration_required": ("error", "Email delivery configuration is incomplete."),
+    "email_delivery_send_confirmation_required": (
+        "error",
+        "Confirm email delivery before sending.",
+    ),
+    "email_delivery_enqueue_confirmation_required": (
+        "error",
+        "Confirm queued email delivery before continuing.",
+    ),
+    "email_delivery_configuration_required": (
+        "error",
+        "Email delivery configuration is incomplete.",
+    ),
     "provider_config_created": ("success", "Provider config created."),
     "provider_config_updated": ("success", "Provider config updated."),
     "provider_config_enabled": ("success", "Provider config enabled."),
@@ -352,7 +414,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "owner_updated": ("success", "Owner updated."),
     "invalid_admin_record": ("error", "Enter valid record metadata."),
     "gateway_key_already_suspended": ("error", "Gateway key is already suspended."),
-    "invalid_gateway_key_status_transition": ("error", "That key status transition is not allowed."),
+    "invalid_gateway_key_status_transition": (
+        "error",
+        "That key status transition is not allowed.",
+    ),
     "key_action_failed": ("error", "Gateway key action failed."),
 }
 
@@ -621,6 +686,12 @@ async def create_admin_key(
     confirm_trusted_calibration: str = Form(""),
     codex_protocol_pilot: str = Form(""),
     confirm_codex_protocol_pilot: str = Form(""),
+    external_tool_mode: str = Form(STRICT_BOUNDED),
+    external_tool_capabilities: list[str] = Form([]),
+    external_tool_destination_ids: str = Form(""),
+    external_tool_max_calls: str = Form("0"),
+    external_tool_overrun_acknowledged: str = Form(""),
+    confirm_external_tool_fenced: str = Form(""),
     email_delivery_mode: str = Form("none"),
     reason: str = Form(""),
 ) -> Response:
@@ -658,6 +729,12 @@ async def create_admin_key(
         "confirm_trusted_calibration": confirm_trusted_calibration,
         "codex_protocol_pilot": codex_protocol_pilot,
         "confirm_codex_protocol_pilot": confirm_codex_protocol_pilot,
+        "external_tool_mode": external_tool_mode,
+        "external_tool_capabilities": "\n".join(external_tool_capabilities),
+        "external_tool_destination_ids": external_tool_destination_ids,
+        "external_tool_max_calls": external_tool_max_calls,
+        "external_tool_overrun_acknowledged": external_tool_overrun_acknowledged,
+        "confirm_external_tool_fenced": confirm_external_tool_fenced,
         "email_delivery_mode": email_delivery_mode,
         "reason": reason,
     }
@@ -697,9 +774,7 @@ async def create_admin_key(
                 parsed_input,
                 responses_policy={
                     "version": CODEX_RESPONSES_POLICY["version"],
-                    "allowed_capabilities": list(
-                        CODEX_RESPONSES_POLICY["allowed_capabilities"]
-                    ),
+                    "allowed_capabilities": list(CODEX_RESPONSES_POLICY["allowed_capabilities"]),
                     "allowed_local_tool_types": list(
                         CODEX_RESPONSES_POLICY["allowed_local_tool_types"]
                     ),
@@ -789,7 +864,8 @@ async def create_admin_key(
         )
         error_message = (
             exc.safe_message
-            if isinstance(exc, KeyManagementError) and exc.error_code == "invalid_gateway_key_policy"
+            if isinstance(exc, KeyManagementError)
+            and exc.error_code == "invalid_gateway_key_policy"
             else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1]
         )
         return _render_key_create_form(
@@ -882,6 +958,7 @@ async def create_admin_key(
                 "responses_policy_summary": _safe_codex_responses_policy_summary(
                     parsed_input.responses_policy
                 ),
+                "external_tool_policy": created.external_tool_policy,
             },
         )
         _set_no_store_headers(response)
@@ -918,6 +995,8 @@ async def create_admin_key(
                 "responses_policy_summary": _safe_codex_responses_policy_summary(
                     parsed_input.responses_policy
                 ),
+                "external_tool_policy": created.external_tool_policy
+                or strict_key_policy().to_metadata(),
             },
             "key_purpose": created.key_purpose,
             "capability_policy_mode": created.capability_policy_mode,
@@ -978,7 +1057,9 @@ async def preview_bulk_import_admin_keys(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        raw_rows = (
+            parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        )
         preview = await _build_key_import_preview(
             request,
             raw_rows,
@@ -1046,7 +1127,9 @@ async def execute_bulk_import_admin_keys(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        raw_rows = (
+            parse_key_import_json(text) if detected_format == "json" else parse_key_import_csv(text)
+        )
         preview = await _build_key_import_preview(
             request,
             raw_rows,
@@ -1178,7 +1261,10 @@ async def admin_key_calibration_form(request: Request, gateway_key_id: str) -> R
     except AdminKeyNotFoundError:
         return HTMLResponse("Gateway key not found.", status_code=404)
     if key.key_purpose != KEY_PURPOSE_TRUSTED_CALIBRATION:
-        return HTMLResponse("Calibration summaries are available only for trusted calibration keys.", status_code=400)
+        return HTMLResponse(
+            "Calibration summaries are available only for trusted calibration keys.",
+            status_code=400,
+        )
 
     return _render_key_calibration_form(
         request,
@@ -1281,6 +1367,12 @@ async def create_template_from_admin_key_calibration(
     validity_days_default: str = Form(""),
     email_delivery_mode_default: str = Form(""),
     confirm_create_template: str = Form(""),
+    external_tool_mode: str = Form(STRICT_BOUNDED),
+    external_tool_capabilities: list[str] = Form([]),
+    external_tool_destination_ids: str = Form(""),
+    external_tool_max_calls: str = Form("0"),
+    external_tool_overrun_acknowledged: str = Form(""),
+    confirm_external_tool_fenced: str = Form(""),
     reason: str = Form(""),
 ) -> Response:
     settings = _settings(request)
@@ -1295,7 +1387,17 @@ async def create_template_from_admin_key_calibration(
     if isinstance(action_context, Response):
         return action_context
 
-    form = {"start_at": start_at, "end_at": end_at, "multiplier": multiplier}
+    form = {
+        "start_at": start_at,
+        "end_at": end_at,
+        "multiplier": multiplier,
+        "external_tool_mode": external_tool_mode,
+        "external_tool_capabilities": "\n".join(external_tool_capabilities),
+        "external_tool_destination_ids": external_tool_destination_ids,
+        "external_tool_max_calls": external_tool_max_calls,
+        "external_tool_overrun_acknowledged": external_tool_overrun_acknowledged,
+        "confirm_external_tool_fenced": confirm_external_tool_fenced,
+    }
     try:
         parsed_start_at = _parse_admin_datetime(start_at)
         parsed_end_at = _parse_admin_datetime(end_at)
@@ -1321,6 +1423,8 @@ async def create_template_from_admin_key_calibration(
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
                 request_id=_admin_diagnostic_id(request),
+                external_tool_policy=_parse_external_tool_policy_form(form),
+                confirm_external_tool_fenced=_is_checked(confirm_external_tool_fenced),
             )
     except (CalibrationSummaryError, KeyTemplateError, ValueError) as exc:
         diagnostic_id = _admin_diagnostic_id(request)
@@ -1376,6 +1480,13 @@ async def admin_key_templates_list(request: Request) -> Response:
             "admin": context.admin_user,
             "csrf_token": csrf_token,
             "templates": templates_rows,
+            "template_external_tool_summaries": {
+                str(getattr(row, "id")): _template_external_tool_summary(
+                    _current_template_revision(row),
+                    settings=settings,
+                )
+                for row in templates_rows
+            },
         },
     )
 
@@ -1398,7 +1509,9 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
-            template = await KeyTemplatesRepository(session).get_template_for_admin_detail(parsed_template_id)
+            template = await KeyTemplatesRepository(session).get_template_for_admin_detail(
+                parsed_template_id
+            )
     if template is None:
         return HTMLResponse("Key template not found.", status_code=404)
 
@@ -1415,6 +1528,10 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
             "current_revision_chat_live_burn_summary": _template_chat_live_burn_summary(
                 current_revision
             ),
+            "current_revision_external_tool_summary": _template_external_tool_summary(
+                current_revision,
+                settings=settings,
+            ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
             "form": _default_template_key_create_form(current_revision),
@@ -1425,7 +1542,9 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
     return response
 
 
-@router.post("/templates/{template_id}/revisions/{revision_id}/create-key", response_class=HTMLResponse)
+@router.post(
+    "/templates/{template_id}/revisions/{revision_id}/create-key", response_class=HTMLResponse
+)
 async def create_admin_key_from_template_revision(
     request: Request,
     template_id: str,
@@ -1553,7 +1672,9 @@ async def create_admin_key_from_template_revision(
             current_revision=current_revision,
             options=options,
             form=form,
-            error=str(exc) if isinstance(exc, (KeyTemplateError, ValueError)) else "Gateway key creation failed.",
+            error=str(exc)
+            if isinstance(exc, (KeyTemplateError, ValueError))
+            else "Gateway key creation failed.",
             diagnostic_id=diagnostic_id,
         )
 
@@ -1645,6 +1766,8 @@ async def create_admin_key_from_template_revision(
                         result.created_key.chat_streaming_live_burn_policy,
                     )
                 ),
+                "external_tool_policy": result.created_key.external_tool_policy
+                or strict_key_policy().to_metadata(),
             },
             "key_purpose": result.created_key.key_purpose,
             "capability_policy_mode": result.created_key.capability_policy_mode,
@@ -1760,6 +1883,73 @@ async def update_admin_key_policy(
         )
 
     return _redirect_to_admin_key(parsed_key_id, message="key_policy_updated")
+
+
+@router.post("/keys/{gateway_key_id}/external-tool-policy", response_class=HTMLResponse)
+async def update_admin_key_external_tool_policy(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    external_tool_mode: str = Form(STRICT_BOUNDED),
+    external_tool_capabilities: list[str] = Form([]),
+    external_tool_destination_ids: str = Form(""),
+    external_tool_max_calls: str = Form("0"),
+    external_tool_overrun_acknowledged: str = Form(""),
+    confirm_external_tool_fenced: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    form = {
+        "external_tool_mode": external_tool_mode,
+        "external_tool_capabilities": "\n".join(external_tool_capabilities),
+        "external_tool_destination_ids": external_tool_destination_ids,
+        "external_tool_max_calls": external_tool_max_calls,
+        "external_tool_overrun_acknowledged": external_tool_overrun_acknowledged,
+        "confirm_external_tool_fenced": confirm_external_tool_fenced,
+        "reason": reason,
+    }
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.update_gateway_key_external_tool_policy(
+                UpdateGatewayKeyExternalToolPolicyInput(
+                    gateway_key_id=parsed_key_id,
+                    external_tool_policy=_parse_external_tool_policy_form(form),
+                    confirm_external_tool_fenced=_is_checked(confirm_external_tool_fenced),
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=reason,
+                )
+            )
+    except (KeyManagementError, ValueError) as exc:
+        async with _admin_key_dashboard_service_scope(request) as dashboard_service:
+            try:
+                key = await dashboard_service.get_key_detail(parsed_key_id)
+            except AdminKeyNotFoundError:
+                return HTMLResponse("Gateway key not found.", status_code=404)
+        return _render_key_detail(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            key=key,
+            policy_catalog=await _load_key_policy_catalog(request),
+            policy_form=_default_key_policy_form_for_key(key),
+            external_policy_form=form,
+            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+            diagnostic_id=_admin_diagnostic_id(request),
+            status_code=400,
+        )
+    return _redirect_to_admin_key(
+        parsed_key_id,
+        message="key_external_tool_policy_updated",
+    )
 
 
 @router.post("/keys/{gateway_key_id}/chat-streaming-live-burn", response_class=HTMLResponse)
@@ -2040,10 +2230,16 @@ async def update_admin_key_limits(
     except ValueError:
         return _redirect_to_admin_key(parsed_key_id, message="invalid_gateway_key_limits")
 
-    if (clear_cost and cost_provided) or (clear_tokens and token_provided) or (clear_requests and request_provided):
+    if (
+        (clear_cost and cost_provided)
+        or (clear_tokens and token_provided)
+        or (clear_requests and request_provided)
+    ):
         return _redirect_to_admin_key(parsed_key_id, message="invalid_gateway_key_limits")
 
-    if not any((cost_provided, token_provided, request_provided, clear_cost, clear_tokens, clear_requests)):
+    if not any(
+        (cost_provided, token_provided, request_provided, clear_cost, clear_tokens, clear_requests)
+    ):
         return _redirect_to_admin_key(parsed_key_id, message="gateway_key_no_limit_change")
 
     try:
@@ -2188,7 +2384,9 @@ async def rotate_admin_key(
                 )
             )
             if rotation.owner_id is None:
-                raise ValueError("Rotated key result did not include owner metadata for email delivery")
+                raise ValueError(
+                    "Rotated key result did not include owner metadata for email delivery"
+                )
             delivery_result = await _handle_admin_key_email_delivery_in_transaction(
                 email_delivery_service,
                 mode=parsed_email_delivery_mode,
@@ -3111,7 +3309,9 @@ async def list_admin_providers(
     context, csrf_token = page_context
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
-        rows = await service.list_providers(provider=provider, enabled=enabled, limit=limit, offset=offset)
+        rows = await service.list_providers(
+            provider=provider, enabled=enabled, limit=limit, offset=offset
+        )
 
     return templates.TemplateResponse(
         request,
@@ -3393,7 +3593,9 @@ async def disable_admin_provider(
 
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_reason_required")
+        return _redirect_to_admin_provider(
+            parsed_provider_config_id, message="provider_config_reason_required"
+        )
 
     try:
         async with _admin_provider_config_service_scope(request) as service:
@@ -3406,9 +3608,13 @@ async def disable_admin_provider(
     except RecordNotFoundError:
         return HTMLResponse("Provider config not found.", status_code=404)
     except ValueError:
-        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_failed")
+        return _redirect_to_admin_provider(
+            parsed_provider_config_id, message="provider_config_failed"
+        )
 
-    return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_disabled")
+    return _redirect_to_admin_provider(
+        parsed_provider_config_id, message="provider_config_disabled"
+    )
 
 
 async def _set_admin_provider_enabled(
@@ -3434,7 +3640,9 @@ async def _set_admin_provider_enabled(
 
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_reason_required")
+        return _redirect_to_admin_provider(
+            parsed_provider_config_id, message="provider_config_reason_required"
+        )
 
     try:
         async with _admin_provider_config_service_scope(request) as service:
@@ -3447,7 +3655,9 @@ async def _set_admin_provider_enabled(
     except RecordNotFoundError:
         return HTMLResponse("Provider config not found.", status_code=404)
     except ValueError:
-        return _redirect_to_admin_provider(parsed_provider_config_id, message="provider_config_failed")
+        return _redirect_to_admin_provider(
+            parsed_provider_config_id, message="provider_config_failed"
+        )
 
     return _redirect_to_admin_provider(
         parsed_provider_config_id,
@@ -3528,6 +3738,13 @@ async def list_admin_routes(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "routes": rows,
+            "route_external_tool_policies": {
+                str(getattr(row, "id")): _external_tool_route_policy_for_display(
+                    getattr(row, "capabilities", None),
+                    settings=settings,
+                )
+                for row in rows
+            },
             "filters": {
                 "provider": provider or "",
                 "requested_model": requested_model or "",
@@ -4044,7 +4261,9 @@ async def create_admin_route(
         reason=reason,
     )
     try:
-        parsed = _parse_model_route_form(form, provider_choices=provider_choices, require_reason=True)
+        parsed = _parse_model_route_form(
+            form, provider_choices=provider_choices, require_reason=True
+        )
     except ValueError as exc:
         return _render_route_form(
             request,
@@ -4169,7 +4388,9 @@ async def update_admin_route(
         reason=reason,
     )
     try:
-        parsed = _parse_model_route_form(form, provider_choices=provider_choices, require_reason=True)
+        parsed = _parse_model_route_form(
+            form, provider_choices=provider_choices, require_reason=True
+        )
     except ValueError as exc:
         return _render_route_form(
             request,
@@ -4257,7 +4478,9 @@ async def disable_admin_route(
         return action_context
 
     if not _is_checked(confirm_disable):
-        return _redirect_to_admin_route(parsed_route_id, message="model_route_disable_confirmation_required")
+        return _redirect_to_admin_route(
+            parsed_route_id, message="model_route_disable_confirmation_required"
+        )
 
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
@@ -4353,6 +4576,10 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "route": route,
+            "external_tool_policy": _external_tool_route_policy_for_display(
+                getattr(route, "capabilities", None),
+                settings=settings,
+            ),
         },
     )
 
@@ -4688,7 +4915,9 @@ async def create_admin_pricing_rule(
         reason=reason,
     )
     try:
-        parsed = _parse_pricing_rule_form(form, provider_choices=provider_choices, require_reason=True)
+        parsed = _parse_pricing_rule_form(
+            form, provider_choices=provider_choices, require_reason=True
+        )
     except ValueError:
         return _render_pricing_rule_form(
             request,
@@ -4825,7 +5054,9 @@ async def update_admin_pricing_rule(
         reason=reason,
     )
     try:
-        parsed = _parse_pricing_rule_form(form, provider_choices=provider_choices, require_reason=True)
+        parsed = _parse_pricing_rule_form(
+            form, provider_choices=provider_choices, require_reason=True
+        )
     except ValueError:
         return _render_pricing_rule_form(
             request,
@@ -4923,7 +5154,9 @@ async def disable_admin_pricing_rule(
         )
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_reason_required")
+        return _redirect_to_admin_pricing_rule(
+            parsed_pricing_rule_id, message="pricing_rule_reason_required"
+        )
 
     try:
         async with _admin_pricing_rule_service_scope(request) as service:
@@ -4936,7 +5169,9 @@ async def disable_admin_pricing_rule(
     except RecordNotFoundError:
         return HTMLResponse("Pricing rule not found.", status_code=404)
     except ValueError:
-        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_failed")
+        return _redirect_to_admin_pricing_rule(
+            parsed_pricing_rule_id, message="pricing_rule_failed"
+        )
 
     return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_disabled")
 
@@ -4964,7 +5199,9 @@ async def _set_admin_pricing_rule_enabled(
 
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_reason_required")
+        return _redirect_to_admin_pricing_rule(
+            parsed_pricing_rule_id, message="pricing_rule_reason_required"
+        )
 
     try:
         async with _admin_pricing_rule_service_scope(request) as service:
@@ -4977,7 +5214,9 @@ async def _set_admin_pricing_rule_enabled(
     except RecordNotFoundError:
         return HTMLResponse("Pricing rule not found.", status_code=404)
     except ValueError:
-        return _redirect_to_admin_pricing_rule(parsed_pricing_rule_id, message="pricing_rule_failed")
+        return _redirect_to_admin_pricing_rule(
+            parsed_pricing_rule_id, message="pricing_rule_failed"
+        )
 
     return _redirect_to_admin_pricing_rule(
         parsed_pricing_rule_id,
@@ -5135,7 +5374,9 @@ async def admin_fx_import_preview(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = parse_fx_import_json(text) if detected_format == "json" else parse_fx_import_csv(text)
+        raw_rows = (
+            parse_fx_import_json(text) if detected_format == "json" else parse_fx_import_csv(text)
+        )
         preview = validate_fx_import_rows(
             raw_rows,
             max_rows=settings.FX_IMPORT_MAX_ROWS,
@@ -5231,7 +5472,9 @@ async def admin_fx_import_execute(
             requested_format=import_format,
             text=text,
         )
-        raw_rows = parse_fx_import_json(text) if detected_format == "json" else parse_fx_import_csv(text)
+        raw_rows = (
+            parse_fx_import_json(text) if detected_format == "json" else parse_fx_import_csv(text)
+        )
         preview = validate_fx_import_rows(
             raw_rows,
             max_rows=settings.FX_IMPORT_MAX_ROWS,
@@ -5654,14 +5897,22 @@ async def export_admin_usage_csv(
         return HTMLResponse("Enter an audit reason before exporting usage rows.", status_code=400)
 
     try:
-        parsed_gateway_key_id = _parse_optional_admin_uuid(gateway_key_id, field_name="gateway_key_id")
+        parsed_gateway_key_id = _parse_optional_admin_uuid(
+            gateway_key_id, field_name="gateway_key_id"
+        )
         parsed_owner_id = _parse_optional_admin_uuid(owner_id, field_name="owner_id")
-        parsed_institution_id = _parse_optional_admin_uuid(institution_id, field_name="institution_id")
+        parsed_institution_id = _parse_optional_admin_uuid(
+            institution_id, field_name="institution_id"
+        )
         parsed_cohort_id = _parse_optional_admin_uuid(cohort_id, field_name="cohort_id")
         parsed_streaming = _parse_optional_admin_bool(streaming, field_name="streaming")
         parsed_start_at = _parse_admin_datetime(start_at)
         parsed_end_at = _parse_admin_datetime(end_at)
-        if parsed_start_at is not None and parsed_end_at is not None and parsed_end_at < parsed_start_at:
+        if (
+            parsed_start_at is not None
+            and parsed_end_at is not None
+            and parsed_end_at < parsed_start_at
+        ):
             raise ValueError("end_at must be greater than or equal to start_at.")
         parsed_limit = _parse_admin_export_limit(
             limit,
@@ -5787,11 +6038,17 @@ async def export_admin_audit_csv(
         return HTMLResponse("Enter an audit reason before exporting audit rows.", status_code=400)
 
     try:
-        parsed_actor_admin_id = _parse_optional_admin_uuid(actor_admin_id, field_name="actor_admin_id")
+        parsed_actor_admin_id = _parse_optional_admin_uuid(
+            actor_admin_id, field_name="actor_admin_id"
+        )
         parsed_target_id = _parse_optional_admin_uuid(target_id, field_name="target_id")
         parsed_start_at = _parse_admin_datetime(start_at)
         parsed_end_at = _parse_admin_datetime(end_at)
-        if parsed_start_at is not None and parsed_end_at is not None and parsed_end_at < parsed_start_at:
+        if (
+            parsed_start_at is not None
+            and parsed_end_at is not None
+            and parsed_end_at < parsed_start_at
+        ):
             raise ValueError("end_at must be greater than or equal to start_at.")
         parsed_limit = _parse_admin_export_limit(
             limit,
@@ -5977,7 +6234,9 @@ async def send_admin_email_delivery_now(
         async with _admin_email_delivery_action_scope(request) as service:
             sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
             if not sendability.can_send or sendability.one_time_secret_id is None:
-                return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id, message="email_delivery_not_sendable"
+                )
             result = await service.send_pending_key_email(
                 one_time_secret_id=sendability.one_time_secret_id,
                 email_delivery_id=parsed_email_delivery_id,
@@ -5990,7 +6249,9 @@ async def send_admin_email_delivery_now(
             message="email_delivery_configuration_required",
         )
     except EmailError:
-        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_send_failed")
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id, message="email_delivery_send_failed"
+        )
 
     if result.status == "sent":
         message = "email_delivery_sent"
@@ -6032,7 +6293,9 @@ async def enqueue_admin_email_delivery(
         async with _admin_email_delivery_action_scope(request) as service:
             sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
             if not sendability.can_send or sendability.one_time_secret_id is None:
-                return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id, message="email_delivery_not_sendable"
+                )
             one_time_secret_id = sendability.one_time_secret_id
     except ValueError:
         return _redirect_to_admin_email_delivery(
@@ -6040,7 +6303,9 @@ async def enqueue_admin_email_delivery(
             message="email_delivery_configuration_required",
         )
     except EmailError:
-        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_not_sendable")
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id, message="email_delivery_not_sendable"
+        )
 
     try:
         _enqueue_admin_pending_key_email(
@@ -6049,10 +6314,14 @@ async def enqueue_admin_email_delivery(
             actor_admin_id=action_context.admin_user.id,
         )
     except Exception:  # noqa: BLE001
-        return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_send_failed")
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id, message="email_delivery_send_failed"
+        )
 
     _ = reason
-    return _redirect_to_admin_email_delivery(parsed_email_delivery_id, message="email_delivery_queued")
+    return _redirect_to_admin_email_delivery(
+        parsed_email_delivery_id, message="email_delivery_queued"
+    )
 
 
 @router.post("/logout", response_class=HTMLResponse)
@@ -6114,7 +6383,9 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         return response
 
 
-async def _admin_action_context(request: Request, *, csrf_token: str) -> AdminSessionContext | Response:
+async def _admin_action_context(
+    request: Request, *, csrf_token: str
+) -> AdminSessionContext | Response:
     settings = _settings(request)
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:
@@ -6141,15 +6412,22 @@ async def _admin_service_scope(request: Request) -> AsyncIterator[AdminSessionSe
 
 
 @asynccontextmanager
-async def _admin_key_dashboard_service_scope(request: Request) -> AsyncIterator[AdminKeyDashboardService]:
+async def _admin_key_dashboard_service_scope(
+    request: Request,
+) -> AsyncIterator[AdminKeyDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
-            yield AdminKeyDashboardService(gateway_keys_repository=GatewayKeysRepository(session))
+            yield AdminKeyDashboardService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                external_tool_ceilings=_settings(request).get_external_tool_operator_ceilings(),
+            )
 
 
 @asynccontextmanager
-async def _calibration_summary_service_scope(request: Request) -> AsyncIterator[CalibrationSummaryService]:
+async def _calibration_summary_service_scope(
+    request: Request,
+) -> AsyncIterator[CalibrationSummaryService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6167,13 +6445,16 @@ async def _key_template_service_scope(request: Request) -> AsyncIterator[KeyTemp
             yield KeyTemplateService(
                 key_templates_repository=KeyTemplatesRepository(session),
                 audit_repository=AuditRepository(session),
+                external_tool_ceilings=(_settings(request).get_external_tool_operator_ceilings()),
             )
 
 
 @asynccontextmanager
 async def _admin_template_key_creation_runtime_scope(
     request: Request,
-) -> AsyncIterator[tuple[OwnersRepository, CohortsRepository, KeyTemplateService, EmailDeliveryService]]:
+) -> AsyncIterator[
+    tuple[OwnersRepository, CohortsRepository, KeyTemplateService, EmailDeliveryService]
+]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6196,6 +6477,7 @@ async def _admin_template_key_creation_runtime_scope(
                     key_templates_repository=KeyTemplatesRepository(session),
                     audit_repository=audit_repository,
                     key_service=key_service,
+                    external_tool_ceilings=(settings.get_external_tool_operator_ceilings()),
                 ),
                 EmailDeliveryService(
                     settings=settings,
@@ -6232,12 +6514,15 @@ async def _admin_key_management_runtime_scope(
     async with session_factory() as session:
         async with session.begin():
             keys_repository = GatewayKeysRepository(session)
-            yield keys_repository, KeyService(
-                settings=_settings(request),
-                gateway_keys_repository=keys_repository,
-                one_time_secrets_repository=OneTimeSecretsRepository(session),
-                audit_repository=AuditRepository(session),
-                model_routes_repository=ModelRoutesRepository(session),
+            yield (
+                keys_repository,
+                KeyService(
+                    settings=_settings(request),
+                    gateway_keys_repository=keys_repository,
+                    one_time_secrets_repository=OneTimeSecretsRepository(session),
+                    audit_repository=AuditRepository(session),
+                    model_routes_repository=ModelRoutesRepository(session),
+                ),
             )
 
 
@@ -6297,7 +6582,9 @@ async def _admin_key_email_delivery_runtime_scope(
 
 
 @asynccontextmanager
-async def _admin_records_dashboard_service_scope(request: Request) -> AsyncIterator[AdminRecordsDashboardService]:
+async def _admin_records_dashboard_service_scope(
+    request: Request,
+) -> AsyncIterator[AdminRecordsDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6343,7 +6630,9 @@ async def _admin_owner_service_scope(request: Request) -> AsyncIterator[OwnerSer
 
 
 @asynccontextmanager
-async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncIterator[AdminCatalogDashboardService]:
+async def _admin_catalog_dashboard_service_scope(
+    request: Request,
+) -> AsyncIterator[AdminCatalogDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6356,7 +6645,9 @@ async def _admin_catalog_dashboard_service_scope(request: Request) -> AsyncItera
 
 
 @asynccontextmanager
-async def _admin_provider_config_service_scope(request: Request) -> AsyncIterator[ProviderConfigService]:
+async def _admin_provider_config_service_scope(
+    request: Request,
+) -> AsyncIterator[ProviderConfigService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6374,6 +6665,7 @@ async def _admin_model_route_service_scope(request: Request) -> AsyncIterator[Mo
             yield ModelRouteService(
                 model_routes_repository=ModelRoutesRepository(session),
                 audit_repository=AuditRepository(session),
+                external_tool_ceilings=(_settings(request).get_external_tool_operator_ceilings()),
             )
 
 
@@ -6400,7 +6692,9 @@ async def _admin_fx_rate_service_scope(request: Request) -> AsyncIterator[FxRate
 
 
 @asynccontextmanager
-async def _admin_activity_dashboard_service_scope(request: Request) -> AsyncIterator[AdminActivityDashboardService]:
+async def _admin_activity_dashboard_service_scope(
+    request: Request,
+) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
@@ -6423,7 +6717,9 @@ async def _admin_csv_export_service_scope(request: Request) -> AsyncIterator[Adm
 
 
 @asynccontextmanager
-async def _admin_email_delivery_action_scope(request: Request) -> AsyncIterator[EmailDeliveryService]:
+async def _admin_email_delivery_action_scope(
+    request: Request,
+) -> AsyncIterator[EmailDeliveryService]:
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         settings = _settings(request)
@@ -6511,7 +6807,9 @@ def _redirect_to_admin_key(gateway_key_id: uuid.UUID, *, message: str) -> Redire
     return RedirectResponse(f"/admin/keys/{gateway_key_id}?{query}", status_code=303)
 
 
-def _redirect_to_admin_email_delivery(email_delivery_id: uuid.UUID, *, message: str) -> RedirectResponse:
+def _redirect_to_admin_email_delivery(
+    email_delivery_id: uuid.UUID, *, message: str
+) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/email-deliveries/{email_delivery_id}?{query}", status_code=303)
 
@@ -6526,7 +6824,9 @@ def _redirect_to_admin_route(route_id: uuid.UUID, *, message: str) -> RedirectRe
     return RedirectResponse(f"/admin/routes/{route_id}?{query}", status_code=303)
 
 
-def _redirect_to_admin_pricing_rule(pricing_rule_id: uuid.UUID, *, message: str) -> RedirectResponse:
+def _redirect_to_admin_pricing_rule(
+    pricing_rule_id: uuid.UUID, *, message: str
+) -> RedirectResponse:
     query = urlencode({"message": message})
     return RedirectResponse(f"/admin/pricing/{pricing_rule_id}?{query}", status_code=303)
 
@@ -6586,7 +6886,9 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
         session_factory = get_sessionmaker_from_app(request)
         async with session_factory() as session:
             async with session.begin():
-                providers = await ProviderConfigsRepository(session).list_provider_configs(enabled=True, limit=500)
+                providers = await ProviderConfigsRepository(session).list_provider_configs(
+                    enabled=True, limit=500
+                )
                 routes = await ModelRoutesRepository(session).list_enabled_model_routes()
                 qualification_results = await CodexQualificationService(
                     provider_configs_repository=ProviderConfigsRepository(session),
@@ -6816,6 +7118,29 @@ def _default_key_policy_form_for_key(key: object) -> dict[str, str]:
     }
 
 
+def _default_external_tool_policy_form_for_key(key: object) -> dict[str, str]:
+    policy = getattr(key, "external_tool_policy", None)
+    if not isinstance(policy, dict):
+        policy = strict_key_policy().to_metadata()
+    capabilities = policy.get("allowed_capabilities", [])
+    destinations = policy.get("allowed_destination_ids", [])
+    return {
+        "external_tool_mode": str(policy.get("mode", STRICT_BOUNDED)),
+        "external_tool_capabilities": "\n".join(
+            str(item) for item in capabilities if isinstance(item, str)
+        ),
+        "external_tool_destination_ids": "\n".join(
+            str(item) for item in destinations if isinstance(item, str)
+        ),
+        "external_tool_max_calls": str(policy.get("max_provider_tool_calls_per_request", 0)),
+        "external_tool_overrun_acknowledged": (
+            "true" if policy.get("single_request_overrun_acknowledged") is True else ""
+        ),
+        "confirm_external_tool_fenced": "",
+        "reason": "",
+    }
+
+
 def _build_policy_selector_form_state(
     form: dict[str, str],
     *,
@@ -6829,12 +7154,10 @@ def _build_policy_selector_form_state(
     selected_model_values = tuple(_parse_admin_text_list(form.get("allowed_models")))
 
     provider_lookup = {
-        choice.value: choice.label
-        for choice in policy_catalog.get("provider_choices", [])
+        choice.value: choice.label for choice in policy_catalog.get("provider_choices", [])
     }
     endpoint_lookup = {
-        choice.value: choice.label
-        for choice in policy_catalog.get("endpoint_choices", [])
+        choice.value: choice.label for choice in policy_catalog.get("endpoint_choices", [])
     }
 
     return {
@@ -6865,7 +7188,8 @@ def _build_policy_selector_form_state(
             }
             for value in selected_model_values
         ],
-        "models_only_selected": not allow_all_endpoints and set(selected_endpoint_values) == {MODELS_ENDPOINT},
+        "models_only_selected": not allow_all_endpoints
+        and set(selected_endpoint_values) == {MODELS_ENDPOINT},
     }
 
 
@@ -6877,6 +7201,7 @@ def _render_key_detail(
     key: object,
     policy_catalog: dict[str, object],
     policy_form: dict[str, str],
+    external_policy_form: dict[str, str] | None = None,
     error: str | None = None,
     diagnostic_id: str | None = None,
     status_code: int = 200,
@@ -6895,6 +7220,10 @@ def _render_key_detail(
                 policy_form,
                 policy_catalog=policy_catalog,
             ),
+            "external_policy_form": external_policy_form
+            or _default_external_tool_policy_form_for_key(key),
+            "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
+            "external_tool_ceilings": _settings(request).get_external_tool_operator_ceilings(),
             "models_endpoint": MODELS_ENDPOINT,
             "chat_completions_endpoint": CHAT_COMPLETIONS_ENDPOINT,
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
@@ -6928,6 +7257,10 @@ def _render_template_detail_error(
             "current_revision": current_revision,
             "current_revision_chat_live_burn_summary": _template_chat_live_burn_summary(
                 current_revision
+            ),
+            "current_revision_external_tool_summary": _template_external_tool_summary(
+                current_revision,
+                settings=_settings(request),
             ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
@@ -6988,6 +7321,22 @@ def _template_chat_live_burn_summary(revision: object | None) -> str:
         return chat_streaming_live_burn_policy_summary_for_template_revision(revision)
     except KeyTemplateError:
         return "Chat live-burn: invalid template policy"
+
+
+def _template_external_tool_summary(
+    revision: object | None,
+    *,
+    settings: Settings,
+) -> str:
+    if revision is None:
+        return "External tools: strict_bounded; runtime denied"
+    try:
+        return external_tool_policy_summary_for_template_revision(
+            revision,
+            ceilings=settings.get_external_tool_operator_ceilings(),
+        )
+    except KeyTemplateError:
+        return "External tools: invalid template policy; runtime denied"
 
 
 async def _render_key_policy_error(
@@ -7129,6 +7478,8 @@ def _render_key_create_form(
             "error": error,
             "diagnostic_id": diagnostic_id,
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
+            "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
+            "external_tool_ceilings": settings.get_external_tool_operator_ceilings(),
             "trusted_calibration_settings": {
                 "enabled": settings.CALIBRATION_KEYS_ENABLED,
                 "max_requests": settings.TRUSTED_CALIBRATION_MAX_REQUESTS,
@@ -7218,6 +7569,12 @@ def _default_key_create_form() -> dict[str, str]:
         "confirm_trusted_calibration": "",
         "codex_protocol_pilot": "",
         "confirm_codex_protocol_pilot": "",
+        "external_tool_mode": STRICT_BOUNDED,
+        "external_tool_capabilities": "",
+        "external_tool_destination_ids": "",
+        "external_tool_max_calls": "0",
+        "external_tool_overrun_acknowledged": "",
+        "confirm_external_tool_fenced": "",
         "email_delivery_mode": "none",
         "reason": "",
     }
@@ -7232,8 +7589,12 @@ def _default_key_calibration_form() -> dict[str, str]:
 
 
 def _default_template_key_create_form(revision: object | None = None) -> dict[str, str]:
-    default_email_mode = getattr(revision, "email_delivery_mode_default", None) if revision is not None else None
-    default_validity_days = getattr(revision, "validity_days_default", None) if revision is not None else None
+    default_email_mode = (
+        getattr(revision, "email_delivery_mode_default", None) if revision is not None else None
+    )
+    default_validity_days = (
+        getattr(revision, "validity_days_default", None) if revision is not None else None
+    )
     return {
         "owner_id": "",
         "cohort_id": "",
@@ -7258,7 +7619,9 @@ def _default_institution_form() -> dict[str, str]:
     return _institution_form_from_values(name="", country="", notes="", reason="")
 
 
-def _institution_form_from_values(*, name: str, country: str, notes: str, reason: str) -> dict[str, str]:
+def _institution_form_from_values(
+    *, name: str, country: str, notes: str, reason: str
+) -> dict[str, str]:
     return {
         "name": name,
         "country": country,
@@ -7659,7 +8022,9 @@ def _render_pricing_import_form(
     )
 
 
-def _parse_pricing_import_rows_for_format(text: str, *, import_format: str) -> list[dict[str, object]]:
+def _parse_pricing_import_rows_for_format(
+    text: str, *, import_format: str
+) -> list[dict[str, object]]:
     if import_format == "json":
         return parse_pricing_import_json(text)
     if import_format == "tsv":
@@ -7781,9 +8146,24 @@ def _render_route_form(
             "form": form,
             "provider_choices": provider_choices,
             "error": error,
+            "external_tool_runtime_status": "denied_pending_objectives_014_016",
         },
         status_code=status_code,
     )
+
+
+def _external_tool_route_policy_for_display(
+    capabilities: object,
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    raw_policy = capabilities.get("external_tools") if isinstance(capabilities, dict) else None
+    parsed = parse_route_external_tool_policy(
+        raw_policy,
+        ceilings=settings.get_external_tool_operator_ceilings(),
+    )
+    policy = parsed.policy if parsed.valid and parsed.policy is not None else strict_route_policy()
+    return policy.to_metadata()
 
 
 def _render_route_import_form(
@@ -7809,7 +8189,9 @@ def _render_route_import_form(
     )
 
 
-def _parse_route_import_rows_for_format(text: str, *, import_format: str) -> list[dict[str, object]]:
+def _parse_route_import_rows_for_format(
+    text: str, *, import_format: str
+) -> list[dict[str, object]]:
     if import_format == "json":
         return parse_route_import_json(text)
     if import_format == "tsv":
@@ -8239,7 +8621,9 @@ def _pricing_rule_form_from_detail(pricing_rule: object) -> dict[str, str]:
         endpoint=str(getattr(pricing_rule, "endpoint")),
         currency=str(getattr(pricing_rule, "currency")),
         input_price_per_1m=_decimal_form_value(getattr(pricing_rule, "input_price_per_1m")),
-        cached_input_price_per_1m=_decimal_form_value(getattr(pricing_rule, "cached_input_price_per_1m")),
+        cached_input_price_per_1m=_decimal_form_value(
+            getattr(pricing_rule, "cached_input_price_per_1m")
+        ),
         output_price_per_1m=_decimal_form_value(getattr(pricing_rule, "output_price_per_1m")),
         reasoning_price_per_1m=_decimal_form_value(getattr(pricing_rule, "reasoning_price_per_1m")),
         request_price=_decimal_form_value(getattr(pricing_rule, "request_price")),
@@ -8523,7 +8907,10 @@ def _parse_optional_import_source_label(value: str | None) -> str | None:
     if source_label is None:
         return None
     lowered = source_label.lower()
-    if lowered.startswith(("bearer ", "sk-", "sk_", "sk-or-")) or redact_text(source_label) != source_label:
+    if (
+        lowered.startswith(("bearer ", "sk-", "sk_", "sk-or-"))
+        or redact_text(source_label) != source_label
+    ):
         raise ValueError("Source label must not contain secret-looking values.")
     return source_label
 
@@ -8542,6 +8929,7 @@ async def _build_route_import_preview(
                 raw_rows,
                 provider_configs=provider_refs_from_rows(providers),
                 max_rows=max_rows,
+                external_tool_ceilings=(_settings(request).get_external_tool_operator_ceilings()),
             )
             valid_rows = [row for row in preview.rows if row.status == "valid"]
             if not valid_rows:
@@ -8586,8 +8974,7 @@ async def _build_key_import_preview(
         owners_by_id={owner.id: owner for owner in owner_refs},
         owners_by_email={owner.email.lower(): owner for owner in owner_refs},
         cohorts_by_id={
-            cohort.id: KeyImportCohortRef(id=cohort.id, name=cohort.name)
-            for cohort in cohorts
+            cohort.id: KeyImportCohortRef(id=cohort.id, name=cohort.name) for cohort in cohorts
         },
         email_delivery_enabled=settings.ENABLE_EMAIL_DELIVERY,
         smtp_configured=bool(settings.SMTP_HOST and settings.SMTP_FROM),
@@ -8649,7 +9036,9 @@ async def _classify_fx_import_preview(
     return classify_fx_import_preview(preview, existing_rates_by_row=existing_by_row)
 
 
-def _blocked_pricing_import_result(plan: PricingImportExecutionPlan) -> PricingImportExecutionResult:
+def _blocked_pricing_import_result(
+    plan: PricingImportExecutionPlan,
+) -> PricingImportExecutionResult:
     return PricingImportExecutionResult(
         total_rows=plan.total_rows,
         created_count=0,
@@ -8706,8 +9095,12 @@ def _parse_provider_config_form(
     if base_url is not None:
         _validate_admin_base_url(base_url)
     api_key_env_var = _parse_provider_api_key_env_var(form.get("api_key_env_var"))
-    timeout_seconds = _parse_required_positive_admin_int(form.get("timeout_seconds"), field_name="timeout_seconds")
-    max_retries = _parse_required_non_negative_admin_int(form.get("max_retries"), field_name="max_retries")
+    timeout_seconds = _parse_required_positive_admin_int(
+        form.get("timeout_seconds"), field_name="timeout_seconds"
+    )
+    max_retries = _parse_required_non_negative_admin_int(
+        form.get("max_retries"), field_name="max_retries"
+    )
     reason = _clean_admin_reason(form.get("reason"))
     if require_reason and reason is None:
         raise ValueError(_ADMIN_STATUS_MESSAGES["provider_config_reason_required"][1])
@@ -8781,8 +9174,7 @@ def _parse_key_create_form(
             allowed_models=_parse_admin_text_list(form.get("allowed_models")),
             allowed_endpoints=_parse_admin_text_list(form.get("allowed_endpoints")),
             allow_all_models=trusted_calibration or _is_checked(form.get("allow_all_models")),
-            allow_all_endpoints=trusted_calibration
-            or _is_checked(form.get("allow_all_endpoints")),
+            allow_all_endpoints=trusted_calibration or _is_checked(form.get("allow_all_endpoints")),
         )
     )
     allowed_providers = None
@@ -8802,10 +9194,7 @@ def _parse_key_create_form(
             raise ValueError("Confirm trusted calibration mode before creating this key.")
         if request_limit_total is None:
             raise ValueError("Trusted calibration keys require request_limit_total.")
-        if (
-            settings is not None
-            and request_limit_total > settings.TRUSTED_CALIBRATION_MAX_REQUESTS
-        ):
+        if settings is not None and request_limit_total > settings.TRUSTED_CALIBRATION_MAX_REQUESTS:
             raise ValueError("Trusted calibration request limit exceeds the configured maximum.")
         if settings is not None and valid_until - valid_from > timedelta(
             days=settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS
@@ -8838,8 +9227,33 @@ def _parse_key_create_form(
         confirm_trusted_calibration=_is_checked(form.get("confirm_trusted_calibration")),
         rate_limit_policy=rate_limit_policy,
         chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
+        external_tool_policy=_parse_external_tool_policy_form(form),
+        confirm_external_tool_fenced=_is_checked(form.get("confirm_external_tool_fenced")),
         note=cleaned_reason,
     )
+
+
+def _parse_external_tool_policy_form(form: Mapping[str, str]) -> dict[str, object]:
+    mode = (form.get("external_tool_mode") or STRICT_BOUNDED).strip()
+    cap_text = (form.get("external_tool_max_calls") or "0").strip()
+    try:
+        call_cap = int(cap_text)
+    except ValueError as exc:
+        raise ValueError("External-tool max calls must be a non-negative integer.") from exc
+    if call_cap < 0:
+        raise ValueError("External-tool max calls must be a non-negative integer.")
+    return {
+        "version": 1,
+        "mode": mode,
+        "allowed_capabilities": _parse_admin_text_list(form.get("external_tool_capabilities")),
+        "allowed_destination_ids": _parse_admin_text_list(
+            form.get("external_tool_destination_ids")
+        ),
+        "max_provider_tool_calls_per_request": call_cap,
+        "single_request_overrun_acknowledged": _is_checked(
+            form.get("external_tool_overrun_acknowledged")
+        ),
+    }
 
 
 async def _validate_admin_request_policy(
@@ -8953,6 +9367,7 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
             CHAT_STREAMING_LIVE_BURN_SURFACE,
             created.chat_streaming_live_burn_policy,
         ),
+        "external_tool_policy": created.external_tool_policy,
     }
 
 
@@ -9050,8 +9465,13 @@ def _parse_admin_allowed_providers(
     if _is_checked(form.get("allow_all_providers", "")):
         return None
 
-    available_provider_set = {str(value).strip() for value in available_provider_values if str(value).strip()}
-    providers = [_parse_provider_slug(value) for value in _parse_admin_text_list(form.get("allowed_providers"))]
+    available_provider_set = {
+        str(value).strip() for value in available_provider_values if str(value).strip()
+    }
+    providers = [
+        _parse_provider_slug(value)
+        for value in _parse_admin_text_list(form.get("allowed_providers"))
+    ]
     if not providers:
         return None
 
@@ -9079,9 +9499,13 @@ def _parse_provider_api_key_env_var(value: str | None) -> str:
     if _looks_like_provider_secret_value(env_var):
         raise ValueError("Enter an environment variable name, not a provider API key value.")
     if not (env_var[0].isalpha() or env_var[0] == "_"):
-        raise ValueError("API key environment variable name must start with a letter or underscore.")
+        raise ValueError(
+            "API key environment variable name must start with a letter or underscore."
+        )
     if not all(ch.isalnum() or ch == "_" for ch in env_var):
-        raise ValueError("API key environment variable name may contain only letters, numbers, and underscores.")
+        raise ValueError(
+            "API key environment variable name may contain only letters, numbers, and underscores."
+        )
     return env_var
 
 
@@ -9132,7 +9556,9 @@ def _parse_optional_admin_uuid(value: str | None, *, field_name: str) -> uuid.UU
         raise ValueError(f"{field_name} must be a valid UUID.") from exc
 
 
-def _key_management_error_response(exc: KeyManagementError, *, gateway_key_id: uuid.UUID) -> Response:
+def _key_management_error_response(
+    exc: KeyManagementError, *, gateway_key_id: uuid.UUID
+) -> Response:
     if exc.status_code == 404:
         return HTMLResponse("Gateway key not found.", status_code=404)
     message = exc.error_code if exc.error_code in _ADMIN_STATUS_MESSAGES else "key_action_failed"
@@ -9199,7 +9625,9 @@ def _parse_required_non_negative_admin_decimal(value: str | None, *, field_name:
     return parsed
 
 
-def _parse_optional_non_negative_admin_decimal(value: str | None, *, field_name: str) -> Decimal | None:
+def _parse_optional_non_negative_admin_decimal(
+    value: str | None, *, field_name: str
+) -> Decimal | None:
     if value is None:
         return None
     normalized = value.strip()

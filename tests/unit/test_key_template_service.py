@@ -14,7 +14,11 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationPolicyProposal,
     CalibrationPreviewResult,
 )
-from slaif_gateway.services.key_template_service import KeyTemplateError, KeyTemplateService
+from slaif_gateway.services.key_template_service import (
+    KeyTemplateError,
+    KeyTemplateService,
+    external_tool_policy_for_template_revision,
+)
 from slaif_gateway.schemas.keys import CreatedGatewayKey
 
 PROMPT_TEXT = "prompt text must not persist"
@@ -235,7 +239,9 @@ def test_rejects_unimplemented_endpoints_and_participant_hosted_allowlist() -> N
 
 def test_does_not_mutate_existing_gateway_keys() -> None:
     templates = FakeTemplatesRepository()
-    service = KeyTemplateService(key_templates_repository=templates, audit_repository=FakeAuditRepository())
+    service = KeyTemplateService(
+        key_templates_repository=templates, audit_repository=FakeAuditRepository()
+    )
 
     asyncio.run(
         service.create_from_calibration_proposal(
@@ -427,7 +433,9 @@ def test_create_key_from_template_allows_safe_responses_policy_metadata() -> Non
     assert "codex_request_envelope" not in payload.responses_policy["allowed_capabilities"]
     assert "codex_client_tools" not in payload.responses_policy["allowed_capabilities"]
     assert "codex_streaming_tool_events" not in payload.responses_policy["allowed_capabilities"]
-    assert "codex_encrypted_reasoning_replay" not in payload.responses_policy["allowed_capabilities"]
+    assert (
+        "codex_encrypted_reasoning_replay" not in payload.responses_policy["allowed_capabilities"]
+    )
     assert "codex_compaction" not in payload.responses_policy["allowed_capabilities"]
     assert "responses_policy" in audit.rows[-1].new_values
 
@@ -586,7 +594,9 @@ def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> No
             )
         )
 
-    revision.template_snapshot = {"responses_policy": _responses_policy(hosted_tools_allowed=["web_search"])}
+    revision.template_snapshot = {
+        "responses_policy": _responses_policy(hosted_tools_allowed=["web_search"])
+    }
     with pytest.raises(KeyTemplateError, match="hosted tools"):
         asyncio.run(
             service.create_key_from_revision(
@@ -597,7 +607,9 @@ def test_create_key_from_template_rejects_unsafe_responses_policy_claims() -> No
             )
         )
 
-    revision.template_snapshot = {"responses_policy": _responses_policy(extra_field="raw_tool_schema")}
+    revision.template_snapshot = {
+        "responses_policy": _responses_policy(extra_field="raw_tool_schema")
+    }
     with pytest.raises(KeyTemplateError, match="unsupported Responses policy fields"):
         asyncio.run(
             service.create_key_from_revision(
@@ -781,7 +793,9 @@ def _preview(
         multiplier=Decimal("3"),
     )
     warnings = tuple(filter(None, (extra_warning,)))
-    return CalibrationPreviewResult(summary=summary, proposal=proposal, is_empty=empty, warnings=warnings)
+    return CalibrationPreviewResult(
+        summary=summary, proposal=proposal, is_empty=empty, warnings=warnings
+    )
 
 
 def _template_revision(
@@ -852,3 +866,69 @@ def _responses_policy(**overrides: object) -> dict[str, object]:
     }
     policy.update(overrides)
     return policy
+
+
+def test_template_external_tool_policy_requires_confirmation_and_copies_exact_provenance() -> None:
+    templates = FakeTemplatesRepository()
+    audit = FakeAuditRepository()
+    key_service = FakeKeyService()
+    service = KeyTemplateService(
+        key_templates_repository=templates,
+        audit_repository=audit,
+        key_service=key_service,
+    )
+    policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
+
+    with pytest.raises(KeyTemplateError, match="Confirm"):
+        asyncio.run(
+            service.create_from_calibration_proposal(
+                preview=_preview(),
+                name="Future search",
+                reason="reviewed",
+                confirm_create_template=True,
+                external_tool_policy=policy,
+            )
+        )
+    assert templates.templates == []
+
+    created_template = asyncio.run(
+        service.create_from_calibration_proposal(
+            preview=_preview(),
+            name="Future search",
+            reason="reviewed",
+            confirm_create_template=True,
+            external_tool_policy=policy,
+            confirm_external_tool_fenced=True,
+            validity_days_default=7,
+        )
+    )
+    revision = created_template.revision
+    created_template.template.status = "active"
+    revision.template = created_template.template
+    assert revision.template_snapshot["external_tool_policy"] == policy
+
+    asyncio.run(
+        service.create_key_from_revision(
+            template_revision_id=revision.id,
+            owner_id=uuid.uuid4(),
+            reason="issue reviewed template key",
+            confirm_create_key_from_template=True,
+        )
+    )
+    assert key_service.payloads[0].external_tool_policy == policy
+    assert key_service.payloads[0].confirm_external_tool_fenced is True
+    assert key_service.payloads[0].template_revision_id == revision.id
+
+
+def test_historical_template_snapshot_missing_external_policy_is_strict() -> None:
+    templates = FakeTemplatesRepository()
+    _template, revision = _template_revision(templates, template_snapshot={"warnings": []})
+
+    assert external_tool_policy_for_template_revision(revision).mode == "strict_bounded"

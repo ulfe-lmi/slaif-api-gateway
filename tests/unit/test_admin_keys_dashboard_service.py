@@ -10,6 +10,9 @@ from slaif_gateway.services.admin_key_dashboard import (
     AdminKeyNotFoundError,
     compute_key_display_status,
 )
+from slaif_gateway.services.external_tool_policy_contract import (
+    build_external_tool_operator_ceilings,
+)
 
 
 @dataclass
@@ -192,21 +195,73 @@ async def test_detail_returns_safe_data_or_not_found() -> None:
         await service.get_key_detail(uuid.uuid4())
 
 
+@pytest.mark.asyncio
+async def test_external_tool_dashboard_policy_respects_narrow_installation_ceiling() -> None:
+    key = _row()
+    key.metadata_json["external_tool_policy"] = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_connector"],
+        "allowed_destination_ids": ["connector:reviewed"],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
+    service = AdminKeyDashboardService(
+        gateway_keys_repository=_Repo(key),
+        external_tool_ceilings=build_external_tool_operator_ceilings(
+            max_provider_tool_calls_per_request=1
+        ),
+    )
+
+    detail = await service.get_key_detail(key.id)
+
+    assert detail.external_tool_policy["mode"] == "strict_bounded"
+    assert detail.external_tool_policy["allowed_capabilities"] == []
+    assert "runtime: denied" in detail.external_tool_policy_summary
+
+
 def test_computed_display_status_values() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
-    assert compute_key_display_status("active", now - timedelta(days=1), now + timedelta(days=1), now=now) == "active"
-    assert compute_key_display_status("active", now + timedelta(days=1), now + timedelta(days=2), now=now) == "not_yet_valid"
-    assert compute_key_display_status("active", now - timedelta(days=2), now - timedelta(days=1), now=now) == "expired"
-    assert compute_key_display_status("suspended", now - timedelta(days=2), now - timedelta(days=1), now=now) == "suspended"
-    assert compute_key_display_status("revoked", now - timedelta(days=1), now + timedelta(days=1), now=now) == "revoked"
+    assert (
+        compute_key_display_status(
+            "active", now - timedelta(days=1), now + timedelta(days=1), now=now
+        )
+        == "active"
+    )
+    assert (
+        compute_key_display_status(
+            "active", now + timedelta(days=1), now + timedelta(days=2), now=now
+        )
+        == "not_yet_valid"
+    )
+    assert (
+        compute_key_display_status(
+            "active", now - timedelta(days=2), now - timedelta(days=1), now=now
+        )
+        == "expired"
+    )
+    assert (
+        compute_key_display_status(
+            "suspended", now - timedelta(days=2), now - timedelta(days=1), now=now
+        )
+        == "suspended"
+    )
+    assert (
+        compute_key_display_status(
+            "revoked", now - timedelta(days=1), now + timedelta(days=1), now=now
+        )
+        == "revoked"
+    )
 
 
 @pytest.mark.asyncio
 async def test_lifecycle_action_flags_follow_stored_status() -> None:
     active = _row()
     active.status = "active"
-    active_detail = await AdminKeyDashboardService(gateway_keys_repository=_Repo(active)).get_key_detail(active.id)
+    active_detail = await AdminKeyDashboardService(
+        gateway_keys_repository=_Repo(active)
+    ).get_key_detail(active.id)
     assert active_detail.can_suspend is True
     assert active_detail.can_activate is False
     assert active_detail.can_revoke is True
@@ -224,7 +279,9 @@ async def test_lifecycle_action_flags_follow_stored_status() -> None:
 
     revoked = _row()
     revoked.status = "revoked"
-    revoked_detail = await AdminKeyDashboardService(gateway_keys_repository=_Repo(revoked)).get_key_detail(revoked.id)
+    revoked_detail = await AdminKeyDashboardService(
+        gateway_keys_repository=_Repo(revoked)
+    ).get_key_detail(revoked.id)
     assert revoked_detail.can_suspend is False
     assert revoked_detail.can_activate is False
     assert revoked_detail.can_revoke is False

@@ -192,6 +192,17 @@ class ExternalToolKeyPolicy:
     max_provider_tool_calls_per_request: int
     single_request_overrun_acknowledged: bool
 
+    def to_metadata(self) -> dict[str, object]:
+        """Return the exact JSON-compatible v1 key-policy object."""
+        return {
+            "version": self.version,
+            "mode": self.mode,
+            "allowed_capabilities": list(self.allowed_capabilities),
+            "allowed_destination_ids": list(self.allowed_destination_ids),
+            "max_provider_tool_calls_per_request": self.max_provider_tool_calls_per_request,
+            "single_request_overrun_acknowledged": (self.single_request_overrun_acknowledged),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ExternalToolRoutePolicy:
@@ -204,6 +215,18 @@ class ExternalToolRoutePolicy:
     call_limit_enforced: bool
     final_usage_required: bool
     final_cost_required: bool
+
+    def to_metadata(self) -> dict[str, object]:
+        """Return the exact JSON-compatible v1 route-policy object."""
+        return {
+            "version": self.version,
+            "supported_capabilities": list(self.supported_capabilities),
+            "approved_destination_ids": list(self.approved_destination_ids),
+            "max_provider_tool_calls_per_request": self.max_provider_tool_calls_per_request,
+            "call_limit_enforced": self.call_limit_enforced,
+            "final_usage_required": self.final_usage_required,
+            "final_cost_required": self.final_cost_required,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +369,22 @@ def strict_route_policy() -> ExternalToolRoutePolicy:
         call_limit_enforced=False,
         final_usage_required=False,
         final_cost_required=False,
+    )
+
+
+def build_external_tool_operator_ceilings(
+    *,
+    max_distinct_capabilities: int = ABSOLUTE_MAX_DISTINCT_CAPABILITIES,
+    max_approved_destinations: int = ABSOLUTE_MAX_APPROVED_DESTINATIONS,
+    max_provider_tool_declarations_per_request: int = ABSOLUTE_MAX_PROVIDER_TOOL_DECLARATIONS,
+    max_provider_tool_calls_per_request: int = ABSOLUTE_MAX_PROVIDER_TOOL_CALLS,
+) -> ExternalToolOperatorCeilings:
+    """Build validated installation ceilings without reading environment state."""
+    return ExternalToolOperatorCeilings(
+        max_distinct_capabilities=max_distinct_capabilities,
+        max_approved_destinations=max_approved_destinations,
+        max_provider_tool_declarations_per_request=(max_provider_tool_declarations_per_request),
+        max_provider_tool_calls_per_request=max_provider_tool_calls_per_request,
     )
 
 

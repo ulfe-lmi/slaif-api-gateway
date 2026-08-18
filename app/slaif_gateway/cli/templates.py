@@ -16,6 +16,7 @@ from slaif_gateway.cli.common import (
     parse_uuid,
     run_async,
 )
+from slaif_gateway.config import get_settings
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
@@ -26,7 +27,10 @@ from slaif_gateway.services.key_template_service import (
     KeyTemplateService,
     chat_streaming_live_burn_policy_for_template_revision,
     chat_streaming_live_burn_policy_summary_for_template_revision,
+    external_tool_policy_for_template_revision,
+    external_tool_policy_summary_for_template_revision,
 )
+from slaif_gateway.services.external_tool_policy_contract import STRICT_BOUNDED
 
 app = typer.Typer(help="Create and inspect durable key templates")
 
@@ -48,6 +52,8 @@ async def _create_from_calibration(
     email_delivery_mode_default: str | None,
     confirm_create_template: bool,
     reason: str,
+    external_tool_policy: dict[str, object],
+    confirm_external_tool_fenced: bool,
 ) -> KeyTemplateCreationResult:
     parsed_multiplier = parse_decimal(multiplier, field_name="multiplier")
     if parsed_multiplier is None:
@@ -66,6 +72,7 @@ async def _create_from_calibration(
         template_service = KeyTemplateService(
             key_templates_repository=KeyTemplatesRepository(session),
             audit_repository=AuditRepository(session),
+            external_tool_ceilings=get_settings().get_external_tool_operator_ceilings(),
         )
         return await template_service.create_from_calibration_proposal(
             preview=preview,
@@ -75,31 +82,75 @@ async def _create_from_calibration(
             confirm_create_template=confirm_create_template,
             validity_days_default=validity_days_default,
             email_delivery_mode_default=email_delivery_mode_default,
+            external_tool_policy=external_tool_policy,
+            confirm_external_tool_fenced=confirm_external_tool_fenced,
         )
 
 
 @app.command("create-from-calibration")
 def create_from_calibration(
-    gateway_key_id: Annotated[str, typer.Option("--gateway-key-id", help="Trusted calibration gateway key UUID")],
+    gateway_key_id: Annotated[
+        str, typer.Option("--gateway-key-id", help="Trusted calibration gateway key UUID")
+    ],
     name: Annotated[str, typer.Option("--name", help="Template name")],
-    description: Annotated[str | None, typer.Option("--description", help="Template description")] = None,
-    start_at: Annotated[str | None, typer.Option("--start-at", help="Inclusive ISO created_at lower bound")] = None,
-    end_at: Annotated[str | None, typer.Option("--end-at", help="Inclusive ISO created_at upper bound")] = None,
-    multiplier: Annotated[str, typer.Option("--multiplier", help="Decimal policy multiplier from 1.0 to 10.0")] = "3",
+    description: Annotated[
+        str | None, typer.Option("--description", help="Template description")
+    ] = None,
+    start_at: Annotated[
+        str | None, typer.Option("--start-at", help="Inclusive ISO created_at lower bound")
+    ] = None,
+    end_at: Annotated[
+        str | None, typer.Option("--end-at", help="Inclusive ISO created_at upper bound")
+    ] = None,
+    multiplier: Annotated[
+        str, typer.Option("--multiplier", help="Decimal policy multiplier from 1.0 to 10.0")
+    ] = "3",
     validity_days_default: Annotated[
         int | None,
-        typer.Option("--validity-days-default", help="Optional default validity window for future keys"),
+        typer.Option(
+            "--validity-days-default", help="Optional default validity window for future keys"
+        ),
     ] = None,
     email_delivery_mode_default: Annotated[
         str | None,
-        typer.Option("--email-delivery-mode-default", help="Optional default email mode: none or pending"),
+        typer.Option(
+            "--email-delivery-mode-default", help="Optional default email mode: none or pending"
+        ),
     ] = None,
     confirm_create_template: Annotated[
         bool,
         typer.Option("--confirm-create-template", help="Confirm durable template creation"),
     ] = False,
     reason: Annotated[str, typer.Option("--reason", help="Required audit reason")] = "",
-    json_output: Annotated[bool, typer.Option("--json", help="Output machine-readable safe JSON")] = False,
+    external_tool_mode: Annotated[
+        str,
+        typer.Option("--external-tool-mode", help="strict_bounded or external_tool_fenced"),
+    ] = STRICT_BOUNDED,
+    external_tool_capabilities: Annotated[
+        list[str] | None,
+        typer.Option("--external-tool-capability", help="Reviewed capability ID; repeatable"),
+    ] = None,
+    external_tool_destination_ids: Annotated[
+        list[str] | None,
+        typer.Option("--external-tool-destination-id", help="Opaque destination ID; repeatable"),
+    ] = None,
+    external_tool_max_calls: Annotated[
+        int,
+        typer.Option("--external-tool-max-calls", help="Positive call cap; zero for strict"),
+    ] = 0,
+    acknowledge_single_request_overrun: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-single-request-overrun", help="Acknowledge overrun/hold policy"
+        ),
+    ] = False,
+    confirm_external_tool_fenced: Annotated[
+        bool,
+        typer.Option("--confirm-external-tool-fenced", help="Confirm fenced future policy"),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output machine-readable safe JSON")
+    ] = False,
 ) -> None:
     """Create a versioned key template from a reviewed calibration proposal."""
     try:
@@ -115,6 +166,15 @@ def create_from_calibration(
                 email_delivery_mode_default=email_delivery_mode_default,
                 confirm_create_template=confirm_create_template,
                 reason=reason,
+                external_tool_policy={
+                    "version": 1,
+                    "mode": external_tool_mode,
+                    "allowed_capabilities": list(external_tool_capabilities or []),
+                    "allowed_destination_ids": list(external_tool_destination_ids or []),
+                    "max_provider_tool_calls_per_request": external_tool_max_calls,
+                    "single_request_overrun_acknowledged": (acknowledge_single_request_overrun),
+                },
+                confirm_external_tool_fenced=confirm_external_tool_fenced,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -130,6 +190,7 @@ def create_from_calibration(
 
 def _result_dict(result: KeyTemplateCreationResult) -> dict[str, object]:
     revision = result.revision
+    external_tool_ceilings = get_settings().get_external_tool_operator_ceilings()
     return {
         "template": {
             "id": result.template.id,
@@ -159,6 +220,16 @@ def _result_dict(result: KeyTemplateCreationResult) -> dict[str, object]:
             "chat_streaming_live_burn_policy_summary": (
                 chat_streaming_live_burn_policy_summary_for_template_revision(revision)
             ),
+            "external_tool_policy": external_tool_policy_for_template_revision(
+                revision,
+                ceilings=external_tool_ceilings,
+            ).to_metadata(),
+            "external_tool_policy_summary": (
+                external_tool_policy_summary_for_template_revision(
+                    revision,
+                    ceilings=external_tool_ceilings,
+                )
+            ),
             "warnings": _snapshot_warnings(revision.template_snapshot),
         },
         "audit_log_id": result.audit_log.id,
@@ -173,6 +244,7 @@ def _snapshot_warnings(snapshot: dict[str, object]) -> list[object]:
 
 def _emit_human_result(result: KeyTemplateCreationResult) -> None:
     revision = result.revision
+    external_tool_ceilings = get_settings().get_external_tool_operator_ceilings()
     typer.echo("Key template created from reviewed calibration proposal")
     typer.echo(f"template_id: {result.template.id}")
     typer.echo(f"template_name: {result.template.name}")
@@ -189,6 +261,14 @@ def _emit_human_result(result: KeyTemplateCreationResult) -> None:
         "chat_streaming_live_burn: "
         + chat_streaming_live_burn_policy_summary_for_template_revision(revision)
     )
+    typer.echo(
+        "external_tool_policy: "
+        + external_tool_policy_summary_for_template_revision(
+            revision,
+            ceilings=external_tool_ceilings,
+        )
+    )
+    typer.echo("external_tool_runtime: denied pending objectives 014-016")
     if revision.hosted_capabilities_requiring_review:
         typer.echo(
             "hosted_capabilities_requiring_review: "

@@ -97,6 +97,58 @@ def test_create_from_calibration_json_is_valid_and_safe(monkeypatch) -> None:
     assert COMPLETION_TEXT not in serialized
 
 
+def test_create_from_calibration_accepts_only_explicit_confirmed_fenced_policy(
+    monkeypatch,
+) -> None:
+    policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_connector"],
+        "allowed_destination_ids": ["connector:reviewed"],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
+
+    async def fake_create(**kwargs):
+        assert kwargs["external_tool_policy"] == policy
+        assert kwargs["confirm_external_tool_fenced"] is True
+        result = _created_result()
+        result.revision.template_snapshot["external_tool_policy"] = policy
+        return result
+
+    monkeypatch.setattr(templates_cli, "_create_from_calibration", fake_create)
+    result = runner.invoke(
+        app,
+        [
+            "templates",
+            "create-from-calibration",
+            "--gateway-key-id",
+            str(KEY_ID),
+            "--name",
+            "Participants",
+            "--confirm-create-template",
+            "--reason",
+            "Reviewed",
+            "--external-tool-mode",
+            "external_tool_fenced",
+            "--external-tool-capability",
+            "provider_connector",
+            "--external-tool-destination-id",
+            "connector:reviewed",
+            "--external-tool-max-calls",
+            "2",
+            "--acknowledge-single-request-overrun",
+            "--confirm-external-tool-fenced",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["revision"]["external_tool_policy"] == policy
+    assert "runtime denied" in output["revision"]["external_tool_policy_summary"]
+
+
 def test_create_from_calibration_rejects_missing_confirmation(monkeypatch) -> None:
     async def fake_create(**kwargs):
         raise KeyTemplateError("Confirm template creation before continuing.")
@@ -105,7 +157,14 @@ def test_create_from_calibration_rejects_missing_confirmation(monkeypatch) -> No
 
     result = runner.invoke(
         app,
-        ["templates", "create-from-calibration", "--gateway-key-id", str(KEY_ID), "--name", "Participants"],
+        [
+            "templates",
+            "create-from-calibration",
+            "--gateway-key-id",
+            str(KEY_ID),
+            "--name",
+            "Participants",
+        ],
     )
 
     assert result.exit_code == 1
@@ -137,7 +196,9 @@ def test_create_from_calibration_rejects_missing_reason(monkeypatch) -> None:
 
 def test_create_from_calibration_rejects_standard_key(monkeypatch) -> None:
     async def fake_create(**kwargs):
-        raise KeyTemplateError("Calibration summaries are available only for trusted calibration keys.")
+        raise KeyTemplateError(
+            "Calibration summaries are available only for trusted calibration keys."
+        )
 
     monkeypatch.setattr(templates_cli, "_create_from_calibration", fake_create)
 

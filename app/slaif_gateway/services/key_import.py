@@ -13,7 +13,11 @@ from decimal import Decimal, InvalidOperation
 from io import StringIO
 
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
-from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.email_delivery_service import (
+    EmailDeliveryService,
+    PendingKeyEmailResult,
+)
+from slaif_gateway.services.external_tool_policy_contract import strict_key_policy
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.streaming_live_burn_surface import (
     CHAT_STREAMING_LIVE_BURN_SURFACE,
@@ -344,7 +348,9 @@ def validate_key_import_rows(
         valid_count=valid_count,
         invalid_count=len(classified) - valid_count,
         rows=classified,
-        duplicate_owner_count=sum(1 for row in classified if row.status == "valid" and row.classification == "duplicate"),
+        duplicate_owner_count=sum(
+            1 for row in classified if row.status == "valid" and row.classification == "duplicate"
+        ),
     )
 
 
@@ -365,15 +371,23 @@ def build_key_import_execution_plan(
     if preview.invalid_count:
         raise ValueError("All rows must validate before bulk key import execution.")
 
-    unsupported_modes = sorted({row.email_delivery_mode for row in preview.rows if row.email_delivery_mode == "send-now"})
+    unsupported_modes = sorted(
+        {row.email_delivery_mode for row in preview.rows if row.email_delivery_mode == "send-now"}
+    )
     if unsupported_modes:
-        raise ValueError("Bulk send-now email delivery is not implemented; use enqueue, pending, or none.")
+        raise ValueError(
+            "Bulk send-now email delivery is not implemented; use enqueue, pending, or none."
+        )
 
     for row in preview.rows:
         if row.allowed_providers:
-            raise ValueError("allowed_providers is not supported by the current key creation service.")
+            raise ValueError(
+                "allowed_providers is not supported by the current key creation service."
+            )
         if row.allow_all_providers:
-            raise ValueError("allow_all_providers is not supported by the current key creation service.")
+            raise ValueError(
+                "allow_all_providers is not supported by the current key creation service."
+            )
 
     plaintext_display_required = preview.plaintext_display_required
     if plaintext_display_required and not confirm_plaintext_display:
@@ -426,7 +440,9 @@ async def execute_key_import_plan(
                 email_delivery_id=delivery_result.email_delivery_id if delivery_result else None,
                 email_delivery_mode=row.email_delivery_mode,
                 email_delivery_status=delivery_result.status if delivery_result else None,
-                enqueue_status="pending" if row.email_delivery_mode == "enqueue" else "not_applicable",
+                enqueue_status="pending"
+                if row.email_delivery_mode == "enqueue"
+                else "not_applicable",
                 valid_from=created.valid_from,
                 valid_until=created.valid_until,
                 cost_limit_eur=row.cost_limit_eur,
@@ -438,7 +454,9 @@ async def execute_key_import_plan(
                 chat_streaming_live_burn_policy=(
                     created.chat_streaming_live_burn_policy or row.chat_streaming_live_burn_policy
                 ),
-                plaintext_key=created.plaintext_key if row.email_delivery_mode in {"none", "pending"} else None,
+                plaintext_key=created.plaintext_key
+                if row.email_delivery_mode in {"none", "pending"}
+                else None,
             )
         )
 
@@ -448,7 +466,9 @@ async def execute_key_import_plan(
         invalid_count=0,
         rows=tuple(result_rows),
         plaintext_display_count=sum(1 for row in result_rows if row.plaintext_key),
-        pending_email_delivery_count=sum(1 for row in result_rows if row.email_delivery_mode in {"pending", "enqueue"}),
+        pending_email_delivery_count=sum(
+            1 for row in result_rows if row.email_delivery_mode in {"pending", "enqueue"}
+        ),
         queued_email_delivery_count=sum(1 for row in result_rows if row.enqueue_status == "queued"),
     )
 
@@ -509,13 +529,17 @@ def enqueue_key_import_email_tasks(
         invalid_count=result.invalid_count,
         rows=tuple(updated_rows),
         plaintext_display_count=sum(1 for row in updated_rows if row.plaintext_key),
-        pending_email_delivery_count=sum(1 for row in updated_rows if row.email_delivery_mode in {"pending", "enqueue"}),
+        pending_email_delivery_count=sum(
+            1 for row in updated_rows if row.email_delivery_mode in {"pending", "enqueue"}
+        ),
         queued_email_delivery_count=queued_count,
         audit_summary=result.audit_summary,
     )
 
 
-def key_import_execution_result_from_preview_errors(preview: KeyImportPreview) -> KeyImportExecutionResult:
+def key_import_execution_result_from_preview_errors(
+    preview: KeyImportPreview,
+) -> KeyImportExecutionResult:
     """Convert validation failures into a safe no-mutation execution result."""
     rows = tuple(
         KeyImportExecutionRow(
@@ -684,15 +708,31 @@ def _validate_one_row(
         field_name="request_limit",
     )
     allowed_models = _optional_import_list(row.get("allowed_models"), field_name="allowed_models")
-    allowed_endpoints = _optional_import_list(row.get("allowed_endpoints"), field_name="allowed_endpoints")
-    allowed_providers = _optional_import_list(row.get("allowed_providers"), field_name="allowed_providers")
+    allowed_endpoints = _optional_import_list(
+        row.get("allowed_endpoints"), field_name="allowed_endpoints"
+    )
+    allowed_providers = _optional_import_list(
+        row.get("allowed_providers"), field_name="allowed_providers"
+    )
     allow_all_models = _optional_bool(row.get("allow_all_models"), field_name="allow_all_models")
-    allow_all_endpoints = _optional_bool(row.get("allow_all_endpoints"), field_name="allow_all_endpoints")
-    allow_all_providers = _optional_bool(row.get("allow_all_providers"), field_name="allow_all_providers")
+    allow_all_endpoints = _optional_bool(
+        row.get("allow_all_endpoints"), field_name="allow_all_endpoints"
+    )
+    allow_all_providers = _optional_bool(
+        row.get("allow_all_providers"), field_name="allow_all_providers"
+    )
     rate_limit_policy = _rate_limit_policy(row)
     chat_streaming_live_burn_policy = _chat_streaming_live_burn_policy(row)
-    email_delivery_mode = _email_delivery_mode(row.get("email_delivery_mode"), context=context, owner=owner)
+    email_delivery_mode = _email_delivery_mode(
+        row.get("email_delivery_mode"), context=context, owner=owner
+    )
     metadata = _optional_import_metadata(row.get("metadata"))
+    if "external_tool_policy" in metadata or any(
+        str(key).startswith("external_tool_") for key in metadata
+    ):
+        raise ValueError(
+            "Bulk key import is strict-only; external-tool policy fields are unsupported"
+        )
 
     return KeyImportRowPreview(
         row_number=index,
@@ -725,7 +765,9 @@ def _validate_one_row(
     )
 
 
-def _resolve_owner(row: Mapping[str, object], *, context: KeyImportReadOnlyContext) -> KeyImportOwnerRef:
+def _resolve_owner(
+    row: Mapping[str, object], *, context: KeyImportReadOnlyContext
+) -> KeyImportOwnerRef:
     owner_id = _optional_import_uuid(row.get("owner_id"), field_name="owner_id")
     owner_email = _optional_email(row.get("owner_email"))
     if owner_id is None and owner_email is None:
@@ -744,7 +786,9 @@ def _resolve_owner(row: Mapping[str, object], *, context: KeyImportReadOnlyConte
     return owner
 
 
-def _resolve_cohort(row: Mapping[str, object], *, context: KeyImportReadOnlyContext) -> KeyImportCohortRef | None:
+def _resolve_cohort(
+    row: Mapping[str, object], *, context: KeyImportReadOnlyContext
+) -> KeyImportCohortRef | None:
     cohort_id = _optional_import_uuid(row.get("cohort_id"), field_name="cohort_id")
     if cohort_id is None:
         return None
@@ -754,7 +798,9 @@ def _resolve_cohort(row: Mapping[str, object], *, context: KeyImportReadOnlyCont
     return cohort
 
 
-def _parse_valid_until(*, valid_from: datetime, valid_until: object, valid_days: object) -> datetime:
+def _parse_valid_until(
+    *, valid_from: datetime, valid_until: object, valid_days: object
+) -> datetime:
     has_valid_until = not _is_blank(valid_until)
     has_valid_days = not _is_blank(valid_days)
     if has_valid_until and has_valid_days:
@@ -832,7 +878,9 @@ def _email_delivery_mode(
     if normalized in {"pending", "send-now", "enqueue"} and not owner.email:
         raise ValueError("email_delivery_mode requires the owner to have an email address")
     if normalized in {"send-now", "enqueue"} and not context.email_delivery_enabled:
-        raise ValueError("email delivery must be enabled before send-now or enqueue can be executed")
+        raise ValueError(
+            "email delivery must be enabled before send-now or enqueue can be executed"
+        )
     if normalized == "send-now" and not context.smtp_configured:
         raise ValueError("SMTP settings must be configured before send-now can be executed")
     if normalized == "enqueue" and not context.celery_configured:
@@ -943,7 +991,9 @@ def _optional_import_list(value: object, *, field_name: str) -> list[str]:
             try:
                 parsed = json.loads(text)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"{field_name} must be a JSON list or comma/newline-separated string") from exc
+                raise ValueError(
+                    f"{field_name} must be a JSON list or comma/newline-separated string"
+                ) from exc
             return _list_from_sequence(parsed, field_name=field_name)
         normalized = text.replace(",", "\n")
         items = [item.strip() for item in normalized.splitlines() if item.strip()]
@@ -956,7 +1006,9 @@ def _optional_import_list(value: object, *, field_name: str) -> list[str]:
             raise ValueError(f"{field_name} must not contain secret-looking values")
         if field_name == "allowed_endpoints" and not _is_safe_endpoint_policy(item):
             raise ValueError("allowed_endpoints must contain safe /v1 paths")
-        if field_name in {"allowed_models", "allowed_providers"} and any(ch.isspace() for ch in item):
+        if field_name in {"allowed_models", "allowed_providers"} and any(
+            ch.isspace() for ch in item
+        ):
             raise ValueError(f"{field_name} values must not contain whitespace")
     return items
 
@@ -1057,6 +1109,7 @@ def _create_gateway_key_input_from_row(
         chat_streaming_live_burn_policy=dict(row.chat_streaming_live_burn_policy)
         if row.chat_streaming_live_burn_policy
         else None,
+        external_tool_policy=strict_key_policy().to_metadata(),
         note=reason,
     )
 
@@ -1064,7 +1117,12 @@ def _create_gateway_key_input_from_row(
 def _is_safe_endpoint_policy(value: str) -> bool:
     if value == "/v1/chat/completions" or value == "/v1/models":
         return True
-    return value.startswith("/v1/") and "?" not in value and "#" not in value and not any(ch.isspace() for ch in value)
+    return (
+        value.startswith("/v1/")
+        and "?" not in value
+        and "#" not in value
+        and not any(ch.isspace() for ch in value)
+    )
 
 
 def _aware_time(value: datetime) -> datetime:
@@ -1089,7 +1147,11 @@ def _mapping_contains_secret(value: object) -> bool:
     if isinstance(value, Mapping):
         for key, item in value.items():
             key_text = str(key)
-            if is_sensitive_key(key_text) or "secret" in key_text.lower() or "password" in key_text.lower():
+            if (
+                is_sensitive_key(key_text)
+                or "secret" in key_text.lower()
+                or "password" in key_text.lower()
+            ):
                 return True
             if _mapping_contains_secret(item):
                 return True

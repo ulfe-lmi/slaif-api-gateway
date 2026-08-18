@@ -92,7 +92,9 @@ def test_valid_csv_and_json_parse() -> None:
 
 
 def test_valid_row_resolves_owner_policy_and_rate_limits() -> None:
-    preview = _preview([_valid_row(owner_id="", owner_email="ada@example.org", cohort_id=str(COHORT_ID))])
+    preview = _preview(
+        [_valid_row(owner_id="", owner_email="ada@example.org", cohort_id=str(COHORT_ID))]
+    )
 
     row = preview.rows[0]
     assert preview.valid_count == 1
@@ -186,7 +188,9 @@ def test_live_burn_columns_accept_disabled_positive_zero_and_negative_margins() 
         ),
     ],
 )
-def test_live_burn_import_validation_errors_are_row_level(field: str, value: str, message: str) -> None:
+def test_live_burn_import_validation_errors_are_row_level(
+    field: str, value: str, message: str
+) -> None:
     preview = _preview([_valid_row(**{field: value})])
 
     assert preview.invalid_count == 1
@@ -210,7 +214,11 @@ def test_live_burn_import_validation_errors_are_row_level(field: str, value: str
         ("allow_all_models", "maybe", "allow_all_models must be true or false"),
         ("email_delivery_mode", "old-key-resend", "email_delivery_mode must be"),
         ("note", "sk-provider-secret", "note must not contain secret-looking values"),
-        ("allowed_models", "Bearer upstream-token", "allowed_models must not contain secret-looking values"),
+        (
+            "allowed_models",
+            "Bearer upstream-token",
+            "allowed_models must not contain secret-looking values",
+        ),
     ],
 )
 def test_invalid_rows_are_rejected(field: str, value: str, message: str) -> None:
@@ -264,7 +272,10 @@ def test_email_delivery_modes_validate_when_configured() -> None:
     context = _context(email_delivery_enabled=True, smtp_configured=True, celery_configured=True)
 
     preview = _preview(
-        [_valid_row(email_delivery_mode="send-now"), _valid_row(owner_email="", email_delivery_mode="enqueue")],
+        [
+            _valid_row(email_delivery_mode="send-now"),
+            _valid_row(owner_email="", email_delivery_mode="enqueue"),
+        ],
         context=context,
     )
 
@@ -349,7 +360,9 @@ def test_execution_plan_requires_confirmation_reason_and_valid_rows() -> None:
 
 def test_execution_plan_rejects_send_now_and_provider_policy() -> None:
     configured = _context(email_delivery_enabled=True, smtp_configured=True, celery_configured=True)
-    send_now = _preview([_valid_row(email_delivery_mode="send-now", allowed_providers="")], context=configured)
+    send_now = _preview(
+        [_valid_row(email_delivery_mode="send-now", allowed_providers="")], context=configured
+    )
     provider_policy = _preview([_valid_row()], context=configured)
 
     with pytest.raises(ValueError, match="send-now email delivery is not implemented"):
@@ -465,13 +478,17 @@ async def test_execute_key_import_plan_calls_key_service_and_returns_plaintext_o
         "cost_margin_eur": "0.000000000",
         "token_margin": 0,
     }
-    assert email_service.calls[0]["one_time_secret_id"] == uuid.UUID("66666666-6666-4666-8666-666666666666")
+    assert email_service.calls[0]["one_time_secret_id"] == uuid.UUID(
+        "66666666-6666-4666-8666-666666666666"
+    )
 
 
 @pytest.mark.asyncio
 async def test_execute_key_import_plan_suppresses_plaintext_for_enqueue() -> None:
     context = _context(email_delivery_enabled=True, celery_configured=True)
-    preview = _preview([_valid_row(allowed_providers="", email_delivery_mode="enqueue")], context=context)
+    preview = _preview(
+        [_valid_row(allowed_providers="", email_delivery_mode="enqueue")], context=context
+    )
     plan = build_key_import_execution_plan(
         preview,
         actor_admin_id=ADMIN_ID,
@@ -562,12 +579,15 @@ def test_enqueue_key_import_email_tasks_handles_failure_safely() -> None:
     def enqueue_func(**kwargs):
         raise RuntimeError("broker contains sk-slaif-secret")
 
-    result = enqueue_key_import_email_tasks(base, actor_admin_id=ADMIN_ID, enqueue_func=enqueue_func)
+    result = enqueue_key_import_email_tasks(
+        base, actor_admin_id=ADMIN_ID, enqueue_func=enqueue_func
+    )
 
     assert result.rows[0].enqueue_status == "failed"
     assert "pending" in (result.rows[0].enqueue_error or "")
     assert "sk-slaif" not in (result.rows[0].enqueue_error or "")
     assert result.rows[0].plaintext_key is None
+
 
 def test_execution_error_result_does_not_include_raw_content() -> None:
     result = key_import_execution_error_result("safe error")
@@ -577,3 +597,23 @@ def test_execution_error_result_does_not_include_raw_content() -> None:
     assert "owner_email,valid_days" not in str(result)
     assert "token_hash" not in str(result)
     assert "encrypted_payload" not in str(result)
+
+
+def test_direct_bulk_import_rejects_external_tool_fields_including_nested_metadata() -> None:
+    top_level = _preview([_valid_row(external_tool_mode="external_tool_fenced")])
+    nested = _preview(
+        [
+            _valid_row(
+                metadata={
+                    "external_tool_policy": {
+                        "mode": "external_tool_fenced",
+                    }
+                }
+            )
+        ]
+    )
+
+    assert top_level.invalid_count == 1
+    assert "unknown fields" in top_level.rows[0].errors[0]
+    assert nested.invalid_count == 1
+    assert "strict-only" in nested.rows[0].errors[0]
