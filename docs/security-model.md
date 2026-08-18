@@ -259,6 +259,42 @@ The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
+Objective 012 defines a pure version-1 external-tool policy contract only.
+`strict_bounded` remains the default/current deny-only mode.
+`external_tool_fenced` is a future explicit standard-key mode and is not wired
+to runtime, persistence, settings, admin/CLI, routes, quota, or providers.
+
+The taxonomy treats client-operated tools, provider-hosted authority, remote
+MCP, connectors, provider URL fetch, and unknown authority separately. Raw
+provider names, URLs, credentials, bearer values, cookies, authorization,
+prompts, arguments/results, and arbitrary labels never enter the safe decision
+DTO. Client-provided `server_url`, `connector_id`, authorization, headers/
+cookies, approval, or deferred-loading values never become approved
+destinations. A future selected provider contract must resolve opaque reviewed
+`remote_mcp:` or `connector:` IDs from server-side configuration, and request
+`require_approval` cannot lower the operator/route floor. Unknown, malformed,
+mixed, or unreviewed authority is `unknown_external_authority` and denies.
+
+Marker detection is semantic-position aware rather than a recursive keyword
+scan. Authority-bearing keys at semantic declaration/control positions still
+fail closed, but business fields inside local function parameters/JSON Schema,
+descriptions, and custom format/grammar payloads are opaque to this taxonomy
+and are never retained in its DTOs. Bounded namespace traversal inspects every child and
+denies provider-hosted, raw MCP/connector, unknown, malformed, cyclic,
+excessively nested, or excessive-count children. Existing endpoint validators
+continue to enforce their own schema, content, depth, size, and secret rules;
+this narrower authority answer grants no acceptance, execution, or forwarding,
+and current runtime remains deny-only.
+
+The future fenced promise requires an exclusive per-key fence while the request
+is unresolved, accepts that one admitted request can overrun remaining token or
+cost quota before control returns, blocks following requests after exhaustion,
+and retains a blocking hold for missing, ambiguous, interrupted, or unreconciled
+final cost. Provider final usage/cost remains authoritative when available.
+This is not provider-invoice truth, zero-overrun assurance, a compliance claim,
+or current functionality. Trusted-calibration discovery remains observation,
+not standard-key provider/external permission.
+
 Standalone embeddings requests follow the same no-storage boundary. The gateway
 does not persist embedding input strings, token arrays, embedding vectors, raw
 request bodies, raw provider response bodies, provider keys, or client keys.

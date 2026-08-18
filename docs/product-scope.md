@@ -167,18 +167,28 @@ implemented invariants and failure behavior.
 ### Current
 
 Current: hosted/provider-side tools and external MCP/connectors are unsupported
-and fail closed. This includes hosted web/file search, code interpreter,
-computer use, provider-side authorization/connectors, and similar remote
-execution. Implemented local/client-side function and custom tools do not grant
-SLAIF authority to execute tools.
+in the runtime. It is deny-only for those surfaces, provider URL fetch
+authority, and unknown/ambiguous authority. Objective 012 adds a pure version-1
+taxonomy and policy/admission contract only; it adds no
+stored policy, setting, admin/CLI control, request forwarding, fence, hold, or
+provider integration. Implemented local/client-side function, custom,
+namespace, local-shell, and client-side apply-patch workflows keep their
+existing independent gates and do not grant SLAIF provider/external authority.
 
 ### Approved target
 
-Approved target: every key must be able to prohibit external tools. If a future
-key explicitly allows a reviewed external tool, the gateway may be unable to
-stop provider-side tool activity inside an already accepted Responses request
-before final usage becomes known. It must still account for the provider result
-and block later requests once finalized counters put the key over quota.
+Approved target: every key must be able to prohibit external tools.
+`strict_bounded` is the default approved mode and denies provider-hosted/
+external authority. `external_tool_fenced` is the only approved future opt-in
+mode for a standard key with exact route support, operator ceilings, positive
+finite request/token/EUR limits, and explicit acknowledgement.
+
+Its promise is exact: one admitted provider-hosted external-tool request may
+exceed the key's remaining token or cost quota before SLAIF regains control.
+SLAIF will reject concurrent requests for that key while the request is
+unresolved, finalize authoritative provider usage/cost when available, reject
+following requests after exhaustion, and retain a blocking accounting hold
+when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
 
 Any such implementation requires explicit per-key permissions, fail-closed
 unknowns, route/model/tool capability, pricing and bounded exposure, privacy and
@@ -186,7 +196,8 @@ storage rules, negative tests, auditability, and operator-visible limits.
 
 ### Non-goals / not current
 
-- No current hosted-tool or MCP permission field is implied by these targets.
+- No current hosted-tool, MCP, or external-tool permission field is activated
+  by the objective-012 contract.
 - No claim of exact mid-request external-tool interruption or tool-budget
   enforcement.
 - No claim that local function/custom tool support authorizes provider-hosted

@@ -473,6 +473,55 @@ MCP/connectors markers such as `server_url`, `connector_id`, provider-side
 `background=true`, `external_web_access`, or search-specific Chat Completions
 models such as `gpt-5-search-api`.
 
+Objective 012 adds a pure classification/admission contract but does not alter
+that forwarding behavior. The contract distinguishes:
+
+- client-operated `function`, `custom`, current gated `namespace`,
+  `local_shell`, and client-executed `apply_patch` declarations;
+- provider-hosted web/file search, code interpreter, `shell`, image generation,
+  computer use, tool search, skills, remote MCP, connectors, and provider URL
+  fetch authority; and
+- malformed, unknown, mixed, or unreviewed authority, which fails closed as
+  `unknown_external_authority`.
+
+`web_search`/`web_search_preview`, `file_search`, `code_interpreter`, `shell`,
+`image_generation`, `computer`/`computer_use`/`computer_use_preview`,
+`tool_search`, `skill`/`skills`, and `mcp` are exact reviewed wire aliases.
+Chat `web_search_options` and reviewed search-specific model IDs classify as
+`provider_web_search`. Remote image/file URL fetching classifies separately as
+`provider_url_fetch`. For `mcp`, request `server_url`, `connector_id`,
+authorization, cookies/headers, approval, or deferred-loading markers never
+become reviewed destinations; a future selected provider contract must resolve
+an opaque server-side `remote_mcp:` or `connector:` destination ID. Request
+`require_approval` can never lower the operator/route approval floor.
+
+The taxonomy scans only authority-bearing declaration/control positions. It
+does not recursively reinterpret field names inside local
+function parameters/JSON Schema, descriptions, or custom format/grammar
+payloads as provider authority, and it does not retain that content. Namespace
+child declarations are inspected with strict depth/count bounds, so a nested
+provider tool, raw MCP/connector, unknown or malformed declaration, or cycle cannot hide external
+authority. Provider filter/query/schema payloads are likewise not treated as a
+second authority grant; objective 016 still owns their complete provider-
+contract validation. Existing endpoint validators retain independent shape,
+size, depth, content, and secret enforcement, so client-operated classification
+does not make a request valid or forwardable.
+
+`strict_bounded` is the current/default deny mode. The future
+`external_tool_fenced` mode requires exact key/route/operator intersection and
+the exclusive-fence/overrun/hold/following-block promise in
+[`accounting.md`](accounting.md). Objectives 013–017 must implement it. No new
+tool is enabled or forwarded by objective 012, and trusted-calibration
+observation is not standard-key authorization.
+Authority classification never substitutes for existing endpoint-specific
+shape, size, content, pricing, or provider-contract validation; a known local
+or provider alias alone cannot make a malformed request forwardable.
+
+Official taxonomy evidence checked for this contract:
+
+- <https://developers.openai.com/api/docs/models/gpt-5.6-sol>
+- <https://developers.openai.com/api/docs/guides/tools-connectors-mcp>
+
 The Chat Completions field registry is also fail-closed. Standard keys and
 trusted calibration keys reject unknown top-level Chat Completions fields with
 `unknown_chat_completion_field`. Current forwarding supports text message

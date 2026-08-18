@@ -275,6 +275,23 @@ migrations automatically.
 - There is no formal security certification, formal penetration test, SOC/ISO
   attestation, or compliance certification.
 
+## Current External-Tool Contract Boundary
+
+Objective 012 defines the future version-1 `strict_bounded` and
+`external_tool_fenced` taxonomy/admission contract only. It does not change the
+implemented RC-beta/RC2 runtime boundary: provider-hosted tools, remote MCP/
+connectors, provider URL fetch authority, and unknown authority remain
+deny-only for standard keys. No migration, policy storage, settings, admin/CLI,
+fence/hold, provider forwarding, or real provider call is included.
+
+The future fenced promise explicitly permits one admitted request to exceed
+remaining token/cost quota before SLAIF regains control, while requiring
+exclusive per-key concurrency fencing, authoritative finalization, following-
+request blocking after exhaustion, and a blocking hold for missing, ambiguous,
+interrupted, or unreconciled final cost. This is neither a zero-overrun nor
+provider-invoice guarantee. Objectives 013–017 remain required before any
+external-tool opt-in is current functionality.
+
 ## Release Checklist
 
 Before tagging an RC-beta release:

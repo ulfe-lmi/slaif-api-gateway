@@ -834,6 +834,33 @@ exposure, privacy/storage policy, capability gates, negative tests, and
 documentation before it can be enabled. PostgreSQL must block subsequent
 admission after a finalized overrun.
 
+Objective 012 now defines, but does not activate, the version-1 pure contract
+for that future expansion. It separates client-operated authority from
+provider-hosted/external authority and unknown authority, with two quota modes:
+`strict_bounded` (the default) and `external_tool_fenced` (future explicit
+opt-in). Current runtime behavior remains deny-only for provider-hosted tools,
+remote MCP/connectors, provider URL fetch, and unknown authority. No objective-
+012 policy is stored, forwarded, configured, or exposed through admin/CLI.
+
+The future fenced mode carries this exact product promise: one admitted
+provider-hosted external-tool request may exceed the key's remaining token or
+cost quota before SLAIF regains control. SLAIF will reject concurrent requests
+for that key while the request is unresolved, finalize authoritative provider
+usage/cost when available, reject following requests after exhaustion, and
+retain a blocking accounting hold when final cost is missing, ambiguous,
+interrupted, or awaiting reconciliation. Client-operated tools keep their
+existing independent gates and do not acquire provider authority. Trusted
+calibration observation remains separate from standard-key permission.
+
+External-tool authority markers are examined only at semantic declaration and
+control positions. Local function parameters/JSON Schema, descriptions, and
+custom format/grammar payloads are opaque to this taxonomy, are never retained
+by it, and remain subject to existing endpoint-specific shape, size, depth,
+content, and secret validation. Namespace child declarations are traversed with
+strict depth/count bounds and cannot hide provider-hosted, MCP/connector,
+unknown, malformed, or mixed authority. This position-aware classification
+changes no current runtime denial and grants no forwarding or execution.
+
 Key templates are versioned snapshots for the currently implemented safe
 policy vocabulary. A reviewed template revision can create one normal gateway
 key and records template/revision provenance. Editing a template never silently

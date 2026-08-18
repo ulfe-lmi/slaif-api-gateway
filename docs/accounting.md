@@ -163,6 +163,32 @@ Core invariants:
   raw session config, audio payloads, transcripts, raw SDP, raw events, and
   raw provider bodies are never stored.
 
+## External-tool quota modes (contract only)
+
+Objective 012 defines two mechanically testable future policy modes without
+changing runtime or PostgreSQL state:
+
+- `strict_bounded` is the default. Provider-hosted/external authority is denied;
+  existing client-operated tools retain their independent policy and ordinary
+  per-model-request accounting.
+- `external_tool_fenced` is a future explicit standard-key/route opt-in. It
+  requires positive finite request, token, and EUR limits, exact capability and
+  reviewed-destination intersections, bounded declarations/calls, final usage
+  and cost evidence, and literal overrun acknowledgement.
+
+The fenced promise is exact: one admitted provider-hosted external-tool request
+may exceed the key's remaining token or cost quota before SLAIF regains control.
+SLAIF will reject concurrent requests for that key while the request is
+unresolved, finalize authoritative provider usage/cost when available, reject
+following requests after exhaustion, and retain a blocking accounting hold
+when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
+This is not an invoice guarantee or zero-overrun promise.
+
+Objectives 013–017 must implement the exclusive key fence, durable hold,
+reconciliation, selected provider contracts, and operator surfaces before the
+fenced mode can run. Current runtime remains deny-only; objective 012 adds no
+migration, reservation behavior, forwarding, or provider call.
+
 ## Chat Completions Streaming Live-Burn Margin
 
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md) records a

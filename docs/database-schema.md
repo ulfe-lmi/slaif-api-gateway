@@ -549,6 +549,94 @@ Trusted calibration key rules:
   one key from a template must not mutate the template revision or any existing
   gateway keys.
 
+### Objective 012 external-tool policy contract (not stored)
+
+Objective 012 defines the exact version-1 metadata schemas below for objectives
+013–017. It adds no column, table, constraint, migration, JSON persistence, key
+service integration, or route service integration. Current runtime remains
+deny-only. These examples are a versioned target contract, not accepted current
+`gateway_keys` or `model_routes` metadata.
+
+Conceptual per-key `external_tool_policy`:
+
+```json
+{
+  "version": 1,
+  "mode": "strict_bounded",
+  "allowed_capabilities": [],
+  "allowed_destination_ids": [],
+  "max_provider_tool_calls_per_request": 0,
+  "single_request_overrun_acknowledged": false
+}
+```
+
+The only other mode is `external_tool_fenced`. Its capability list must be a
+non-empty, duplicate-free subset of:
+
+```text
+provider_web_search
+provider_file_search
+provider_code_interpreter
+provider_hosted_shell
+provider_image_generation
+provider_computer_use
+provider_tool_search
+provider_skill
+provider_remote_mcp
+provider_connector
+provider_url_fetch
+```
+
+Reviewed destination IDs are opaque normalized identifiers shaped as
+`connector:<opaque-id>` or `remote_mcp:<opaque-id>`. They are present only for
+the matching destination capability. Raw URLs, provider connector names,
+credentials, authorization, cookies, bearer material, request labels, and
+secret-looking values are not destination IDs and must never be persisted as
+policy. Fenced key policy additionally requires a positive call cap within the
+operator ceiling and literal `single_request_overrun_acknowledged=true`.
+Missing, partial, extra-key, coerced, duplicated, unknown, URL-like,
+secret-looking, or over-ceiling objects grant no permission.
+
+Conceptual `model_routes.capabilities.external_tools`:
+
+```json
+{
+  "version": 1,
+  "supported_capabilities": [],
+  "approved_destination_ids": [],
+  "max_provider_tool_calls_per_request": 0,
+  "call_limit_enforced": false,
+  "final_usage_required": false,
+  "final_cost_required": false
+}
+```
+
+External route support requires non-empty known capabilities, only matching
+reviewed destinations, a positive bounded call cap, and all three booleans
+true. Empty/strict metadata is exactly empty/zero/false. Missing or invalid
+metadata grants no external support. The immutable objective-012 defaults cap
+16 distinct capabilities, 8 destinations, 16 provider declarations per
+request, and 16 provider calls/iterations per request. Objectives 013–017 own
+durable operator configuration and may only narrow those absolute maxima.
+
+`strict_bounded` remains the current/default quota mode. The future
+`external_tool_fenced` promise permits one admitted request to cross remaining
+token/cost quota before control returns, while requiring an exclusive per-key
+fence, following-request block after exhaustion, and blocking accounting hold
+for missing, ambiguous, interrupted, or unreconciled final cost. Provider final
+usage/cost remains authoritative when available; this is not provider-invoice
+truth or a zero-overrun guarantee.
+
+The version-1 taxonomy examines provider markers only at semantic declaration/
+control positions. Local function parameters/JSON Schema, descriptions, and
+custom format/grammar payloads are opaque to authority classification and are
+not retained in its DTOs; existing endpoint validators still independently
+enforce their shape, size, depth, content, and secret rules. Bounded namespace
+child traversal fails closed when a child is provider-hosted, MCP/connector,
+unknown, malformed, cyclic, excessively nested, or over the child-count bound.
+This correction grants no runtime support and does not change the no-storage/
+no-migration status above.
+
 Quota rule:
 
 Before forwarding a request, update reservation counters in the same PostgreSQL transaction that checks limits. Use row locking or atomic conditional updates.
