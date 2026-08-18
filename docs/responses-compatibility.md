@@ -186,6 +186,18 @@ errors, or safe evidence. `additional_tools`, hosted or unknown item types,
 ordinary requests, missing-gate requests, and other endpoints continue to
 reject the field rather than dropping or forwarding it.
 
+Fully gated Codex client-tool history may preserve optional bounded `id` on
+`function_call_output` and `custom_tool_call_output`. A present value must pass
+the existing 128-character ASCII-safe Codex item-ID validator, is canonicalized
+unchanged, contributes its complete canonical bytes to input-token/cost
+estimation, and must be unique across every request history item ID. It is not
+a separate replay/HMAC reference: the output remains authorized only by the
+immediately preceding matching HMAC-owned call and `call_id`. Absent IDs retain
+the prior canonical shape. Ordinary outputs, malformed or duplicate IDs,
+unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
+denied. Raw output IDs are transient provider input and never enter safe
+evidence or persistence.
+
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
 that field absent in the provider request while using the validated Codex route
 maximum (128,000 for the qualification profile) as effective/requested output

@@ -250,6 +250,14 @@ Responses-specific rules for the current foundation:
   They are forwarded after validation and counted conservatively, but are not
   persisted, logged, audited, exported, echoed, or treated as routing,
   ownership, cache, or state authority;
+- the fully gated Codex client-tool replay path may preserve optional bounded
+  `id` on function/custom output items. It is validated with the existing
+  Codex item-ID boundary, reconstructed into the canonical output before byte
+  estimation, and required to be unique across all request history IDs. It is
+  forwarded only as transient provider/model history and creates no separate
+  replay/HMAC reference; immediate matching call/`call_id` ownership remains
+  mandatory. Ordinary outputs and malformed, duplicate, or unknown fields are
+  still rejected, and raw output IDs never enter persistence or safe evidence;
 - a fully gated Codex request requires strict top-level route `codex_limits`
   metadata. After route resolution, SLAIF replaces only the injected ordinary
   output default with the route default, then rejects output above route or

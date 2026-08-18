@@ -381,6 +381,19 @@ Ordinary or partially gated requests, `additional_tools`, hosted/provider
 tools, unknown item types, and any other endpoint retain strict unknown-field
 or unsupported-shape rejection; the metadata field grants no authority.
 
+Pinned Codex 0.147.0 also defines optional `id` on
+`function_call_output` and `custom_tool_call_output`. Only the fully gated
+client-tool replay validator accepts it, using the same non-secret ASCII
+item-ID pattern and 128-character limit as other Codex history IDs. A present
+ID is preserved in canonical/provider input, included completely in input-token
+and cost estimation, and subject to request-wide uniqueness across message,
+reasoning, call, output, and compaction IDs. It creates no replay candidate or
+separate HMAC authority: the output remains usable only immediately after its
+matching HMAC-owned call and `call_id`. Ordinary outputs, malformed IDs,
+unknown fields, duplicates, or broken/cross-type linkage remain fail-closed.
+Raw output IDs are never persisted, logged, audited, exported, or placed in
+safe evidence.
+
 This is one partial client-side streaming tool loop plus opaque V1 compaction,
 not general Codex compatibility. Codex/the downstream client owns and performs the local tool
 execution; SLAIF only validates and forwards the bounded model protocol.

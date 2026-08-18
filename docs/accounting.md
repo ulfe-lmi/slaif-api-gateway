@@ -68,6 +68,13 @@ Core invariants:
   live-burn estimation count their bounded canonical bytes, but safe evidence
   retains only category/count/byte totals. It never retains call IDs, item IDs,
   arguments, results, reasoning, or message text.
+- Fully gated Codex function/custom output items may carry the pinned optional
+  bounded `id`. When present, its complete canonical bytes are included in
+  model-input admission and cost estimation, including the existing item-ID
+  estimate, while provider final usage/cost remains authoritative. The ID is
+  transient upstream history only: it creates no separate replay/HMAC
+  reference and never enters ledger metadata, safe evidence, logs, audits,
+  metrics, or exports. Ordinary function/custom outputs continue to reject it.
 - Provider-encrypted Codex reasoning generation/replay requires the independent
   default-off `codex_encrypted_reasoning_replay` key and route capability.
   Encrypted and summary bytes are bounded and counted conservatively as model

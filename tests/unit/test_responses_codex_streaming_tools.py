@@ -691,11 +691,118 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
 
 
 @pytest.mark.parametrize(
+    ("custom", "output_id"),
+    [
+        (False, "fco_1"),
+        (True, "ctco_" + "a" * 36),
+    ],
+)
+def test_optional_bounded_codex_output_item_id_is_canonical(custom: bool, output_id: str) -> None:
+    if custom:
+        assert len(output_id) == len(output_id.encode("ascii")) == 41
+    call_type = "custom_tool_call" if custom else "function_call"
+    output_type = "custom_tool_call_output" if custom else "function_call_output"
+    text_field = "input" if custom else "arguments"
+    name = "exec" if custom else "wait"
+    call = {
+        "type": call_type,
+        "id": "ctc_1" if custom else "fc_1",
+        "namespace": "functions",
+        "name": name,
+        "call_id": "call_1",
+        text_field: "bounded",
+    }
+    output = {
+        "type": output_type,
+        "id": output_id,
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+
+    result = _apply(_body(input_items=[_additional_tools(), call, output]))
+
+    assert result.effective_body["input"][2] == output
+
+
+@pytest.mark.parametrize(
+    "invalid_id",
+    [
+        7,
+        "",
+        "bad/output-id",
+        "x" * 129,
+    ],
+)
+def test_malformed_codex_output_item_ids_fail_safely(invalid_id: object) -> None:
+    items = [
+        _additional_tools(),
+        {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "namespace": "functions",
+            "name": "exec",
+            "call_id": "call_1",
+            "input": "bounded",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "id": invalid_id,
+            "call_id": "call_1",
+            "output": PRIVATE_CANARY,
+        },
+    ]
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(input_items=items))
+
+    assert exc_info.value.error_code == "responses_codex_envelope_invalid"
+    assert exc_info.value.param == "input[2].id"
+    assert PRIVATE_CANARY not in exc_info.value.safe_message
+    assert PRIVATE_CANARY not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("unknown_field", ["name", "status", "metadata"])
+def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> None:
+    output = {
+        "type": "custom_tool_call_output",
+        "id": "ctco_1",
+        "call_id": "call_1",
+        "output": PRIVATE_CANARY,
+        unknown_field: PRIVATE_CANARY,
+    }
+    items = [
+        _additional_tools(),
+        {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "namespace": "functions",
+            "name": "exec",
+            "call_id": "call_1",
+            "input": "bounded",
+        },
+        output,
+    ]
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(input_items=items))
+
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+    assert exc_info.value.param == f"input[2].{unknown_field}"
+    assert PRIVATE_CANARY not in exc_info.value.safe_message
+    assert PRIVATE_CANARY not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
     "items",
     [
         [
             _additional_tools(),
-            {"type": "function_call_output", "call_id": "call_1", "output": "orphan"},
+            {
+                "type": "function_call_output",
+                "id": "fco_orphan",
+                "call_id": "call_1",
+                "output": "orphan",
+            },
         ],
         [
             _additional_tools(),
@@ -706,7 +813,12 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
                 "call_id": "call_1",
                 "arguments": "{}",
             },
-            {"type": "function_call_output", "call_id": "call_1", "output": "x"},
+            {
+                "type": "function_call_output",
+                "id": "fco_unknown",
+                "call_id": "call_1",
+                "output": "x",
+            },
         ],
         [
             _additional_tools(),
@@ -717,7 +829,12 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
                 "call_id": "call_1",
                 "arguments": "{}",
             },
-            {"type": "custom_tool_call_output", "call_id": "call_1", "output": "x"},
+            {
+                "type": "custom_tool_call_output",
+                "id": "ctco_cross_type",
+                "call_id": "call_1",
+                "output": "x",
+            },
         ],
         [
             _additional_tools(),
@@ -729,7 +846,12 @@ def test_roundtrip_replay_is_deep_copied_metered_and_exact(custom: bool) -> None
                 "call_id": "call_1",
                 "input": PRIVATE_CANARY,
             },
-            {"type": "custom_tool_call_output", "call_id": "call_1", "output": "x"},
+            {
+                "type": "custom_tool_call_output",
+                "id": "ctco_unapproved",
+                "call_id": "call_1",
+                "output": "x",
+            },
         ],
     ],
 )

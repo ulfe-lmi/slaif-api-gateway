@@ -103,6 +103,8 @@ _SUPPORTED_INPUT_IMAGE_PART_FIELDS = frozenset({"type", "image_url", "detail"})
 _SUPPORTED_INPUT_FILE_PART_FIELDS = frozenset({"type", "file_url", "filename", "file_data"})
 _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
+_SUPPORTED_CODEX_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "id", "call_id", "output"})
+_SUPPORTED_CODEX_CUSTOM_TOOL_CALL_OUTPUT_FIELDS = frozenset({"type", "id", "call_id", "output"})
 _SUPPORTED_CODEX_TOOL_OUTPUT_CONTENT_FIELDS = frozenset({"type", "text"})
 _SUPPORTED_CODEX_FUNCTION_CALL_FIELDS = frozenset(
     {"type", "id", "status", "namespace", "name", "arguments", "call_id"}
@@ -1882,9 +1884,9 @@ class ResponsesRequestPolicy:
         custom: bool,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         allowed_fields = (
-            _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
+            _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
             if custom
-            else _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS
+            else _SUPPORTED_CODEX_FUNCTION_CALL_OUTPUT_FIELDS
         )
         unknown = set(item) - allowed_fields
         if unknown:
@@ -1965,6 +1967,11 @@ class ResponsesRequestPolicy:
             "call_id": call_id,
             "output": canonical_output,
         }
+        if "id" in item:
+            canonical["id"] = self._validate_codex_message_id(
+                item.get("id"),
+                param=f"{param}.id",
+            )
         material_bytes = len(canonical_json_bytes(canonical))
         return canonical, material_bytes, material_bytes, 0, 0, 0, 0
 

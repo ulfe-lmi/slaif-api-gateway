@@ -238,6 +238,33 @@ def test_codex_compact_accepts_pinned_18_137_byte_child_description() -> None:
     assert "input[].additional_tools" in result.estimated_non_message_input_fields
 
 
+def test_compact_preserves_bounded_output_ids_without_creating_replay_candidates() -> None:
+    body = _fully_gated_history_body(include_metadata=False)
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    function_output = input_items[5]
+    custom_output = input_items[7]
+    assert isinstance(function_output, dict)
+    assert isinstance(custom_output, dict)
+    function_output["id"] = "fco_compact_1"
+    custom_output_id = "ctco_" + "a" * 36
+    assert len(custom_output_id) == len(custom_output_id.encode("ascii")) == 41
+    custom_output["id"] = custom_output_id
+    original = copy.deepcopy(body)
+
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        body,
+        allow_codex_compaction=True,
+    )
+    candidates = codex_replay_request_candidates(result.effective_body)
+
+    assert body == original
+    assert result.effective_body["input"][5]["id"] == "fco_compact_1"
+    assert result.effective_body["input"][7]["id"] == custom_output_id
+    assert "fco_compact_1" not in repr(candidates)
+    assert custom_output_id not in repr(candidates)
+
+
 def test_fully_gated_codex_history_drops_internal_chat_metadata_from_every_surface() -> None:
     metadata = {
         "turn_id": "private-turn",

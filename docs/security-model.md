@@ -723,6 +723,16 @@ evidence surface. The dropped bytes count as zero model input. Partial gates,
 ordinary requests, `additional_tools`, hosted/provider items, unknown types, and
 all other endpoint shapes remain fail-closed.
 
+Pinned optional IDs on fully gated Codex function/custom output items remain
+transient provider/model history. They use the same bounded non-secret ASCII
+item-ID validation and request-wide uniqueness check as other Codex history
+IDs, and their canonical bytes are metered. They do not grant tool, execution,
+route, provider, replay, or HMAC authority; the immediately preceding
+HMAC-owned call and exact `call_id` remain mandatory. Raw output IDs never enter
+persistence, logs, audits, metrics, exports, errors, or safe evidence. Ordinary
+outputs, malformed/duplicate IDs, unknown fields, and broken or cross-type
+linkage remain denied.
+
 The separate client-tool declaration slice accepts at most one developer
 `additional_tools` item only when `codex_request_envelope` and
 `codex_client_tools` are each present on both the key and route. It admits
