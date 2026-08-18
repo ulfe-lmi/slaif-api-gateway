@@ -555,7 +555,10 @@ default-off and policy-first:
   by operator ceilings. An omitted output maximum becomes the bounded route
   default (32,768 for the qualification profile), never an unbounded request;
   ordinary Responses retains 1,024. Route/model names and headers cannot grant
-  these limits.
+  these limits. Gated pinned V1 compact instead keeps `max_output_tokens`
+  absent upstream and uses the validated route maximum (128,000 in the
+  qualification profile) as its bounded output exposure for context, quota,
+  pricing, and safe evidence; ordinary compact is unchanged.
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
@@ -582,10 +585,16 @@ default-off and policy-first:
   capabilities plus default-off `codex_compaction` on the key and route. It
   verifies every replay item before side effects and permits a different route
   row only through explicit same-provider/same-model compatibility metadata.
+  Provider success is accepted only with one exact opaque item, strict usage,
+  and a top-level allowlist of required `output`/`usage` plus optional validated
+  `id`, `object`, and `created_at`.
   After final usage and PostgreSQL accounting, SLAIF stores only a
   domain-separated HMAC over the opaque compaction ID plus ciphertext with safe
   ownership/routing/expiry metadata. Raw IDs, ciphertext, digests, cache keys,
   history, and bodies never persist or enter logs/audit/metrics/exports/errors.
+  Normal compact success metrics and the response occur only after HMAC
+  persistence; persistence failure remains charged and produces a safe error
+  without either normal success signal.
   V2 triggers, background, hosted tools, MCP, and provider authority remain
   unsupported.
 - `/v1/responses` and `/v1/responses/compact` reject non-identity

@@ -66,7 +66,12 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
+from slaif_gateway.schemas.providers import (
+    ProviderRequest,
+    ProviderResponse,
+    ProviderStreamChunk,
+    ProviderUsage,
+)
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.rate_limits import RateLimitPolicy
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -345,7 +350,8 @@ def _validate_compact_response(
             upstream_status_code=provider_response.status_code,
             error_code="provider_response_invalid",
         )
-    if provider_response.usage is None:
+    raw_usage = payload.get("usage")
+    if provider_response.usage is None or not isinstance(raw_usage, Mapping):
         raise ProviderError(
             "Provider Responses compact response did not include usage metadata.",
             provider=provider_response.provider,
@@ -354,6 +360,24 @@ def _validate_compact_response(
         )
     if not codex_compaction:
         return None
+    if (
+        set(payload) - {"output", "usage", "id", "object", "created_at"}
+        or "output" not in payload
+        or "usage" not in payload
+        or ("object" in payload and payload["object"] != "response.compaction")
+        or ("id" in payload and not _valid_codex_compact_response_id(payload["id"]))
+        or (
+            "created_at" in payload
+            and not _valid_codex_compact_created_at(payload["created_at"])
+        )
+        or not _valid_codex_compact_usage(raw_usage, provider_response.usage)
+    ):
+        raise ProviderError(
+            "Provider returned an invalid Codex compact response.",
+            provider=provider_response.provider,
+            upstream_status_code=provider_response.status_code,
+            error_code="responses_codex_compaction_response_invalid",
+        )
     output = payload.get("output")
     if not isinstance(output, list) or len(output) != 1:
         raise ProviderError(
@@ -398,6 +422,90 @@ def _validate_compact_response(
         tool_name=None,
         encrypted_content=encrypted_content,
     )
+
+
+def _valid_codex_compact_response_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value.encode("utf-8")) <= 512
+        and all(ord(character) >= 32 and ord(character) != 127 for character in value)
+    )
+
+
+def _valid_codex_compact_created_at(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= 2**63 - 1
+
+
+def _valid_codex_compact_usage(raw: Mapping[str, object], usage: ProviderUsage) -> bool:
+    allowed = {
+        "input_tokens",
+        "input_tokens_details",
+        "output_tokens",
+        "output_tokens_details",
+        "total_tokens",
+    }
+    if set(raw) - allowed:
+        return False
+
+    def _count(value: object) -> bool:
+        return not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= 2**63 - 1
+
+    input_tokens = raw.get("input_tokens")
+    output_tokens = raw.get("output_tokens")
+    total_tokens = raw.get("total_tokens")
+    if not all(_count(value) for value in (input_tokens, output_tokens, total_tokens)):
+        return False
+    assert isinstance(input_tokens, int)
+    assert isinstance(output_tokens, int)
+    assert isinstance(total_tokens, int)
+    if total_tokens != input_tokens + output_tokens:
+        return False
+    if (
+        usage.prompt_tokens != input_tokens
+        or usage.completion_tokens != output_tokens
+        or usage.total_tokens != total_tokens
+    ):
+        return False
+
+    input_details = raw.get("input_tokens_details")
+    if input_details is not None:
+        if not isinstance(input_details, Mapping) or set(input_details) - {
+            "cached_tokens",
+            "cache_write_tokens",
+        }:
+            return False
+        cached_tokens = input_details.get("cached_tokens", 0)
+        cache_write_tokens = input_details.get("cache_write_tokens", 0)
+        if not _count(cached_tokens) or not _count(cache_write_tokens):
+            return False
+        assert isinstance(cached_tokens, int)
+        assert isinstance(cache_write_tokens, int)
+        if cached_tokens + cache_write_tokens > input_tokens:
+            return False
+        if (
+            usage.cached_tokens != input_details.get("cached_tokens")
+            or usage.cache_write_tokens != input_details.get("cache_write_tokens")
+        ):
+            return False
+    elif usage.cached_tokens is not None or usage.cache_write_tokens is not None:
+        return False
+
+    output_details = raw.get("output_tokens_details")
+    if output_details is not None:
+        if not isinstance(output_details, Mapping) or set(output_details) - {"reasoning_tokens"}:
+            return False
+        reasoning_tokens = output_details.get("reasoning_tokens", 0)
+        if not _count(reasoning_tokens):
+            return False
+        assert isinstance(reasoning_tokens, int)
+        if reasoning_tokens > output_tokens:
+            return False
+        if usage.reasoning_tokens != output_details.get("reasoning_tokens"):
+            return False
+    elif usage.reasoning_tokens is not None:
+        return False
+    return True
 
 
 async def handle_response_input_tokens_count(
@@ -520,6 +628,7 @@ async def handle_response_compact(
                 route_capabilities=route.capabilities,
                 settings=settings,
                 include_output_field=False,
+                reserve_route_max_output=True,
             )
         except RequestPolicyError as exc:
             raise openai_error_from_request_policy_error(exc) from exc
@@ -595,12 +704,6 @@ async def handle_response_compact(
                 request=request,
                 provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
             )
-            _record_success_metrics(
-                route=route,
-                provider_response=provider_response,
-                accounting_result=accounting_result,
-                provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
-            )
             if compact_candidate is not None:
                 await _persist_codex_replay_references(
                     candidates=(compact_candidate,),
@@ -611,6 +714,12 @@ async def handle_response_compact(
                     settings=settings,
                     request=request,
                 )
+            _record_success_metrics(
+                route=route,
+                provider_response=provider_response,
+                accounting_result=accounting_result,
+                provider_endpoint=RESPONSES_COMPACT_PROVIDER_ENDPOINT,
+            )
         except AccountingError as exc:
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc

@@ -246,7 +246,9 @@ Responses-specific rules for the current foundation:
   operator maximum and rejects estimated input plus output above context before
   Redis, pricing, quota, or provider work. The qualification profile's 32,768
   default and 1,050,000/128,000 limits are configured model data, not universal
-  facts; ordinary Responses remains at 1,024;
+  facts; ordinary Responses remains at 1,024. Gated pinned V1 compact is the
+  explicit exception: it preserves an absent upstream `max_output_tokens` field
+  while using the validated route maximum as its effective/requested exposure;
 - one Codex `additional_tools` input item is reconstructed only when both the
   key and route independently enable both `codex_request_envelope` and
   `codex_client_tools`. Its canonical shape is `role=developer` with exactly
@@ -384,9 +386,14 @@ Responses-specific rules for the current foundation:
   same-upstream-model compatible-route UUID list;
 - a Codex compact provider success must contain supported final usage and
   exactly one bounded opaque compaction item with a safe ID and non-empty
-  ciphertext. Accounting finalizes first; SLAIF then HMACs the length-delimited
+  ciphertext. The top-level response permits only required `output`/`usage`
+  plus optional validated `id`, `object`, and `created_at`; unknown fields,
+  malformed metadata or usage, extra output, and plaintext item fields fail
+  closed. Accounting finalizes first; SLAIF then HMACs the length-delimited
   ID/ciphertext composite and persists only the digest plus safe ownership,
-  route, model, and expiry metadata before releasing unary success. Neither raw
+  route, model, and expiry metadata before recording normal compact success
+  metrics or releasing unary success. Persistence failure remains charged but
+  produces neither normal success metric nor response. Neither raw
   component is stored, logged, audited, exported, or metric-labelled;
 - streaming preserves Responses event types such as `response.created`,
   `response.output_text.delta`, `response.completed`, and safe gateway `error`

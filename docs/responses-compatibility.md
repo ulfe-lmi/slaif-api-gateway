@@ -174,11 +174,23 @@ fields. Prior reasoning/tool/compaction history must pass same-key HMAC lookup
 before side effects. A different compact route row requires explicit same-
 provider/same-upstream-model compatible-route metadata.
 
+The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
+that field absent in the provider request while using the validated Codex route
+maximum (128,000 for the qualification profile) as effective/requested output
+exposure for context admission, quota reservation, pricing, and safe evidence.
+This exception changes neither ordinary compact's configured default nor
+ordinary Responses output-default behavior.
+
 The Codex provider response must contain supported final usage and exactly one
 opaque `compaction` item with a safe ID and non-empty capped encrypted content.
+Its top level allows only required `output` and `usage` plus optional validated
+`id`, `object`, and `created_at`; unknown fields, malformed metadata or usage,
+extra output, and plaintext item fields are rejected.
 After finalized PostgreSQL accounting, SLAIF stores only a versioned composite
 HMAC over both opaque values plus safe ownership/routing/expiry metadata before
-returning success. Neither raw value is stored or inspected. Later gated create
+recording the normal compact success metric and returning success. HMAC
+persistence failure remains charged but returns a safe 500-class error and no
+normal success metric. Neither raw value is stored or inspected. Later gated create
 or compact history must prove that composite HMAC. This is client-managed
 opaque V1 history, not local content storage; V2, background, and hosted tools
 remain unsupported.

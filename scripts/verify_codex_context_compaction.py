@@ -14,6 +14,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from slaif_gateway.config import Settings
+from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.responses_request_policy import (
+    ResponsesRequestPolicy,
+    apply_codex_route_limits,
+)
+
 try:
     import capture_codex_protocol as capture
 except ModuleNotFoundError:
@@ -28,6 +35,13 @@ TOOL_CALL_ID = "call_slaif_context_1"
 FINAL_MESSAGE_ID = "msg_slaif_context_final"
 EXPECTED_PATHS = ("/v1/responses", "/v1/responses/compact", "/v1/responses")
 MAX_SUBPROCESS_OUTPUT_BYTES = 512_000
+CODEX_ROUTE_CAPABILITIES = {
+    "codex_limits": {
+        "context_window_tokens": 1_050_000,
+        "default_max_output_tokens": 32_768,
+        "max_output_tokens": 128_000,
+    }
+}
 
 
 class VerificationError(RuntimeError):
@@ -314,7 +328,31 @@ def _validate_http_request(
         _request_json(request)
 
 
-def _validate_sequence(requests: list[capture.ParsedHttpRequest]) -> None:
+def _validate_captured_compact_policy(body: dict[str, Any]) -> bool:
+    try:
+        policy_result = ResponsesRequestPolicy(Settings()).apply_compact(
+            body,
+            allow_codex_compaction=True,
+        )
+        policy_result = apply_codex_route_limits(
+            policy_result,
+            route_capabilities=CODEX_ROUTE_CAPABILITIES,
+            settings=Settings(),
+            include_output_field=False,
+            reserve_route_max_output=True,
+        )
+    except RequestPolicyError as exc:
+        raise VerificationError("Captured V1 compact request failed gateway policy.") from exc
+    if (
+        policy_result.effective_output_tokens != 128_000
+        or policy_result.requested_output_tokens != 128_000
+        or "max_output_tokens" in policy_result.effective_body
+    ):
+        raise VerificationError("Captured V1 compact request used unsafe gateway exposure.")
+    return True
+
+
+def _validate_sequence(requests: list[capture.ParsedHttpRequest]) -> bool:
     if len(requests) != len(EXPECTED_PATHS):
         raise VerificationError("Verifier did not receive exactly three requests.")
     bodies = [_request_json(request) for request in requests]
@@ -323,6 +361,7 @@ def _validate_sequence(requests: list[capture.ParsedHttpRequest]) -> None:
         raise VerificationError("Pinned Codex did not send bounded prompt-cache keys.")
     if len(set(cache_keys)) != 1:
         raise VerificationError("Pinned Codex did not reuse one prompt-cache key.")
+    gateway_compact_policy_accepted = _validate_captured_compact_policy(bodies[1])
     if any("content-encoding" in request.headers for request in requests):
         raise VerificationError("API-key Codex unexpectedly compressed a request.")
     compact_input = bodies[1].get("input")
@@ -355,6 +394,7 @@ def _validate_sequence(requests: list[capture.ParsedHttpRequest]) -> None:
         for item in (body.get("input") if isinstance(body.get("input"), list) else [])
     ):
         raise VerificationError("Verifier observed unapproved tool authority.")
+    return gateway_compact_policy_accepted
 
 
 def _command(codex_binary: Path, *, workdir: Path, port: int) -> list[str]:
@@ -440,7 +480,7 @@ def verify(args: argparse.Namespace) -> dict[str, object]:
         for event in _safe_json_event(line)
     ):
         raise VerificationError("Pinned Codex did not complete the bounded turn.")
-    _validate_sequence(requests)
+    gateway_compact_policy_accepted = _validate_sequence(requests)
     del requests, result
     return {
         "result": "OK",
@@ -454,6 +494,7 @@ def verify(args: argparse.Namespace) -> dict[str, object]:
         "threshold_edge_seen": True,
         "above_threshold_seen": True,
         "v1_compact_seen": True,
+        "gateway_compact_policy_accepted": gateway_compact_policy_accepted,
         "post_compact_continuation_seen": True,
         "content_encoding_absent": True,
         "loopback_only": True,

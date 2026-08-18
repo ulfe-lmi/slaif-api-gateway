@@ -3540,6 +3540,7 @@ def apply_codex_route_limits(
     route_capabilities: Mapping[str, object] | None,
     settings: Settings,
     include_output_field: bool = True,
+    reserve_route_max_output: bool = False,
 ) -> ResponsesPolicyResult:
     """Finalize fully gated Codex limits after route resolution and before side effects."""
 
@@ -3550,11 +3551,12 @@ def apply_codex_route_limits(
             "responses_codex_limits_invalid",
             "The route Codex output default exceeds the operator ceiling.",
         )
-    output_tokens = (
-        limits.default_max_output_tokens
-        if policy_result.injected_default_output_tokens
-        else policy_result.requested_output_tokens
-    )
+    if reserve_route_max_output:
+        output_tokens = limits.max_output_tokens
+    elif policy_result.injected_default_output_tokens:
+        output_tokens = limits.default_max_output_tokens
+    else:
+        output_tokens = policy_result.requested_output_tokens
     if output_tokens > limits.max_output_tokens:
         _raise(
             "max_output_tokens",

@@ -88,6 +88,39 @@ def test_ordinary_responses_keeps_legacy_default() -> None:
     assert result.codex_limits_applied is False
 
 
+def test_codex_compact_reserves_route_maximum_without_forwarding_output_field() -> None:
+    compact = ResponsesRequestPolicy(Settings()).apply_compact(
+        {
+            "model": "gpt-5.6-sol",
+            "input": [{"type": "message", "role": "user", "content": "bounded"}],
+            "prompt_cache_key": "safe-session-key",
+        },
+        allow_codex_compaction=True,
+    )
+    final = apply_codex_route_limits(
+        compact,
+        route_capabilities=_route_capabilities(),
+        settings=Settings(),
+        include_output_field=False,
+        reserve_route_max_output=True,
+    )
+    assert final.requested_output_tokens == 128_000
+    assert final.effective_output_tokens == 128_000
+    assert "max_output_tokens" not in final.effective_body
+
+    with pytest.raises(Exception) as context_exc:
+        apply_codex_route_limits(
+            compact.model_copy(update={"estimated_input_tokens": 922_001}),
+            route_capabilities=_route_capabilities(),
+            settings=Settings(),
+            include_output_field=False,
+            reserve_route_max_output=True,
+        )
+    assert getattr(context_exc.value, "error_code", None) == (
+        "responses_codex_context_window_exceeded"
+    )
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

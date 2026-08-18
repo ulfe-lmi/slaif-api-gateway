@@ -71,6 +71,12 @@ Core invariants:
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,
   quota, or provider work. Ordinary non-Codex admission remains unchanged.
+  Gated V1 compact is the deliberate exception: because the pinned client does
+  not send `max_output_tokens`, SLAIF keeps that field absent upstream but uses
+  the validated route maximum (128,000 in the qualification profile) as the
+  effective/requested output exposure for context checks, reservation, pricing,
+  and safe admission evidence. Ordinary compact and ordinary Responses retain
+  their existing defaults.
   The 1,050,000 context and 128,000 output qualification ceilings are configured
   model data, not hardcoded universal limits.
 - Codex pricing partitions provider input into cached reads, cache writes, and
@@ -85,7 +91,9 @@ Core invariants:
 - A gated V1 compact response becomes replayable only after final provider
   usage and finalized PostgreSQL accounting. SLAIF then persists only a
   versioned HMAC over the opaque compaction ID plus ciphertext and safe
-  ownership/routing metadata. Persistence failure is a charged safe failure.
+  ownership/routing metadata. Only after that persistence succeeds does SLAIF
+  emit its normal compact success metric and response. Persistence failure is a
+  charged safe failure with no normal success metric or response.
   Raw compact history, IDs, ciphertext, prompt-cache keys, and HMACs never enter
   accounting metadata.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw

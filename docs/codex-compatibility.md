@@ -332,11 +332,19 @@ provider-invoice truth. OpenRouter provider-cost authority remains unchanged.
 V1 remote compaction forms a fifth independent slice. Both key and route must
 enable `codex_compaction` plus all four earlier Codex capabilities. The request
 is rebuilt from the exact pinned compact fields and history, and all prior
-HMAC ownership is verified before side effects. The provider must return one
-bounded opaque compaction item and supported final usage. After PostgreSQL
-accounting, SLAIF persists only a versioned, length-delimited HMAC over both
-the item ID and encrypted content plus safe ownership/routing/expiry metadata;
-neither raw component is stored, logged, audited, exported, or exposed. Later
+HMAC ownership is verified before side effects. Because the pinned V1 request
+omits `max_output_tokens`, SLAIF also omits that upstream field while reserving
+the validated route maximum (128,000 for the qualification profile) as output
+exposure for context, quota, pricing, and safe evidence. The provider must
+return one bounded opaque compaction item and supported final usage in a strict
+top-level envelope containing only required `output`/`usage` and optional safe
+`id`, `object`, and `created_at`. After PostgreSQL accounting, SLAIF persists
+only a versioned, length-delimited HMAC over both the item ID and encrypted
+content plus safe ownership/routing/expiry metadata; normal compact success
+metrics and the response follow that persistence, so a persistence failure is
+charged but produces neither normal success signal. Ordinary Responses and
+non-Codex compact behavior are unchanged. Neither raw component is stored,
+logged, audited, exported, or exposed. Later
 create/compact replay must prove the same composite for the same key/provider/
 model and an explicitly compatible route. V2 `compaction_trigger`, background,
 hosted tools, MCP, and provider-side authority remain unsupported.
@@ -407,7 +415,8 @@ The context/compaction verifier is also numeric-loopback-only, uses a dummy
 key and private temporary directories, and calls no real provider. Its fixed
 safe mock exercises prompt-cache reuse, cache-write/cached/reasoning usage on
 both sides of the configured long-context threshold, exactly one V1 compact
-request, opaque compaction replay, and post-compact continuation. Only safe
+request, the exact captured body passing the gateway compact policy with route-
+maximum exposure, opaque compaction replay, and post-compact continuation. Only safe
 counts/booleans/types are emitted; requests, responses, headers, IDs, cache
 keys, ciphertext, prompts, tool payloads, subprocess output, and assistant text
 are neither printed nor persisted. This is local protocol qualification only;
