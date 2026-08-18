@@ -256,7 +256,10 @@ async def _create_dashboard_data(database_url: str) -> dict[str, object]:
                     entity_type="gateway_key",
                     entity_id=key.id,
                     old_values={"token_hash": "secret"},
-                    new_values={"safe": "browser-audit-ok", "provider_api_key": FAKE_PROVIDER_KEY_VALUE},
+                    new_values={
+                        "safe": "browser-audit-ok",
+                        "provider_api_key": FAKE_PROVIDER_KEY_VALUE,
+                    },
                     ip_address="127.0.0.1",
                     user_agent="playwright",
                     request_id=f"req_audit_browser_{suffix}",
@@ -451,6 +454,9 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert 'name="trusted_calibration"' in html
                     assert 'name="confirm_trusted_calibration"' in html
                     assert "Do not issue them to participants" in html
+                    assert 'name="external_tool_mode"' in html
+                    assert 'name="confirm_external_tool_fenced"' in html
+                    assert "runtime still denies provider-hosted tools" in html
                 if path == "/admin":
                     assert 'href="/admin/templates"' in html
                 if path == "/admin/templates":
@@ -459,6 +465,9 @@ def test_admin_dashboard_browser_smoke() -> None:
                 if path == f"/admin/keys/{data['key_id']}":
                     assert "key_purpose" not in html
                     assert "trusted_calibration" not in html
+                    assert 'action="/admin/keys/' in html
+                    assert "/external-tool-policy" in html
+                    assert "Configured policy is not runtime authority" in html
                 if path == f"/admin/keys/{data['trusted_key_id']}":
                     assert "Preview calibration policy" in html
                     assert "Trusted Calibration Key" in html
@@ -466,6 +475,8 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert "Preview strict participant policy" in html
                     assert 'name="multiplier"' in html
                     assert "does not mutate gateway key policy" in html
+                if path == "/admin/routes/new":
+                    assert "runtime remains denied pending objectives 014" in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')
@@ -513,17 +524,26 @@ def test_admin_key_policy_selector_browser_flow() -> None:
             assert available_model.get_attribute("data-codex-protocol-ready") == "false"
             page.click('[data-policy-add="models"]')
 
-            assert page.locator('#create-policy-providers-selected option[value]').count() == 1
-            assert page.locator('#create-policy-endpoints-selected option[value]').count() == 1
-            assert page.locator('#create-policy-models-selected option[value]').count() == 1
-            assert page.locator('textarea[name="allowed_providers"]').input_value() == data["provider_slug"]
-            assert page.locator('textarea[name="allowed_endpoints"]').input_value() == "/v1/chat/completions"
-            assert page.locator('textarea[name="allowed_models"]').input_value() == f"browser-gpt-{data['suffix']}"
+            assert page.locator("#create-policy-providers-selected option[value]").count() == 1
+            assert page.locator("#create-policy-endpoints-selected option[value]").count() == 1
+            assert page.locator("#create-policy-models-selected option[value]").count() == 1
+            assert (
+                page.locator('textarea[name="allowed_providers"]').input_value()
+                == data["provider_slug"]
+            )
+            assert (
+                page.locator('textarea[name="allowed_endpoints"]').input_value()
+                == "/v1/chat/completions"
+            )
+            assert (
+                page.locator('textarea[name="allowed_models"]').input_value()
+                == f"browser-gpt-{data['suffix']}"
+            )
             assert page.locator('input[name="codex_protocol_pilot"]').count() == 1
             assert page.locator('input[name="confirm_codex_protocol_pilot"]').count() == 1
 
             page.goto(f"/admin/keys/{data['key_id']}")
             assert "Update Request Policy" in page.content()
-            assert page.locator('[data-policy-selector-surface]').count() >= 1
+            assert page.locator("[data-policy-selector-surface]").count() >= 1
         finally:
             context.close()

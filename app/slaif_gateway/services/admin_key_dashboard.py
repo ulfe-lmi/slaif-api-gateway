@@ -15,6 +15,12 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     chat_streaming_live_burn_policy_from_metadata,
     default_chat_streaming_live_burn_policy,
 )
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    ExternalToolOperatorCeilings,
+    parse_key_external_tool_policy,
+    strict_key_policy,
+)
 from slaif_gateway.services.streaming_live_burn_surface import (
     CHAT_STREAMING_LIVE_BURN_SURFACE,
     streaming_live_burn_surface_policy_summary,
@@ -47,8 +53,16 @@ class _GatewayKeysAdminRepository(Protocol):
 class AdminKeyDashboardService:
     """Build safe read-only key dashboard DTOs from repository rows."""
 
-    def __init__(self, *, gateway_keys_repository: _GatewayKeysAdminRepository) -> None:
+    def __init__(
+        self,
+        *,
+        gateway_keys_repository: _GatewayKeysAdminRepository,
+        external_tool_ceilings: ExternalToolOperatorCeilings = (
+            DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+        ),
+    ) -> None:
         self._gateway_keys = gateway_keys_repository
+        self._external_tool_ceilings = external_tool_ceilings
 
     async def list_keys(
         self,
@@ -75,7 +89,10 @@ class AdminKeyDashboardService:
             limit=limit,
             offset=offset,
         )
-        return [_to_list_row(row, now=timestamp) for row in rows]
+        return [
+            _to_list_row(row, now=timestamp, external_tool_ceilings=self._external_tool_ceilings)
+            for row in rows
+        ]
 
     async def get_key_detail(
         self,
@@ -87,11 +104,24 @@ class AdminKeyDashboardService:
         row = await self._gateway_keys.get_key_for_admin_detail(gateway_key_id)
         if row is None:
             raise AdminKeyNotFoundError("Gateway key not found")
-        return _to_detail(row, now=timestamp)
+        return _to_detail(
+            row,
+            now=timestamp,
+            external_tool_ceilings=self._external_tool_ceilings,
+        )
 
 
-def _to_detail(row: GatewayKey, *, now: datetime) -> AdminKeyDetail:
-    list_row = _to_list_row(row, now=now)
+def _to_detail(
+    row: GatewayKey,
+    *,
+    now: datetime,
+    external_tool_ceilings: ExternalToolOperatorCeilings,
+) -> AdminKeyDetail:
+    list_row = _to_list_row(
+        row,
+        now=now,
+        external_tool_ceilings=external_tool_ceilings,
+    )
     return AdminKeyDetail(
         **asdict(list_row),
         revoked_at=row.revoked_at,
@@ -103,7 +133,12 @@ def _to_detail(row: GatewayKey, *, now: datetime) -> AdminKeyDetail:
     )
 
 
-def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
+def _to_list_row(
+    row: GatewayKey,
+    *,
+    now: datetime,
+    external_tool_ceilings: ExternalToolOperatorCeilings,
+) -> AdminKeyListRow:
     owner = getattr(row, "owner", None)
     institution = getattr(owner, "institution", None) if owner is not None else None
     cohort = getattr(row, "cohort", None)
@@ -120,7 +155,9 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         cohort_id=row.cohort_id,
         cohort_name=getattr(cohort, "name", None),
         status=row.status,
-        computed_display_status=compute_key_display_status(row.status, row.valid_from, row.valid_until, now=now),
+        computed_display_status=compute_key_display_status(
+            row.status, row.valid_from, row.valid_until, now=now
+        ),
         can_suspend=row.status == "active",
         can_activate=row.status == "suspended",
         can_revoke=row.status in {"active", "suspended"},
@@ -148,7 +185,9 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         template_id=getattr(row, "template_id", None),
         template_revision_id=getattr(row, "template_revision_id", None),
         allowed_models_summary=_allowed_values_summary(row.allow_all_models, row.allowed_models),
-        allowed_endpoints_summary=_allowed_values_summary(row.allow_all_endpoints, row.allowed_endpoints),
+        allowed_endpoints_summary=_allowed_values_summary(
+            row.allow_all_endpoints, row.allowed_endpoints
+        ),
         allowed_providers_summary=_allowed_providers_summary(row.metadata_json),
         rate_limit_policy_summary=_rate_limit_policy_summary(row),
         responses_policy=_responses_policy(row.metadata_json),
@@ -156,6 +195,14 @@ def _to_list_row(row: GatewayKey, *, now: datetime) -> AdminKeyListRow:
         chat_streaming_live_burn_policy=_chat_streaming_live_burn_policy(row.metadata_json),
         chat_streaming_live_burn_policy_summary=_chat_streaming_live_burn_policy_summary(
             row.metadata_json
+        ),
+        external_tool_policy=_external_tool_policy(
+            row.metadata_json,
+            ceilings=external_tool_ceilings,
+        ),
+        external_tool_policy_summary=_external_tool_policy_summary(
+            row.metadata_json,
+            ceilings=external_tool_ceilings,
         ),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -235,7 +282,9 @@ def _rate_limit_policy_summary(row: GatewayKey) -> str:
         parts.append(f"{row.rate_limit_tokens_per_minute} tokens/min")
     if row.max_concurrent_requests is not None:
         parts.append(f"{row.max_concurrent_requests} concurrent")
-    metadata_policy = row.metadata_json.get("rate_limit_policy") if isinstance(row.metadata_json, dict) else None
+    metadata_policy = (
+        row.metadata_json.get("rate_limit_policy") if isinstance(row.metadata_json, dict) else None
+    )
     if isinstance(metadata_policy, dict):
         window_seconds = metadata_policy.get("window_seconds")
         if isinstance(window_seconds, int) and not isinstance(window_seconds, bool):
@@ -259,8 +308,12 @@ def _responses_policy_summary(metadata_json: dict[str, object] | None) -> str:
         return "None"
     capabilities = policy.get("allowed_capabilities")
     tools = policy.get("allowed_local_tool_types")
-    capability_text = ", ".join(str(item) for item in capabilities) if isinstance(capabilities, list) else "None"
-    tool_text = ", ".join(str(item) for item in tools) if isinstance(tools, list) and tools else "None"
+    capability_text = (
+        ", ".join(str(item) for item in capabilities) if isinstance(capabilities, list) else "None"
+    )
+    tool_text = (
+        ", ".join(str(item) for item in tools) if isinstance(tools, list) and tools else "None"
+    )
     return f"Capabilities: {capability_text}; local tools: {tool_text}; hosted/stateful/multimodal: denied"
 
 
@@ -280,6 +333,36 @@ def _chat_streaming_live_burn_policy_summary(metadata_json: dict[str, object] | 
     return streaming_live_burn_surface_policy_summary(
         CHAT_STREAMING_LIVE_BURN_SURFACE,
         policy,
+    )
+
+
+def _external_tool_policy(
+    metadata_json: dict[str, object] | None,
+    *,
+    ceilings: ExternalToolOperatorCeilings,
+) -> dict[str, object]:
+    raw_policy = (
+        metadata_json.get("external_tool_policy") if isinstance(metadata_json, dict) else None
+    )
+    parsed = parse_key_external_tool_policy(raw_policy, ceilings=ceilings)
+    policy = parsed.policy if parsed.valid and parsed.policy is not None else strict_key_policy()
+    return policy.to_metadata()
+
+
+def _external_tool_policy_summary(
+    metadata_json: dict[str, object] | None,
+    *,
+    ceilings: ExternalToolOperatorCeilings,
+) -> str:
+    policy = _external_tool_policy(metadata_json, ceilings=ceilings)
+    capabilities = policy["allowed_capabilities"]
+    destinations = policy["allowed_destination_ids"]
+    return (
+        f"Mode: {policy['mode']}; capabilities: "
+        f"{', '.join(capabilities) if capabilities else 'none'}; destinations: "
+        f"{', '.join(destinations) if destinations else 'none'}; max calls: "
+        f"{policy['max_provider_tool_calls_per_request']}; overrun acknowledged: "
+        f"{str(policy['single_request_overrun_acknowledged']).lower()}; runtime: denied"
     )
 
 

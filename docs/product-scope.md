@@ -168,10 +168,11 @@ implemented invariants and failure behavior.
 
 Current: hosted/provider-side tools and external MCP/connectors are unsupported
 in the runtime. It is deny-only for those surfaces, provider URL fetch
-authority, and unknown/ambiguous authority. Objective 012 adds a pure version-1
-taxonomy and policy/admission contract only; it adds no
-stored policy, setting, admin/CLI control, request forwarding, fence, hold, or
-provider integration. Implemented local/client-side function, custom,
+authority, and unknown/ambiguous authority. Objective 012 adds the version-1
+taxonomy and policy/admission contract. Objective 013 stores canonical policy
+on keys, immutable template snapshots, and routes, and adds narrowed settings
+plus audited admin/CLI controls. Storage adds no request forwarding, fence,
+hold, or provider integration. Implemented local/client-side function, custom,
 namespace, local-shell, and client-side apply-patch workflows keep their
 existing independent gates and do not grant SLAIF provider/external authority.
 
@@ -196,8 +197,9 @@ storage rules, negative tests, auditability, and operator-visible limits.
 
 ### Non-goals / not current
 
-- No current hosted-tool, MCP, or external-tool permission field is activated
-  by the objective-012 contract.
+- No stored hosted-tool, MCP, or external-tool policy is consumed by runtime
+  request admission. Objectives 014–016 must implement the fence, hold,
+  accounting, and provider contracts before activation.
 - No claim of exact mid-request external-tool interruption or tool-budget
   enforcement.
 - No claim that local function/custom tool support authorizes provider-hosted

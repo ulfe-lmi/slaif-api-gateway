@@ -154,3 +154,47 @@ async def test_model_route_service_rejects_invalid_match_type() -> None:
             enabled=True,
             notes=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_model_route_external_tool_metadata_is_canonical_before_mutation_and_audit() -> None:
+    service, routes, audit = _service()
+    policy = {
+        "version": 1,
+        "supported_capabilities": ["provider_web_search"],
+        "approved_destination_ids": [],
+        "max_provider_tool_calls_per_request": 2,
+        "call_limit_enforced": True,
+        "final_usage_required": True,
+        "final_cost_required": True,
+    }
+    row = await service.create_model_route(
+        requested_model="gpt-test-mini",
+        match_type="exact",
+        provider="openai",
+        upstream_model="gpt-test-mini",
+        priority=10,
+        visible_in_models=True,
+        enabled=True,
+        notes="reviewed future support",
+        capabilities={"external_tools": policy},
+    )
+    assert row.capabilities["external_tools"] == policy
+    assert audit.rows[0]["new_values"]["capabilities"]["external_tools"] == policy
+
+    with pytest.raises(ValueError, match="External-tool route policy"):
+        await service.update_model_route(
+            row.id,
+            requested_model=row.requested_model,
+            match_type=row.match_type,
+            provider=row.provider,
+            upstream_model=row.upstream_model,
+            priority=row.priority,
+            visible_in_models=row.visible_in_models,
+            enabled=row.enabled,
+            supports_streaming=row.supports_streaming,
+            capabilities={"external_tools": {"server_url": "https://forbidden.invalid"}},
+            notes=row.notes,
+        )
+    assert len(audit.rows) == 1
+    assert routes.row.capabilities["external_tools"] == policy

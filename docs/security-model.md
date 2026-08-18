@@ -259,10 +259,14 @@ The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
-Objective 012 defines a pure version-1 external-tool policy contract only.
+Objective 012 defines the version-1 external-tool policy contract. Objective
+013 persists only canonical safe IDs, caps, booleans, mode, and version in
+existing key/template/route JSON and adds audited admin/CLI controls.
 `strict_bounded` remains the default/current deny-only mode.
-`external_tool_fenced` is a future explicit standard-key mode and is not wired
-to runtime, persistence, settings, admin/CLI, routes, quota, or providers.
+`external_tool_fenced` is a future explicit standard-key mode. Stored policy is
+not wired to Chat/Responses runtime, quota/accounting, or providers; those paths
+remain deny-only pending objectives 014–016. Raw URLs, credentials, labels,
+request content, and provider secrets are never stored in this policy.
 
 The taxonomy treats client-operated tools, provider-hosted authority, remote
 MCP, connectors, provider URL fetch, and unknown authority separately. Raw

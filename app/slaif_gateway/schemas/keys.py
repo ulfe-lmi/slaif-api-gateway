@@ -34,6 +34,8 @@ class CreateGatewayKeyInput:
     confirm_trusted_calibration: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
+    external_tool_policy: dict[str, object] | None = None
+    confirm_external_tool_fenced: bool = False
     note: str | None = None
 
 
@@ -51,6 +53,7 @@ class CreatedGatewayKey:
     valid_until: datetime
     rate_limit_policy: dict[str, int | None] | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
+    external_tool_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
     capability_policy_mode: str = "standard"
     template_id: uuid.UUID | None = None
@@ -143,6 +146,17 @@ class UpdateGatewayKeyPolicyInput:
 
 
 @dataclass(slots=True)
+class UpdateGatewayKeyExternalToolPolicyInput:
+    """Input for an audited external-tool policy replacement."""
+
+    gateway_key_id: uuid.UUID
+    external_tool_policy: dict[str, object]
+    confirm_external_tool_fenced: bool = False
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
+@dataclass(slots=True)
 class ResetGatewayKeyUsageInput:
     """Input payload for administrative usage-counter repair/reset."""
 
@@ -198,6 +212,7 @@ class GatewayKeyManagementResult:
     key_purpose: str | None = None
     capability_policy_mode: str | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
+    external_tool_policy: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

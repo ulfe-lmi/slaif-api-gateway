@@ -16,6 +16,11 @@ from slaif_gateway.services.audio_route_capabilities import (
 from slaif_gateway.services.embeddings_route_capabilities import (
     ensure_default_embeddings_capabilities,
 )
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    ExternalToolOperatorCeilings,
+    parse_route_external_tool_policy,
+)
 from slaif_gateway.services.realtime_route_capabilities import (
     ensure_default_realtime_capabilities,
 )
@@ -41,9 +46,13 @@ class ModelRouteService:
         *,
         model_routes_repository: ModelRoutesRepository,
         audit_repository: AuditRepository,
+        external_tool_ceilings: ExternalToolOperatorCeilings = (
+            DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+        ),
     ) -> None:
         self._routes = model_routes_repository
         self._audit = audit_repository
+        self._external_tool_ceilings = external_tool_ceilings
 
     async def create_model_route(
         self,
@@ -81,6 +90,7 @@ class ModelRouteService:
                 capabilities,
                 supports_streaming=supports_streaming,
                 endpoint=normalize_endpoint(endpoint),
+                external_tool_ceilings=self._external_tool_ceilings,
             ),
             notes=_clean_optional(notes),
         )
@@ -185,6 +195,7 @@ class ModelRouteService:
                 capabilities,
                 supports_streaming=supports_streaming,
                 endpoint=normalize_endpoint(endpoint),
+                external_tool_ceilings=self._external_tool_ceilings,
             ),
             notes=_clean_optional(notes),
         )
@@ -228,6 +239,9 @@ def _ensure_default_capabilities(
     *,
     supports_streaming: bool,
     endpoint: str,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
 ) -> dict[str, object]:
     normalized = ensure_default_chat_completion_capabilities(
         capabilities,
@@ -246,7 +260,17 @@ def _ensure_default_capabilities(
         normalized,
         endpoint=endpoint,
     )
-    return ensure_default_responses_capabilities(normalized, endpoint=endpoint)
+    normalized = ensure_default_responses_capabilities(normalized, endpoint=endpoint)
+    if "external_tools" not in normalized:
+        return normalized
+    parsed = parse_route_external_tool_policy(
+        normalized.get("external_tools"),
+        ceilings=external_tool_ceilings,
+    )
+    if not parsed.valid or parsed.policy is None:
+        raise ValueError("External-tool route policy is invalid or exceeds installation ceilings")
+    normalized["external_tools"] = parsed.policy.to_metadata()
+    return normalized
 
 
 def _parse_route_id(route_id: uuid.UUID | str) -> uuid.UUID:

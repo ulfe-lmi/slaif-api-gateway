@@ -11,7 +11,11 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli import keys as keys_cli
 from slaif_gateway.cli.main import app
-from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
+from slaif_gateway.schemas.keys import (
+    CreateGatewayKeyInput,
+    CreatedGatewayKey,
+    GatewayKeyManagementResult,
+)
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
@@ -190,6 +194,121 @@ def test_keys_create_parses_chat_streaming_live_burn_flags(monkeypatch) -> None:
         "cost_margin_eur": "-0.250000000",
         "token_margin": -250,
     }
+
+
+def test_keys_create_parses_confirmed_fenced_external_tool_policy(monkeypatch) -> None:
+    seen: dict[str, CreateGatewayKeyInput] = {}
+
+    async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:
+        seen["payload"] = payload
+        return _created_result()
+
+    monkeypatch.setattr(keys_cli, "_create_gateway_key", fake_create)
+
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            str(OWNER_ID),
+            "--valid-days",
+            "31",
+            "--cost-limit-eur",
+            "5",
+            "--token-limit-total",
+            "500",
+            "--request-limit-total",
+            "50",
+            "--external-tool-mode",
+            "external_tool_fenced",
+            "--external-tool-capability",
+            "provider_connector",
+            "--external-tool-destination-id",
+            "connector:reviewed",
+            "--external-tool-max-calls",
+            "2",
+            "--acknowledge-single-request-overrun",
+            "--confirm",
+            "--reason",
+            "reviewed external-tool boundary",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["payload"].external_tool_policy == {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_connector"],
+        "allowed_destination_ids": ["connector:reviewed"],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
+    assert seen["payload"].confirm_external_tool_fenced is True
+    assert seen["payload"].note == "reviewed external-tool boundary"
+
+
+def test_keys_external_tools_update_builds_safe_confirmed_payload(monkeypatch) -> None:
+    seen = {}
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    safe_policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_connector"],
+        "allowed_destination_ids": ["connector:reviewed"],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
+
+    async def fake_update(payload):
+        seen["payload"] = payload
+        return GatewayKeyManagementResult(
+            gateway_key_id=GATEWAY_KEY_ID,
+            public_key_id="public",
+            status="active",
+            updated_at=now,
+            valid_from=now,
+            valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+            external_tool_policy=safe_policy,
+        )
+
+    monkeypatch.setattr(keys_cli, "_update_external_tool_policy", fake_update)
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "external-tools",
+            "update",
+            str(GATEWAY_KEY_ID),
+            "--mode",
+            "external_tool_fenced",
+            "--capability",
+            "provider_connector",
+            "--destination-id",
+            "connector:reviewed",
+            "--max-calls",
+            "1",
+            "--acknowledge-single-request-overrun",
+            "--confirm",
+            "--actor-admin-id",
+            str(ADMIN_ID),
+            "--reason",
+            "reviewed connector",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = seen["payload"]
+    assert payload.gateway_key_id == GATEWAY_KEY_ID
+    assert payload.actor_admin_id == ADMIN_ID
+    assert payload.reason == "reviewed connector"
+    assert payload.confirm_external_tool_fenced is True
+    assert payload.external_tool_policy == safe_policy
+    output = json.loads(result.stdout)
+    assert output["external_tool_policy"] == safe_policy
+    assert output["runtime_status"] == "denied_pending_objectives_014_016"
+    assert "secret" not in result.stdout.lower()
 
 
 def test_keys_create_from_template_outputs_safe_standard_key(monkeypatch) -> None:
@@ -502,7 +621,10 @@ def test_keys_create_trusted_calibration_requires_confirmation(monkeypatch) -> N
 
     assert result.exit_code != 0
     assert called is False
-    assert "trusted calibration" in result.stderr.lower() or "trusted calibration" in result.stdout.lower()
+    assert (
+        "trusted calibration" in result.stderr.lower()
+        or "trusted calibration" in result.stdout.lower()
+    )
 
 
 def test_keys_create_trusted_calibration_builds_payload_and_warns(monkeypatch) -> None:
@@ -589,7 +711,9 @@ def test_keys_create_trusted_calibration_rejects_send_now_email(monkeypatch) -> 
     assert "email-delivery none or pending" in result.stderr
 
 
-def test_keys_create_rejects_existing_secret_output_file_before_service(monkeypatch, tmp_path) -> None:
+def test_keys_create_rejects_existing_secret_output_file_before_service(
+    monkeypatch, tmp_path
+) -> None:
     called = False
 
     async def fake_create(payload: CreateGatewayKeyInput) -> CreatedGatewayKey:

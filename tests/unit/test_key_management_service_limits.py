@@ -13,6 +13,7 @@ from slaif_gateway.schemas.keys import (
 from slaif_gateway.services.key_errors import (
     InvalidGatewayKeyLimitsError,
     InvalidGatewayKeyUsageResetError,
+    InvalidGatewayKeyPolicyError,
 )
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
 
@@ -247,3 +248,32 @@ async def test_limit_and_reset_audit_logs_contain_safe_values_only() -> None:
     assert "encrypted_payload" not in serialized
     assert "nonce" not in serialized
     assert "sk-slaif-" not in serialized
+
+
+async def test_fenced_external_tool_key_limits_cannot_be_cleared() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "external_tool_policy": {
+                "version": 1,
+                "mode": "external_tool_fenced",
+                "allowed_capabilities": ["provider_web_search"],
+                "allowed_destination_ids": [],
+                "max_provider_tool_calls_per_request": 1,
+                "single_request_overrun_acknowledged": True,
+            }
+        }
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(InvalidGatewayKeyPolicyError, match="positive finite"):
+        await service.update_gateway_key_limits(
+            UpdateGatewayKeyLimitsInput(
+                gateway_key_id=row.id,
+                cost_limit_eur=None,
+                token_limit_total=row.token_limit_total,
+                request_limit_total=row.request_limit_total,
+            )
+        )
+
+    assert keys_repo.limit_calls == []
+    assert audit_repo.calls == []

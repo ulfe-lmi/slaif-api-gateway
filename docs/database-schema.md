@@ -549,15 +549,16 @@ Trusted calibration key rules:
   one key from a template must not mutate the template revision or any existing
   gateway keys.
 
-### Objective 012 external-tool policy contract (not stored)
+### External-tool policy JSON (stored, runtime deny-only)
 
-Objective 012 defines the exact version-1 metadata schemas below for objectives
-013–017. It adds no column, table, constraint, migration, JSON persistence, key
-service integration, or route service integration. Current runtime remains
-deny-only. These examples are a versioned target contract, not accepted current
-`gateway_keys` or `model_routes` metadata.
+Objective 012 defines the exact version-1 schemas. Objective 013 stores them in
+existing JSON only: `gateway_keys.metadata.external_tool_policy`, immutable
+`key_template_revisions.template_snapshot.external_tool_policy`, and
+`model_routes.capabilities.external_tools`. No column, table, constraint, or migration was added.
+Missing historical metadata means exact strict. Current
+runtime remains deny-only and does not consume these objects.
 
-Conceptual per-key `external_tool_policy`:
+Canonical per-key `external_tool_policy`:
 
 ```json
 {
@@ -597,7 +598,7 @@ operator ceiling and literal `single_request_overrun_acknowledged=true`.
 Missing, partial, extra-key, coerced, duplicated, unknown, URL-like,
 secret-looking, or over-ceiling objects grant no permission.
 
-Conceptual `model_routes.capabilities.external_tools`:
+Canonical `model_routes.capabilities.external_tools`:
 
 ```json
 {
@@ -614,10 +615,11 @@ Conceptual `model_routes.capabilities.external_tools`:
 External route support requires non-empty known capabilities, only matching
 reviewed destinations, a positive bounded call cap, and all three booleans
 true. Empty/strict metadata is exactly empty/zero/false. Missing or invalid
-metadata grants no external support. The immutable objective-012 defaults cap
-16 distinct capabilities, 8 destinations, 16 provider declarations per
-request, and 16 provider calls/iterations per request. Objectives 013–017 own
-durable operator configuration and may only narrow those absolute maxima.
+metadata grants no external support. The immutable objective-012 absolute
+maxima cap 16 distinct capabilities, 8 destinations, 16 provider declarations
+per request, and 16 provider calls/iterations per request. Objective 013 adds
+positive installation settings with those defaults; they may only narrow the
+absolute maxima.
 
 `strict_bounded` remains the current/default quota mode. The future
 `external_tool_fenced` promise permits one admitted request to cross remaining
@@ -634,8 +636,8 @@ not retained in its DTOs; existing endpoint validators still independently
 enforce their shape, size, depth, content, and secret rules. Bounded namespace
 child traversal fails closed when a child is provider-hosted, MCP/connector,
 unknown, malformed, cyclic, excessively nested, or over the child-count bound.
-This correction grants no runtime support and does not change the no-storage/
-no-migration status above.
+This correction grants no runtime support. Objective 013 changes JSON storage
+only and retains the no-migration status above.
 
 Quota rule:
 

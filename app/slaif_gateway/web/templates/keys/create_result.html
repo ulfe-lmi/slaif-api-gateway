@@ -125,6 +125,17 @@
         </dd>
         <dt>Chat streaming live-burn</dt>
         <dd>{{ policy.chat_streaming_live_burn_policy_summary }}</dd>
+        {% if policy.external_tool_policy %}
+        <dt>External-tool policy</dt>
+        <dd>
+          Mode {{ policy.external_tool_policy.mode }};
+          capabilities {{ policy.external_tool_policy.allowed_capabilities|join(', ') or 'none' }};
+          destinations {{ policy.external_tool_policy.allowed_destination_ids|join(', ') or 'none' }};
+          max calls {{ policy.external_tool_policy.max_provider_tool_calls_per_request }};
+          overrun acknowledged {{ 'yes' if policy.external_tool_policy.single_request_overrun_acknowledged else 'no' }}.
+          <span class="warning-text">Runtime remains denied pending objectives 014–016.</span>
+        </dd>
+        {% endif %}
         {% if policy.responses_policy_summary %}
         <dt>Responses policy</dt>
         <dd>

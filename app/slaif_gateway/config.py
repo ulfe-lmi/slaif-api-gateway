@@ -26,7 +26,20 @@ _PLACEHOLDER_SECRET_SUBSTRINGS = (
 _SUPPORTED_CHAT_AUDIO_INPUT_FORMATS = frozenset({"wav", "mp3"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS = frozenset({"wav", "aac", "mp3", "flac", "opus", "pcm16"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES = frozenset(
-    {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "marin", "cedar"}
+    {
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "nova",
+        "onyx",
+        "sage",
+        "shimmer",
+        "marin",
+        "cedar",
+    }
 )
 _SUPPORTED_AUDIO_SPEECH_RESPONSE_FORMATS = frozenset({"mp3", "opus", "aac", "flac", "wav", "pcm"})
 _SUPPORTED_AUDIO_SPEECH_VOICES = frozenset(
@@ -201,7 +214,9 @@ class Settings(BaseSettings):
     CHAT_MAX_FILE_NAME_BYTES: int = 255
     CHAT_ALLOW_FILE_DATA_URLS: bool = False
     CHAT_ALLOW_FILE_IDS: bool = False
-    CHAT_ALLOWED_FILE_MIME_TYPES: str = "application/pdf,text/plain,text/markdown,text/csv,application/json"
+    CHAT_ALLOWED_FILE_MIME_TYPES: str = (
+        "application/pdf,text/plain,text/markdown,text/csv,application/json"
+    )
     CHAT_ALLOWED_FILE_EXTENSIONS: str = ".pdf,.txt,.md,.csv,.json"
     CHAT_MAX_AUDIO_INPUTS_PER_REQUEST: int = 4
     CHAT_MAX_AUDIO_INPUTS_PER_MESSAGE: int = 2
@@ -209,13 +224,17 @@ class Settings(BaseSettings):
     CHAT_ALLOWED_AUDIO_INPUT_FORMATS: str = "wav,mp3"
     CHAT_ALLOW_AUDIO_INPUT_DATA_URLS: bool = False
     CHAT_ALLOWED_AUDIO_OUTPUT_FORMATS: str = "wav,aac,mp3,flac,opus,pcm16"
-    CHAT_ALLOWED_AUDIO_OUTPUT_VOICES: str = "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar"
+    CHAT_ALLOWED_AUDIO_OUTPUT_VOICES: str = (
+        "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,marin,cedar"
+    )
     CHAT_ALLOW_CUSTOM_AUDIO_OUTPUT_VOICES: bool = False
     CHAT_ALLOW_STREAMING_AUDIO_OUTPUT: bool = False
     CHAT_ALLOW_AUDIO_OUTPUT_WITH_N_CHOICES: bool = False
     AUDIO_SPEECH_ALLOWED_MODELS: str = "tts-1,tts-1-hd,gpt-4o-mini-tts,gpt-4o-mini-tts-2025-12-15"
     AUDIO_SPEECH_ALLOWED_RESPONSE_FORMATS: str = "mp3,opus,aac,flac,wav,pcm"
-    AUDIO_SPEECH_ALLOWED_VOICES: str = "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,verse,marin,cedar"
+    AUDIO_SPEECH_ALLOWED_VOICES: str = (
+        "alloy,ash,ballad,coral,echo,fable,nova,onyx,sage,shimmer,verse,marin,cedar"
+    )
     AUDIO_SPEECH_MAX_INPUT_CHARS: int = 4096
     AUDIO_SPEECH_MAX_INSTRUCTIONS_BYTES: int = 8192
     AUDIO_TRANSCRIPTION_ALLOWED_MODELS: str = "gpt-4o-transcribe,gpt-4o-mini-transcribe,gpt-4o-mini-transcribe-2025-12-15,whisper-1,gpt-4o-transcribe-diarize"
@@ -323,6 +342,10 @@ class Settings(BaseSettings):
     TRUSTED_CALIBRATION_MAX_VALID_DAYS: int = 7
     TRUSTED_CALIBRATION_ALLOW_UNKNOWN_HOSTED_TOOLS: bool = True
     TRUSTED_CALIBRATION_ALLOW_EXTERNAL_AUTHORITY: bool = False
+    EXTERNAL_TOOL_MAX_DISTINCT_CAPABILITIES: int = 16
+    EXTERNAL_TOOL_MAX_APPROVED_DESTINATIONS: int = 8
+    EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST: int = 16
+    EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST: int = 16
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
@@ -357,6 +380,7 @@ class Settings(BaseSettings):
 
         self._validate_request_caps()
         self._validate_calibration_settings()
+        self.get_external_tool_operator_ceilings()
         self._validate_request_id_header()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
@@ -364,6 +388,23 @@ class Settings(BaseSettings):
         self._validate_email_settings()
         self._validate_reconciliation_settings()
         return self
+
+    def get_external_tool_operator_ceilings(self):
+        """Return validated external-tool ceilings without enabling runtime tools."""
+        from slaif_gateway.services.external_tool_policy_contract import (
+            build_external_tool_operator_ceilings,
+        )
+
+        return build_external_tool_operator_ceilings(
+            max_distinct_capabilities=self.EXTERNAL_TOOL_MAX_DISTINCT_CAPABILITIES,
+            max_approved_destinations=self.EXTERNAL_TOOL_MAX_APPROVED_DESTINATIONS,
+            max_provider_tool_declarations_per_request=(
+                self.EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST
+            ),
+            max_provider_tool_calls_per_request=(
+                self.EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST
+            ),
+        )
 
     def _validate_database_settings(self) -> None:
         if self.DATABASE_POOL_SIZE <= 0:
@@ -376,7 +417,10 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_POOL_RECYCLE_SECONDS must be a positive integer")
         if self.DATABASE_CONNECT_TIMEOUT_SECONDS <= 0:
             raise ValueError("DATABASE_CONNECT_TIMEOUT_SECONDS must be a positive number")
-        if self.DATABASE_STATEMENT_TIMEOUT_MS is not None and self.DATABASE_STATEMENT_TIMEOUT_MS <= 0:
+        if (
+            self.DATABASE_STATEMENT_TIMEOUT_MS is not None
+            and self.DATABASE_STATEMENT_TIMEOUT_MS <= 0
+        ):
             raise ValueError("DATABASE_STATEMENT_TIMEOUT_MS must be a positive integer when set")
 
     def _validate_redis_rate_limit_settings(self) -> None:
@@ -435,7 +479,9 @@ class Settings(BaseSettings):
                 "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS must be greater than or equal to 0"
             )
         if self.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS <= 0:
-            raise ValueError("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS must be a positive number")
+            raise ValueError(
+                "RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS must be a positive number"
+            )
         if self.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS < 0:
             raise ValueError(
                 "RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS must be greater than or equal to 0"
@@ -502,7 +548,9 @@ class Settings(BaseSettings):
             and same_site == "none"
             and self.ADMIN_SESSION_COOKIE_SECURE is False
         ):
-            raise ValueError("ADMIN_SESSION_COOKIE_SECURE must be true in production when SameSite=None")
+            raise ValueError(
+                "ADMIN_SESSION_COOKIE_SECURE must be true in production when SameSite=None"
+            )
 
     def _validate_request_caps(self) -> None:
         for name in (
@@ -613,7 +661,10 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} must be a positive integer")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
-        if self.RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS > self.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS:
+        if (
+            self.RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
+            > self.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS
+        ):
             raise ValueError(
                 "RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS must be <= "
                 "RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS"
@@ -621,7 +672,9 @@ class Settings(BaseSettings):
         if self.CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER <= 0:
             raise ValueError("CHAT_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER must be positive")
         if self.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR < 0:
-            raise ValueError("CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR must be non-negative")
+            raise ValueError(
+                "CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR must be non-negative"
+            )
         _validate_audio_option_set(
             self.CHAT_ALLOWED_AUDIO_INPUT_FORMATS,
             allowed_values=_SUPPORTED_CHAT_AUDIO_INPUT_FORMATS,
@@ -677,7 +730,9 @@ class Settings(BaseSettings):
             allowed_values=_SUPPORTED_AUDIO_TIMESTAMP_GRANULARITIES,
             field_name="AUDIO_ALLOWED_TIMESTAMP_GRANULARITIES",
         )
-        _validate_nonempty_csv(self.AUDIO_SPEECH_ALLOWED_MODELS, field_name="AUDIO_SPEECH_ALLOWED_MODELS")
+        _validate_nonempty_csv(
+            self.AUDIO_SPEECH_ALLOWED_MODELS, field_name="AUDIO_SPEECH_ALLOWED_MODELS"
+        )
         _validate_nonempty_csv(
             self.AUDIO_TRANSCRIPTION_ALLOWED_MODELS,
             field_name="AUDIO_TRANSCRIPTION_ALLOWED_MODELS",
@@ -696,11 +751,17 @@ class Settings(BaseSettings):
             allowed_values=_SUPPORTED_REALTIME_AUDIO_VOICES,
             field_name="REALTIME_ALLOWED_VOICES",
         )
-        if self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS < self.REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS:
+        if (
+            self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS
+            < self.REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS
+        ):
             raise ValueError(
                 "REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS must be >= REALTIME_CLIENT_SECRET_MIN_TTL_SECONDS"
             )
-        if self.REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS < self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS:
+        if (
+            self.REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS
+            < self.REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS
+        ):
             raise ValueError(
                 "REALTIME_CLIENT_SECRET_MAX_TTL_SECONDS must be >= REALTIME_CLIENT_SECRET_DEFAULT_TTL_SECONDS"
             )
@@ -957,11 +1018,7 @@ def _validate_audio_option_set(
     allowed_values: frozenset[str],
     field_name: str,
 ) -> None:
-    parsed = {
-        item.strip().lower()
-        for item in raw_value.split(",")
-        if item.strip()
-    }
+    parsed = {item.strip().lower() for item in raw_value.split(",") if item.strip()}
     if not parsed:
         raise ValueError(f"{field_name} must contain at least one supported value")
     unsupported = sorted(parsed - allowed_values)

@@ -507,11 +507,13 @@ contract validation. Existing endpoint validators retain independent shape,
 size, depth, content, and secret enforcement, so client-operated classification
 does not make a request valid or forwardable.
 
-`strict_bounded` is the current/default deny mode. The future
+`strict_bounded` is the current/default deny mode. Objective 013 persists but
+does not consume the future
 `external_tool_fenced` mode requires exact key/route/operator intersection and
 the exclusive-fence/overrun/hold/following-block promise in
-[`accounting.md`](accounting.md). Objectives 013–017 must implement it. No new
-tool is enabled or forwarded by objective 012, and trusted-calibration
+[`accounting.md`](accounting.md). Objectives 014–17 must implement the runtime
+fence, hold, accounting, and provider contracts. No new tool is enabled or
+forwarded by objective 013, and trusted-calibration
 observation is not standard-key authorization.
 Authority classification never substitutes for existing endpoint-specific
 shape, size, content, pricing, or provider-contract validation; a known local

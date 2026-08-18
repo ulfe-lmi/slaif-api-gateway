@@ -259,15 +259,16 @@ zero, and negative margin semantics match normal per-key configuration.
 
 ## External-tool contract boundary
 
-Objective 012 defines `strict_bounded` and `external_tool_fenced` as a pure
-future policy contract. It does not add those objects to template snapshots,
-template import, key creation, existing-key mutation, admin/CLI, or database
-storage. Current standard keys and template-created keys remain deny-only for
-provider-hosted/external authority. Trusted-calibration observations remain
-review input and never silently become standard-key permission.
+Objective 012 defines `strict_bounded` and `external_tool_fenced`. Objective
+013 stores canonical policy in every new immutable template snapshot;
+historical snapshots without it mean exact strict. Explicit fenced template
+creation requires confirmation, an audit reason, and positive finite request,
+token, and EUR limits. One key created from that revision copies the exact
+policy and provenance. Trusted-calibration observations remain review input
+and never silently become permission. Runtime remains deny-only.
 
-A future template revision may carry external-tool policy only after objectives
-013–017 add the reviewed storage and operator workflow. Such a snapshot must
+A template revision may carry external-tool policy only through the reviewed
+objective-013 operator workflow. Such a snapshot must
 preserve exact versioned key/route schemas, opaque reviewed destination IDs,
 operator ceilings, positive finite request/token/EUR limits, explicit
 single-request-overrun acknowledgement, exclusive-key fencing, following-

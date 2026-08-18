@@ -23,10 +23,17 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.external_tool_policy_contract import (
+    EXTERNAL_TOOL_FENCED,
+    ExternalToolKeyPolicy,
+    parse_key_external_tool_policy,
+    strict_key_policy,
 )
 from slaif_gateway.services.chat_streaming_live_burn import (
     CHAT_STREAMING_LIVE_BURN_METADATA_KEY,
@@ -59,7 +66,10 @@ from slaif_gateway.services.key_modes import (
     default_capability_policy_mode_for_purpose,
     is_trusted_calibration_key,
 )
-from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy, validate_gateway_key_policy
+from slaif_gateway.services.key_policy_validation import (
+    GatewayKeyPolicy,
+    validate_gateway_key_policy,
+)
 from slaif_gateway.services.responses_streaming_live_burn import (
     default_responses_streaming_live_burn_policy,
     metadata_with_responses_streaming_live_burn_policy,
@@ -118,6 +128,16 @@ class KeyService:
             confirmed=payload.confirm_trusted_calibration,
             reason=payload.note,
         )
+        external_tool_policy = self._validate_external_tool_policy(
+            payload.external_tool_policy,
+            key_purpose=key_purpose,
+            request_limit_total=payload.request_limit_total,
+            token_limit_total=payload.token_limit_total,
+            cost_limit_eur=payload.cost_limit_eur,
+            confirmed=payload.confirm_external_tool_fenced,
+            reason=payload.note,
+            require_reason=True,
+        )
         rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
         chat_live_burn_policy = self._validate_chat_streaming_live_burn_policy(
             payload.chat_streaming_live_burn_policy
@@ -141,6 +161,24 @@ class KeyService:
             allow_all_models=allow_all_models,
             allow_all_endpoints=allow_all_endpoints,
         )
+        metadata_json = self._metadata_with_rate_limit_window(
+            self._metadata_with_responses_streaming_live_burn_policy(
+                self._metadata_with_chat_streaming_live_burn_policy(
+                    self._metadata_with_responses_policy(
+                        self._metadata_with_provider_policy({}, payload.allowed_providers),
+                        payload.responses_policy,
+                    ),
+                    chat_live_burn_policy,
+                ),
+                default_responses_streaming_live_burn_policy(),
+            ),
+            rate_limit_policy,
+        )
+        if external_tool_policy.mode == EXTERNAL_TOOL_FENCED:
+            metadata_json = self._metadata_with_external_tool_policy(
+                metadata_json,
+                external_tool_policy,
+            )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
             key_prefix=active_prefix,
@@ -166,19 +204,7 @@ class KeyService:
             rate_limit_requests_per_minute=rate_limit_policy.get("requests_per_minute"),
             rate_limit_tokens_per_minute=rate_limit_policy.get("tokens_per_minute"),
             max_concurrent_requests=rate_limit_policy.get("max_concurrent_requests"),
-            metadata_json=self._metadata_with_rate_limit_window(
-                self._metadata_with_responses_streaming_live_burn_policy(
-                    self._metadata_with_chat_streaming_live_burn_policy(
-                        self._metadata_with_responses_policy(
-                            self._metadata_with_provider_policy({}, payload.allowed_providers),
-                            payload.responses_policy,
-                        ),
-                        chat_live_burn_policy,
-                    ),
-                    default_responses_streaming_live_burn_policy(),
-                ),
-                rate_limit_policy,
-            ),
+            metadata_json=metadata_json,
             created_by_admin_user_id=payload.created_by_admin_id,
             hmac_key_version=int(active_hmac_version),
         )
@@ -248,6 +274,7 @@ class KeyService:
                 "responses_policy": self._safe_responses_policy(payload.responses_policy),
                 "chat_streaming_live_burn_policy": chat_live_burn_policy.to_metadata(),
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
+                "external_tool_policy": external_tool_policy.to_metadata(),
             },
         )
 
@@ -266,9 +293,12 @@ class KeyService:
             capability_policy_mode=capability_policy_mode,
             template_id=payload.template_id,
             template_revision_id=payload.template_revision_id,
+            external_tool_policy=external_tool_policy.to_metadata(),
         )
 
-    async def suspend_gateway_key(self, payload: SuspendGatewayKeyInput) -> GatewayKeyManagementResult:
+    async def suspend_gateway_key(
+        self, payload: SuspendGatewayKeyInput
+    ) -> GatewayKeyManagementResult:
         """Suspend an active gateway key."""
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
         self._require_status(gateway_key, allowed=("active",), operation="suspend")
@@ -358,7 +388,9 @@ class KeyService:
         )
         return self._management_result(gateway_key, updated_at=now)
 
-    async def activate_gateway_key(self, payload: ActivateGatewayKeyInput) -> GatewayKeyManagementResult:
+    async def activate_gateway_key(
+        self, payload: ActivateGatewayKeyInput
+    ) -> GatewayKeyManagementResult:
         """Activate a suspended gateway key."""
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
         self._require_status(gateway_key, allowed=("suspended",), operation="activate")
@@ -392,7 +424,9 @@ class KeyService:
         )
         return self._management_result(gateway_key, updated_at=now)
 
-    async def revoke_gateway_key(self, payload: RevokeGatewayKeyInput) -> GatewayKeyManagementResult:
+    async def revoke_gateway_key(
+        self, payload: RevokeGatewayKeyInput
+    ) -> GatewayKeyManagementResult:
         """Revoke an active or suspended gateway key."""
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
         self._require_status(gateway_key, allowed=("active", "suspended"), operation="revoke")
@@ -477,6 +511,13 @@ class KeyService:
             payload.request_limit_total,
             param="request_limit_total",
         )
+        current_external_policy = self._external_tool_policy_from_key(gateway_key)
+        if current_external_policy.mode == EXTERNAL_TOOL_FENCED:
+            self._validate_external_tool_limits(
+                request_limit_total=payload.request_limit_total,
+                token_limit_total=payload.token_limit_total,
+                cost_limit_eur=cost_limit,
+            )
 
         old_values = self._limits_audit_values(gateway_key)
         now = self._now()
@@ -500,6 +541,52 @@ class KeyService:
             reason=payload.reason,
             old_values=old_values,
             new_values=self._limits_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
+    async def update_gateway_key_external_tool_policy(
+        self,
+        payload: UpdateGatewayKeyExternalToolPolicyInput,
+    ) -> GatewayKeyManagementResult:
+        """Replace external-tool policy after canonical validation and safe audit."""
+        cleaned_reason = payload.reason.strip() if payload.reason else ""
+        if not cleaned_reason:
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating external-tool policy.",
+                param="reason",
+            )
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        policy = self._validate_external_tool_policy(
+            payload.external_tool_policy,
+            key_purpose=str(getattr(gateway_key, "key_purpose", KEY_PURPOSE_STANDARD)),
+            request_limit_total=gateway_key.request_limit_total,
+            token_limit_total=gateway_key.token_limit_total,
+            cost_limit_eur=gateway_key.cost_limit_eur,
+            confirmed=payload.confirm_external_tool_fenced,
+            reason=cleaned_reason,
+            require_reason=True,
+        )
+        old_values = self._external_tool_policy_audit_values(gateway_key)
+        new_metadata = self._metadata_with_external_tool_policy(
+            gateway_key.metadata_json,
+            policy,
+        )
+        now = self._now()
+        updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+            gateway_key.id,
+            metadata_json=new_metadata,
+        )
+        if not updated:
+            raise GatewayKeyNotFoundError()
+        gateway_key.metadata_json = new_metadata
+        self._set_updated_at(gateway_key, now)
+        await self._audit_gateway_key_change(
+            action="update_external_tool_policy",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._external_tool_policy_audit_values(gateway_key),
         )
         return self._management_result(gateway_key, updated_at=now)
 
@@ -624,11 +711,18 @@ class KeyService:
 
         active_hmac_version, active_hmac_secret = self._settings.get_active_hmac_secret()
         if not self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY:
-            raise GatewayKeyRotationError("ONE_TIME_SECRET_ENCRYPTION_KEY is required for key rotation")
+            raise GatewayKeyRotationError(
+                "ONE_TIME_SECRET_ENCRYPTION_KEY is required for key rotation"
+            )
 
         new_valid_from = payload.new_valid_from or old_key.valid_from
         new_valid_until = payload.new_valid_until or old_key.valid_until
         self._validate_validity_window(valid_from=new_valid_from, valid_until=new_valid_until)
+        external_tool_policy = self._external_tool_policy_from_key(old_key)
+        if external_tool_policy.mode == EXTERNAL_TOOL_FENCED and not payload.preserve_limits:
+            raise GatewayKeyRotationError(
+                "External-tool fenced keys must preserve finite limits during rotation"
+            )
 
         active_prefix = self._settings.get_gateway_key_prefix()
         generated = generate_gateway_key(prefix=active_prefix)
@@ -651,11 +745,26 @@ class KeyService:
             token_limit_total=old_key.token_limit_total if payload.preserve_limits else None,
             request_limit_total=old_key.request_limit_total if payload.preserve_limits else None,
             allowed_models=list(old_key.allowed_models) if payload.preserve_allowed_models else [],
-            allowed_endpoints=list(old_key.allowed_endpoints) if payload.preserve_allowed_endpoints else [],
+            allowed_endpoints=list(old_key.allowed_endpoints)
+            if payload.preserve_allowed_endpoints
+            else [],
             allow_all_models=old_key.allow_all_models if payload.preserve_allowed_models else False,
-            allow_all_endpoints=old_key.allow_all_endpoints if payload.preserve_allowed_endpoints else False,
+            allow_all_endpoints=old_key.allow_all_endpoints
+            if payload.preserve_allowed_endpoints
+            else False,
+            key_purpose=getattr(old_key, "key_purpose", KEY_PURPOSE_STANDARD),
+            capability_policy_mode=getattr(
+                old_key,
+                "capability_policy_mode",
+                CAPABILITY_POLICY_MODE_STANDARD,
+            ),
+            calibration_metadata=dict(getattr(old_key, "calibration_metadata", {}) or {}),
+            template_id=getattr(old_key, "template_id", None),
+            template_revision_id=getattr(old_key, "template_revision_id", None),
             rate_limit_requests_per_minute=(
-                old_key.rate_limit_requests_per_minute if payload.preserve_rate_limit_policy else None
+                old_key.rate_limit_requests_per_minute
+                if payload.preserve_rate_limit_policy
+                else None
             ),
             rate_limit_tokens_per_minute=(
                 old_key.rate_limit_tokens_per_minute if payload.preserve_rate_limit_policy else None
@@ -663,19 +772,34 @@ class KeyService:
             max_concurrent_requests=(
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
             ),
-            metadata_json=self._metadata_with_chat_streaming_live_burn_policy(
-                self._metadata_with_responses_streaming_live_burn_policy(
-                    (
-                        self._metadata_with_rate_limit_window(
-                            {},
-                            self._rate_limit_policy_from_key(old_key) or {},
-                        )
-                        if payload.preserve_rate_limit_policy
-                        else {}
+            metadata_json=self._metadata_with_external_tool_policy(
+                self._metadata_with_chat_streaming_live_burn_policy(
+                    self._metadata_with_responses_streaming_live_burn_policy(
+                        (
+                            self._metadata_with_rate_limit_window(
+                                self._metadata_with_provider_policy(
+                                    self._metadata_with_responses_policy(
+                                        {},
+                                        self._responses_policy_from_key(old_key),
+                                    ),
+                                    self._allowed_providers_from_key(old_key),
+                                ),
+                                self._rate_limit_policy_from_key(old_key) or {},
+                            )
+                            if payload.preserve_rate_limit_policy
+                            else self._metadata_with_provider_policy(
+                                self._metadata_with_responses_policy(
+                                    {},
+                                    self._responses_policy_from_key(old_key),
+                                ),
+                                self._allowed_providers_from_key(old_key),
+                            )
+                        ),
+                        default_responses_streaming_live_burn_policy(),
                     ),
-                    default_responses_streaming_live_burn_policy(),
+                    self._chat_streaming_live_burn_policy_from_key(old_key),
                 ),
-                self._chat_streaming_live_burn_policy_from_key(old_key),
+                external_tool_policy,
             ),
             created_by_admin_user_id=payload.actor_admin_id,
             hmac_key_version=int(active_hmac_version),
@@ -696,7 +820,9 @@ class KeyService:
             plaintext=one_time_plaintext,
             master_key=self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
         )
-        expires_at = self._now() + timedelta(seconds=self._settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS)
+        expires_at = self._now() + timedelta(
+            seconds=self._settings.EMAIL_KEY_SECRET_MAX_AGE_SECONDS
+        )
         one_time_secret = await self._one_time_secrets_repository.create_one_time_secret(
             purpose="gateway_key_rotation_email",
             encrypted_payload=encrypted.ciphertext,
@@ -800,7 +926,9 @@ class KeyService:
             gateway_key.updated_at = updated_at
 
     @staticmethod
-    def _require_status(gateway_key: GatewayKey, *, allowed: tuple[str, ...], operation: str) -> None:
+    def _require_status(
+        gateway_key: GatewayKey, *, allowed: tuple[str, ...], operation: str
+    ) -> None:
         if gateway_key.status in allowed:
             return
         if gateway_key.status == "revoked":
@@ -816,11 +944,17 @@ class KeyService:
     @staticmethod
     def _validate_validity_window(*, valid_from: datetime, valid_until: datetime) -> None:
         if valid_from.tzinfo is None:
-            raise InvalidGatewayKeyValidityError("valid_from must be timezone-aware", param="valid_from")
+            raise InvalidGatewayKeyValidityError(
+                "valid_from must be timezone-aware", param="valid_from"
+            )
         if valid_until.tzinfo is None:
-            raise InvalidGatewayKeyValidityError("valid_until must be timezone-aware", param="valid_until")
+            raise InvalidGatewayKeyValidityError(
+                "valid_until must be timezone-aware", param="valid_until"
+            )
         if valid_until <= valid_from:
-            raise InvalidGatewayKeyValidityError("valid_until must be after valid_from", param="valid_until")
+            raise InvalidGatewayKeyValidityError(
+                "valid_until must be after valid_from", param="valid_until"
+            )
 
     @staticmethod
     def _validate_optional_positive_decimal(value: Decimal | None, *, param: str) -> Decimal | None:
@@ -860,7 +994,12 @@ class KeyService:
             )
 
         normalized: dict[str, int | None] = {}
-        for key in ("requests_per_minute", "tokens_per_minute", "max_concurrent_requests", "window_seconds"):
+        for key in (
+            "requests_per_minute",
+            "tokens_per_minute",
+            "max_concurrent_requests",
+            "window_seconds",
+        ):
             value = policy.get(key)
             if key == "max_concurrent_requests" and value is None:
                 value = policy.get("concurrent_requests")
@@ -891,8 +1030,7 @@ class KeyService:
     ) -> tuple[str, str]:
         purpose = str(key_purpose or KEY_PURPOSE_STANDARD).strip()
         mode = str(
-            capability_policy_mode
-            or default_capability_policy_mode_for_purpose(purpose)
+            capability_policy_mode or default_capability_policy_mode_for_purpose(purpose)
         ).strip()
         if purpose not in KEY_PURPOSE_VALUES:
             raise InvalidGatewayKeyPolicyError("Unsupported key purpose.", param="key_purpose")
@@ -1075,6 +1213,97 @@ class KeyService:
         metadata["responses_policy"] = safe_policy
         return metadata
 
+    @staticmethod
+    def _metadata_with_external_tool_policy(
+        metadata_json: dict[str, object] | None,
+        policy: ExternalToolKeyPolicy,
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        metadata["external_tool_policy"] = policy.to_metadata()
+        return metadata
+
+    def _validate_external_tool_policy(
+        self,
+        value: object,
+        *,
+        key_purpose: str,
+        request_limit_total: int | None,
+        token_limit_total: int | None,
+        cost_limit_eur: Decimal | None,
+        confirmed: bool,
+        reason: str | None,
+        require_reason: bool,
+    ) -> ExternalToolKeyPolicy:
+        parsed = parse_key_external_tool_policy(
+            value,
+            ceilings=self._settings.get_external_tool_operator_ceilings(),
+        )
+        if not parsed.valid or parsed.policy is None:
+            raise InvalidGatewayKeyPolicyError(
+                "External-tool policy is invalid or exceeds installation ceilings.",
+                param="external_tool_policy",
+            )
+        policy = parsed.policy
+        if policy.mode != EXTERNAL_TOOL_FENCED:
+            return policy
+        if key_purpose != KEY_PURPOSE_STANDARD:
+            raise InvalidGatewayKeyPolicyError(
+                "External-tool fenced policy is available only to standard keys.",
+                param="external_tool_policy",
+            )
+        if not confirmed:
+            raise InvalidGatewayKeyPolicyError(
+                "Confirm the external-tool fenced overrun and hold policy.",
+                param="confirm_external_tool_fenced",
+            )
+        if require_reason and not (reason or "").strip():
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating external-tool policy.",
+                param="reason",
+            )
+        self._validate_external_tool_limits(
+            request_limit_total=request_limit_total,
+            token_limit_total=token_limit_total,
+            cost_limit_eur=cost_limit_eur,
+        )
+        return policy
+
+    @staticmethod
+    def _validate_external_tool_limits(
+        *,
+        request_limit_total: int | None,
+        token_limit_total: int | None,
+        cost_limit_eur: Decimal | None,
+    ) -> None:
+        if (
+            type(request_limit_total) is not int
+            or request_limit_total <= 0
+            or type(token_limit_total) is not int
+            or token_limit_total <= 0
+            or not isinstance(cost_limit_eur, Decimal)
+            or not cost_limit_eur.is_finite()
+            or cost_limit_eur <= 0
+        ):
+            raise InvalidGatewayKeyPolicyError(
+                "External-tool fenced policy requires positive finite request, token, and EUR limits.",
+                param="external_tool_policy",
+            )
+
+    def _external_tool_policy_from_key(self, gateway_key: GatewayKey) -> ExternalToolKeyPolicy:
+        metadata = getattr(gateway_key, "metadata_json", None)
+        raw_policy = metadata.get("external_tool_policy") if isinstance(metadata, dict) else None
+        parsed = parse_key_external_tool_policy(
+            raw_policy,
+            ceilings=self._settings.get_external_tool_operator_ceilings(),
+        )
+        return parsed.policy if parsed.valid and parsed.policy is not None else strict_key_policy()
+
+    @classmethod
+    def _responses_policy_from_key(cls, gateway_key: GatewayKey) -> dict[str, object] | None:
+        metadata = getattr(gateway_key, "metadata_json", None)
+        raw_policy = metadata.get("responses_policy") if isinstance(metadata, dict) else None
+        return cls._safe_responses_policy(raw_policy if isinstance(raw_policy, dict) else None)
+
     async def _audit_gateway_key_change(
         self,
         *,
@@ -1143,6 +1372,13 @@ class KeyService:
             ).to_metadata(),
         }
 
+    def _external_tool_policy_audit_values(self, gateway_key: GatewayKey) -> dict[str, object]:
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "external_tool_policy": self._external_tool_policy_from_key(gateway_key).to_metadata(),
+        }
+
     @staticmethod
     def _policy_audit_values(gateway_key: GatewayKey) -> dict[str, object]:
         return {
@@ -1174,9 +1410,8 @@ class KeyService:
             "quota_reset_count": gateway_key.quota_reset_count,
         }
 
-    @classmethod
     def _management_result(
-        cls,
+        self,
         gateway_key: GatewayKey,
         *,
         updated_at: datetime,
@@ -1199,16 +1434,17 @@ class KeyService:
             requests_reserved_total=gateway_key.requests_reserved_total,
             last_quota_reset_at=gateway_key.last_quota_reset_at,
             quota_reset_count=gateway_key.quota_reset_count,
-            rate_limit_policy=cls._rate_limit_policy_from_key(gateway_key),
+            rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
             allowed_models=list(gateway_key.allowed_models or []),
             allowed_endpoints=list(gateway_key.allowed_endpoints or []),
             allow_all_models=gateway_key.allow_all_models,
             allow_all_endpoints=gateway_key.allow_all_endpoints,
             key_purpose=gateway_key.key_purpose,
             capability_policy_mode=gateway_key.capability_policy_mode,
-            chat_streaming_live_burn_policy=cls._chat_streaming_live_burn_policy_from_key_static(
+            chat_streaming_live_burn_policy=self._chat_streaming_live_burn_policy_from_key_static(
                 gateway_key
             ).to_metadata(),
+            external_tool_policy=self._external_tool_policy_from_key(gateway_key).to_metadata(),
         )
 
     @staticmethod
@@ -1275,7 +1511,9 @@ class KeyService:
                     return ChatStreamingLiveBurnPolicy(
                         enabled=enabled if isinstance(enabled, bool) else True,
                         cost_margin_eur=Decimal(str(cost_margin)),
-                        token_margin=token_margin if isinstance(token_margin, int) else int(str(token_margin)),
+                        token_margin=token_margin
+                        if isinstance(token_margin, int)
+                        else int(str(token_margin)),
                     )
                 except (InvalidOperation, ValueError, TypeError):
                     return default_chat_streaming_live_burn_policy()

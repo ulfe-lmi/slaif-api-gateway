@@ -127,6 +127,8 @@
         <dd>{{ key.rate_limit_policy_summary }}</dd>
         <dt>Chat streaming live-burn</dt>
         <dd>{{ key.chat_streaming_live_burn_policy_summary }}</dd>
+        <dt>External-tool policy</dt>
+        <dd>{{ key.external_tool_policy_summary }}</dd>
         {% if key.responses_policy %}
         <dt>Responses policy</dt>
         <dd>{{ key.responses_policy_summary }}</dd>
@@ -179,6 +181,56 @@
         <input name="reason" value="{{ policy_form.reason }}" required autocomplete="off" placeholder="Required reason">
       </label>
       <button type="submit">Update request policy</button>
+    </form>
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-external-tool-policy-heading">
+    <h2 id="key-external-tool-policy-heading">External-tool Policy</h2>
+    <p class="warning-text">Configured policy is not runtime authority. Provider-hosted tools, remote MCP, connectors, URL authority, and unknown external authority remain denied pending objectives 014–016.</p>
+    <dl class="compact-dl">
+      <dt>Mode</dt><dd>{{ key.external_tool_policy.mode }}</dd>
+      <dt>Capabilities</dt><dd>{{ key.external_tool_policy.allowed_capabilities|join(', ') or 'None' }}</dd>
+      <dt>Destination IDs</dt><dd>{{ key.external_tool_policy.allowed_destination_ids|join(', ') or 'None' }}</dd>
+      <dt>Maximum calls</dt><dd>{{ key.external_tool_policy.max_provider_tool_calls_per_request }}</dd>
+      <dt>Overrun acknowledged</dt><dd>{{ 'Yes' if key.external_tool_policy.single_request_overrun_acknowledged else 'No' }}</dd>
+    </dl>
+    <form method="post" action="/admin/keys/{{ key.id }}/external-tool-policy">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Mode
+        <select name="external_tool_mode">
+          <option value="strict_bounded" {% if external_policy_form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
+          <option value="external_tool_fenced" {% if external_policy_form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (future opt-in)</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Reviewed capability IDs</legend>
+        {% for capability in external_tool_capabilities %}
+        <label class="checkbox-row">
+          <input type="checkbox" name="external_tool_capabilities" value="{{ capability }}" {% if capability in external_policy_form.external_tool_capabilities %}checked{% endif %}>
+          <code>{{ capability }}</code>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <label>
+        Reviewed destination IDs
+        <textarea name="external_tool_destination_ids" rows="3" autocomplete="off">{{ external_policy_form.external_tool_destination_ids }}</textarea>
+      </label>
+      <label>
+        Maximum provider tool calls per request
+        <input name="external_tool_max_calls" value="{{ external_policy_form.external_tool_max_calls }}" inputmode="numeric" autocomplete="off">
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if external_policy_form.external_tool_overrun_acknowledged %}checked{% endif %}>
+        I acknowledge the future single-request overrun and final-cost hold behavior.
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true">
+        I separately confirm fenced future external-tool policy.
+      </label>
+      <label>Audit reason <input name="reason" value="{{ external_policy_form.reason }}" required autocomplete="off"></label>
+      <p class="warning-text">One admitted future request may overrun; concurrent requests will be fenced, following exhausted requests blocked, and missing or ambiguous final cost held. Fenced mode requires positive finite hard quotas. Strict reset still requires an audit reason.</p>
+      <button type="submit">Update external-tool policy</button>
     </form>
   </section>
 

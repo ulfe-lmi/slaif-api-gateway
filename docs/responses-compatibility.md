@@ -617,8 +617,9 @@ Responses input item text and item wrappers are included in the normal
 admission-time input estimate. They do not create a new billing category; final
 accounting still uses provider-reported usage/cost once.
 
-Objective 012 defines two future external-tool quota modes without enabling
-either forwarding or storage. `strict_bounded` is current/default and denies
+Objective 012 defines two external-tool quota modes. Objective 013 stores their
+canonical key/template/route policy and audited operator configuration without
+enabling forwarding. `strict_bounded` is current/default and denies
 provider-hosted/external authority. Existing client-operated `function`,
 `custom`, gated `namespace`, `local_shell`, and client-side `apply_patch`
 workflows remain under their independent policies. `external_tool_fenced` is a
@@ -640,8 +641,8 @@ fails closed. Client MCP/network behavior outside provider wire authority is a
 client responsibility; SLAIF cannot claim to observe or block undeclared client
 action. Provider background execution, stored/previous-response state, and
 provider authentication remain distinct unsupported surfaces and are not
-implicitly enabled. Objectives 013–017 own the fence, hold, persistent policy,
-selected-provider contracts, and runtime integration. Current Responses
+implicitly enabled. Objectives 014–17 own the fence, hold, selected-provider
+contracts, and runtime integration. Current Responses
 runtime remains deny-only for every provider-hosted/external tool.
 
 ## Key Policy

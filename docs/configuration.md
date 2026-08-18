@@ -832,17 +832,24 @@ formats outside the configured allowlist.
 
 ## Planned Responses Tool Configuration
 
-Objective 012 defines the pure `strict_bounded` / `external_tool_fenced`
-contract, exact future key/route JSON schemas, and immutable absolute contract
-maxima of 16 capabilities, 8 reviewed destinations, 16 provider tool
-declarations, and 16 provider calls/iterations per request. It deliberately adds
-no settings, environment variables, `.env.example` entries, persisted policy,
-admin/CLI surface, or runtime behavior. Current runtime remains deny-only for
+Objective 012 defines the `strict_bounded` / `external_tool_fenced` contract
+and immutable absolute maxima. Objective 013 adds four positive installation
+settings, each defaulting to and never exceeding its contract maximum:
+
+```text
+EXTERNAL_TOOL_MAX_DISTINCT_CAPABILITIES=16
+EXTERNAL_TOOL_MAX_APPROVED_DESTINATIONS=8
+EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST=16
+EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST=16
+```
+
+They validate persisted key/template/route policy and do not enable runtime
+behavior. Current runtime remains deny-only for
 provider-hosted tools, remote MCP/connectors, provider URL fetch, and unknown
 authority.
 
-Objectives 013–017 own durable operator configuration and may only narrow the
-absolute maxima. Local function/custom and gated Codex client-tool request caps
+Objectives 014–017 own runtime/provider completion. Local function/custom and
+gated Codex client-tool request caps
 listed above remain active independent controls; they do not enable hosted
 tools, MCP/connectors, web/file search, code interpreter, hosted shell, computer
 use, image generation, tool search, skills, storage, provider authentication,
@@ -851,7 +858,7 @@ key fence, single-request-overrun acknowledgement, following-request block, and
 missing/ambiguous-cost hold contract documented in
 [`accounting.md`](accounting.md).
 
-Possible future setting names:
+Possible future Responses setting names:
 
 - `ENABLE_RESPONSES_API=false`
 - `RESPONSES_DEFAULT_ENABLED_FOR_KEYS=false`

@@ -38,6 +38,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
@@ -49,9 +50,17 @@ from slaif_gateway.services.chat_streaming_live_burn import (
     default_chat_streaming_live_burn_policy,
     normalize_chat_streaming_live_burn_policy,
 )
-from slaif_gateway.services.email_delivery_service import EmailDeliveryService, PendingKeyEmailResult
+from slaif_gateway.services.email_delivery_service import (
+    EmailDeliveryService,
+    PendingKeyEmailResult,
+)
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.email_service import EmailService
+from slaif_gateway.services.external_tool_policy_contract import (
+    STRICT_BOUNDED,
+    parse_key_external_tool_policy,
+    strict_key_policy,
+)
 from slaif_gateway.services.key_errors import GatewayKeyNotFoundError, KeyManagementError
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
@@ -71,7 +80,9 @@ from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
 policy_app = typer.Typer(help="Show or update gateway-key request policy")
+external_tools_app = typer.Typer(help="Show or update future external-tool policy")
 app.add_typer(policy_app, name="policy")
+app.add_typer(external_tools_app, name="external-tools")
 
 
 class CliKeyError(Exception):
@@ -104,7 +115,9 @@ class KeyEmailDeliveryCliResult:
 async def _key_runtime() -> AsyncIterator[tuple[Settings, GatewayKeysRepository, KeyService]]:
     settings = get_settings()
     if not settings.DATABASE_URL:
-        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
 
     try:
         session_factory = get_sessionmaker(settings)
@@ -125,12 +138,12 @@ async def _key_runtime() -> AsyncIterator[tuple[Settings, GatewayKeysRepository,
 
 
 @asynccontextmanager
-async def _key_email_runtime() -> AsyncIterator[
-    tuple[Settings, KeyService, EmailDeliveryService]
-]:
+async def _key_email_runtime() -> AsyncIterator[tuple[Settings, KeyService, EmailDeliveryService]]:
     settings = get_settings()
     if not settings.DATABASE_URL:
-        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
 
     try:
         session_factory = get_sessionmaker(settings)
@@ -167,7 +180,9 @@ async def _template_key_runtime() -> AsyncIterator[
 ]:
     settings = get_settings()
     if not settings.DATABASE_URL:
-        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
 
     try:
         session_factory = get_sessionmaker(settings)
@@ -202,6 +217,7 @@ async def _template_key_runtime() -> AsyncIterator[
                     key_templates_repository=KeyTemplatesRepository(session),
                     audit_repository=audit_repository,
                     key_service=key_service,
+                    external_tool_ceilings=(settings.get_external_tool_operator_ceilings()),
                 ),
                 email_delivery_service,
             )
@@ -267,25 +283,37 @@ def _rate_limit_policy_from_options(
 ) -> dict[str, int] | None:
     policy: dict[str, int] = {}
     if requests_per_minute is not None:
-        policy["requests_per_minute"] = _validate_positive_int(
-            requests_per_minute,
-            option_name="--rate-limit-requests-per-minute",
-        ) or requests_per_minute
+        policy["requests_per_minute"] = (
+            _validate_positive_int(
+                requests_per_minute,
+                option_name="--rate-limit-requests-per-minute",
+            )
+            or requests_per_minute
+        )
     if tokens_per_minute is not None:
-        policy["tokens_per_minute"] = _validate_positive_int(
-            tokens_per_minute,
-            option_name="--rate-limit-tokens-per-minute",
-        ) or tokens_per_minute
+        policy["tokens_per_minute"] = (
+            _validate_positive_int(
+                tokens_per_minute,
+                option_name="--rate-limit-tokens-per-minute",
+            )
+            or tokens_per_minute
+        )
     if concurrent_requests is not None:
-        policy["max_concurrent_requests"] = _validate_positive_int(
-            concurrent_requests,
-            option_name="--rate-limit-concurrent-requests",
-        ) or concurrent_requests
+        policy["max_concurrent_requests"] = (
+            _validate_positive_int(
+                concurrent_requests,
+                option_name="--rate-limit-concurrent-requests",
+            )
+            or concurrent_requests
+        )
     if window_seconds is not None:
-        policy["window_seconds"] = _validate_positive_int(
-            window_seconds,
-            option_name="--rate-limit-window-seconds",
-        ) or window_seconds
+        policy["window_seconds"] = (
+            _validate_positive_int(
+                window_seconds,
+                option_name="--rate-limit-window-seconds",
+            )
+            or window_seconds
+        )
     return policy or None
 
 
@@ -306,6 +334,26 @@ def _chat_streaming_live_burn_policy_from_options(
         ).to_metadata()
     except ChatStreamingLiveBurnPolicyError as exc:
         raise typer.BadParameter(str(exc), param_hint=exc.param) from exc
+
+
+def _external_tool_policy_from_options(
+    *,
+    mode: str,
+    capabilities: Sequence[str] | None,
+    destination_ids: Sequence[str] | None,
+    max_calls: int,
+    acknowledge_single_request_overrun: bool,
+) -> dict[str, object]:
+    if max_calls < 0:
+        raise typer.BadParameter("--external-tool-max-calls must be non-negative")
+    return {
+        "version": 1,
+        "mode": mode.strip(),
+        "allowed_capabilities": list(capabilities or []),
+        "allowed_destination_ids": list(destination_ids or []),
+        "max_provider_tool_calls_per_request": max_calls,
+        "single_request_overrun_acknowledged": acknowledge_single_request_overrun,
+    }
 
 
 def _valid_until_from_options(
@@ -384,6 +432,7 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "chat_streaming_live_burn_policy": _chat_streaming_live_burn_policy_from_gateway_key(
             gateway_key
         ),
+        "external_tool_policy": _external_tool_policy_from_gateway_key(gateway_key),
     }
 
 
@@ -443,6 +492,17 @@ def _chat_streaming_live_burn_policy_from_gateway_key(gateway_key: GatewayKey) -
         return default_chat_streaming_live_burn_policy().to_metadata()
 
 
+def _external_tool_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object]:
+    metadata = getattr(gateway_key, "metadata_json", None)
+    raw_policy = metadata.get("external_tool_policy") if isinstance(metadata, dict) else None
+    parsed = parse_key_external_tool_policy(
+        raw_policy,
+        ceilings=get_settings().get_external_tool_operator_ceilings(),
+    )
+    policy = parsed.policy if parsed.valid and parsed.policy is not None else strict_key_policy()
+    return policy.to_metadata()
+
+
 def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, object]:
     return {
         "gateway_key_id": result.gateway_key_id,
@@ -470,12 +530,15 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "key_purpose": result.key_purpose,
         "capability_policy_mode": result.capability_policy_mode,
         "chat_streaming_live_burn_policy": result.chat_streaming_live_burn_policy,
+        "external_tool_policy": result.external_tool_policy,
         "template_id": getattr(result, "template_id", None),
         "template_revision_id": getattr(result, "template_revision_id", None),
     }
 
 
-def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = True) -> dict[str, object]:
+def _created_key_dict(
+    result: CreatedGatewayKey, *, include_plaintext: bool = True
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "gateway_key_id": result.gateway_key_id,
         "owner_id": result.owner_id,
@@ -488,6 +551,7 @@ def _created_key_dict(result: CreatedGatewayKey, *, include_plaintext: bool = Tr
         "chat_streaming_live_burn_policy": result.chat_streaming_live_burn_policy,
         "key_purpose": result.key_purpose,
         "capability_policy_mode": result.capability_policy_mode,
+        "external_tool_policy": result.external_tool_policy,
     }
     if include_plaintext:
         payload["plaintext_key"] = result.plaintext_key
@@ -610,7 +674,9 @@ def _validate_secret_output_options(
         raise typer.BadParameter("Use either --show-plaintext or --secret-output-file, not both")
     if email_delivery_mode in {EmailDeliveryMode.send_now, EmailDeliveryMode.enqueue}:
         if show_plaintext:
-            raise typer.BadParameter("--show-plaintext cannot be combined with email-delivery send-now/enqueue")
+            raise typer.BadParameter(
+                "--show-plaintext cannot be combined with email-delivery send-now/enqueue"
+            )
         if secret_output_file is not None:
             raise typer.BadParameter(
                 "--secret-output-file cannot be combined with email-delivery send-now/enqueue"
@@ -711,11 +777,15 @@ async def _create_gateway_key_with_email_delivery(
             actor_admin_id=payload.created_by_admin_id,
             reason=payload.note,
         )
-    celery_task_id = _enqueue_pending_key_email(
-        one_time_secret_id=key_result.one_time_secret_id,
-        email_delivery_id=delivery_result.email_delivery_id,
-        actor_admin_id=payload.created_by_admin_id,
-    ) if email_delivery_mode == EmailDeliveryMode.enqueue else None
+    celery_task_id = (
+        _enqueue_pending_key_email(
+            one_time_secret_id=key_result.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=payload.created_by_admin_id,
+        )
+        if email_delivery_mode == EmailDeliveryMode.enqueue
+        else None
+    )
     if email_delivery_mode == EmailDeliveryMode.enqueue:
         delivery_result = PendingKeyEmailResult(
             email_delivery_id=delivery_result.email_delivery_id,
@@ -758,12 +828,16 @@ async def _create_key_from_template(
             valid_until=valid_until,
             valid_days=valid_days,
         )
-        delivery_result = await _create_pending_delivery_for_created_key(
-            email_delivery_service,
-            key_result=result.created_key,
-            actor_admin_id=actor_admin_id,
-            reason=reason,
-        ) if email_delivery_mode != EmailDeliveryMode.none else None
+        delivery_result = (
+            await _create_pending_delivery_for_created_key(
+                email_delivery_service,
+                key_result=result.created_key,
+                actor_admin_id=actor_admin_id,
+                reason=reason,
+            )
+            if email_delivery_mode != EmailDeliveryMode.none
+            else None
+        )
 
     if email_delivery_mode == EmailDeliveryMode.send_now and delivery_result is not None:
         delivery_result = await _send_pending_key_email_now(
@@ -962,6 +1036,13 @@ async def _update_policy(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyMana
         return await service.update_gateway_key_policy(payload)
 
 
+async def _update_external_tool_policy(
+    payload: UpdateGatewayKeyExternalToolPolicyInput,
+) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, _, service):
+        return await service.update_gateway_key_external_tool_policy(payload)
+
+
 async def _reset_usage(payload: ResetGatewayKeyUsageInput) -> GatewayKeyManagementResult:
     async with _key_runtime() as (_, _, service):
         return await service.reset_gateway_key_usage(payload)
@@ -994,11 +1075,15 @@ async def _rotate_gateway_key_with_email_delivery(
             actor_admin_id=payload.actor_admin_id,
             reason=payload.reason,
         )
-    celery_task_id = _enqueue_pending_key_email(
-        one_time_secret_id=key_result.one_time_secret_id,
-        email_delivery_id=delivery_result.email_delivery_id,
-        actor_admin_id=payload.actor_admin_id,
-    ) if email_delivery_mode == EmailDeliveryMode.enqueue else None
+    celery_task_id = (
+        _enqueue_pending_key_email(
+            one_time_secret_id=key_result.one_time_secret_id,
+            email_delivery_id=delivery_result.email_delivery_id,
+            actor_admin_id=payload.actor_admin_id,
+        )
+        if email_delivery_mode == EmailDeliveryMode.enqueue
+        else None
+    )
     if email_delivery_mode == EmailDeliveryMode.enqueue:
         delivery_result = PendingKeyEmailResult(
             email_delivery_id=delivery_result.email_delivery_id,
@@ -1042,7 +1127,9 @@ async def _send_pending_key_email_now(
 ) -> PendingKeyEmailResult:
     settings = get_settings()
     if not settings.DATABASE_URL:
-        raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
     try:
         session_factory = get_sessionmaker(settings)
     except RuntimeError as exc:
@@ -1095,7 +1182,9 @@ def _validate_email_delivery_preconditions(
         if not settings.ENABLE_EMAIL_DELIVERY:
             raise CliKeyError("ENABLE_EMAIL_DELIVERY must be true for email-delivery=enqueue")
         if not settings.get_celery_broker_url():
-            raise CliKeyError("CELERY_BROKER_URL or REDIS_URL is required for email-delivery=enqueue")
+            raise CliKeyError(
+                "CELERY_BROKER_URL or REDIS_URL is required for email-delivery=enqueue"
+            )
 
 
 @app.callback()
@@ -1141,11 +1230,15 @@ def create(
     ] = None,
     allow_all_models: Annotated[
         bool,
-        typer.Option("--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"),
+        typer.Option(
+            "--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"
+        ),
     ] = False,
     allow_all_endpoints: Annotated[
         bool,
-        typer.Option("--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"),
+        typer.Option(
+            "--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"
+        ),
     ] = False,
     rate_limit_requests_per_minute: Annotated[
         int | None,
@@ -1205,6 +1298,49 @@ def create(
             ),
         ),
     ] = None,
+    external_tool_mode: Annotated[
+        str,
+        typer.Option(
+            "--external-tool-mode",
+            help="strict_bounded or external_tool_fenced (runtime remains deny-only)",
+        ),
+    ] = STRICT_BOUNDED,
+    external_tool_capabilities: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--external-tool-capability",
+            help="Reviewed external capability ID; repeatable",
+        ),
+    ] = None,
+    external_tool_destination_ids: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--external-tool-destination-id",
+            help="Reviewed opaque connector:/remote_mcp: destination ID; repeatable",
+        ),
+    ] = None,
+    external_tool_max_calls: Annotated[
+        int,
+        typer.Option(
+            "--external-tool-max-calls",
+            help="Positive future provider-tool call cap; zero for strict mode",
+        ),
+    ] = 0,
+    acknowledge_single_request_overrun: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-single-request-overrun",
+            help="Acknowledge future single-request overrun and hold behavior",
+        ),
+    ] = False,
+    confirm_external_tool_fenced: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-external-tool-fenced",
+            "--confirm",
+            help="Second confirmation required for fenced future policy",
+        ),
+    ] = False,
     actor_admin_id: Annotated[
         str | None,
         typer.Option("--actor-admin-id", help="Acting admin UUID"),
@@ -1217,7 +1353,9 @@ def create(
     ] = False,
     secret_output_file: Annotated[
         Path | None,
-        typer.Option("--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"),
+        typer.Option(
+            "--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"
+        ),
     ] = None,
     email_delivery: Annotated[
         EmailDeliveryMode,
@@ -1274,9 +1412,7 @@ def create(
     parsed_valid_from = _parse_datetime(valid_from, field_name="valid_from") or datetime.now(UTC)
     key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION if trusted_calibration else "standard"
     capability_policy_mode = (
-        CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
-        if trusted_calibration
-        else "standard"
+        CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY if trusted_calibration else "standard"
     )
     payload = CreateGatewayKeyInput(
         owner_id=_parse_uuid(owner_id, field_name="owner_id"),
@@ -1309,6 +1445,14 @@ def create(
             cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
             token_margin=chat_streaming_live_burn_token_margin,
         ),
+        external_tool_policy=_external_tool_policy_from_options(
+            mode=external_tool_mode,
+            capabilities=external_tool_capabilities,
+            destination_ids=external_tool_destination_ids,
+            max_calls=external_tool_max_calls,
+            acknowledge_single_request_overrun=acknowledge_single_request_overrun,
+        ),
+        confirm_external_tool_fenced=confirm_external_tool_fenced,
         created_by_admin_id=(
             _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
         ),
@@ -1316,7 +1460,9 @@ def create(
     )
     try:
         if email_delivery == EmailDeliveryMode.none:
-            cli_result = KeyEmailDeliveryCliResult(key_result=_run_async(_create_gateway_key(payload)))
+            cli_result = KeyEmailDeliveryCliResult(
+                key_result=_run_async(_create_gateway_key(payload))
+            )
         else:
             cli_result = _run_async(
                 _create_gateway_key_with_email_delivery(
@@ -1413,7 +1559,9 @@ def create_from_template(
     ] = False,
     secret_output_file: Annotated[
         Path | None,
-        typer.Option("--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"),
+        typer.Option(
+            "--secret-output-file", help="Write the one-time plaintext key to a new 0600 file"
+        ),
     ] = None,
 ) -> None:
     """Create one normal gateway key from an immutable key template revision."""
@@ -1603,11 +1751,15 @@ def policy_update(
     ] = None,
     allow_all_models: Annotated[
         bool,
-        typer.Option("--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"),
+        typer.Option(
+            "--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"
+        ),
     ] = False,
     allow_all_endpoints: Annotated[
         bool,
-        typer.Option("--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"),
+        typer.Option(
+            "--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"
+        ),
     ] = False,
     actor_admin_id: Annotated[
         str | None,
@@ -1646,6 +1798,105 @@ def policy_update(
     _echo_kv(safe_result)
 
 
+@external_tools_app.command("show")
+def external_tools_show(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Show canonical safe external-tool policy; runtime remains deny-only."""
+    try:
+        gateway_key = _run_async(
+            _show_gateway_key(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
+        )
+        payload = {
+            "gateway_key_id": gateway_key.id,
+            "public_key_id": gateway_key.public_key_id,
+            "external_tool_policy": _external_tool_policy_from_gateway_key(gateway_key),
+            "runtime_status": "denied_pending_objectives_014_016",
+        }
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+    if json_output:
+        _emit_json(payload)
+        return
+    _echo_kv(payload)
+
+
+@external_tools_app.command("update")
+def external_tools_update(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="strict_bounded or external_tool_fenced"),
+    ] = STRICT_BOUNDED,
+    capabilities: Annotated[
+        list[str] | None,
+        typer.Option("--capability", help="Reviewed external capability ID; repeatable"),
+    ] = None,
+    destination_ids: Annotated[
+        list[str] | None,
+        typer.Option("--destination-id", help="Reviewed opaque destination ID; repeatable"),
+    ] = None,
+    max_calls: Annotated[
+        int,
+        typer.Option("--max-calls", help="Positive provider-tool call cap; zero for strict"),
+    ] = 0,
+    acknowledge_single_request_overrun: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-single-request-overrun",
+            help="Acknowledge future one-request overrun and final-cost hold behavior",
+        ),
+    ] = False,
+    confirm: Annotated[
+        bool,
+        typer.Option("--confirm", help="Required second confirmation for fenced mode"),
+    ] = False,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str, typer.Option("--reason", help="Required audit reason")] = "",
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Replace audited future external-tool policy without enabling runtime forwarding."""
+    try:
+        result = _run_async(
+            _update_external_tool_policy(
+                UpdateGatewayKeyExternalToolPolicyInput(
+                    gateway_key_id=_parse_uuid(
+                        gateway_key_id,
+                        field_name="gateway_key_id",
+                    ),
+                    external_tool_policy=_external_tool_policy_from_options(
+                        mode=mode,
+                        capabilities=capabilities,
+                        destination_ids=destination_ids,
+                        max_calls=max_calls,
+                        acknowledge_single_request_overrun=(acknowledge_single_request_overrun),
+                    ),
+                    confirm_external_tool_fenced=confirm,
+                    actor_admin_id=(
+                        _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                        if actor_admin_id
+                        else None
+                    ),
+                    reason=reason,
+                )
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+    payload = _management_result_dict(result)
+    payload["runtime_status"] = "denied_pending_objectives_014_016"
+    if json_output:
+        _emit_json(payload)
+        return
+    _echo_kv(payload)
+
+
 def _status_command_common(
     *,
     command: str,
@@ -1655,7 +1906,9 @@ def _status_command_common(
     json_output: bool,
 ) -> None:
     parsed_id = _parse_uuid(gateway_key_id, field_name="gateway_key_id")
-    parsed_actor = _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
+    parsed_actor = (
+        _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
+    )
     if command == "suspend":
         coro = _suspend_gateway_key(
             SuspendGatewayKeyInput(parsed_id, actor_admin_id=parsed_actor, reason=reason)
@@ -1734,7 +1987,9 @@ def revoke(
 ) -> None:
     """Revoke an active or suspended gateway key."""
     if not reason and not json_output:
-        typer.secho("Warning: --reason is recommended for revocation audit logs.", fg=typer.colors.YELLOW)
+        typer.secho(
+            "Warning: --reason is recommended for revocation audit logs.", fg=typer.colors.YELLOW
+        )
     _status_command_common(
         command="revoke",
         gateway_key_id=gateway_key_id,
@@ -2156,7 +2411,9 @@ def rotate(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
     show_plaintext: Annotated[
         bool,
-        typer.Option("--show-plaintext", help="Include the replacement plaintext key in JSON output"),
+        typer.Option(
+            "--show-plaintext", help="Include the replacement plaintext key in JSON output"
+        ),
     ] = False,
     secret_output_file: Annotated[
         Path | None,
@@ -2201,7 +2458,9 @@ def rotate(
     )
     try:
         if email_delivery == EmailDeliveryMode.none:
-            cli_result = KeyEmailDeliveryCliResult(key_result=_run_async(_rotate_gateway_key(payload)))
+            cli_result = KeyEmailDeliveryCliResult(
+                key_result=_run_async(_rotate_gateway_key(payload))
+            )
         else:
             cli_result = _run_async(
                 _rotate_gateway_key_with_email_delivery(

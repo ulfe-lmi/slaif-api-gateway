@@ -60,6 +60,21 @@ class AdminKeyListRow:
     created_at: datetime
     updated_at: datetime
     allowed_providers: tuple[str, ...] | None = field(default=None, kw_only=True)
+    external_tool_policy: dict[str, object] = field(
+        default_factory=lambda: {
+            "version": 1,
+            "mode": "strict_bounded",
+            "allowed_capabilities": [],
+            "allowed_destination_ids": [],
+            "max_provider_tool_calls_per_request": 0,
+            "single_request_overrun_acknowledged": False,
+        },
+        kw_only=True,
+    )
+    external_tool_policy_summary: str = field(
+        default="Mode: strict_bounded; capabilities: none; destinations: none; max calls: 0; overrun acknowledged: false; runtime: denied",
+        kw_only=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)

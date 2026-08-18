@@ -140,3 +140,32 @@ async def test_rotation_of_revoked_key_fails() -> None:
     assert keys_repo.created_calls == []
     assert one_time_repo.calls == []
     assert audit_repo.calls == []
+
+
+async def test_rotation_preserves_external_tool_policy_exactly_and_refuses_limit_drop() -> None:
+    policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 2,
+        "single_request_overrun_acknowledged": True,
+    }
+    old_key = FakeGatewayKeyRow(metadata_json={"external_tool_policy": policy})
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="rotate fenced key")
+    )
+    assert keys_repo.created_calls[0]["metadata_json"]["external_tool_policy"] == policy
+
+    another = FakeGatewayKeyRow(metadata_json={"external_tool_policy": policy})
+    service, keys_repo, _, _, _ = make_key_service(another)
+    with pytest.raises(GatewayKeyRotationError, match="preserve finite limits"):
+        await service.rotate_gateway_key(
+            RotateGatewayKeyInput(
+                gateway_key_id=another.id,
+                preserve_limits=False,
+            )
+        )
+    assert keys_repo.created_calls == []

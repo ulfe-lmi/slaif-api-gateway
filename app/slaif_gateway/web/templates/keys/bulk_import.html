@@ -3,6 +3,7 @@
 {% block title %}Bulk Key Import Preview{% endblock %}
 
 {% block body %}
+<!-- External-tool policy is intentionally unavailable in direct bulk import. -->
 <section class="dashboard-shell wide" aria-labelledby="bulk-key-import-heading">
   <header class="dashboard-header">
     <div>
@@ -29,6 +30,7 @@
     <section class="action-panel" aria-labelledby="bulk-key-source-heading">
       <h2 id="bulk-key-source-heading">Import Source</h2>
       <p class="warning-text">Preview only: no keys are generated, no plaintext keys are displayed, no email is sent, and no Celery task is queued.</p>
+      <p class="warning-text">Direct bulk import is external-tool strict-only. External mode, capability, destination, cap, or acknowledgement fields are rejected rather than ignored.</p>
       <p class="muted small">Email delivery modes: <code>none</code> and <code>pending</code> show generated plaintext once only after confirmed execution; <code>enqueue</code> queues email delivery after creation and suppresses browser plaintext; <code>send-now</code> is not supported for bulk execution.</p>
       <div class="form-grid">
         <label>
