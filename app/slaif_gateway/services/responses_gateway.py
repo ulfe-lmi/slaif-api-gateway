@@ -96,6 +96,8 @@ from slaif_gateway.services.responses_request_policy import (
     responses_file_input_requested,
     responses_function_tools_requested,
     responses_image_input_requested,
+    responses_codex_client_tools_allowed,
+    responses_codex_client_tools_requested,
     responses_codex_request_envelope_allowed,
     responses_codex_request_envelope_requested,
     responses_text_format_type,
@@ -522,8 +524,14 @@ async def handle_response_create(
     ):
         if field in payload.model_fields_set and field not in body:
             body[field] = None
-    codex_request_envelope_requested = responses_codex_request_envelope_requested(body)
+    codex_client_tools_requested = responses_codex_client_tools_requested(body)
+    codex_request_envelope_requested = (
+        responses_codex_request_envelope_requested(body) or codex_client_tools_requested
+    )
     allow_codex_request_envelope = responses_codex_request_envelope_allowed(
+        authenticated_key.responses_policy
+    )
+    allow_codex_client_tools = responses_codex_client_tools_allowed(
         authenticated_key.responses_policy
     )
     policy = ResponsesRequestPolicy(settings=settings)
@@ -532,6 +540,7 @@ async def handle_response_create(
             body,
             allow_store=True,
             allow_codex_request_envelope=allow_codex_request_envelope,
+            allow_codex_client_tools=allow_codex_client_tools,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -553,6 +562,7 @@ async def handle_response_create(
         compact_requested=False,
         conversations_requested=conversation_requested(policy_result.effective_body),
         codex_request_envelope_requested=codex_request_envelope_requested,
+        codex_client_tools_requested=codex_client_tools_requested,
         request=request,
     )
     if previous_response_id_requested(policy_result.effective_body):
@@ -1240,6 +1250,7 @@ async def _resolve_responses_route(
     conversations_requested: bool,
     request: Request | None,
     codex_request_envelope_requested: bool = False,
+    codex_client_tools_requested: bool = False,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1274,6 +1285,7 @@ async def _resolve_responses_route(
                 compact_requested=compact_requested,
                 conversations_requested=conversations_requested,
                 codex_request_envelope_requested=codex_request_envelope_requested,
+                codex_client_tools_requested=codex_client_tools_requested,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

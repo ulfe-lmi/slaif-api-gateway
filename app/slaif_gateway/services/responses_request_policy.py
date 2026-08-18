@@ -16,6 +16,7 @@ from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_route_capabilities import (
     KNOWN_RESPONSES_CAPABILITIES,
+    RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
 )
 
@@ -93,6 +94,8 @@ _SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
 _SUPPORTED_CUSTOM_TOOL_TEXT_FORMAT_FIELDS = frozenset({"type"})
 _SUPPORTED_CUSTOM_TOOL_GRAMMAR_FORMAT_FIELDS = frozenset({"type", "syntax", "definition"})
+_SUPPORTED_CODEX_ADDITIONAL_TOOLS_FIELDS = frozenset({"type", "role", "tools"})
+_SUPPORTED_CODEX_NAMESPACE_FIELDS = frozenset({"type", "name", "description", "tools"})
 _SUPPORTED_CONVERSATION_ITEM_CREATE_FIELDS = frozenset({"items"})
 _SUPPORTED_CONVERSATION_UPDATE_FIELDS = frozenset({"metadata"})
 _CONVERSATION_UPDATE_MAX_METADATA_KEYS = 16
@@ -179,6 +182,31 @@ _CODEX_MAX_CLIENT_METADATA_KEYS = len(_CODEX_CLIENT_METADATA_KEYS)
 _CODEX_MAX_CLIENT_METADATA_KEY_BYTES = 64
 _CODEX_MAX_CLIENT_METADATA_VALUE_BYTES = 4096
 _CODEX_MAX_CLIENT_METADATA_BYTES = 8192
+_CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH = 16
+_CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES = 256
+_CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES = 32_768
+_CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES = 589_824
+_CODEX_CLIENT_TOOL_TAXONOMY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "functions",
+        (
+            ("exec", "custom"),
+            ("wait", "function"),
+            ("request_user_input", "function"),
+        ),
+    ),
+    (
+        "collaboration",
+        (
+            ("followup_task", "function"),
+            ("interrupt_agent", "function"),
+            ("list_agents", "function"),
+            ("send_message", "function"),
+            ("spawn_agent", "function"),
+            ("wait_agent", "function"),
+        ),
+    ),
+)
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -201,8 +229,18 @@ class ResponsesRequestPolicy:
         *,
         allow_store: bool = False,
         allow_codex_request_envelope: bool = False,
+        allow_codex_client_tools: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
+        codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
+        if codex_client_tools_requested and not (
+            allow_codex_request_envelope and allow_codex_client_tools
+        ):
+            _raise(
+                _first_codex_client_tools_param(effective_body),
+                "responses_codex_client_tools_not_allowed",
+                "Codex client tool namespaces are not enabled for this gateway key.",
+            )
         codex_envelope_requested = responses_codex_request_envelope_requested(effective_body)
         if codex_envelope_requested and not allow_codex_request_envelope:
             _raise(
@@ -223,6 +261,7 @@ class ResponsesRequestPolicy:
         canonical_input, input_material_bytes = self._validate_input(
             effective_body.get("input"),
             allow_codex_request_envelope=allow_codex_request_envelope,
+            allow_codex_client_tools=allow_codex_client_tools,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -250,6 +289,7 @@ class ResponsesRequestPolicy:
             effective_body,
             allow_codex_request_envelope=allow_codex_request_envelope,
         )
+        self._validate_codex_client_tool_controls(effective_body)
         tools_schema_bytes = self._validate_tools(effective_body)
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
@@ -291,6 +331,9 @@ class ResponsesRequestPolicy:
             body=effective_body,
             tools_schema_bytes=tools_schema_bytes,
             tool_choice_bytes=tool_choice_bytes,
+            codex_client_tool_declaration_bytes=(
+                _codex_client_tool_declaration_estimation_bytes(effective_body.get("input"))
+            ),
         )
         if estimated_input_tokens > self._settings.HARD_MAX_INPUT_TOKENS:
             _raise(
@@ -452,6 +495,7 @@ class ResponsesRequestPolicy:
         value: Any,
         *,
         allow_codex_request_envelope: bool = False,
+        allow_codex_client_tools: bool = False,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -471,6 +515,7 @@ class ResponsesRequestPolicy:
             return self._validate_input_item_array(
                 value,
                 allow_codex_request_envelope=allow_codex_request_envelope,
+                allow_codex_client_tools=allow_codex_client_tools,
             )
 
         _raise(
@@ -683,6 +728,7 @@ class ResponsesRequestPolicy:
         value: list[Any],
         *,
         allow_codex_request_envelope: bool = False,
+        allow_codex_client_tools: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -704,7 +750,16 @@ class ResponsesRequestPolicy:
         total_image_data_url_bytes = 0
         total_file_parts = 0
         total_file_data_url_bytes = 0
+        codex_client_tool_items = 0
         for index, item in enumerate(value):
+            if isinstance(item, Mapping) and item.get("type") == "additional_tools":
+                codex_client_tool_items += 1
+                if codex_client_tool_items > 1:
+                    _raise(
+                        f"input[{index}].type",
+                        "responses_codex_client_tools_invalid",
+                        "At most one Codex additional_tools input item is allowed.",
+                    )
             (
                 canonical_item,
                 item_text_bytes,
@@ -717,6 +772,7 @@ class ResponsesRequestPolicy:
                 item,
                 index=index,
                 allow_codex_request_envelope=allow_codex_request_envelope,
+                allow_codex_client_tools=allow_codex_client_tools,
             )
             total_text_bytes += item_text_bytes
             total_material_bytes += item_material_bytes
@@ -763,6 +819,7 @@ class ResponsesRequestPolicy:
         *,
         index: int,
         allow_codex_request_envelope: bool = False,
+        allow_codex_client_tools: bool = False,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -773,6 +830,14 @@ class ResponsesRequestPolicy:
             )
 
         item_type = item.get("type")
+        if item_type == "additional_tools":
+            if not (allow_codex_request_envelope and allow_codex_client_tools):
+                _raise(
+                    f"{param}.type",
+                    "responses_codex_client_tools_not_allowed",
+                    "Codex client tool namespaces are not enabled for this gateway key.",
+                )
+            return self._validate_codex_additional_tools_item(item, param=param)
         if item_type == "function_call_output":
             return self._validate_function_call_output_item(item, param=param)
         if item_type == "custom_tool_call_output":
@@ -847,6 +912,226 @@ class ResponsesRequestPolicy:
             file_parts,
             file_data_url_bytes,
         )
+
+    def _validate_codex_additional_tools_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        unknown = set(item) - _SUPPORTED_CODEX_ADDITIONAL_TOOLS_FIELDS
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_codex_client_tools_invalid",
+                "This Codex additional_tools field is not enabled by this gateway.",
+            )
+        if item.get("role") != "developer":
+            _raise(
+                f"{param}.role",
+                "responses_codex_client_tools_invalid",
+                "Codex additional_tools items require the developer role.",
+            )
+        namespaces = item.get("tools")
+        if not isinstance(namespaces, list) or len(namespaces) != len(
+            _CODEX_CLIENT_TOOL_TAXONOMY
+        ):
+            _raise(
+                f"{param}.tools",
+                "responses_codex_client_tools_invalid",
+                "Codex additional_tools requires the exact approved namespace set.",
+            )
+
+        expected_namespaces = dict(_CODEX_CLIENT_TOOL_TAXONOMY)
+        canonical_by_namespace: dict[str, dict[str, Any]] = {}
+        total_function_schema_bytes = 0
+        total_custom_format_bytes = 0
+        total_description_bytes = 0
+        total_schema_properties = 0
+        for namespace_index, namespace in enumerate(namespaces):
+            namespace_param = f"{param}.tools[{namespace_index}]"
+            if not isinstance(namespace, Mapping):
+                _raise(
+                    namespace_param,
+                    "responses_codex_client_tools_invalid",
+                    "Codex client tool namespaces must be objects.",
+                )
+            unknown_namespace_fields = set(namespace) - _SUPPORTED_CODEX_NAMESPACE_FIELDS
+            if unknown_namespace_fields:
+                _raise(
+                    f"{namespace_param}.{sorted(unknown_namespace_fields)[0]}",
+                    "responses_codex_client_tools_invalid",
+                    "This Codex client tool namespace field is not enabled.",
+                )
+            if namespace.get("type") != "namespace":
+                _raise(
+                    f"{namespace_param}.type",
+                    "responses_codex_client_tools_invalid",
+                    "Codex client tool containers must use type namespace.",
+                )
+            namespace_name = namespace.get("name")
+            if not isinstance(namespace_name, str) or namespace_name not in expected_namespaces:
+                _raise(
+                    f"{namespace_param}.name",
+                    "responses_codex_client_tools_invalid",
+                    "This Codex client tool namespace is not approved.",
+                )
+            if namespace_name in canonical_by_namespace:
+                _raise(
+                    f"{namespace_param}.name",
+                    "responses_codex_client_tools_invalid",
+                    "Codex client tool namespace names must be unique.",
+                )
+            description = namespace.get("description")
+            if description is not None:
+                if not isinstance(description, str):
+                    _raise(
+                        f"{namespace_param}.description",
+                        "responses_codex_client_tools_invalid",
+                        "Codex client tool namespace descriptions must be strings.",
+                    )
+                self._validate_string_bytes(
+                    description,
+                    param=f"{namespace_param}.description",
+                    max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES,
+                    code="responses_codex_client_tools_invalid",
+                )
+                total_description_bytes += len(description.encode("utf-8"))
+
+            tools = namespace.get("tools")
+            expected_tools = dict(expected_namespaces[str(namespace_name)])
+            if not isinstance(tools, list) or len(tools) != len(expected_tools):
+                _raise(
+                    f"{namespace_param}.tools",
+                    "responses_codex_client_tools_invalid",
+                    "This Codex namespace requires its exact approved client tool set.",
+                )
+            canonical_by_tool: dict[str, dict[str, Any]] = {}
+            for tool_index, tool in enumerate(tools):
+                tool_param = f"{namespace_param}.tools[{tool_index}]"
+                if not isinstance(tool, Mapping):
+                    _raise(
+                        tool_param,
+                        "responses_codex_client_tools_invalid",
+                        "Codex namespace tools must be objects.",
+                    )
+                tool_name = tool.get("name")
+                if not isinstance(tool_name, str) or tool_name not in expected_tools:
+                    _raise(
+                        f"{tool_param}.name",
+                        "responses_codex_client_tools_invalid",
+                        "This Codex client tool name is not approved in this namespace.",
+                    )
+                if tool_name in canonical_by_tool:
+                    _raise(
+                        f"{tool_param}.name",
+                        "responses_codex_client_tools_invalid",
+                        "Codex client tool names must be unique within a namespace.",
+                    )
+                if tool.get("type") != expected_tools[str(tool_name)]:
+                    _raise(
+                        f"{tool_param}.type",
+                        "responses_codex_client_tools_invalid",
+                        "This Codex client tool has an invalid declaration type.",
+                    )
+                if _contains_recursive_codex_authority_marker(tool):
+                    _raise(
+                        tool_param,
+                        "responses_codex_client_tools_provider_authority_not_supported",
+                        "Provider authority and hosted tool shapes are not enabled here.",
+                    )
+                canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
+                    tool,
+                    param=tool_param,
+                )
+                if canonical_tool["type"] == "function":
+                    total_schema_properties += _validate_codex_schema_complexity(
+                        canonical_tool["parameters"],
+                        param=f"{tool_param}.parameters",
+                    )
+                    if total_schema_properties > _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES:
+                        _raise(
+                            f"{param}.tools",
+                            "responses_codex_client_tools_property_count_exceeded",
+                            "The Codex client function schemas have too many properties.",
+                        )
+                    total_function_schema_bytes += schema_bytes
+                else:
+                    format_value = canonical_tool.get("format")
+                    if (
+                        tool_name != "exec"
+                        or not isinstance(format_value, Mapping)
+                        or format_value.get("type") != "grammar"
+                        or format_value.get("syntax") not in _CUSTOM_TOOL_GRAMMAR_SYNTAXES
+                    ):
+                        _raise(
+                            f"{tool_param}.format",
+                            "responses_codex_client_tools_invalid",
+                            "The Codex exec tool requires an approved bounded grammar format.",
+                        )
+                    total_custom_format_bytes += format_bytes
+                tool_description = canonical_tool.get("description")
+                if isinstance(tool_description, str):
+                    total_description_bytes += len(tool_description.encode("utf-8"))
+                canonical_by_tool[str(tool_name)] = canonical_tool
+
+            canonical_tools = [
+                canonical_by_tool[tool_name]
+                for tool_name, _tool_type in expected_namespaces[str(namespace_name)]
+            ]
+            canonical_namespace: dict[str, Any] = {
+                "type": "namespace",
+                "name": namespace_name,
+            }
+            if description is not None:
+                canonical_namespace["description"] = description
+            canonical_namespace["tools"] = canonical_tools
+            canonical_by_namespace[str(namespace_name)] = canonical_namespace
+
+        if total_function_schema_bytes > self._settings.RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES:
+            _raise(
+                f"{param}.tools",
+                "responses_function_tool_schema_too_large",
+                "The total Codex client function schema size exceeds the gateway limit.",
+            )
+        if total_custom_format_bytes > self._settings.RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES:
+            _raise(
+                f"{param}.tools",
+                "responses_custom_tool_format_too_large",
+                "The total Codex client custom format size exceeds the gateway limit.",
+            )
+        if total_description_bytes > _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES:
+            _raise(
+                f"{param}.tools",
+                "responses_codex_client_tools_too_large",
+                "The total Codex client tool description size exceeds the gateway limit.",
+            )
+        canonical_item = {
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [
+                canonical_by_namespace[namespace_name]
+                for namespace_name, _tools in _CODEX_CLIENT_TOOL_TAXONOMY
+            ],
+        }
+        if len(canonical_json_bytes(canonical_item)) > _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES:
+            _raise(
+                param,
+                "responses_codex_client_tools_too_large",
+                "The Codex client tool declaration exceeds the gateway size limit.",
+            )
+        # Declaration bytes are accounted separately as safe non-message evidence.
+        return canonical_item, 0, 0, 0, 0, 0, 0
+
+    def _validate_codex_client_tool_controls(self, body: Mapping[str, Any]) -> None:
+        if not responses_codex_client_tools_requested(body):
+            return
+        if "tools" in body:
+            _raise(
+                "tools",
+                "responses_codex_client_tools_invalid",
+                "Codex additional_tools cannot be combined with top-level Responses tools.",
+            )
 
     def _validate_function_call_output_item(
         self,
@@ -2288,7 +2573,8 @@ class ResponsesRequestPolicy:
             return 0
         value = body.get("tool_choice")
         tools = body.get("tools")
-        if tools is None:
+        codex_client_tools = responses_codex_client_tools_requested(body)
+        if tools is None and not codex_client_tools:
             _raise(
                 "tool_choice",
                 "responses_tool_choice_invalid",
@@ -2302,6 +2588,12 @@ class ResponsesRequestPolicy:
                     "Responses tool_choice must be none, auto, required, or a local tool choice.",
                 )
             return len(canonical_json_bytes({"tool_choice": value}))
+        if codex_client_tools:
+            _raise(
+                "tool_choice",
+                "responses_codex_client_tools_invalid",
+                "Codex client tool namespaces allow only none, auto, or required tool_choice.",
+            )
         if not isinstance(value, Mapping):
             _raise(
                 "tool_choice",
@@ -2424,6 +2716,7 @@ class ResponsesRequestPolicy:
         body: Mapping[str, Any],
         tools_schema_bytes: int = 0,
         tool_choice_bytes: int = 0,
+        codex_client_tool_declaration_bytes: int = 0,
     ) -> tuple[int, int, int, tuple[str, ...]]:
         total_bytes = input_material_bytes
         if instructions is not None:
@@ -2434,6 +2727,9 @@ class ResponsesRequestPolicy:
             non_message_fields.append("tools")
         if tool_choice_bytes:
             non_message_fields.append("tool_choice")
+        if codex_client_tool_declaration_bytes:
+            non_message_bytes += codex_client_tool_declaration_bytes
+            non_message_fields.append("input[].additional_tools")
         for field in ("include", "parallel_tool_calls", "prompt_cache_key", "reasoning", "text"):
             if field in body and body[field] is not None:
                 non_message_bytes += len(canonical_json_bytes({field: body[field]}))
@@ -2501,6 +2797,37 @@ def responses_codex_request_envelope_requested(body: Mapping[str, Any]) -> bool:
 def responses_codex_request_envelope_allowed(policy: object) -> bool:
     """Return true only for an explicit, well-formed key capability grant."""
 
+    return _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+    )
+
+
+def responses_codex_client_tools_requested(body: Mapping[str, Any]) -> bool:
+    """Detect Codex client tool declarations from input shape only."""
+
+    input_value = body.get("input")
+    return isinstance(input_value, list) and any(
+        isinstance(item, Mapping) and item.get("type") == "additional_tools"
+        for item in input_value
+    )
+
+
+def responses_codex_client_tools_allowed(policy: object) -> bool:
+    """Require independent, well-formed grants for envelope and client tools."""
+
+    return _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+    ) and _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    )
+
+
+def _responses_policy_capability_allowed(policy: object, capability: str) -> bool:
+    """Parse the versioned key capability list without accepting partial shapes."""
+
     if not isinstance(policy, Mapping):
         return False
     version = policy.get("version")
@@ -2516,7 +2843,7 @@ def responses_codex_request_envelope_allowed(policy: object) -> bool:
         return False
     if len(capabilities) != len(set(capabilities)):
         return False
-    return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE in capabilities
+    return capability in capabilities
 
 
 def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
@@ -2542,6 +2869,25 @@ def _first_codex_envelope_param(body: Mapping[str, Any]) -> str:
             ):
                 return f"input[{index}].id"
     return RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE
+
+
+def _first_codex_client_tools_param(body: Mapping[str, Any]) -> str:
+    input_value = body.get("input")
+    if isinstance(input_value, list):
+        for index, item in enumerate(input_value):
+            if isinstance(item, Mapping) and item.get("type") == "additional_tools":
+                return f"input[{index}].type"
+    return "input"
+
+
+def _codex_client_tool_declaration_estimation_bytes(value: Any) -> int:
+    if not isinstance(value, list):
+        return 0
+    return sum(
+        len(canonical_json_bytes(item))
+        for item in value
+        if isinstance(item, Mapping) and item.get("type") == "additional_tools"
+    )
 
 
 def _contains_control_character(value: str) -> bool:
@@ -2841,6 +3187,99 @@ def _contains_provider_authority_marker(value: Mapping[str, Any]) -> bool:
         "secrets",
     }
     return any(field in value for field in forbidden)
+
+
+def _contains_recursive_codex_authority_marker(value: Any) -> bool:
+    forbidden_fields = {
+        "allowed_tools",
+        "approval",
+        "approval_request",
+        "approval_mode",
+        "approval_policy",
+        "auth",
+        "authentication",
+        "authorization",
+        "connector",
+        "connector_id",
+        "connectors",
+        "headers",
+        "http_headers",
+        "request_headers",
+        "require_approval",
+        "secret",
+        "secrets",
+        "server_description",
+        "server_label",
+        "server_url",
+        "api_key",
+        "api_key_env",
+        "mcp",
+        "shell",
+        "local_shell",
+        "apply_patch",
+        "computer",
+        "computer_use",
+        "web_search",
+        "file_search",
+        "code_interpreter",
+        "image_generation",
+        "tool_search",
+    }
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized_key = str(key).strip().lower().replace("-", "_")
+            if normalized_key in forbidden_fields or any(
+                marker in normalized_key
+                for marker in ("approval", "authorization", "authentication", "connector", "header", "secret")
+            ):
+                return True
+            if normalized_key == "type" and isinstance(nested, str):
+                normalized_type = nested.strip().lower().replace("-", "_")
+                if normalized_type in _HOSTED_TOOL_TYPES:
+                    return True
+            if _contains_recursive_codex_authority_marker(nested):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_contains_recursive_codex_authority_marker(item) for item in value)
+    return False
+
+
+def _validate_codex_schema_complexity(value: Any, *, param: str) -> int:
+    property_count = 0
+
+    def visit(node: Any, *, depth: int) -> None:
+        nonlocal property_count
+        if depth > _CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH:
+            _raise(
+                param,
+                "responses_codex_client_tools_schema_too_deep",
+                "A Codex client function schema exceeds the gateway depth limit.",
+            )
+        if isinstance(node, Mapping):
+            properties = node.get("properties")
+            if properties is not None:
+                if not isinstance(properties, Mapping):
+                    _raise(
+                        param,
+                        "responses_codex_client_tools_invalid",
+                        "Codex client function schema properties must be an object.",
+                    )
+                property_count += len(properties)
+                if property_count > _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES:
+                    _raise(
+                        param,
+                        "responses_codex_client_tools_property_count_exceeded",
+                        "A Codex client function schema has too many properties.",
+                    )
+            for nested in node.values():
+                visit(nested, depth=depth + 1)
+        elif isinstance(node, (list, tuple)):
+            for nested in node:
+                visit(nested, depth=depth + 1)
+
+    visit(value, depth=1)
+    return property_count
 
 
 def _unsupported_code_for_field(field_name: str) -> str:

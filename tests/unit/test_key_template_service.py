@@ -425,10 +425,11 @@ def test_create_key_from_template_allows_safe_responses_policy_metadata() -> Non
         "notes": "safe summary only",
     }
     assert "codex_request_envelope" not in payload.responses_policy["allowed_capabilities"]
+    assert "codex_client_tools" not in payload.responses_policy["allowed_capabilities"]
     assert "responses_policy" in audit.rows[-1].new_values
 
 
-def test_create_key_from_template_propagates_only_explicit_codex_envelope_capability() -> None:
+def test_create_key_from_template_propagates_only_explicit_codex_capabilities() -> None:
     templates = FakeTemplatesRepository()
     key_service = FakeKeyService()
     service = KeyTemplateService(
@@ -440,6 +441,7 @@ def test_create_key_from_template_propagates_only_explicit_codex_envelope_capabi
     policy["allowed_capabilities"] = [
         *policy["allowed_capabilities"],
         "codex_request_envelope",
+        "codex_client_tools",
     ]
     _template, revision = _template_revision(
         templates,
@@ -459,6 +461,7 @@ def test_create_key_from_template_propagates_only_explicit_codex_envelope_capabi
     copied = key_service.payloads[0].responses_policy
     assert copied is not None
     assert copied["allowed_capabilities"].count("codex_request_envelope") == 1
+    assert copied["allowed_capabilities"].count("codex_client_tools") == 1
     assert copied["hosted_tools_allowed"] == []
     assert copied["storage"] is False
 

@@ -532,6 +532,12 @@ default-off and policy-first:
   succeeds. Missing final usage is not treated as zero cost.
 - Local function and custom tools require explicit route capability metadata;
   tool JSON is not blind passthrough and SLAIF does not execute tools.
+- Codex `additional_tools` declarations require independent
+  `codex_request_envelope` and `codex_client_tools` capabilities on both the
+  authenticated key and resolved route. Only the exact pinned `functions` and
+  `collaboration` taxonomy is accepted. Recursive provider-authority/hosted
+  markers fail closed, schemas and grammar are capped, and SLAIF does not
+  execute the declared client-local tools.
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
@@ -595,7 +601,7 @@ default-off and policy-first:
   and compact `previous_response_id` are excluded until ownership mapping,
   quota, accounting, and audit behavior are implemented.
 - `store=false` is injected before forwarding when omitted.
-- Tool-enabled policies, when implemented later, require bounded-overrun cost
+- Future hosted/provider-executed tool policies require bounded-overrun cost
   calculations that admins can inspect before enabling the policy.
 - Pricing catalog refreshes must be previewed, confirmed, and audited; refreshes
   must never silently replace production pricing rows.
@@ -625,7 +631,7 @@ bulk key creation from templates remain future work.
 The central implementation contract is
 [`responses-compatibility.md`](responses-compatibility.md).
 
-## Codex Request-Envelope Boundary
+## Codex Request And Client-Tool Boundary
 
 The first runtime Codex slice is request-shape permission, not client identity
 or tool authority. A request that contains an approved envelope field,
@@ -654,11 +660,25 @@ and encrypted reasoning content likewise must not enter those local surfaces.
 Safe admission evidence contains only approved field names and aggregate
 byte/token counts.
 
-This capability does not enable `additional_tools`, namespaces, nested tools,
-tool-dependent choices, hosted tools, MCP/connectors, background/storage
-expansion, or new streaming event types. Key templates may propagate the
-capability only from an explicit reviewed snapshot; defaults and trusted
-calibration discovery do not add it.
+The separate client-tool declaration slice accepts at most one developer
+`additional_tools` item only when `codex_request_envelope` and
+`codex_client_tools` are each present on both the key and route. It admits
+exactly the pinned `functions` and `collaboration` namespaces and exact nested
+tool name/type placement. Unknown, missing, duplicate, moved, nested namespace,
+hosted/MCP, connector, server, authorization/header/secret/approval, shell-tool,
+patch-tool, computer, web/file-search, code-interpreter, image-generation, and
+tool-search shapes are rejected. Function schemas have byte/depth/property
+caps; `exec` requires a bounded allowlisted grammar. SLAIF executes no declared
+tool, and accepted declarations do not authorize provider-hosted tools.
+
+Declarations, descriptions, schemas, grammar, and `none`/`auto`/`required`
+choice are transient provider input and conservatively metered. They, tool
+arguments/results, and client IDs never enter persistence, logs, audits, or
+exports; safe evidence contains only approved category names and aggregate
+byte/token/count data. Approved declarations may accompany streaming, but no
+new tool/output/reasoning SSE events or tool-result continuation are enabled.
+Key templates propagate either capability only from an explicit reviewed
+snapshot; defaults and trusted calibration discovery add neither.
 
 ## Codex Protocol Capture Evidence
 
