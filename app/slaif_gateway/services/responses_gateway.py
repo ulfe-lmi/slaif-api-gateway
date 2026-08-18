@@ -51,7 +51,13 @@ from slaif_gateway.metrics import (
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
-from slaif_gateway.providers.streaming import format_responses_error_event
+from slaif_gateway.providers.streaming import (
+    RESPONSES_PROVIDER_FAILURE_EVENT_TYPES,
+    RESPONSES_TEXT_STREAM_EVENT_TYPES,
+    ResponsesStreamEventValidator,
+    ResponsesStreamValidationProfile,
+    format_responses_error_event,
+)
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
@@ -100,6 +106,9 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_client_tools_requested,
     responses_codex_request_envelope_allowed,
     responses_codex_request_envelope_requested,
+    responses_codex_streaming_tool_events_allowed,
+    responses_codex_streaming_tool_events_requested,
+    codex_client_tool_declarations,
     responses_text_format_type,
     validate_conversation_items_create_body,
     validate_conversation_update_body,
@@ -161,13 +170,7 @@ _CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
     {"after", "before", "include", "include[]", "limit", "order"}
 )
 _CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
-_ALLOWED_RESPONSES_STREAM_EVENT_TYPES = frozenset(
-    {
-        "response.created",
-        "response.in_progress",
-        "response.output_text.delta",
-    }
-)
+_ALLOWED_RESPONSES_STREAM_EVENT_TYPES = RESPONSES_TEXT_STREAM_EVENT_TYPES
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -534,6 +537,12 @@ async def handle_response_create(
     allow_codex_client_tools = responses_codex_client_tools_allowed(
         authenticated_key.responses_policy
     )
+    codex_streaming_tool_events_requested = (
+        responses_codex_streaming_tool_events_requested(body)
+    )
+    allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
+        authenticated_key.responses_policy
+    )
     policy = ResponsesRequestPolicy(settings=settings)
     try:
         policy_result = policy.apply(
@@ -541,6 +550,7 @@ async def handle_response_create(
             allow_store=True,
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
+            allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -552,8 +562,14 @@ async def handle_response_create(
         endpoint=RESPONSES_ENDPOINT,
         streaming_requested=policy_result.effective_body.get("stream") is True,
         text_format_type=responses_text_format_type(policy_result.effective_body),
-        function_tools_requested=responses_function_tools_requested(policy_result.effective_body),
-        custom_tools_requested=responses_custom_tools_requested(policy_result.effective_body),
+        function_tools_requested=(
+            responses_function_tools_requested(policy_result.effective_body)
+            and not codex_client_tools_requested
+        ),
+        custom_tools_requested=(
+            responses_custom_tools_requested(policy_result.effective_body)
+            and not codex_client_tools_requested
+        ),
         image_input_requested=responses_image_input_requested(policy_result.effective_body),
         file_input_requested=responses_file_input_requested(policy_result.effective_body),
         input_token_count_requested=False,
@@ -563,6 +579,7 @@ async def handle_response_create(
         conversations_requested=conversation_requested(policy_result.effective_body),
         codex_request_envelope_requested=codex_request_envelope_requested,
         codex_client_tools_requested=codex_client_tools_requested,
+        codex_streaming_tool_events_requested=codex_streaming_tool_events_requested,
         request=request,
     )
     if previous_response_id_requested(policy_result.effective_body):
@@ -644,6 +661,12 @@ async def handle_response_create(
                     rate_limit_reservation=rate_limit_reservation,
                     upstream_body=upstream_body,
                     live_burn_budget=quota.live_burn_budget,
+                    stream_validation_profile=ResponsesStreamValidationProfile(
+                        codex_streaming_tool_events=codex_streaming_tool_events_requested,
+                        declared_client_tools=codex_client_tool_declarations(
+                            policy_result.effective_body
+                        ),
+                    ),
                 )
                 return response
             except ProviderError as exc:
@@ -1251,6 +1274,7 @@ async def _resolve_responses_route(
     request: Request | None,
     codex_request_envelope_requested: bool = False,
     codex_client_tools_requested: bool = False,
+    codex_streaming_tool_events_requested: bool = False,
 ) -> RouteResolutionResult:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1286,6 +1310,9 @@ async def _resolve_responses_route(
                 conversations_requested=conversations_requested,
                 codex_request_envelope_requested=codex_request_envelope_requested,
                 codex_client_tools_requested=codex_client_tools_requested,
+                codex_streaming_tool_events_requested=(
+                    codex_streaming_tool_events_requested
+                ),
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc
@@ -1383,6 +1410,7 @@ def _streaming_responses_response(
     rate_limit_reservation: _RateLimitReservation | None,
     upstream_body: dict[str, object],
     live_burn_budget: ResponsesStreamingLiveBurnBudget | None,
+    stream_validation_profile: ResponsesStreamValidationProfile | None = None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -1406,6 +1434,9 @@ def _streaming_responses_response(
             estimate_multiplier=settings.RESPONSES_STREAMING_LIVE_BURN_ESTIMATE_MULTIPLIER,
             budget=live_burn_budget,
         )
+        stream_event_validator = ResponsesStreamEventValidator(
+            stream_validation_profile or ResponsesStreamValidationProfile()
+        )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = _start_rate_limit_heartbeat(
             rate_limit_reservation,
@@ -1415,15 +1446,29 @@ def _streaming_responses_response(
             async for chunk in adapter.stream_response(provider_request):
                 if chunk.upstream_request_id:
                     upstream_request_id = chunk.upstream_request_id
-                if _is_responses_completed_chunk(chunk):
-                    completed = True
-                    completed_event = chunk.raw_sse_event
-                    completed_chunk = chunk
-                    continue
                 if chunk.is_done:
                     terminal_done_event = chunk.raw_sse_event
                     continue
-                if not _is_supported_responses_stream_chunk(chunk):
+                if not stream_event_validator.validate(chunk.json_body):
+                    event_type = (
+                        chunk.json_body.get("type")
+                        if isinstance(chunk.json_body, dict)
+                        else None
+                    )
+                    provider_failure = event_type in RESPONSES_PROVIDER_FAILURE_EVENT_TYPES
+                    error_code = (
+                        "responses_stream_provider_failure"
+                        if provider_failure
+                        else "responses_stream_event_not_supported"
+                    )
+                    safe_message = (
+                        "Provider reported a failure during Responses streaming."
+                        if provider_failure
+                        else (
+                            "Provider emitted a Responses streaming event that is not supported "
+                            "by this gateway."
+                        )
+                    )
                     await _finalize_responses_stream_interruption_after_output(
                         reservation=reservation,
                         authenticated_key=authenticated_key,
@@ -1432,10 +1477,10 @@ def _streaming_responses_response(
                         cost_estimate=cost_estimate,
                         request_id=request_id,
                         provider_error=ProviderError(
-                            "Provider emitted a Responses streaming event that is not supported by this gateway.",
+                            safe_message,
                             provider=route.provider,
                             upstream_status_code=200,
-                            error_code="responses_stream_event_not_supported",
+                            error_code=error_code,
                         ),
                         request=request,
                         estimate_reason="responses_streaming_provider_error_estimated",
@@ -1443,14 +1488,16 @@ def _streaming_responses_response(
                     )
                     provider_status = "incomplete"
                     yield format_responses_error_event(
-                        message=(
-                            "Provider emitted a Responses streaming event that is not supported by "
-                            "this gateway."
-                        ),
-                        code="responses_stream_event_not_supported",
+                        message=safe_message,
+                        code=error_code,
                         request_id=request_id,
                     )
                     return
+                if _is_responses_completed_chunk(chunk):
+                    completed = True
+                    completed_event = chunk.raw_sse_event
+                    completed_chunk = chunk
+                    continue
                 live_burn_estimate = stream_estimate_monitor.observe_chunk(chunk.json_body)
                 if live_burn_estimate is not None:
                     await _record_streaming_live_burn_abort_estimate(
@@ -2817,18 +2864,6 @@ def _provider_response_from_response_stream(
 def _is_responses_completed_chunk(chunk: ProviderStreamChunk) -> bool:
     payload = chunk.json_body
     return isinstance(payload, dict) and payload.get("type") == "response.completed"
-
-
-def _is_supported_responses_stream_chunk(chunk: ProviderStreamChunk) -> bool:
-    payload = chunk.json_body
-    if not isinstance(payload, dict):
-        return False
-    event_type = payload.get("type")
-    if event_type not in _ALLOWED_RESPONSES_STREAM_EVENT_TYPES:
-        return False
-    if event_type == "response.output_text.delta":
-        return isinstance(payload.get("delta"), str)
-    return True
 
 
 class _RateLimitReservation:

@@ -127,6 +127,7 @@ def _apply(body: dict[str, object] | None = None, *, settings: Settings | None =
         body or _body(),
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
     )
 
 
@@ -278,20 +279,13 @@ def test_exact_taxonomy_is_canonicalized_estimated_and_reconstructed() -> None:
     assert inbound == original
 
 
-def test_streaming_declarations_are_admitted_without_expanding_event_allowlist() -> None:
-    from slaif_gateway.services.responses_gateway import _ALLOWED_RESPONSES_STREAM_EVENT_TYPES
-
+def test_streaming_declarations_are_admitted_for_separate_event_profile() -> None:
     result = _apply(_body(stream=True))
 
     assert result.effective_body["stream"] is True
-    assert {
-        "response.function_call_arguments.delta",
-        "response.output_item.added",
-        "response.reasoning_summary_text.delta",
-    }.isdisjoint(_ALLOWED_RESPONSES_STREAM_EVENT_TYPES)
 
 
-def test_all_captured_request_shapes_compose_after_objective_006() -> None:
+def test_all_captured_request_shapes_compose_after_objective_007() -> None:
     body = _body(
         input=[
             _additional_tools_item(),
@@ -661,6 +655,71 @@ def test_route_denial_precedes_redis_quota_and_provider(monkeypatch) -> None:
                     responses_policy=_key_policy(
                         "codex_request_envelope",
                         "codex_client_tools",
+                    )
+                ),
+                settings=Settings(),
+            )
+        )
+
+    assert exc_info.value.code == "responses_route_capability_not_supported"
+    assert calls == ["route"]
+
+
+def test_stream_event_key_denial_precedes_route_lookup(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as gateway
+
+    async def unexpected_route(**kwargs):
+        raise AssertionError("route should not be called")
+
+    monkeypatch.setattr(gateway, "_resolve_responses_route", unexpected_route)
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        asyncio.run(
+            gateway.handle_response_create(
+                payload=ResponsesCreateRequest.model_validate(_body(stream=True)),
+                authenticated_key=_authenticated_key(
+                    responses_policy=_key_policy(
+                        "codex_request_envelope",
+                        "codex_client_tools",
+                    )
+                ),
+                settings=Settings(),
+            )
+        )
+
+    assert exc_info.value.code == "responses_codex_streaming_tool_events_not_allowed"
+
+
+def test_stream_event_route_denial_precedes_redis_quota_and_provider(monkeypatch) -> None:
+    import slaif_gateway.services.responses_gateway as gateway
+
+    calls: list[str] = []
+
+    async def deny_route(**kwargs):
+        calls.append("route")
+        assert kwargs["codex_streaming_tool_events_requested"] is True
+        raise OpenAICompatibleError(
+            "This model route does not support Codex streaming tool events.",
+            code="responses_route_capability_not_supported",
+        )
+
+    async def unexpected_later(**kwargs):
+        calls.append("later")
+        raise AssertionError("later pipeline work should not be called")
+
+    monkeypatch.setattr(gateway, "_resolve_responses_route", deny_route)
+    monkeypatch.setattr(gateway, "_reserve_redis_rate_limit", unexpected_later)
+    monkeypatch.setattr(gateway, "_reserve_responses_quota", unexpected_later)
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        asyncio.run(
+            gateway.handle_response_create(
+                payload=ResponsesCreateRequest.model_validate(_body(stream=True)),
+                authenticated_key=_authenticated_key(
+                    responses_policy=_key_policy(
+                        "codex_request_envelope",
+                        "codex_client_tools",
+                        "codex_streaming_tool_events",
                     )
                 ),
                 settings=Settings(),

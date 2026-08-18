@@ -26,6 +26,7 @@ from slaif_gateway.services.responses_route_capabilities import (
     RESPONSES_CAPABILITY_COMPACT,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+    RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
     RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
     RESPONSES_CAPABILITY_CONVERSATIONS,
     RESPONSES_CAPABILITY_CUSTOM_TOOLS,
@@ -84,6 +85,7 @@ _RESPONSES_POLICY_ALLOWED_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
     }
 )
 _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES = frozenset(
@@ -660,6 +662,13 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
     )
     if not _RESPONSES_POLICY_REQUIRED_BASE_CAPABILITIES.issubset(capabilities):
         raise KeyTemplateError("Responses template policy must include text and stateless capabilities.")
+    if RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS in capabilities and not {
+        RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+    }.issubset(capabilities):
+        raise KeyTemplateError(
+            "Codex streaming tool events require the request-envelope and client-tool capabilities."
+        )
 
     local_tool_types = _clean_string_list(
         raw_policy.get("allowed_local_tool_types", []),

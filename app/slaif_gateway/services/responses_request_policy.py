@@ -18,6 +18,7 @@ from slaif_gateway.services.responses_route_capabilities import (
     KNOWN_RESPONSES_CAPABILITIES,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+    RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
 )
 
 _SUPPORTED_FIELDS = frozenset(
@@ -86,6 +87,13 @@ _SUPPORTED_INPUT_IMAGE_PART_FIELDS = frozenset({"type", "image_url", "detail"})
 _SUPPORTED_INPUT_FILE_PART_FIELDS = frozenset({"type", "file_url", "filename", "file_data"})
 _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
 _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS = frozenset({"type", "call_id", "output"})
+_SUPPORTED_CODEX_TOOL_OUTPUT_CONTENT_FIELDS = frozenset({"type", "text"})
+_SUPPORTED_CODEX_FUNCTION_CALL_FIELDS = frozenset(
+    {"type", "id", "status", "namespace", "name", "arguments", "call_id"}
+)
+_SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS = frozenset(
+    {"type", "id", "status", "namespace", "name", "input", "call_id"}
+)
 _SUPPORTED_FUNCTION_TOOL_FIELDS = frozenset(
     {"type", "name", "description", "parameters", "strict"}
 )
@@ -165,6 +173,8 @@ _CODEX_REASONING_EFFORTS = frozenset(
 _CODEX_REASONING_CONTEXT = "all_turns"
 _CODEX_TEXT_VERBOSITIES = frozenset({"low", "medium", "high"})
 _CODEX_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CODEX_TOOL_CALL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_CODEX_TOOL_CALL_STATUSES = frozenset({"completed"})
 _CODEX_CLIENT_METADATA_KEYS = frozenset(
     {
         "x-codex-installation-id",
@@ -230,6 +240,7 @@ class ResponsesRequestPolicy:
         allow_store: bool = False,
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
+        allow_codex_streaming_tool_events: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -240,6 +251,19 @@ class ResponsesRequestPolicy:
                 _first_codex_client_tools_param(effective_body),
                 "responses_codex_client_tools_not_allowed",
                 "Codex client tool namespaces are not enabled for this gateway key.",
+            )
+        codex_streaming_tool_events_requested = (
+            responses_codex_streaming_tool_events_requested(effective_body)
+        )
+        if codex_streaming_tool_events_requested and not (
+            allow_codex_request_envelope
+            and allow_codex_client_tools
+            and allow_codex_streaming_tool_events
+        ):
+            _raise(
+                "stream",
+                "responses_codex_streaming_tool_events_not_allowed",
+                "Codex streaming tool events are not enabled for this gateway key.",
             )
         codex_envelope_requested = responses_codex_request_envelope_requested(effective_body)
         if codex_envelope_requested and not allow_codex_request_envelope:
@@ -262,6 +286,7 @@ class ResponsesRequestPolicy:
             effective_body.get("input"),
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
+            allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -294,13 +319,21 @@ class ResponsesRequestPolicy:
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
         custom_tools_requested = responses_custom_tools_requested(effective_body)
-        if effective_body.get("stream") is True and function_tools_requested:
+        if (
+            effective_body.get("stream") is True
+            and function_tools_requested
+            and not codex_streaming_tool_events_requested
+        ):
             _raise(
                 "tools",
                 "responses_function_tool_streaming_not_supported",
                 "Streaming Responses function tools are not enabled by this gateway.",
             )
-        if effective_body.get("stream") is True and custom_tools_requested:
+        if (
+            effective_body.get("stream") is True
+            and custom_tools_requested
+            and not codex_streaming_tool_events_requested
+        ):
             _raise(
                 "tools",
                 "responses_custom_tool_streaming_not_supported",
@@ -496,6 +529,7 @@ class ResponsesRequestPolicy:
         *,
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
+        allow_codex_streaming_tool_events: bool = False,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -516,6 +550,7 @@ class ResponsesRequestPolicy:
                 value,
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
+                allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
             )
 
         _raise(
@@ -729,6 +764,7 @@ class ResponsesRequestPolicy:
         *,
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
+        allow_codex_streaming_tool_events: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -751,6 +787,7 @@ class ResponsesRequestPolicy:
         total_file_parts = 0
         total_file_data_url_bytes = 0
         codex_client_tool_items = 0
+        codex_tool_call_items = 0
         for index, item in enumerate(value):
             if isinstance(item, Mapping) and item.get("type") == "additional_tools":
                 codex_client_tool_items += 1
@@ -760,6 +797,11 @@ class ResponsesRequestPolicy:
                         "responses_codex_client_tools_invalid",
                         "At most one Codex additional_tools input item is allowed.",
                     )
+            if isinstance(item, Mapping) and item.get("type") in {
+                "function_call",
+                "custom_tool_call",
+            }:
+                codex_tool_call_items += 1
             (
                 canonical_item,
                 item_text_bytes,
@@ -773,6 +815,7 @@ class ResponsesRequestPolicy:
                 index=index,
                 allow_codex_request_envelope=allow_codex_request_envelope,
                 allow_codex_client_tools=allow_codex_client_tools,
+                allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
             )
             total_text_bytes += item_text_bytes
             total_material_bytes += item_material_bytes
@@ -811,6 +854,17 @@ class ResponsesRequestPolicy:
                     "The Responses input file data URLs exceed the gateway size limit.",
                 )
             canonical_items.append(canonical_item)
+        if codex_tool_call_items and not codex_client_tool_items:
+            _raise(
+                "input",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation requires the exact client-tool declarations.",
+            )
+        if codex_client_tool_items:
+            self._validate_codex_tool_roundtrip_items(
+                canonical_items,
+                allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+            )
         return canonical_items, total_material_bytes
 
     def _validate_input_item(
@@ -820,6 +874,7 @@ class ResponsesRequestPolicy:
         index: int,
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
+        allow_codex_streaming_tool_events: bool = False,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -838,9 +893,39 @@ class ResponsesRequestPolicy:
                     "Codex client tool namespaces are not enabled for this gateway key.",
                 )
             return self._validate_codex_additional_tools_item(item, param=param)
+        if item_type == "function_call":
+            if (
+                allow_codex_request_envelope
+                and allow_codex_client_tools
+                and allow_codex_streaming_tool_events
+            ):
+                return self._validate_codex_tool_call_item(item, param=param, custom=False)
+        if item_type == "custom_tool_call":
+            if (
+                allow_codex_request_envelope
+                and allow_codex_client_tools
+                and allow_codex_streaming_tool_events
+            ):
+                return self._validate_codex_tool_call_item(item, param=param, custom=True)
         if item_type == "function_call_output":
+            if (
+                allow_codex_request_envelope
+                and allow_codex_client_tools
+                and allow_codex_streaming_tool_events
+            ):
+                return self._validate_codex_tool_call_output_item(
+                    item, param=param, custom=False
+                )
             return self._validate_function_call_output_item(item, param=param)
         if item_type == "custom_tool_call_output":
+            if (
+                allow_codex_request_envelope
+                and allow_codex_client_tools
+                and allow_codex_streaming_tool_events
+            ):
+                return self._validate_codex_tool_call_output_item(
+                    item, param=param, custom=True
+                )
             return self._validate_custom_tool_call_output_item(item, param=param)
         if item_type is not None and item_type != "message":
             if item_type in _MULTIMODAL_INPUT_ITEM_TYPES:
@@ -1132,6 +1217,289 @@ class ResponsesRequestPolicy:
                 "responses_codex_client_tools_invalid",
                 "Codex additional_tools cannot be combined with top-level Responses tools.",
             )
+
+    def _validate_codex_tool_call_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+        custom: bool,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        allowed_fields = (
+            _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS
+            if custom
+            else _SUPPORTED_CODEX_FUNCTION_CALL_FIELDS
+        )
+        unknown = set(item) - allowed_fields
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_codex_tool_roundtrip_invalid",
+                "This Codex tool-call continuation field is not enabled.",
+            )
+        expected_type = "custom_tool_call" if custom else "function_call"
+        if item.get("type") != expected_type:
+            _raise(
+                f"{param}.type",
+                "responses_codex_tool_roundtrip_invalid",
+                "This Codex tool-call continuation type is invalid.",
+            )
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str) or _CODEX_TOOL_CALL_ID_RE.fullmatch(call_id) is None:
+            _raise(
+                f"{param}.call_id",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation requires a bounded call ID.",
+            )
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            _raise(
+                f"{param}.name",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation requires a declared tool name.",
+            )
+        self._validate_string_bytes(
+            name,
+            param=f"{param}.name",
+            max_bytes=(
+                self._settings.RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES
+                if custom
+                else self._settings.RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES
+            ),
+            code="responses_codex_tool_roundtrip_invalid",
+        )
+        namespace = item.get("namespace")
+        if namespace is not None:
+            if not isinstance(namespace, str) or not namespace:
+                _raise(
+                    f"{param}.namespace",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool-call namespace must be a bounded string.",
+                )
+            self._validate_string_bytes(
+                namespace,
+                param=f"{param}.namespace",
+                max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES,
+                code="responses_codex_tool_roundtrip_invalid",
+            )
+        status = item.get("status")
+        if status is not None and status not in _CODEX_TOOL_CALL_STATUSES:
+            _raise(
+                f"{param}.status",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation status is not supported.",
+            )
+        item_id = item.get("id")
+        if item_id is not None:
+            self._validate_codex_message_id(item_id, param=f"{param}.id")
+        text_field = "input" if custom else "arguments"
+        text_value = item.get(text_field)
+        if not isinstance(text_value, str):
+            _raise(
+                f"{param}.{text_field}",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation payload must be a string.",
+            )
+        self._validate_string_bytes(
+            text_value,
+            param=f"{param}.{text_field}",
+            max_bytes=(
+                self._settings.RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES
+                if custom
+                else self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES
+            ),
+            code="responses_codex_tool_roundtrip_too_large",
+        )
+        canonical: dict[str, Any] = {
+            "type": expected_type,
+            "call_id": call_id,
+            "name": name,
+        }
+        if item_id is not None:
+            canonical["id"] = item_id
+        if status is not None:
+            canonical["status"] = status
+        if namespace is not None:
+            canonical["namespace"] = namespace
+        canonical[text_field] = text_value
+        material_bytes = len(canonical_json_bytes(canonical))
+        return canonical, material_bytes, material_bytes, 0, 0, 0, 0
+
+    def _validate_codex_tool_roundtrip_items(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        allow_codex_streaming_tool_events: bool,
+    ) -> None:
+        declarations = _codex_declarations_from_input_items(items)
+        calls: dict[str, tuple[str, str, str]] = {}
+        outputs: dict[str, str] = {}
+        item_ids: set[str] = set()
+        for index, item in enumerate(items):
+            item_type = item.get("type")
+            if item_type in {"function_call", "custom_tool_call"}:
+                if not allow_codex_streaming_tool_events:
+                    _raise(
+                        f"input[{index}].type",
+                        "responses_codex_streaming_tool_events_not_allowed",
+                        "Codex tool-call continuation is not enabled for this gateway key.",
+                    )
+                tool_type = "custom" if item_type == "custom_tool_call" else "function"
+                name = str(item["name"])
+                namespace = item.get("namespace")
+                matches = [
+                    declaration
+                    for declaration in declarations
+                    if declaration[1] == name
+                    and declaration[2] == tool_type
+                    and (namespace is None or declaration[0] == namespace)
+                ]
+                if len(matches) != 1 or (tool_type == "custom" and matches[0] != ("functions", "exec", "custom")):
+                    _raise(
+                        f"input[{index}].name",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool calls must match the exact declared client-tool taxonomy.",
+                    )
+                call_id = str(item["call_id"])
+                if call_id in calls:
+                    _raise(
+                        f"input[{index}].call_id",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool-call IDs must be unique.",
+                    )
+                calls[call_id] = matches[0]
+                item_id = item.get("id")
+                if isinstance(item_id, str):
+                    if item_id in item_ids:
+                        _raise(
+                            f"input[{index}].id",
+                            "responses_codex_tool_roundtrip_invalid",
+                            "Codex tool-call item IDs must be unique.",
+                        )
+                    item_ids.add(item_id)
+            elif item_type in {"function_call_output", "custom_tool_call_output"}:
+                call_id = str(item["call_id"])
+                if call_id in outputs:
+                    _raise(
+                        f"input[{index}].call_id",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool-call output IDs must be unique.",
+                    )
+                outputs[call_id] = str(item_type)
+
+        for call_id, output_type in outputs.items():
+            declaration = calls.get(call_id)
+            expected_type = (
+                "custom_tool_call_output"
+                if declaration is not None and declaration[2] == "custom"
+                else "function_call_output"
+            )
+            if declaration is None or output_type != expected_type:
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool outputs must match one approved tool call and call ID.",
+                )
+        if set(calls) != set(outputs):
+            _raise(
+                "input",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool-call continuation requires exactly one matching bounded output.",
+            )
+
+    def _validate_codex_tool_call_output_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+        custom: bool,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        allowed_fields = (
+            _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
+            if custom
+            else _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS
+        )
+        unknown = set(item) - allowed_fields
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_codex_tool_roundtrip_invalid",
+                "This Codex tool output field is not enabled.",
+            )
+        expected_type = "custom_tool_call_output" if custom else "function_call_output"
+        call_id = item.get("call_id")
+        if item.get("type") != expected_type or not isinstance(call_id, str):
+            _raise(
+                f"{param}.call_id",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool outputs require the matching bounded call ID.",
+            )
+        if _CODEX_TOOL_CALL_ID_RE.fullmatch(call_id) is None:
+            _raise(
+                f"{param}.call_id",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool outputs require the matching bounded call ID.",
+            )
+        output = item.get("output")
+        max_bytes = (
+            self._settings.RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES
+            if custom
+            else self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES
+        )
+        canonical_output: str | list[dict[str, str]]
+        if isinstance(output, str):
+            self._validate_string_bytes(
+                output,
+                param=f"{param}.output",
+                max_bytes=max_bytes,
+                code="responses_codex_tool_roundtrip_too_large",
+            )
+            canonical_output = output
+        elif custom and isinstance(output, list) and 0 < len(output) <= 8:
+            canonical_parts: list[dict[str, str]] = []
+            total_text_bytes = 0
+            for part_index, part in enumerate(output):
+                part_param = f"{param}.output[{part_index}]"
+                if not isinstance(part, Mapping):
+                    _raise(
+                        part_param,
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex custom tool output parts must be bounded text objects.",
+                    )
+                unknown_part_fields = set(part) - _SUPPORTED_CODEX_TOOL_OUTPUT_CONTENT_FIELDS
+                text = part.get("text")
+                if (
+                    unknown_part_fields
+                    or part.get("type") != "input_text"
+                    or not isinstance(text, str)
+                ):
+                    _raise(
+                        part_param,
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex custom tool output parts must be bounded input_text objects.",
+                    )
+                total_text_bytes += len(text.encode("utf-8"))
+                if total_text_bytes > max_bytes:
+                    _raise(
+                        f"{param}.output",
+                        "responses_codex_tool_roundtrip_too_large",
+                        "Codex custom tool output exceeds the gateway size limit.",
+                    )
+                canonical_parts.append({"type": "input_text", "text": text})
+            canonical_output = canonical_parts
+        else:
+            _raise(
+                f"{param}.output",
+                "responses_codex_tool_roundtrip_invalid",
+                "Codex tool output must use the approved bounded text shape.",
+            )
+        canonical = {
+            "type": expected_type,
+            "call_id": call_id,
+            "output": canonical_output,
+        }
+        material_bytes = len(canonical_json_bytes(canonical))
+        return canonical, material_bytes, material_bytes, 0, 0, 0, 0
 
     def _validate_function_call_output_item(
         self,
@@ -2825,6 +3193,40 @@ def responses_codex_client_tools_allowed(policy: object) -> bool:
     )
 
 
+def responses_codex_streaming_tool_events_requested(body: Mapping[str, Any]) -> bool:
+    """Detect the streaming declaration or bounded tool-roundtrip request shape."""
+
+    input_value = body.get("input")
+    if not isinstance(input_value, list):
+        return False
+    item_types = {
+        item.get("type")
+        for item in input_value
+        if isinstance(item, Mapping) and isinstance(item.get("type"), str)
+    }
+    if "additional_tools" not in item_types:
+        return False
+    return body.get("stream") is True or bool(
+        item_types.intersection(
+            {
+                "function_call",
+                "custom_tool_call",
+                "function_call_output",
+                "custom_tool_call_output",
+            }
+        )
+    )
+
+
+def responses_codex_streaming_tool_events_allowed(policy: object) -> bool:
+    """Require all three explicit, well-formed Codex key capability grants."""
+
+    return responses_codex_client_tools_allowed(policy) and _responses_policy_capability_allowed(
+        policy,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+    )
+
+
 def _responses_policy_capability_allowed(policy: object, capability: str) -> bool:
     """Parse the versioned key capability list without accepting partial shapes."""
 
@@ -2888,6 +3290,45 @@ def _codex_client_tool_declaration_estimation_bytes(value: Any) -> int:
         for item in value
         if isinstance(item, Mapping) and item.get("type") == "additional_tools"
     )
+
+
+def codex_client_tool_declarations(
+    body: Mapping[str, Any],
+) -> frozenset[tuple[str, str, str]]:
+    """Return only the canonical namespace/name/type taxonomy from validated input."""
+
+    input_value = body.get("input")
+    if not isinstance(input_value, list):
+        return frozenset()
+    return frozenset(_codex_declarations_from_input_items(input_value))
+
+
+def _codex_declarations_from_input_items(
+    items: list[dict[str, Any]] | list[Any],
+) -> set[tuple[str, str, str]]:
+    declarations: set[tuple[str, str, str]] = set()
+    for item in items:
+        if not isinstance(item, Mapping) or item.get("type") != "additional_tools":
+            continue
+        namespaces = item.get("tools")
+        if not isinstance(namespaces, list):
+            continue
+        for namespace in namespaces:
+            if not isinstance(namespace, Mapping) or not isinstance(namespace.get("name"), str):
+                continue
+            tools = namespace.get("tools")
+            if not isinstance(tools, list):
+                continue
+            for tool in tools:
+                if (
+                    isinstance(tool, Mapping)
+                    and isinstance(tool.get("name"), str)
+                    and tool.get("type") in {"function", "custom"}
+                ):
+                    declarations.add(
+                        (str(namespace["name"]), str(tool["name"]), str(tool["type"]))
+                    )
+    return declarations
 
 
 def _contains_control_character(value: str) -> bool:

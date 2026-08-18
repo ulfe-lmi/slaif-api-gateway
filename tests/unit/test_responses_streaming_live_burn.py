@@ -114,7 +114,7 @@ def test_invalid_policy_shapes_are_rejected() -> None:
         )
 
 
-def test_responses_delta_extractor_counts_only_output_text_delta() -> None:
+def test_responses_delta_extractor_counts_all_enabled_generated_delta_types() -> None:
     assert generated_responses_streaming_delta_text(
         {"type": "response.output_text.delta", "delta": "hello"}
     ) == "hello"
@@ -122,6 +122,15 @@ def test_responses_delta_extractor_counts_only_output_text_delta() -> None:
     assert generated_responses_streaming_delta_text(
         {"type": "response.output_text.delta", "delta": {"nested": "nope"}}
     ) == ""
+    for event_type in (
+        "response.function_call_arguments.delta",
+        "response.custom_tool_call_input.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+    ):
+        assert generated_responses_streaming_delta_text(
+            {"type": event_type, "delta": "bounded"}
+        ) == "bounded"
 
 
 def test_safe_lifecycle_events_do_not_change_accounting() -> None:

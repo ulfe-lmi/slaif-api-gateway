@@ -49,6 +49,13 @@ Core invariants:
   arguments, results, or client identifiers. SLAIF does not execute the tools
   and records no client tool/service cost; provider final usage/cost remains
   authoritative for the model request.
+- Codex streaming calls and replayed results require the additional
+  `codex_streaming_tool_events` capability on both the key and route. Function
+  arguments, `functions.exec` custom input, replay output, reasoning summary/
+  text, and message text are transient model input/output only. Admission and
+  live-burn estimation count their bounded canonical bytes, but safe evidence
+  retains only category/count/byte totals. It never retains call IDs, item IDs,
+  arguments, results, reasoning, or message text.
 - Prompt text, completion text, streamed chunk text, raw request bodies, raw
   response bodies, tool payloads, media payloads, provider keys, plaintext
   gateway keys, token hashes, encrypted payloads, nonces, password hashes,
@@ -108,7 +115,7 @@ The feature is an operational stream interruption control, not billing truth:
 
 - Chat Completions streaming is implemented.
 - Responses typed SSE live-burn is implemented for the supported stateless
-  text-output subset only.
+  text-output subset and the explicitly gated Codex client-tool event slice.
 - The per-key default is enabled with zero cost and token margins.
 - Positive margins stop before the quota boundary, zero margins stop near the
   estimated boundary, and negative margins allow bounded estimated overrun.
@@ -122,6 +129,10 @@ The feature is an operational stream interruption control, not billing truth:
   metrics.
 - No streamed content, prompts, completions, tool payloads, media payloads, raw
   request bodies, or raw response bodies may be stored.
+- For the Codex slice, live-burn counts output-text deltas, function-argument
+  deltas, custom-tool-input deltas, and reasoning-summary/text deltas. Matching
+  done events are not double counted; a bounded done value is counted only when
+  no corresponding deltas were seen. The threshold-crossing event is withheld.
 - Missing provider usage after an intentional streaming live-burn interruption
   is recorded as estimated interrupted accounting; it is not normal zero-cost
   success.

@@ -1,6 +1,6 @@
 # Codex CLI Compatibility
 
-Status: **PARTIAL REQUEST/CLIENT-TOOL DECLARATION SUPPORT, NOT CODEX-COMPATIBLE**.
+Status: **PARTIAL STREAMING CLIENT-TOOL ROUND-TRIP SUPPORT, NOT CODEX-COMPATIBLE**.
 
 This is the canonical versioned contract for Codex CLI traffic through SLAIF.
 It records evidence; it does not enable Codex traffic, relax gateway policy, or
@@ -21,7 +21,7 @@ Checked on 2026-08-18:
 | Fixture | `tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json` |
 | Approved canonical fixture SHA-256 | `436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432` |
 | Immutable 004-baseline compatibility result | `not_compatible` |
-| Current runtime status | Envelope plus bounded client-tool declarations; still `not_compatible` |
+| Current runtime status | Envelope, bounded client-tool declarations, and one strict streaming client-tool round trip; still `not_compatible` |
 
 Primary references:
 
@@ -150,7 +150,7 @@ that historical result remains `not_compatible`. Current runtime support is
 documented separately below; endpoint/model permission still must not be
 interpreted as Codex tool permission.
 
-## Current bounded request and client-tool declaration slices
+## Current bounded request, declaration, and streaming round-trip slices
 
 Current runtime policy can accept a tool-free projection of the captured
 request envelope, but only through two explicit gates using the same capability
@@ -230,16 +230,59 @@ client identifiers. Those private values must not be persisted, logged,
 audited, or exported, and model-request accounting never claims client tool or
 service cost.
 
-`stream=true` may carry approved declarations, but the gateway's typed SSE
-allowlist is unchanged. Function-call arguments, output-item/tool-call, and
-reasoning-summary event families remain denied, and tool-result continuation is
-not expanded. With all four gates enabled, the complete captured 0.147.0
-request-side field/item shape can now be admitted and canonically reconstructed;
-response/event/tool-roundtrip compatibility remains incomplete. Therefore this
-remains a declaration-only partial slice, not a full Codex tool loop or Codex
-compatibility claim. Hosted tools, MCP,
-background/provider state, arbitrary namespaces, gateway tool execution,
-WebSocket behavior, and any production/release claim remain disabled.
+Streaming client-tool events and replay form a third independent slice. A
+request using them requires all three capabilities on both the key and route:
+`codex_request_envelope`, `codex_client_tools`, and
+`codex_streaming_tool_events`. The third key gate fails before route/database
+work; the third route gate fails before Redis, pricing, quota, or provider work.
+It is never added by defaults, trusted-calibration discovery, or ordinary
+function/custom-tool permission.
+
+For a request with the exact declarations above, a request-scoped validator
+admits only bounded, correctly ordered instances of:
+
+- `response.created` and `response.in_progress`;
+- `response.output_item.added` and `response.output_item.done` for declared
+  function calls, `functions.exec` custom calls, messages, or reasoning;
+- `response.function_call_arguments.delta`;
+- `response.custom_tool_call_input.delta`;
+- `response.reasoning_summary_part.added`,
+  `response.reasoning_summary_text.delta`, and
+  `response.reasoning_summary_part.done`;
+- `response.reasoning_text.delta`, `response.output_text.delta`, and
+  `response.completed`.
+
+IDs, call IDs, indexes, cumulative arguments/input, text deltas, event counts,
+and aggregate bytes are capped and linked incrementally. Unknown event types,
+duplicate or orphan items, mismatched IDs/indexes/names/namespaces/types,
+unapproved authority, and provider `response.failed`, `response.incomplete`, or
+`error` events fail closed to a safe gateway event. The validated
+`response.completed` event remains held until usage-backed finalization.
+
+A following stateless request may replay only exact validated function calls or
+the declared `functions.exec` custom call together with exactly one matching
+output per call. Orphans, mismatches, duplicates, unknown declarations, hosted
+authority, and over-size payloads fail closed. Function output remains a
+bounded string. For the pinned Code Mode profile only, `functions.exec` output
+may also be the exact bounded list of `input_text` parts emitted by Codex
+0.147.0. Reconstructed replay input is deep-copied, all canonical bytes are
+included in admission estimation, and no call, argument, result, or reasoning
+content is persisted.
+
+Live-burn monitoring counts output text, function arguments, custom input,
+reasoning summary text, and reasoning text. Matching done events are not double
+counted; a done value is counted only if its delta family was absent. The event
+that crosses a threshold is withheld. Provider final usage/cost remains
+authoritative; missing usage, provider error, or disconnect after any counted
+output finalizes as estimated interrupted accounting.
+
+This is one partial client-side streaming tool loop, not general Codex
+compatibility. Codex/the downstream client owns and performs the local tool
+execution; SLAIF only validates and forwards the bounded model protocol.
+Hosted tools, MCP/connectors, provider-side authorization,
+arbitrary namespaces, shell/patch/computer/web/file-search authority, gateway
+tool execution, background/provider state, broader replay, WebSocket behavior,
+and production/release claims remain disabled.
 
 ## Regeneration and verification
 
@@ -260,10 +303,26 @@ Only a human or active work order may invoke the installed Codex binary:
   --model gpt-5.6-sol \
   --profile api-key-responses-baseline \
   --fixture tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json
+
+.venv/bin/python scripts/verify_codex_tool_roundtrip.py \
+  --codex-binary /usr/bin/codex \
+  --expected-cli-version 0.147.0 \
+  --model gpt-5.6-sol \
+  --profile api-key-responses-baseline \
+  --fixture tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json
 ```
 
+The round-trip verifier uses the same private temporary home/work directory,
+dummy key, stripped environment, and numeric loopback-only network boundary.
+It accepts exactly two in-memory requests: the immutable captured first request,
+then a continuation containing the fixed `functions.exec` call/output pair. Its
+mock stream requests only side-effect-free Code Mode
+`text("SAFE_TOOL_RESULT")` execution and then returns a final assistant message.
+Only a bounded safe summary is printed; request bodies, headers, subprocess
+output, tool input/output, and assistant text are never persisted or printed.
+
 Normal pytest, CI, application startup, packaging, Docker, migrations, and HPC
-verification must never run either live action.
+verification must never run any live action.
 
 Pure fixture validation and both live paths pin the complete canonical JSON
 document to the approved SHA-256 above after semantic and safety validation.
@@ -281,10 +340,11 @@ it cannot silently overwrite the existing evidence.
 
 ## Future objectives
 
-Objectives 007 through 011 remain separate strategic work-order boundaries.
-The request/envelope and client-tool declaration slices grant none of them
-implicitly. Streaming expansion, quota/accounting work, end-to-end validation,
-operator guidance, and any release decision each require their own activated
-scope, tests, privacy review, and GitHub acceptance.
+Objectives 008 through 011 remain separate strategic work-order boundaries.
+The request/envelope, declaration, and narrow streaming round-trip slices grant
+none of them implicitly. Broader state/reasoning replay, Codex compaction,
+quota/accounting work, full CLI-to-gateway end-to-end validation, operator
+guidance, and any release decision each require their own activated scope,
+tests, privacy review, and GitHub acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.

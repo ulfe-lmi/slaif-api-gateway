@@ -30,6 +30,7 @@ RESPONSES_CAPABILITY_JSON_MODE = "json_mode"
 RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS = "structured_outputs"
 RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE = "codex_request_envelope"
 RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS = "codex_client_tools"
+RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS = "codex_streaming_tool_events"
 
 KNOWN_RESPONSES_CAPABILITIES = frozenset(
     {
@@ -55,6 +56,7 @@ KNOWN_RESPONSES_CAPABILITIES = frozenset(
         RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS,
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
     }
 )
 
@@ -85,6 +87,7 @@ def default_responses_capabilities() -> dict[str, bool]:
         RESPONSES_CAPABILITY_STRUCTURED_OUTPUTS: False,
         RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE: False,
         RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS: False,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS: False,
     }
 
 
@@ -139,6 +142,7 @@ def enforce_responses_route_capabilities(
     conversation_items_requested: bool = False,
     codex_request_envelope_requested: bool = False,
     codex_client_tools_requested: bool = False,
+    codex_streaming_tool_events_requested: bool = False,
 ) -> None:
     """Require explicit Responses metadata and fail closed."""
 
@@ -332,7 +336,11 @@ def enforce_responses_route_capabilities(
             )
         )
     if (
-        (codex_request_envelope_requested or codex_client_tools_requested)
+        (
+            codex_request_envelope_requested
+            or codex_client_tools_requested
+            or codex_streaming_tool_events_requested
+        )
         and capabilities.get(RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE) is not True
     ):
         raise ResponsesRouteCapabilityError(
@@ -344,7 +352,7 @@ def enforce_responses_route_capabilities(
             )
         )
     if (
-        codex_client_tools_requested
+        (codex_client_tools_requested or codex_streaming_tool_events_requested)
         and capabilities.get(RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS) is not True
     ):
         raise ResponsesRouteCapabilityError(
@@ -353,6 +361,20 @@ def enforce_responses_route_capabilities(
                 field="input",
                 error_code="responses_route_capability_not_supported",
                 safe_message="This model route does not support Codex client tool namespaces.",
+            )
+        )
+    if (
+        codex_streaming_tool_events_requested
+        and capabilities.get(RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS) is not True
+    ):
+        raise ResponsesRouteCapabilityError(
+            ResponsesRouteCapabilityFinding(
+                capability=RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+                field="stream",
+                error_code="responses_route_capability_not_supported",
+                safe_message=(
+                    "This model route does not support Codex streaming tool events."
+                ),
             )
         )
 
