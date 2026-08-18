@@ -43,7 +43,11 @@ Core invariants:
   final usage/cost remains authoritative.
 - Separately gated Codex client-tool declarations count their canonical
   namespace/tool containers, descriptions, function schemas, `exec` grammar,
-  and bounded string `tool_choice` as provider/model request input. Safe
+  and bounded string `tool_choice` as provider/model request input. Pinned
+  qualification permits at most 20,000 bytes for each exact child-tool
+  description and 32,768 description bytes in aggregate; namespace and
+  ordinary function/custom descriptions retain their 4,096-byte limits. Every
+  admitted description byte remains part of the conservative estimate. Safe
   evidence contains only approved category names and aggregate
   byte/token/count data, never descriptions, property names, grammar,
   arguments, results, or client identifiers. SLAIF does not execute the tools

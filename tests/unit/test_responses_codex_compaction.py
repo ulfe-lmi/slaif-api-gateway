@@ -52,6 +52,53 @@ def _compact_body() -> dict[str, object]:
     }
 
 
+def _pinned_compact_additional_tools(description_bytes: int) -> dict[str, object]:
+    def function(name: str) -> dict[str, object]:
+        return {
+            "type": "function",
+            "name": name,
+            "description": f"bounded-{name}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+    return {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "exec",
+                        "description": "d" * description_bytes,
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "lark",
+                            "definition": "start: WORD\nWORD: /[A-Za-z]+/",
+                        },
+                    },
+                    function("wait"),
+                    function("request_user_input"),
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [
+                    function("followup_task"),
+                    function("interrupt_agent"),
+                    function("list_agents"),
+                    function("send_message"),
+                    function("spawn_agent"),
+                    function("wait_agent"),
+                ],
+            },
+        ],
+    }
+
+
 def test_codex_compact_requires_independent_key_gate() -> None:
     with pytest.raises(Exception) as exc_info:
         ResponsesRequestPolicy(Settings()).apply_compact(_compact_body())
@@ -75,6 +122,23 @@ def test_codex_compact_canonicalizes_pinned_v1_fields_and_composite_candidate() 
     assert len(candidates) == 1
     assert candidates[0].item_kind == "compaction"
     assert candidates[0].encrypted_content == "opaque-value"
+
+
+def test_codex_compact_accepts_pinned_18_137_byte_child_description() -> None:
+    body = _compact_body()
+    input_items = body["input"]
+    assert isinstance(input_items, list)
+    input_items.insert(0, _pinned_compact_additional_tools(18_137))
+
+    result = ResponsesRequestPolicy(Settings()).apply_compact(
+        body,
+        allow_codex_compaction=True,
+    )
+
+    description = result.effective_body["input"][0]["tools"][0]["tools"][0]["description"]
+    assert len(description.encode("utf-8")) == 18_137
+    assert result.estimated_non_message_input_bytes >= 18_137
+    assert "input[].additional_tools" in result.estimated_non_message_input_fields
 
 
 @pytest.mark.parametrize(

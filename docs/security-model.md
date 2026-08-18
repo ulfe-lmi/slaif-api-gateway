@@ -540,7 +540,10 @@ default-off and policy-first:
   authenticated key and resolved route. Only the exact pinned `functions` and
   `collaboration` taxonomy is accepted. Recursive provider-authority/hosted
   markers fail closed, schemas and grammar are capped, and SLAIF does not
-  execute the declared client-local tools.
+  execute the declared client-local tools. Only exact child tools in this fully
+  gated taxonomy receive the fixed 20,000-byte description qualification cap;
+  all descriptions together remain capped at 32,768 bytes. Namespace and
+  ordinary function/custom descriptions remain capped at 4,096 bytes.
 - Codex client-tool streaming and replay additionally require
   `codex_streaming_tool_events` on both the key and route. A request-scoped
   validator accepts only bounded declared event/call shapes and exact call-to-
@@ -714,8 +717,10 @@ caps; `exec` requires a bounded allowlisted grammar. SLAIF executes no declared
 tool, and accepted declarations do not authorize provider-hosted tools.
 
 Declarations, descriptions, schemas, grammar, and `none`/`auto`/`required`
-choice are transient provider input and conservatively metered. They, tool
-arguments/results, and client IDs never enter persistence, logs, audits, or
+choice are transient provider input and conservatively metered, including the
+complete bytes of any pinned 18,137-byte child description admitted under the
+20,000-byte Codex-only cap. Declarations, tool arguments/results, and client IDs
+never enter persistence, logs, audits, or
 exports; safe evidence contains only approved category names and aggregate
 byte/token/count data.
 

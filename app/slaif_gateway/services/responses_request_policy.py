@@ -213,6 +213,7 @@ _CODEX_MAX_CLIENT_METADATA_VALUE_BYTES = 4096
 _CODEX_MAX_CLIENT_METADATA_BYTES = 8192
 _CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH = 16
 _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES = 256
+_CODEX_MAX_CLIENT_TOOL_DESCRIPTION_BYTES = 20_000
 _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES = 32_768
 _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES = 589_824
 _CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
@@ -1310,6 +1311,7 @@ class ResponsesRequestPolicy:
                 canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
                     tool,
                     param=tool_param,
+                    description_max_bytes=_CODEX_MAX_CLIENT_TOOL_DESCRIPTION_BYTES,
                 )
                 if canonical_tool["type"] == "function":
                     total_schema_properties += _validate_codex_schema_complexity(
@@ -3061,6 +3063,7 @@ class ResponsesRequestPolicy:
         tool: Any,
         *,
         param: str,
+        description_max_bytes: int | None = None,
     ) -> tuple[dict[str, Any], int, int]:
         if not isinstance(tool, Mapping):
             _raise(
@@ -3070,10 +3073,18 @@ class ResponsesRequestPolicy:
             )
         tool_type = tool.get("type")
         if tool_type == "function":
-            canonical_tool, schema_bytes = self._validate_function_tool(tool, param=param)
+            canonical_tool, schema_bytes = self._validate_function_tool(
+                tool,
+                param=param,
+                description_max_bytes=description_max_bytes,
+            )
             return canonical_tool, schema_bytes, 0
         if tool_type == "custom":
-            canonical_tool, format_bytes = self._validate_custom_tool(tool, param=param)
+            canonical_tool, format_bytes = self._validate_custom_tool(
+                tool,
+                param=param,
+                description_max_bytes=description_max_bytes,
+            )
             return canonical_tool, 0, format_bytes
 
         code = (
@@ -3094,6 +3105,7 @@ class ResponsesRequestPolicy:
         tool: Any,
         *,
         param: str,
+        description_max_bytes: int | None = None,
     ) -> tuple[dict[str, Any], int]:
         if not isinstance(tool, Mapping):
             _raise(
@@ -3183,7 +3195,11 @@ class ResponsesRequestPolicy:
             self._validate_string_bytes(
                 description,
                 param=f"{param}.description",
-                max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES,
+                max_bytes=(
+                    description_max_bytes
+                    if description_max_bytes is not None
+                    else self._settings.RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES
+                ),
                 code="responses_tool_invalid_shape",
             )
             canonical_tool["description"] = description
@@ -3204,6 +3220,7 @@ class ResponsesRequestPolicy:
         tool: Mapping[str, Any],
         *,
         param: str,
+        description_max_bytes: int | None = None,
     ) -> tuple[dict[str, Any], int]:
         if _contains_provider_authority_marker(tool):
             _raise(
@@ -3252,7 +3269,11 @@ class ResponsesRequestPolicy:
             self._validate_string_bytes(
                 description,
                 param=f"{param}.description",
-                max_bytes=self._settings.RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES,
+                max_bytes=(
+                    description_max_bytes
+                    if description_max_bytes is not None
+                    else self._settings.RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES
+                ),
                 code="responses_tool_invalid_shape",
             )
             canonical_tool["description"] = description

@@ -307,11 +307,14 @@ Namespace/tool placement and types are exact, schemas/grammar/descriptions are
 bounded, `exec` must use an allowlisted grammar, and `tool_choice` is limited to
 `none`, `auto`, or `required`. Hosted/MCP/provider authority, arbitrary or
 nested namespaces, gateway execution, and background/storage expansion still
-fail closed. Approved
-envelope, message-ID, declaration, schema, grammar, and choice bytes increase
-the conservative admission estimate; safe estimation evidence contains only
-approved categories and aggregate bytes/tokens, never private values. Dropped
-client metadata is size-capped but is not provider-billed input.
+fail closed. Child function/custom descriptions use a fixed 20,000-byte per-
+description qualification cap only in this exact gated taxonomy, with 32,768
+bytes total across namespace and child descriptions. Namespace and ordinary
+top-level function/custom descriptions keep their 4,096-byte limits. Approved
+envelope, message-ID, declaration, description, schema, grammar, and choice
+bytes increase the conservative admission estimate; safe estimation evidence
+contains only approved categories and aggregate bytes/tokens, never private
+values. Dropped client metadata is size-capped but is not provider-billed input.
 
 Streaming call events and replay require a third capability,
 `codex_streaming_tool_events`, on both the key and route in addition to the two

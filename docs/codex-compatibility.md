@@ -221,6 +221,13 @@ and tool-search shapes fail closed. Function schemas reuse the bounded local
 function validation plus explicit depth and property-count limits. `exec`
 requires a bounded `lark` or `regex` grammar. Its description may explain
 client-local shell/patch work, but SLAIF and the provider execute nothing.
+Only inside this exact, fully gated taxonomy, each child function/custom tool
+description has a fixed 20,000-byte qualification cap and all namespace plus
+child descriptions retain the 32,768-byte aggregate cap. The pinned 0.147.0
+`exec` description is 18,137 bytes. Namespace descriptions and ordinary
+top-level function/custom tools remain capped at 4,096 bytes; model names,
+headers, endpoint permission, and ordinary tool capabilities cannot reach the
+Codex-only allowance.
 
 With these declarations, `tool_choice` is limited to the strings `none`,
 `auto`, or `required`; the pinned profile uses `auto`. Named/object choices are
