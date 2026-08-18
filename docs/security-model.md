@@ -275,6 +275,17 @@ destinations. A future selected provider contract must resolve opaque reviewed
 `require_approval` cannot lower the operator/route floor. Unknown, malformed,
 mixed, or unreviewed authority is `unknown_external_authority` and denies.
 
+Marker detection is semantic-position aware rather than a recursive keyword
+scan. Authority-bearing keys at semantic declaration/control positions still
+fail closed, but business fields inside local function parameters/JSON Schema,
+descriptions, and custom format/grammar payloads are opaque to this taxonomy
+and are never retained in its DTOs. Bounded namespace traversal inspects every child and
+denies provider-hosted, raw MCP/connector, unknown, malformed, cyclic,
+excessively nested, or excessive-count children. Existing endpoint validators
+continue to enforce their own schema, content, depth, size, and secret rules;
+this narrower authority answer grants no acceptance, execution, or forwarding,
+and current runtime remains deny-only.
+
 The future fenced promise requires an exclusive per-key fence while the request
 is unresolved, accepts that one admitted request can overrun remaining token or
 cost quota before control returns, blocks following requests after exhaustion,

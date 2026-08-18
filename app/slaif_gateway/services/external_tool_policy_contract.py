@@ -130,7 +130,8 @@ _PROVIDER_AUTHORITY_MARKERS = frozenset(
     }
 )
 _MCP_DESTINATION_MARKERS = frozenset({"server_url", "connector_id"})
-_MALFORMED_NESTED_MARKER = "malformed_nested_shape"
+_MAX_NAMESPACE_DEPTH = 4
+_MAX_NAMESPACE_CHILD_DECLARATIONS = 16
 _DESTINATION_ID_PATTERN = re.compile(
     r"^(?P<kind>connector|remote_mcp):(?P<opaque>[a-z0-9][a-z0-9_-]{0,47})$"
 )
@@ -501,12 +502,14 @@ def classify_tool_declaration(value: object) -> ToolAuthorityClassification:
     if not isinstance(tool_type, str) or not tool_type or tool_type != tool_type.strip():
         return _unknown_classification("malformed_tool_type")
 
-    markers = _find_provider_authority_markers(value)
     if tool_type in CLIENT_TOOL_ALIASES:
+        markers = _client_declaration_control_markers(tool_type, value)
         if markers:
             return _unknown_classification("mixed_local_external_authority")
         if not _is_recognizable_client_tool_shape(tool_type, value):
             return _unknown_classification("malformed_client_tool_shape")
+        if tool_type == "namespace" and not _namespace_children_are_client_operated(value):
+            return _unknown_classification("namespace_child_external_or_invalid")
         return ToolAuthorityClassification(
             authority_class=CLIENT_OPERATED_AUTHORITY,
             capability_id=None,
@@ -517,10 +520,11 @@ def classify_tool_declaration(value: object) -> ToolAuthorityClassification:
         )
 
     if tool_type == "mcp":
-        return _classify_wire_mcp(markers)
+        return _classify_wire_mcp(value)
 
     capability = PROVIDER_TOOL_ALIAS_TO_CAPABILITY.get(tool_type)
     if capability is not None:
+        markers = _declaration_control_markers(value)
         if markers:
             return _unknown_classification("malformed_provider_tool_authority")
         return ToolAuthorityClassification(
@@ -809,9 +813,8 @@ def _decision(
     )
 
 
-def _classify_wire_mcp(markers: frozenset[str]) -> ToolAuthorityClassification:
-    if _MALFORMED_NESTED_MARKER in markers:
-        return _unknown_classification("malformed_mcp_authority")
+def _classify_wire_mcp(value: Mapping[object, object]) -> ToolAuthorityClassification:
+    markers = _declaration_control_markers(value)
     destinations = markers & _MCP_DESTINATION_MARKERS
     if len(destinations) != 1:
         return _unknown_classification("mcp_destination_ambiguous_or_missing")
@@ -854,32 +857,64 @@ def _is_recognizable_client_tool_shape(tool_type: str, value: Mapping[object, ob
     return False
 
 
-def _find_provider_authority_markers(value: object) -> frozenset[str]:
-    found: set[str] = set()
-    stack = [value]
-    seen: set[int] = set()
-    visited = 0
-    while stack:
-        current = stack.pop()
-        if not isinstance(current, Mapping | list | tuple):
-            continue
-        identity = id(current)
-        if identity in seen:
-            found.add(_MALFORMED_NESTED_MARKER)
-            continue
-        seen.add(identity)
-        visited += 1
-        if visited > 1_024:
-            found.add(_MALFORMED_NESTED_MARKER)
-            break
-        if isinstance(current, Mapping):
-            for key, nested in current.items():
-                if isinstance(key, str) and key in _PROVIDER_AUTHORITY_MARKERS:
-                    found.add(key)
-                stack.append(nested)
-        else:
-            stack.extend(current)
+def _client_declaration_control_markers(
+    tool_type: str,
+    value: Mapping[object, object],
+) -> frozenset[str]:
+    """Inspect authority-bearing container keys, never client-owned payloads."""
+    found = set(_declaration_control_markers(value))
+    if tool_type in {"function", "custom"}:
+        nested = value.get(tool_type)
+        if isinstance(nested, Mapping):
+            found.update(_declaration_control_markers(nested))
     return frozenset(found)
+
+
+def _declaration_control_markers(value: Mapping[object, object]) -> frozenset[str]:
+    """Return reviewed markers only when they are keys at this control level."""
+    return frozenset(
+        key for key in value if isinstance(key, str) and key in _PROVIDER_AUTHORITY_MARKERS
+    )
+
+
+def _namespace_children_are_client_operated(value: Mapping[object, object]) -> bool:
+    """Validate bounded namespace authority without entering opaque child schemas."""
+    stack: list[tuple[Mapping[object, object], int]] = [(value, 1)]
+    seen_namespaces: set[int] = set()
+    child_count = 0
+
+    while stack:
+        namespace, depth = stack.pop()
+        namespace_id = id(namespace)
+        if namespace_id in seen_namespaces or depth > _MAX_NAMESPACE_DEPTH:
+            return False
+        seen_namespaces.add(namespace_id)
+
+        if _client_declaration_control_markers("namespace", namespace):
+            return False
+        if not _is_recognizable_client_tool_shape("namespace", namespace):
+            return False
+        children = namespace.get("tools")
+        if not isinstance(children, list):
+            return False
+        child_count += len(children)
+        if child_count > _MAX_NAMESPACE_CHILD_DECLARATIONS:
+            return False
+
+        for child in children:
+            if not isinstance(child, Mapping):
+                return False
+            child_type = child.get("type")
+            if not isinstance(child_type, str) or child_type not in CLIENT_TOOL_ALIASES:
+                return False
+            if child_type == "namespace":
+                stack.append((child, depth + 1))
+                continue
+            if _client_declaration_control_markers(child_type, child):
+                return False
+            if not _is_recognizable_client_tool_shape(child_type, child):
+                return False
+    return True
 
 
 def _parse_capability_list(value: object, *, maximum: int) -> tuple[str, ...] | None:

@@ -627,6 +627,16 @@ for missing, ambiguous, interrupted, or unreconciled final cost. Provider final
 usage/cost remains authoritative when available; this is not provider-invoice
 truth or a zero-overrun guarantee.
 
+The version-1 taxonomy examines provider markers only at semantic declaration/
+control positions. Local function parameters/JSON Schema, descriptions, and
+custom format/grammar payloads are opaque to authority classification and are
+not retained in its DTOs; existing endpoint validators still independently
+enforce their shape, size, depth, content, and secret rules. Bounded namespace
+child traversal fails closed when a child is provider-hosted, MCP/connector,
+unknown, malformed, cyclic, excessively nested, or over the child-count bound.
+This correction grants no runtime support and does not change the no-storage/
+no-migration status above.
+
 Quota rule:
 
 Before forwarding a request, update reservation counters in the same PostgreSQL transaction that checks limits. Use row locking or atomic conditional updates.

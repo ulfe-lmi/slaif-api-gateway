@@ -180,6 +180,52 @@ def test_incomplete_client_tool_shapes_fail_closed(tool: dict[str, object]) -> N
     assert result.reason_code == "malformed_client_tool_shape"
 
 
+OPAQUE_BUSINESS_FIELD_NAMES = (
+    "headers",
+    "authorization",
+    "server_url",
+    "connector_id",
+    "api_key",
+    "bearer_token",
+    "cookie",
+    "token",
+)
+
+
+@pytest.mark.parametrize("marker", OPAQUE_BUSINESS_FIELD_NAMES)
+def test_function_parameter_business_fields_are_opaque_to_authority(marker: str) -> None:
+    secret = "raw-secret-sentinel"
+    responses_style = classify_tool_declaration(
+        {
+            "type": "function",
+            "name": "local_function",
+            "description": f"Collect a business {marker} value",
+            "parameters": {
+                "type": "object",
+                "properties": {marker: {"type": "string", "example": secret}},
+            },
+        }
+    )
+    chat_style = classify_tool_declaration(
+        {
+            "type": "function",
+            "function": {
+                "name": "local_function",
+                "description": f"Collect a business {marker} value",
+                "parameters": {
+                    "type": "object",
+                    "properties": {marker: {"type": "string", "example": secret}},
+                },
+            },
+        }
+    )
+
+    assert responses_style.authority_class == CLIENT_OPERATED_AUTHORITY
+    assert chat_style.authority_class == CLIENT_OPERATED_AUTHORITY
+    assert secret not in repr((responses_style, chat_style))
+
+
+@pytest.mark.parametrize("nested_container", [False, True])
 @pytest.mark.parametrize(
     "marker",
     [
@@ -189,32 +235,196 @@ def test_incomplete_client_tool_shapes_fail_closed(tool: dict[str, object]) -> N
         "require_approval",
         "defer_loading",
         "server_label",
+        "allowed_tools",
         "headers",
         "cookie",
         "bearer_token",
     ],
 )
-def test_provider_marker_on_claimed_local_tool_is_unknown_external(marker: str) -> None:
+def test_provider_marker_at_local_declaration_control_level_is_unknown_external(
+    marker: str,
+    nested_container: bool,
+) -> None:
     secret = "raw-secret-sentinel"
-    result = classify_tool_declaration(
-        {
+    tool: dict[str, object] = {"type": "function", "name": "local_function"}
+    if nested_container:
+        tool = {
             "type": "function",
-            "function": {"name": "local_function", "parameters": {marker: secret}},
+            "function": {"name": "local_function", marker: secret},
         }
-    )
+    else:
+        tool[marker] = secret
+    result = classify_tool_declaration(tool)
 
     assert result.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
     assert result.reason_code == "mixed_local_external_authority"
     assert secret not in repr(result)
 
 
-def test_recursive_or_cyclic_tool_shapes_fail_closed_without_recursing_forever() -> None:
-    cyclic: dict[str, object] = {"type": "function", "name": "local_function"}
-    cyclic["schema"] = cyclic
+def test_custom_description_format_and_grammar_are_opaque_and_not_retained() -> None:
+    secret = "raw-custom-payload-sentinel"
+    responses_style = classify_tool_declaration(
+        {
+            "type": "custom",
+            "name": "local_custom",
+            "description": f"Grammar mentions authorization and server_url: {secret}",
+            "format": {
+                "type": "grammar",
+                "definition": {
+                    "headers": secret,
+                    "authorization": secret,
+                    "connector_id": secret,
+                },
+            },
+        }
+    )
+    nested_style = classify_tool_declaration(
+        {
+            "type": "custom",
+            "custom": {
+                "name": "local_custom",
+                "description": f"Grammar mentions headers: {secret}",
+                "format": {"grammar": {"authorization": secret}},
+            },
+        }
+    )
 
-    result = classify_tool_declaration(cyclic)
+    assert responses_style.authority_class == CLIENT_OPERATED_AUTHORITY
+    assert nested_style.authority_class == CLIENT_OPERATED_AUTHORITY
+    assert responses_style.reason_code == "client_operated_tool"
+    assert secret not in repr((responses_style, nested_style))
+
+
+def test_client_classification_does_not_claim_endpoint_schema_acceptance() -> None:
+    result = classify_tool_declaration(
+        {
+            "type": "function",
+            "name": "local_function",
+            "parameters": {"type": "not-a-valid-json-schema-type", "headers": object()},
+        }
+    )
+
+    # Authority classification is deliberately narrower than endpoint validation.
+    assert result.authority_class == CLIENT_OPERATED_AUTHORITY
+
+
+def test_namespace_with_local_children_keeps_opaque_payloads_client_operated() -> None:
+    secret = "raw-namespace-child-sentinel"
+    result = classify_tool_declaration(
+        {
+            "type": "namespace",
+            "name": "functions",
+            "description": f"Namespace mentions authorization: {secret}",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "local_function",
+                    "parameters": {"properties": {"server_url": {"default": secret}}},
+                },
+                {
+                    "type": "custom",
+                    "name": "local_custom",
+                    "format": {"grammar": {"headers": secret}},
+                },
+                {"type": "local_shell"},
+                {"type": "apply_patch"},
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "nested_local",
+                            "parameters": {"properties": {"authorization": {}}},
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert result.authority_class == CLIENT_OPERATED_AUTHORITY
+    assert secret not in repr(result)
+
+
+def test_namespace_control_marker_remains_mixed_external_authority() -> None:
+    result = classify_tool_declaration(
+        {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [],
+            "require_approval": "never",
+        }
+    )
 
     assert result.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+    assert result.reason_code == "mixed_local_external_authority"
+
+
+def test_namespace_children_cannot_hide_external_unknown_malformed_or_cycles() -> None:
+    children: list[object] = [
+        {"type": "mcp", "server_url": "https://raw.example/mcp"},
+        {"type": "web_search"},
+        {"type": "unknown"},
+        {"type": "function"},
+        "not-a-declaration",
+    ]
+    for child in children:
+        result = classify_tool_declaration(
+            {"type": "namespace", "name": "functions", "tools": [child]}
+        )
+        assert result.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+        assert result.reason_code == "namespace_child_external_or_invalid"
+
+    cyclic: dict[str, object] = {"type": "namespace", "name": "cycle"}
+    cyclic["tools"] = [cyclic]
+    cycle_result = classify_tool_declaration(cyclic)
+    assert cycle_result.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+    assert cycle_result.reason_code == "namespace_child_external_or_invalid"
+
+
+def test_namespace_depth_and_total_child_count_are_bounded() -> None:
+    too_many = classify_tool_declaration(
+        {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [{"type": "function", "name": f"function_{index}"} for index in range(17)],
+        }
+    )
+    nested: dict[str, object] = {
+        "type": "namespace",
+        "name": "level_5",
+        "tools": [{"type": "function", "name": "leaf"}],
+    }
+    for depth in range(4, 0, -1):
+        nested = {"type": "namespace", "name": f"level_{depth}", "tools": [nested]}
+    too_deep = classify_tool_declaration(nested)
+
+    assert too_many.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+    assert too_deep.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+
+
+def test_cyclic_opaque_function_schema_does_not_enter_authority_traversal() -> None:
+    cyclic_schema: dict[str, object] = {"type": "object"}
+    cyclic_schema["properties"] = cyclic_schema
+
+    result = classify_tool_declaration(
+        {"type": "function", "name": "local_function", "parameters": cyclic_schema}
+    )
+
+    assert result.authority_class == CLIENT_OPERATED_AUTHORITY
+
+
+def test_provider_configuration_payload_is_opaque_but_control_markers_still_deny() -> None:
+    opaque = classify_tool_declaration(
+        {"type": "web_search", "filters": {"headers": "business-field"}}
+    )
+    control = classify_tool_declaration({"type": "web_search", "headers": "raw-header"})
+
+    assert opaque.authority_class == PROVIDER_EXTERNAL_AUTHORITY
+    assert opaque.capability_id == PROVIDER_WEB_SEARCH
+    assert control.authority_class == UNKNOWN_EXTERNAL_AUTHORITY
+    assert control.reason_code == "malformed_provider_tool_authority"
 
 
 def test_wire_mcp_distinguishes_connector_and_remote_but_never_trusts_raw_destination() -> None:
@@ -226,7 +436,13 @@ def test_wire_mcp_distinguishes_connector_and_remote_but_never_trusts_raw_destin
             "require_approval": "never",
         }
     )
-    remote = classify_tool_declaration({"type": "mcp", "server_url": "https://raw.example/mcp"})
+    remote = classify_tool_declaration(
+        {
+            "type": "mcp",
+            "server_url": "https://raw.example/mcp",
+            "tool_filter": {"connector_id": "opaque-business-filter-value"},
+        }
+    )
 
     assert connector.capability_id == PROVIDER_CONNECTOR
     assert remote.capability_id == PROVIDER_REMOTE_MCP

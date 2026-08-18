@@ -495,6 +495,18 @@ become reviewed destinations; a future selected provider contract must resolve
 an opaque server-side `remote_mcp:` or `connector:` destination ID. Request
 `require_approval` can never lower the operator/route approval floor.
 
+The taxonomy scans only authority-bearing declaration/control positions. It
+does not recursively reinterpret field names inside local
+function parameters/JSON Schema, descriptions, or custom format/grammar
+payloads as provider authority, and it does not retain that content. Namespace
+child declarations are inspected with strict depth/count bounds, so a nested
+provider tool, raw MCP/connector, unknown or malformed declaration, or cycle cannot hide external
+authority. Provider filter/query/schema payloads are likewise not treated as a
+second authority grant; objective 016 still owns their complete provider-
+contract validation. Existing endpoint validators retain independent shape,
+size, depth, content, and secret enforcement, so client-operated classification
+does not make a request valid or forwardable.
+
 `strict_bounded` is the current/default deny mode. The future
 `external_tool_fenced` mode requires exact key/route/operator intersection and
 the exclusive-fence/overrun/hold/following-block promise in

@@ -852,6 +852,15 @@ interrupted, or awaiting reconciliation. Client-operated tools keep their
 existing independent gates and do not acquire provider authority. Trusted
 calibration observation remains separate from standard-key permission.
 
+External-tool authority markers are examined only at semantic declaration and
+control positions. Local function parameters/JSON Schema, descriptions, and
+custom format/grammar payloads are opaque to this taxonomy, are never retained
+by it, and remain subject to existing endpoint-specific shape, size, depth,
+content, and secret validation. Namespace child declarations are traversed with
+strict depth/count bounds and cannot hide provider-hosted, MCP/connector,
+unknown, malformed, or mixed authority. This position-aware classification
+changes no current runtime denial and grants no forwarding or execution.
+
 Key templates are versioned snapshots for the currently implemented safe
 policy vocabulary. A reviewed template revision can create one normal gateway
 key and records template/revision provenance. Editing a template never silently

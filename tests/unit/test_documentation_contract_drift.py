@@ -282,3 +282,22 @@ def test_external_tool_contract_is_not_wired_to_runtime_settings_or_migrations()
     assert "EXTERNAL_TOOL_" not in _read("app/slaif_gateway/config.py")
     for path in (REPO_ROOT / "migrations/versions").glob("*.py"):
         assert "external_tool_policy" not in path.read_text(encoding="utf-8"), path
+
+
+def test_external_tool_authority_docs_are_position_aware_without_granting_acceptance() -> None:
+    for relative_path in (
+        "AGENTS.md",
+        "docs/database-schema.md",
+        "docs/provider-forwarding-contract.md",
+        "docs/security-model.md",
+    ):
+        content = _read(relative_path)
+        normalized = re.sub(r"\s+", " ", content)
+        assert "semantic" in normalized and "control positions" in normalized, relative_path
+        assert "function parameters/JSON Schema" in normalized, relative_path
+        assert "custom format/grammar" in normalized, relative_path
+        assert "namespace" in normalized.casefold(), relative_path
+        assert re.search(r"deny-only|grants no|does not make", normalized), relative_path
+
+    forwarding = _read("docs/provider-forwarding-contract.md")
+    assert "does not make a request valid or forwardable" in forwarding
