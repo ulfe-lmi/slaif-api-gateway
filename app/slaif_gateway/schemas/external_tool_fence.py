@@ -11,11 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
-
-from slaif_gateway.services.external_tool_policy_contract import (
-    ExternalToolAdmissionDecision,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +41,7 @@ class ExternalToolFenceAcquireInput:
     route: ExternalToolFenceRouteFacts
     capabilities: tuple[str, ...]
     destination_ids: tuple[str, ...]
-    decision: ExternalToolAdmissionDecision
+    decision: Any
     now: datetime
     ttl: timedelta = timedelta(minutes=15)
 
