@@ -190,7 +190,18 @@ reservation foundation only: fence state, reservation pointer, and timestamps
 live on the locked `gateway_keys` row, the locked PostgreSQL key row is the
 single concurrency authority (Redis is not), and acquisition atomically
 reserves the complete remaining cost, token, and one request of balance in
-one `external_tool_fenced` reservation. The foundation is implemented, but
+one `external_tool_fenced` reservation. The fenced reservation persists the
+bound provider name and route UUID, and an exact retry matches the key,
+request ID, endpoint, requested model, provider, route UUID, capabilities,
+destinations, fenced mode, and linked fence facts; changing provider or route
+alone is a fixed conflict, never a silent retry. Exclusivity holds in both
+lock orders: a fence cannot be acquired while the key carries any pending
+reservation or non-zero reserved counter, and an ordinary reservation
+cannot be admitted while a committed fence exists. Resolution is authoritative
+evidence: it requires exact reservation and ledger ownership and fact
+agreement and all reserved counters to be exactly zero before the fence
+clears; any mismatch or unreconciled counter leaves the fence in place. The
+foundation is implemented, but
 external forwarding and the unknown-cost hold are still not implemented and
 provider-hosted tools remain denied; objectives 015 and 016 own the
 hold/reconciliation and selected provider execution transitions. Fence expiry

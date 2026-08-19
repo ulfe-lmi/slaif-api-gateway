@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -29,7 +28,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from slaif_gateway.db.models import GatewayKey
+from slaif_gateway.db.models import GatewayKey, ModelRoute
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
@@ -46,8 +45,10 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceActiveError,
+    ExternalToolFenceOccupiedError,
     ExternalToolFenceService,
 )
+from slaif_gateway.services.external_tool_policy_contract import ExternalToolAdmissionDecision
 from slaif_gateway.services.quota_errors import (
     ExternalToolFenceActiveError as QuotaFenceActiveError,
 )
@@ -77,17 +78,23 @@ STORED_POLICY = {
     "mode": "external_tool_fenced",
     "allowed_capabilities": ["provider_connector", "provider_remote_mcp"],
     "allowed_destination_ids": ["connector:demo", "remote_mcp:demo"],
+    "max_provider_tool_calls_per_request": 2,
+    "single_request_overrun_acknowledged": True,
 }
 
 
-@dataclass(frozen=True)
-class _FencedDecision:
-    allowed: bool = True
-    quota_mode: str = "external_tool_fenced"
-    exclusive_key_fence_required: bool = True
-    single_request_overrun_accepted: bool = True
-    hold_on_missing_or_ambiguous_final_cost: bool = True
-    following_requests_block_after_exhaustion: bool = True
+def _decision() -> ExternalToolAdmissionDecision:
+    """Build the exact positive objective-012 fenced admission decision."""
+    return ExternalToolAdmissionDecision(
+        allowed=True,
+        quota_mode="external_tool_fenced",
+        effective_tool_call_cap=2,
+        reason_code="external_tool_fenced_allowed",
+        exclusive_key_fence_required=True,
+        single_request_overrun_accepted=True,
+        hold_on_missing_or_ambiguous_final_cost=True,
+        following_requests_block_after_exhaustion=True,
+    )
 
 
 def _fence_service(session) -> ExternalToolFenceService:
@@ -99,13 +106,38 @@ def _fence_service(session) -> ExternalToolFenceService:
     )
 
 
-def _route_facts(requested_model: str = REQUESTED_MODEL) -> ExternalToolFenceRouteFacts:
+def _route_facts(
+    route_id: uuid.UUID,
+    *,
+    requested_model: str = REQUESTED_MODEL,
+    provider: str = PROVIDER,
+) -> ExternalToolFenceRouteFacts:
     return ExternalToolFenceRouteFacts(
         endpoint=ENDPOINT,
         requested_model=requested_model,
-        provider=PROVIDER,
-        route_id=uuid.uuid4(),
+        provider=provider,
+        route_id=route_id,
     )
+
+
+async def _create_model_route(dsn: str) -> uuid.UUID:
+    """Insert a real model route so fence reservations satisfy the 0015 FK."""
+    engine = create_async_engine(dsn, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            route = ModelRoute(
+                requested_model=REQUESTED_MODEL,
+                match_type="exact",
+                endpoint=ENDPOINT,
+                provider=PROVIDER,
+                upstream_model="gpt-4.1-mini",
+            )
+            session.add(route)
+            await session.commit()
+            return route.id
+    finally:
+        await engine.dispose()
 
 
 def _quota_service(session) -> QuotaService:
@@ -115,14 +147,21 @@ def _quota_service(session) -> QuotaService:
     )
 
 
-def _acquire_input(gateway_key_id: uuid.UUID, request_id: str) -> ExternalToolFenceAcquireInput:
+def _acquire_input(
+    gateway_key_id: uuid.UUID,
+    request_id: str,
+    route_id: uuid.UUID,
+    *,
+    requested_model: str = REQUESTED_MODEL,
+    provider: str = PROVIDER,
+) -> ExternalToolFenceAcquireInput:
     return ExternalToolFenceAcquireInput(
         gateway_key_id=gateway_key_id,
         request_id=request_id,
-        route=_route_facts(),
+        route=_route_facts(route_id, requested_model=requested_model, provider=provider),
         capabilities=CAPABILITIES,
         destination_ids=DESTINATIONS,
-        decision=_FencedDecision(),
+        decision=_decision(),
         now=datetime.now(UTC),
         ttl=TTL,
     )
@@ -202,7 +241,10 @@ async def _count_reservations(dsn: str, gateway_key_id: uuid.UUID) -> int:
 
 
 async def _acquire_worker(
-    dsn: str, gateway_key_id: uuid.UUID, request_id: str
+    dsn: str,
+    gateway_key_id: uuid.UUID,
+    request_id: str,
+    route_id: uuid.UUID,
 ) -> tuple[str, object]:
     """One fence-acquisition attempt in its own engine/session/transaction."""
     engine = create_async_engine(dsn, future=True)
@@ -211,7 +253,7 @@ async def _acquire_worker(
         async with factory() as session:
             try:
                 result = await _fence_service(session).acquire(
-                    _acquire_input(gateway_key_id, request_id)
+                    _acquire_input(gateway_key_id, request_id, route_id)
                 )
                 await session.commit()
                 return "acquired", result
@@ -222,14 +264,9 @@ async def _acquire_worker(
         await engine.dispose()
 
 
-async def _ordinary_reserve_worker(
-    dsn: str, gateway_key_id: uuid.UUID, request_id: str
-) -> tuple[str, object]:
-    """One ordinary chat-completion reservation attempt in its own engine/session."""
-    engine = create_async_engine(dsn, future=True)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+def _ordinary_authenticated_key(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
-    authenticated_key = AuthenticatedGatewayKey(
+    return AuthenticatedGatewayKey(
         gateway_key_id=gateway_key_id,
         owner_id=uuid.uuid4(),
         cohort_id=None,
@@ -247,7 +284,10 @@ async def _ordinary_reserve_worker(
         request_limit_total=None,
         rate_limit_policy={},
     )
-    route = RouteResolutionResult(
+
+
+def _ordinary_route() -> RouteResolutionResult:
+    return RouteResolutionResult(
         requested_model=REQUESTED_MODEL,
         resolved_model="gpt-4.1-mini",
         provider=PROVIDER,
@@ -256,14 +296,20 @@ async def _ordinary_reserve_worker(
         route_pattern=REQUESTED_MODEL,
         priority=100,
     )
-    policy = ChatCompletionPolicyResult(
+
+
+def _ordinary_policy() -> ChatCompletionPolicyResult:
+    return ChatCompletionPolicyResult(
         effective_body={"model": REQUESTED_MODEL, "messages": [], "max_completion_tokens": 40},
         requested_output_tokens=40,
         effective_output_tokens=40,
         estimated_input_tokens=30,
         injected_default_output_tokens=False,
     )
-    cost_estimate = ChatCostEstimate(
+
+
+def _ordinary_cost_estimate() -> ChatCostEstimate:
+    return ChatCostEstimate(
         provider=PROVIDER,
         requested_model=REQUESTED_MODEL,
         resolved_model="gpt-4.1-mini",
@@ -277,22 +323,48 @@ async def _ordinary_reserve_worker(
         pricing_rule_id=None,
         fx_rate_id=None,
     )
+
+
+async def _ordinary_reserve_hold(
+    session_factory, gateway_key_id: uuid.UUID, request_id: str
+) -> tuple[str, object, object]:
+    """Ordinary reservation in a caller-owned session.
+
+    The session is left open (uncommitted) on success so the caller can hold
+    the locked key row; on the fence-rejection path it is rolled back and
+    closed here.
+    """
+    now = datetime.now(UTC)
+    session = session_factory()
     try:
-        async with factory() as session:
-            try:
-                result = await _quota_service(session).reserve_for_chat_completion(
-                    authenticated_key=authenticated_key,
-                    route=route,
-                    policy=policy,
-                    cost_estimate=cost_estimate,
-                    request_id=request_id,
-                    now=now,
-                )
-                await session.commit()
-                return "reserved", result
-            except QuotaFenceActiveError as error:
-                await session.rollback()
-                return "rejected", error
+        result = await _quota_service(session).reserve_for_chat_completion(
+            authenticated_key=_ordinary_authenticated_key(gateway_key_id),
+            route=_ordinary_route(),
+            policy=_ordinary_policy(),
+            cost_estimate=_ordinary_cost_estimate(),
+            request_id=request_id,
+            now=now,
+        )
+    except QuotaFenceActiveError as error:
+        await session.rollback()
+        await session.close()
+        return "rejected", error, session
+    return "acquired", result, session
+
+
+async def _ordinary_reserve_worker(
+    dsn: str, gateway_key_id: uuid.UUID, request_id: str
+) -> tuple[str, object]:
+    """One ordinary chat-completion reservation attempt in its own engine/session."""
+    engine = create_async_engine(dsn, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        kind, payload, session = await _ordinary_reserve_hold(factory, gateway_key_id, request_id)
+        if kind == "acquired":
+            await session.commit()
+            await session.close()
+            return "reserved", payload
+        return "rejected", payload
     finally:
         await engine.dispose()
 
@@ -323,9 +395,10 @@ async def test_distinct_request_id_race_two_workers_single_winner(
 ) -> None:
     dsn = migrated_postgres_url
     key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
     request_ids = [f"req-race2-{uuid.uuid4()}" for _ in range(2)]
     outcomes = await asyncio.gather(
-        *(_acquire_worker(dsn, key_id, request_id) for request_id in request_ids)
+        *(_acquire_worker(dsn, key_id, request_id, route_id) for request_id in request_ids)
     )
     acquired = [r for kind, r in outcomes if kind == "acquired"]
     rejected = [r for kind, r in outcomes if kind == "rejected"]
@@ -351,9 +424,10 @@ async def test_distinct_request_id_race_sixteen_workers_single_winner(
 ) -> None:
     dsn = migrated_postgres_url
     key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
     request_ids = [f"req-race16-{uuid.uuid4()}" for _ in range(16)]
     outcomes = await asyncio.gather(
-        *(_acquire_worker(dsn, key_id, request_id) for request_id in request_ids)
+        *(_acquire_worker(dsn, key_id, request_id, route_id) for request_id in request_ids)
     )
     acquired = [r for kind, r in outcomes if kind == "acquired"]
     rejected = [r for kind, r in outcomes if kind == "rejected"]
@@ -379,8 +453,11 @@ async def test_same_request_id_concurrent_retries_create_single_fence(
 ) -> None:
     dsn = migrated_postgres_url
     key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
     request_id = f"req-same-{uuid.uuid4()}"
-    outcomes = await asyncio.gather(*(_acquire_worker(dsn, key_id, request_id) for _ in range(8)))
+    outcomes = await asyncio.gather(
+        *(_acquire_worker(dsn, key_id, request_id, route_id) for _ in range(8))
+    )
     assert all(kind == "acquired" for kind, _ in outcomes)
     results: list[ExternalToolFenceResult] = [r for _, r in outcomes]
     assert all(r.reservation_id == results[0].reservation_id for r in results)
@@ -403,13 +480,14 @@ async def test_same_request_id_concurrent_retries_create_single_fence(
 async def test_ordinary_reservations_cannot_bypass_active_fence(migrated_postgres_url: str) -> None:
     dsn = migrated_postgres_url
     key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
 
     engine = create_async_engine(dsn, future=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             acquired = await _fence_service(session).acquire(
-                _acquire_input(key_id, f"req-fence-{uuid.uuid4()}")
+                _acquire_input(key_id, f"req-fence-{uuid.uuid4()}", route_id)
             )
             await session.commit()
         fence_request_id = acquired.request_id
@@ -435,3 +513,132 @@ async def test_ordinary_reservations_cannot_bypass_active_fence(migrated_postgre
     assert key.requests_reserved_total == 1
     assert reservation.status == "pending"
     assert await _count_reservations(dsn, key_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_race_fence_lock_first_blocks_ordinary_reservation(
+    migrated_postgres_url: str,
+) -> None:
+    """Fence holds the locked key row uncommitted; the ordinary reservation
+    must block on the row lock, then be rejected by the committed fence."""
+    dsn = migrated_postgres_url
+    key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
+
+    fence_engine = create_async_engine(dsn, future=True)
+    fence_factory = async_sessionmaker(fence_engine, expire_on_commit=False)
+    ordinary_engine = create_async_engine(dsn, future=True)
+    ordinary_factory = async_sessionmaker(ordinary_engine, expire_on_commit=False)
+    fence_session = fence_factory()
+    try:
+        acquired = await _fence_service(fence_session).acquire(
+            _acquire_input(key_id, f"req-racef-{uuid.uuid4()}", route_id)
+        )
+        task = asyncio.create_task(
+            _ordinary_reserve_hold(ordinary_factory, key_id, f"req-raceo-{uuid.uuid4()}")
+        )
+        await asyncio.sleep(0.2)
+        assert not task.done(), "ordinary reservation must block on the uncommitted fence lock"
+
+        await fence_session.commit()
+        kind, error, _held_session = await task
+        assert kind == "rejected"
+        assert isinstance(error, QuotaFenceActiveError)
+        assert error.error_code == "external_tool_fence_active"
+    finally:
+        await fence_session.close()
+        await fence_engine.dispose()
+        await ordinary_engine.dispose()
+
+    key = await _load_key(dsn, key_id)
+    assert key.external_tool_fence_state == "active"
+    assert key.external_tool_fence_request_id == acquired.request_id
+    assert key.external_tool_fence_reservation_id == acquired.reservation_id
+    assert key.cost_reserved_eur == COST_LIMIT
+    assert key.tokens_reserved_total == TOKEN_LIMIT
+    assert key.requests_reserved_total == 1
+    assert await _count_reservations(dsn, key_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_race_ordinary_reservation_first_blocks_fence(
+    migrated_postgres_url: str,
+) -> None:
+    """Ordinary holds the locked key row uncommitted; the fence must block,
+    then fail closed on the committed pending reservation without mutating
+    the key, fencing it, or writing an acquired audit row."""
+    dsn = migrated_postgres_url
+    key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
+
+    ordinary_engine = create_async_engine(dsn, future=True)
+    ordinary_factory = async_sessionmaker(ordinary_engine, expire_on_commit=False)
+    fence_engine = create_async_engine(dsn, future=True)
+    fence_factory = async_sessionmaker(fence_engine, expire_on_commit=False)
+    ordinary_session = ordinary_factory()
+    fence_session = fence_factory()
+    try:
+        keys = GatewayKeysRepository(ordinary_session)
+        row = await keys.get_gateway_key_for_update(key_id)
+        assert row is not None
+        await QuotaReservationsRepository(ordinary_session).create_reservation(
+            gateway_key_id=key_id,
+            request_id=f"req-ordrace-{uuid.uuid4()}",
+            endpoint=ENDPOINT,
+            requested_model=REQUESTED_MODEL,
+            reserved_cost_eur=Decimal("0.25"),
+            reserved_tokens=50,
+            reserved_requests=1,
+            status="pending",
+            expires_at=datetime.now(UTC) + TTL,
+        )
+        await keys.add_reserved_counters(
+            row,
+            cost_reserved_eur=Decimal("0.25"),
+            tokens_reserved_total=50,
+            requests_reserved_total=1,
+        )
+
+        fence_task = asyncio.create_task(
+            _fence_service(fence_session).acquire(
+                _acquire_input(key_id, f"req-racef-{uuid.uuid4()}", route_id)
+            )
+        )
+        await asyncio.sleep(0.2)
+        assert not fence_task.done(), "fence must block on the uncommitted ordinary lock"
+
+        await ordinary_session.commit()
+        with pytest.raises(ExternalToolFenceOccupiedError) as raised:
+            await fence_task
+        assert raised.value.error_code == "external_tool_fence_pending_reservation"
+    finally:
+        await ordinary_session.close()
+        await ordinary_engine.dispose()
+        await fence_session.close()
+        await fence_engine.dispose()
+
+    key = await _load_key(dsn, key_id)
+    assert key.external_tool_fence_state == "none"
+    assert key.external_tool_fence_reservation_id is None
+    assert key.external_tool_fence_request_id is None
+    assert key.cost_reserved_eur == Decimal("0.25")
+    assert key.tokens_reserved_total == 50
+    assert key.requests_reserved_total == 1
+    assert await _count_reservations(dsn, key_id) == 1
+
+    audit_engine = create_async_engine(dsn, future=True)
+    try:
+        async with audit_engine.connect() as conn:
+            acquired_audit = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM audit_log"
+                        " WHERE entity_type = 'gateway_key' AND entity_id = :key_id"
+                        " AND action = 'external_tool_fence_acquired'"
+                    ),
+                    {"key_id": key_id},
+                )
+            ).one()
+    finally:
+        await audit_engine.dispose()
+    assert int(acquired_audit[0]) == 0

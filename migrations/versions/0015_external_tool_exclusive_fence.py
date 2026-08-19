@@ -8,8 +8,15 @@ This migration adds durable, PostgreSQL-authoritative coordination for a
 future provider-hosted external-tool fenced mode. It stores:
 
 - per-key fence state on the already-serialized ``gateway_keys`` row so the
-  key row lock remains the single concurrency truth;
-- quota-mode and canonical external-tool facts on ``quota_reservations``.
+  key row lock remains the single concurrency truth; the fence reservation
+  pointer is unique as well as RESTRICT, so one reservation can never be the
+  durable pointer for two keys;
+- quota-mode, canonical external-tool facts, and exact bound provider/route
+  identity on ``quota_reservations``. Both external fact columns must be JSON
+  arrays in every mode: strict rows keep empty arrays with null provider and
+  route, fenced rows carry a non-empty capability array, an array destination
+  value, a non-empty bounded provider string, and a non-null route UUID that
+  is RESTRICT-linked to ``model_routes``.
 
 Defaults double as the safe backfill for existing rows: every prior key is
 ``none`` with all fence fields null, and every prior reservation is
@@ -94,6 +101,12 @@ def upgrade() -> None:
         ["external_tool_fence_state", "external_tool_fence_expires_at"],
         unique=False,
     )
+    op.create_index(
+        "ix_gateway_keys_external_tool_fence_reservation_id_unique",
+        "gateway_keys",
+        ["external_tool_fence_reservation_id"],
+        unique=True,
+    )
 
     op.add_column(
         "quota_reservations",
@@ -122,35 +135,64 @@ def upgrade() -> None:
             server_default=sa.text("'[]'::jsonb"),
         ),
     )
+    op.add_column(
+        "quota_reservations",
+        sa.Column("external_tool_provider", sa.Text(), nullable=True),
+    )
+    op.add_column(
+        "quota_reservations",
+        sa.Column(
+            "external_tool_route_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("model_routes.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+    )
     op.create_check_constraint(
         "quota_reservations_quota_mode_allowed_values",
         "quota_reservations",
         "quota_mode in ('strict_bounded', 'external_tool_fenced')",
     )
     op.create_check_constraint(
+        "quota_reservations_external_tool_facts_array_shape",
+        "quota_reservations",
+        "jsonb_typeof(external_tool_capabilities) = 'array' "
+        "and jsonb_typeof(external_tool_destination_ids) = 'array'",
+    )
+    op.create_check_constraint(
         "quota_reservations_strict_mode_empty_external_facts",
         "quota_reservations",
         "(quota_mode = 'strict_bounded') = "
         "(external_tool_capabilities = '[]'::jsonb "
-        "and external_tool_destination_ids = '[]'::jsonb)",
+        "and external_tool_destination_ids = '[]'::jsonb "
+        "and external_tool_provider is null "
+        "and external_tool_route_id is null)",
     )
     op.create_check_constraint(
-        "quota_reservations_fenced_mode_nonempty_capabilities",
+        "quota_reservations_fenced_mode_bound_facts",
         "quota_reservations",
         "(quota_mode = 'external_tool_fenced') = "
-        "(jsonb_typeof(external_tool_capabilities) = 'array' "
-        "and external_tool_capabilities <> '[]'::jsonb)",
+        "(external_tool_capabilities <> '[]'::jsonb "
+        "and external_tool_provider is not null "
+        "and btrim(external_tool_provider) <> '' "
+        "and length(external_tool_provider) <= 255 "
+        "and external_tool_route_id is not null)",
     )
 
 
 def downgrade() -> None:
     op.drop_constraint(
-        "quota_reservations_fenced_mode_nonempty_capabilities",
+        "quota_reservations_fenced_mode_bound_facts",
         "quota_reservations",
         type_="check",
     )
     op.drop_constraint(
         "quota_reservations_strict_mode_empty_external_facts",
+        "quota_reservations",
+        type_="check",
+    )
+    op.drop_constraint(
+        "quota_reservations_external_tool_facts_array_shape",
         "quota_reservations",
         type_="check",
     )
@@ -159,10 +201,16 @@ def downgrade() -> None:
         "quota_reservations",
         type_="check",
     )
+    op.drop_column("quota_reservations", "external_tool_route_id")
+    op.drop_column("quota_reservations", "external_tool_provider")
     op.drop_column("quota_reservations", "external_tool_destination_ids")
     op.drop_column("quota_reservations", "external_tool_capabilities")
     op.drop_column("quota_reservations", "quota_mode")
 
+    op.drop_index(
+        "ix_gateway_keys_external_tool_fence_reservation_id_unique",
+        table_name="gateway_keys",
+    )
     op.drop_index(
         "ix_gateway_keys_external_tool_fence_state_expires_at",
         table_name="gateway_keys",

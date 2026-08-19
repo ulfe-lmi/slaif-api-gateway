@@ -5,7 +5,7 @@ provider-hosted external-tool fenced quota mode. It is *flush-only*: callers
 own commit/rollback. No prompt, body, tool argument/result, raw MCP value/URL,
 authorization material, or provider response content is ever stored. No Redis or
 in-memory lock is used as authority; the locked ``gateway_keys`` row is the
-single concurrency truth. Objective 014 writes only the ``none`` and ``active``
+single concurrency truth. Acquisition fails closed when committed ordinary exposure (a pending reservation or any non-zero reserved counter) already occupies the key. Objective 014 writes only the ``none`` and ``active``
 fence states; the reserved ``held`` transition and provider-hosted execution are
 owned by later objectives and are not enabled here.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from uuid import UUID
 
 
 from slaif_gateway.db.models import GatewayKey
@@ -31,13 +31,22 @@ from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceResult,
 )
 from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
     EXTERNAL_TOOL_FENCED,
     KNOWN_EXTERNAL_CAPABILITIES,
+    ExternalToolAdmissionDecision,
+    parse_key_external_tool_policy,
 )
 
-_DEFAULT_FENCE_TTL = timedelta(minutes=15)
 _MAX_REQUEST_ID_LENGTH = 255
 _MAX_ENDPOINT_LENGTH = 255
+_MAX_MODEL_LENGTH = 255
+_MAX_PROVIDER_LENGTH = 255
+
+# The exact reason code the objective-012 admission reducer emits for the
+# positive fenced decision; any other reason is a different (non-acquirable)
+# contract outcome.
+_FENCED_ALLOWED_REASON_CODE = "external_tool_fenced_allowed"
 
 FENCE_NONE = "none"
 FENCE_ACTIVE = "active"
@@ -90,6 +99,15 @@ class ExternalToolFenceConflictError(ExternalToolFenceError):
     message = "External tool fence state conflicts with the requested facts"
 
 
+class ExternalToolFenceOccupiedError(ExternalToolFenceError):
+    """Raised when committed ordinary exposure already occupies the key's quota."""
+
+    status_code = 409
+    error_type = "conflict_error"
+    error_code = "external_tool_fence_occupied"
+    message = "Existing reserved quota on this key blocks a new external tool fence"
+
+
 class ExternalToolFenceExhaustedError(ExternalToolFenceError):
     """Raised when no positive remaining balance is available to fence."""
 
@@ -139,11 +157,14 @@ class ExternalToolFenceService:
 
         request_id = _validate_request_id(acquire_input.request_id)
         endpoint = _validate_endpoint(acquire_input.route.endpoint)
+        requested_model = _validate_requested_model(acquire_input.route.requested_model)
+        provider = _validate_provider(acquire_input.route.provider)
+        route_id = _validate_route_id(acquire_input.route.route_id)
         capabilities = self._validate_capabilities(acquire_input.capabilities)
         destination_ids = self._validate_destination_ids(
             acquire_input.destination_ids, capabilities
         )
-        self._validate_decision(acquire_input.decision)
+        decision = self._validate_decision(acquire_input.decision)
 
         gateway_key = await self._gateway_keys_repository.get_gateway_key_for_update(
             acquire_input.gateway_key_id
@@ -155,7 +176,7 @@ class ExternalToolFenceService:
             )
 
         self._validate_key_for_fence(gateway_key, now=now)
-        self._validate_stored_fenced_policy(gateway_key, capabilities, destination_ids)
+        self._validate_stored_fenced_policy(gateway_key, capabilities, destination_ids, decision)
 
         if gateway_key.external_tool_fence_state in _BOUND_FENCE_STATES:
             if (
@@ -173,11 +194,20 @@ class ExternalToolFenceService:
                         code="external_tool_fence_reservation_missing",
                     )
                 if self._reservation_matches(
-                    reservation, acquire_input, request_id, endpoint, capabilities, destination_ids
+                    reservation,
+                    request_id,
+                    endpoint,
+                    requested_model,
+                    provider,
+                    route_id,
+                    capabilities,
+                    destination_ids,
                 ):
                     return self._projection_result(gateway_key, reservation, idempotent=True)
                 raise ExternalToolFenceConflictError()
             raise ExternalToolFenceActiveError()
+
+        await self._reject_existing_key_exposure(gateway_key)
 
         existing = await self._quota_reservations_repository.get_reservation_by_request_id(
             request_id
@@ -208,7 +238,7 @@ class ExternalToolFenceService:
             gateway_key_id=acquire_input.gateway_key_id,
             request_id=request_id,
             endpoint=endpoint,
-            requested_model=acquire_input.route.requested_model,
+            requested_model=requested_model,
             reserved_cost_eur=remaining_cost,
             reserved_tokens=remaining_tokens,
             reserved_requests=1,
@@ -217,6 +247,8 @@ class ExternalToolFenceService:
             quota_mode=EXTERNAL_TOOL_FENCED,
             external_tool_capabilities=list(capabilities),
             external_tool_destination_ids=list(destination_ids),
+            external_tool_provider=provider,
+            external_tool_route_id=route_id,
         )
         await self._gateway_keys_repository.add_reserved_counters(
             gateway_key,
@@ -288,6 +320,22 @@ class ExternalToolFenceService:
                 "Fence references a missing reservation",
                 code="external_tool_fence_reservation_missing",
             )
+        if reservation.gateway_key_id != gateway_key.id:
+            raise ExternalToolFenceInvariantError(
+                "Fence reservation does not belong to the locked key",
+                code="external_tool_fence_reservation_key_mismatch",
+            )
+        if reservation.request_id != resolve_input.request_id:
+            raise ExternalToolFenceInvariantError(
+                "Fence reservation request ID does not match the fence",
+                code="external_tool_fence_reservation_request_mismatch",
+            )
+        if reservation.quota_mode != EXTERNAL_TOOL_FENCED:
+            raise ExternalToolFenceInvariantError(
+                "Fence reservation is not in the external tool fenced mode",
+                code="external_tool_fence_reservation_not_fenced",
+            )
+        self._validate_bound_route_facts(reservation)
         if reservation.status not in ("finalized", "released"):
             raise ExternalToolFenceInvariantError(
                 "Cannot resolve a fence whose reservation is not terminal",
@@ -303,6 +351,21 @@ class ExternalToolFenceService:
                 code="external_tool_fence_ledger_count",
             )
         ledger = ledgers[0]
+        if ledger.gateway_key_id != gateway_key.id:
+            raise ExternalToolFenceInvariantError(
+                "Linked usage ledger does not belong to the locked key",
+                code="external_tool_fence_ledger_key_mismatch",
+            )
+        if (
+            ledger.endpoint != reservation.endpoint
+            or ledger.provider != reservation.external_tool_provider
+            or ledger.requested_model != reservation.requested_model
+            or ledger.request_id != reservation.request_id
+        ):
+            raise ExternalToolFenceInvariantError(
+                "Usage ledger endpoint, provider, or model facts disagree with the reservation",
+                code="external_tool_fence_ledger_facts_mismatch",
+            )
         if reservation.status == "finalized":
             if ledger.accounting_status != "finalized" or ledger.success is not True:
                 raise ExternalToolFenceInvariantError(
@@ -316,7 +379,7 @@ class ExternalToolFenceService:
                     code="external_tool_fence_ledger_mismatch",
                 )
 
-        self._verify_reserved_counters_reconciled(gateway_key, reservation)
+        self._verify_reserved_counters_zero(gateway_key)
 
         await self._gateway_keys_repository.set_external_tool_fence(
             gateway_key,
@@ -381,21 +444,63 @@ class ExternalToolFenceService:
 
     # -- validation helpers --------------------------------------------------
 
-    def _validate_decision(self, decision: Any) -> None:
-        if not isinstance(decision, object) or decision is None:
-            raise InvalidExternalToolFenceInputError(
-                "A valid external tool admission decision is required",
-                code="external_tool_fence_decision_missing",
+    async def _reject_existing_key_exposure(self, gateway_key: GatewayKey) -> None:
+        """Fail closed if committed exposure already occupies the key.
+
+        Under the already-held key row lock, any pending reservation for the
+        key (ordinary, or stale fence-derived) or any non-zero reserved
+        counter means the key is not fully reconciled; a new exclusive fence
+        must never coexist with it. Stale or drifted state stays blocked for
+        operator reconciliation and is never guessed away.
+        """
+        pending = await self._quota_reservations_repository.list_reservations_for_key(
+            gateway_key.id, status="pending"
+        )
+        if pending:
+            raise ExternalToolFenceOccupiedError(
+                "This key has a pending quota reservation that blocks a new fence",
+                code="external_tool_fence_pending_reservation",
             )
-        if bool(getattr(decision, "allowed", False)) is not True:
+        if (
+            gateway_key.cost_reserved_eur != 0
+            or gateway_key.tokens_reserved_total != 0
+            or gateway_key.requests_reserved_total != 0
+        ):
+            raise ExternalToolFenceOccupiedError(
+                "This key has unreconciled reserved counters that block a new fence",
+                code="external_tool_fence_counters_nonzero",
+            )
+
+    @staticmethod
+    def _validate_decision(decision: object) -> ExternalToolAdmissionDecision:
+        """Require the exact objective-012 positive fenced decision contract."""
+        if not isinstance(decision, ExternalToolAdmissionDecision):
+            raise InvalidExternalToolFenceInputError(
+                "The exact objective-012 external tool admission decision type is required",
+                code="external_tool_fence_decision_type",
+            )
+        if decision.allowed is not True:
             raise InvalidExternalToolFenceInputError(
                 "External tool admission decision is not allowed",
                 code="external_tool_fence_decision_denied",
             )
-        if getattr(decision, "quota_mode", None) != EXTERNAL_TOOL_FENCED:
+        if decision.quota_mode != EXTERNAL_TOOL_FENCED:
             raise InvalidExternalToolFenceInputError(
                 "External tool admission decision is not fenced",
                 code="external_tool_fence_decision_not_fenced",
+            )
+        if (
+            type(decision.effective_tool_call_cap) is not int
+            or decision.effective_tool_call_cap <= 0
+        ):
+            raise InvalidExternalToolFenceInputError(
+                "A fenced decision requires a positive effective tool call cap",
+                code="external_tool_fence_decision_call_cap",
+            )
+        if decision.reason_code != _FENCED_ALLOWED_REASON_CODE:
+            raise InvalidExternalToolFenceInputError(
+                "A fenced decision must carry the canonical allowed reason",
+                code="external_tool_fence_decision_reason",
             )
         for field in (
             "exclusive_key_fence_required",
@@ -403,11 +508,12 @@ class ExternalToolFenceService:
             "hold_on_missing_or_ambiguous_final_cost",
             "following_requests_block_after_exhaustion",
         ):
-            if bool(getattr(decision, field, False)) is not True:
+            if decision.__getattribute__(field) is not True:
                 raise InvalidExternalToolFenceInputError(
                     "A fenced decision requires all exclusive obligations to be true",
                     code="external_tool_fence_decision_obligations",
                 )
+        return decision
 
     def _validate_key_for_fence(self, gateway_key: GatewayKey, *, now: datetime) -> None:
         if gateway_key.status != "active":
@@ -452,41 +558,49 @@ class ExternalToolFenceService:
                 code="external_tool_fence_request_limit",
             )
 
+    @staticmethod
     def _validate_stored_fenced_policy(
-        self,
         gateway_key: GatewayKey,
         capabilities: tuple[str, ...],
         destination_ids: tuple[str, ...],
+        decision: ExternalToolAdmissionDecision,
     ) -> None:
+        """Parse the stored key policy through the exact 012 contract.
+
+        Missing, malformed, noncanonical, wrong-version, duplicate,
+        over-ceiling, non-acknowledged, or non-fenced stored policy all fail
+        closed here; the parser itself rejects anything that is not the exact
+        v1 shape.
+        """
         stored = (gateway_key.metadata_json or {}).get("external_tool_policy")
-        if not isinstance(stored, dict):
+        parsed = parse_key_external_tool_policy(
+            stored, ceilings=DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+        )
+        if parsed.valid is not True or parsed.policy is None:
             raise InvalidExternalToolFenceInputError(
-                "Gateway key has no stored external tool policy",
-                code="external_tool_fence_policy_missing",
+                "Stored external tool policy is missing or malformed",
+                code="external_tool_fence_policy_invalid",
             )
-        if stored.get("mode") != EXTERNAL_TOOL_FENCED:
+        policy = parsed.policy
+        if policy.mode != EXTERNAL_TOOL_FENCED:
             raise InvalidExternalToolFenceInputError(
                 "Gateway key stored policy is not fenced",
                 code="external_tool_fence_policy_not_fenced",
             )
-        stored_caps = stored.get("allowed_capabilities")
-        stored_dests = stored.get("allowed_destination_ids")
-        if not isinstance(stored_caps, list) or not isinstance(stored_dests, list):
-            raise InvalidExternalToolFenceInputError(
-                "Gateway key stored external tool policy is malformed",
-                code="external_tool_fence_policy_malformed",
-            )
-        stored_cap_set = {c for c in stored_caps if isinstance(c, str)}
-        stored_dest_set = {d for d in stored_dests if isinstance(d, str)}
-        if not set(capabilities) <= stored_cap_set:
+        if not set(capabilities) <= set(policy.allowed_capabilities):
             raise InvalidExternalToolFenceInputError(
                 "Requested capabilities are not permitted by the stored policy",
                 code="external_tool_fence_capability_not_permitted",
             )
-        if not set(destination_ids) <= stored_dest_set:
+        if not set(destination_ids) <= set(policy.allowed_destination_ids):
             raise InvalidExternalToolFenceInputError(
                 "Requested destinations are not permitted by the stored policy",
                 code="external_tool_fence_destination_not_permitted",
+            )
+        if decision.effective_tool_call_cap > policy.max_provider_tool_calls_per_request:
+            raise InvalidExternalToolFenceInputError(
+                "Decision call cap exceeds the stored policy ceiling",
+                code="external_tool_fence_decision_call_cap_over_ceiling",
             )
 
     @staticmethod
@@ -501,6 +615,11 @@ class ExternalToolFenceService:
             raise InvalidExternalToolFenceInputError(
                 "Capabilities must be known canonical external tool capability IDs",
                 code="external_tool_fence_capability_unknown",
+            )
+        if len(set(values)) > DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS.max_distinct_capabilities:
+            raise InvalidExternalToolFenceInputError(
+                "Capabilities exceed the operator ceiling",
+                code="external_tool_fence_capabilities_over_ceiling",
             )
         return tuple(sorted(set(values)))
 
@@ -527,6 +646,11 @@ class ExternalToolFenceService:
                 "Destination IDs must be unique",
                 code="external_tool_fence_destination_duplicate",
             )
+        if len(normalized) > DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS.max_approved_destinations:
+            raise InvalidExternalToolFenceInputError(
+                "Destination IDs exceed the operator ceiling",
+                code="external_tool_fence_destinations_over_ceiling",
+            )
         for value in normalized:
             kind = _DESTINATION_ID_PATTERN.fullmatch(value).group("kind")
             required = "provider_connector" if kind == "connector" else "provider_remote_mcp"
@@ -540,37 +664,55 @@ class ExternalToolFenceService:
     def _reservation_matches(
         self,
         reservation,
-        acquire_input: ExternalToolFenceAcquireInput,
         request_id: str,
         endpoint: str,
+        requested_model: str,
+        provider: str,
+        route_id: UUID,
         capabilities: tuple[str, ...],
         destination_ids: tuple[str, ...],
     ) -> bool:
+        """Exact retry identity: every durable request/policy/fence fact must agree."""
         return (
             reservation.request_id == request_id
             and reservation.endpoint == endpoint
-            and reservation.requested_model == acquire_input.route.requested_model
+            and reservation.requested_model == requested_model
+            and reservation.external_tool_provider == provider
+            and reservation.external_tool_route_id == route_id
             and tuple(reservation.external_tool_capabilities) == capabilities
             and tuple(reservation.external_tool_destination_ids) == destination_ids
             and reservation.quota_mode == EXTERNAL_TOOL_FENCED
         )
 
     @staticmethod
-    def _verify_reserved_counters_reconciled(gateway_key: GatewayKey, reservation) -> None:
-        """Confirm durable evidence is consistent without mutating any counter."""
-        for value in (
-            gateway_key.cost_reserved_eur,
-            gateway_key.tokens_reserved_total,
-            gateway_key.requests_reserved_total,
-            reservation.reserved_cost_eur,
-            reservation.reserved_tokens,
-            reservation.reserved_requests,
+    def _validate_bound_route_facts(reservation) -> None:
+        """The terminal reservation must still carry valid bound route facts."""
+        try:
+            _validate_provider(reservation.external_tool_provider)
+            _validate_requested_model(reservation.requested_model)
+        except InvalidExternalToolFenceInputError:
+            raise ExternalToolFenceInvariantError(
+                "Fence reservation bound provider or model facts are invalid",
+                code="external_tool_fence_reservation_route_facts_invalid",
+            ) from None
+        if reservation.external_tool_route_id is None:
+            raise ExternalToolFenceInvariantError(
+                "Fence reservation is missing its bound route identifier",
+                code="external_tool_fence_reservation_route_facts_invalid",
+            )
+
+    @staticmethod
+    def _verify_reserved_counters_zero(gateway_key: GatewayKey) -> None:
+        """Every key reserved counter must be exactly zero before the fence clears."""
+        if (
+            gateway_key.cost_reserved_eur != 0
+            or gateway_key.tokens_reserved_total != 0
+            or gateway_key.requests_reserved_total != 0
         ):
-            if value < 0:
-                raise ExternalToolFenceInvariantError(
-                    "Reserved counters are inconsistent with the terminal reservation",
-                    code="external_tool_fence_counters_inconsistent",
-                )
+            raise ExternalToolFenceInvariantError(
+                "Key reserved counters are not exactly zero; the fence must stay",
+                code="external_tool_fence_counters_inconsistent",
+            )
 
 
 def _aware_now(value: datetime | None) -> datetime:
@@ -600,6 +742,43 @@ def _validate_request_id(value: object) -> str:
         raise InvalidExternalToolFenceInputError(
             "Request ID exceeds the safe length or contains control characters",
             code="external_tool_fence_request_id_invalid",
+        )
+    return value
+
+
+def _validate_requested_model(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidExternalToolFenceInputError(
+            "A requested model is required for fence acquisition",
+            code="external_tool_fence_model_invalid",
+        )
+    if len(value) > _MAX_MODEL_LENGTH or any(ord(ch) < 0x20 for ch in value):
+        raise InvalidExternalToolFenceInputError(
+            "Requested model exceeds the safe length or contains control characters",
+            code="external_tool_fence_model_invalid",
+        )
+    return value
+
+
+def _validate_provider(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidExternalToolFenceInputError(
+            "A provider is required for fence acquisition",
+            code="external_tool_fence_provider_invalid",
+        )
+    if len(value) > _MAX_PROVIDER_LENGTH or any(ord(ch) < 0x20 for ch in value):
+        raise InvalidExternalToolFenceInputError(
+            "Provider exceeds the safe length or contains control characters",
+            code="external_tool_fence_provider_invalid",
+        )
+    return value
+
+
+def _validate_route_id(value: object) -> UUID:
+    if type(value) is not UUID:
+        raise InvalidExternalToolFenceInputError(
+            "A route UUID is required for fence acquisition",
+            code="external_tool_fence_route_id_invalid",
         )
     return value
 

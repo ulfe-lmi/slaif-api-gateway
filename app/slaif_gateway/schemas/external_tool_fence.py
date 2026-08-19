@@ -11,8 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
+
+from slaif_gateway.services.external_tool_policy_contract import (
+    ExternalToolAdmissionDecision,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,9 +32,11 @@ class ExternalToolFenceRouteFacts:
 class ExternalToolFenceAcquireInput:
     """The only inputs the fence acquisition service accepts.
 
-    ``decision`` is the already-positive objective-012
-    ``ExternalToolAdmissionDecision`` whose four fenced obligations are all
-    true. It is validated by the service, not by this schema.
+    ``decision`` must be the exact objective-012
+    ``ExternalToolAdmissionDecision`` type; the service re-validates its
+    positive fenced contract (allowed, fenced mode, positive effective call
+    cap, canonical allowed reason, and all four exclusive obligations true)
+    before any mutation.
     """
 
     gateway_key_id: UUID
@@ -39,7 +44,7 @@ class ExternalToolFenceAcquireInput:
     route: ExternalToolFenceRouteFacts
     capabilities: tuple[str, ...]
     destination_ids: tuple[str, ...]
-    decision: Any
+    decision: ExternalToolAdmissionDecision
     now: datetime
     ttl: timedelta = timedelta(minutes=15)
 

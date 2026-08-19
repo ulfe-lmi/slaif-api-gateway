@@ -514,8 +514,10 @@ the exclusive-fence/overrun/hold/following-block promise in
 [`accounting.md`](accounting.md). Objective 014 implements the PostgreSQL-authoritative fence and
 full-remaining-balance reservation foundation on the locked key row (the
 key-row lock is the single concurrency authority, Redis is not, and fence
-expiry never means safe release), but external forwarding and the unknown-cost
-hold are still not implemented; objectives 015–17 own the hold,
+expiry never means safe release), binding the reservation to the exact
+provider name and route UUID of the admitted route so the later provider
+execution inherits one unambiguous route identity; external forwarding and
+the unknown-cost hold are still not implemented; objectives 015–17 own the hold,
 reconciliation, selected provider contracts, and runtime integration, and the
 exact overrun and one-winner concurrency promise remains conditional on that
 later activation. No new tool is enabled or

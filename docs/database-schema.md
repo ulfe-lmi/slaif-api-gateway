@@ -501,6 +501,7 @@ check(
 )
 check(key_purpose != 'trusted_calibration' or request_limit_total is not null)
 index(external_tool_fence_state, external_tool_fence_expires_at)
+unique index(external_tool_fence_reservation_id)
 check(external_tool_fence_state in ('none', 'active', 'held'))
 check(
   (external_tool_fence_state = 'none') =
@@ -524,7 +525,9 @@ external_tool_fence_state held       reserved for objective 015; objective 014 n
 
 The locked `gateway_keys` row is the single concurrency authority for fence
 acquisition (Redis is not), and the shape constraints make a partially bound
-fence impossible. Objective 014 writes only `none` and `active`; fence expiry
+fence impossible. The fence reservation pointer is additionally a unique index
+(`ix_gateway_keys_external_tool_fence_reservation_id_unique`), so one
+reservation can never be the durable pointer for two keys. Objective 014 writes only `none` and `active`; fence expiry
 is an inspection threshold and never means safe release, and emergency suspend
 or revoke does not clear fence fields, reservations, or counters.
 
@@ -696,6 +699,8 @@ requested_model text null
 quota_mode text not null default 'strict_bounded'
 external_tool_capabilities jsonb not null default '[]'
 external_tool_destination_ids jsonb not null default '[]'
+external_tool_provider text null
+external_tool_route_id UUID null references model_routes(id) on delete restrict
 reserved_cost_eur numeric(18,9) not null default 0
 reserved_tokens bigint not null default 0
 reserved_requests bigint not null default 1
@@ -726,14 +731,15 @@ check(reserved_cost_eur >= 0)
 check(reserved_tokens >= 0)
 check(reserved_requests >= 0)
 check(quota_mode in ('strict_bounded', 'external_tool_fenced'))
-check(
-  (quota_mode = 'strict_bounded') =
-  (external_tool_capabilities = '[]'::jsonb and external_tool_destination_ids = '[]'::jsonb)
-)
-check(
-  (quota_mode = 'external_tool_fenced') =
-  (jsonb_typeof(external_tool_capabilities) = 'array' and external_tool_capabilities <> '[]'::jsonb)
-)
+check(jsonb_typeof(external_tool_capabilities) = 'array'
+      and jsonb_typeof(external_tool_destination_ids) = 'array')
+check((quota_mode = 'strict_bounded') =
+      (external_tool_capabilities = '[]'::jsonb and external_tool_destination_ids = '[]'::jsonb
+       and external_tool_provider is null and external_tool_route_id is null))
+check((quota_mode = 'external_tool_fenced') =
+      (external_tool_capabilities <> '[]'::jsonb and external_tool_provider is not null
+       and btrim(external_tool_provider) <> '' and length(external_tool_provider) <= 255
+       and external_tool_route_id is not null))
 ```
 
 Rules:
@@ -741,7 +747,9 @@ Rules:
 - Every quota-affecting request should create one reservation.
 - Stale `pending` reservations must be released by a scheduled cleanup job.
 - Finalization must adjust `gateway_keys.*_reserved_*` and `gateway_keys.*_used_*` counters atomically.
-- `strict_bounded` is the default/backfilled mode with empty external arrays; `external_tool_fenced` rows carry a canonical non-empty capability snapshot and opaque destination IDs only.
+- `strict_bounded` is the default/backfilled mode with empty external arrays and null external provider/route; `external_tool_fenced` rows carry a canonical non-empty capability snapshot, opaque destination IDs, a bounded non-empty provider name, and a non-null route UUID.
+- PostgreSQL enforces the four named external-fact checks (`quota_reservations_quota_mode_allowed_values`, `quota_reservations_external_tool_facts_array_shape`, `quota_reservations_strict_mode_empty_external_facts`, `quota_reservations_fenced_mode_bound_facts`) in every valid mode; canonical capability/destination values remain a service-layer responsibility.
+- `external_tool_route_id` references `model_routes.id` with `ON DELETE RESTRICT`, so a route referenced by a reservation cannot be deleted out from under it.
 - Stale `pending` reservations in `external_tool_fenced` mode are never auto-released by ordinary reconciliation; they require external-tool review (objective 015) and the key fence keeps blocking admission.
 
 ---

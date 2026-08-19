@@ -34,6 +34,8 @@ class QuotaReservationsRepository:
         quota_mode: str = "strict_bounded",
         external_tool_capabilities: Sequence[str] = (),
         external_tool_destination_ids: Sequence[str] = (),
+        external_tool_provider: str | None = None,
+        external_tool_route_id: uuid.UUID | None = None,
     ) -> QuotaReservation:
         row = QuotaReservation(
             gateway_key_id=gateway_key_id,
@@ -43,6 +45,8 @@ class QuotaReservationsRepository:
             quota_mode=quota_mode,
             external_tool_capabilities=list(external_tool_capabilities),
             external_tool_destination_ids=list(external_tool_destination_ids),
+            external_tool_provider=external_tool_provider,
+            external_tool_route_id=external_tool_route_id,
             reserved_cost_eur=reserved_cost_eur,
             reserved_tokens=reserved_tokens,
             reserved_requests=reserved_requests,
@@ -61,7 +65,9 @@ class QuotaReservationsRepository:
         reservation_id: uuid.UUID,
     ) -> QuotaReservation | None:
         """Return a quota reservation row locked for lifecycle mutation."""
-        statement = select(QuotaReservation).where(QuotaReservation.id == reservation_id).with_for_update()
+        statement = (
+            select(QuotaReservation).where(QuotaReservation.id == reservation_id).with_for_update()
+        )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
@@ -85,7 +91,9 @@ class QuotaReservationsRepository:
         if status is not None:
             statement = statement.where(QuotaReservation.status == status)
 
-        statement = statement.order_by(QuotaReservation.created_at.desc()).limit(limit).offset(offset)
+        statement = (
+            statement.order_by(QuotaReservation.created_at.desc()).limit(limit).offset(offset)
+        )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
@@ -107,7 +115,9 @@ class QuotaReservationsRepository:
         await self._session.flush()
         return True
 
-    async def finalize_reservation(self, reservation_id: uuid.UUID, *, finalized_at: datetime) -> bool:
+    async def finalize_reservation(
+        self, reservation_id: uuid.UUID, *, finalized_at: datetime
+    ) -> bool:
         statement = (
             update(QuotaReservation)
             .where(QuotaReservation.id == reservation_id)
@@ -116,7 +126,9 @@ class QuotaReservationsRepository:
         result = await self._session.execute(statement)
         return result.rowcount > 0
 
-    async def release_reservation(self, reservation_id: uuid.UUID, *, released_at: datetime) -> bool:
+    async def release_reservation(
+        self, reservation_id: uuid.UUID, *, released_at: datetime
+    ) -> bool:
         statement = (
             update(QuotaReservation)
             .where(QuotaReservation.id == reservation_id)

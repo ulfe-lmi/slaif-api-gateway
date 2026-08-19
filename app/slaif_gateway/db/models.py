@@ -25,7 +25,6 @@ from sqlalchemy.dialects.postgresql import CITEXT, INET, JSONB, UUID
 from sqlalchemy.orm import (
     Mapped,
     mapped_column,
-    remote,  # noqa: F401  # referenced by the string primaryjoin of GatewayKey.quota_reservations
     relationship,
 )
 
@@ -77,7 +76,9 @@ class Institution(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     country: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -86,9 +87,7 @@ class Institution(Base):
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="institution")
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="institution")
 
-    __table_args__ = (
-        Index("uq_institutions_name_lower", func.lower(name), unique=True),
-    )
+    __table_args__ = (Index("uq_institutions_name_lower", func.lower(name), unique=True),)
 
 
 class Cohort(Base):
@@ -99,7 +98,9 @@ class Cohort(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -123,9 +124,13 @@ class Owner(Base):
     )
     external_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -137,7 +142,10 @@ class Owner(Base):
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="owner")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="owner")
 
-    __table_args__ = (Index("ix_owners_institution_id", "institution_id"), Index("ix_owners_is_active", "is_active"))
+    __table_args__ = (
+        Index("ix_owners_institution_id", "institution_id"),
+        Index("ix_owners_is_active", "is_active"),
+    )
 
 
 class AdminUser(Base):
@@ -147,17 +155,27 @@ class AdminUser(Base):
     email: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(Text, nullable=False, default="admin", server_default=text("'admin'"))
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, default="admin", server_default=text("'admin'")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
 
     sessions: Mapped[list[AdminSession]] = relationship(back_populates="admin_user")
-    gateway_keys_created: Mapped[list[GatewayKey]] = relationship(back_populates="created_by_admin_user")
-    background_jobs: Mapped[list[BackgroundJob]] = relationship(back_populates="created_by_admin_user")
+    gateway_keys_created: Mapped[list[GatewayKey]] = relationship(
+        back_populates="created_by_admin_user"
+    )
+    background_jobs: Mapped[list[BackgroundJob]] = relationship(
+        back_populates="created_by_admin_user"
+    )
     key_templates_created: Mapped[list[KeyTemplate]] = relationship(
         back_populates="created_by_admin_user",
         foreign_keys="KeyTemplate.created_by_admin_id",
@@ -189,7 +207,9 @@ class AdminSession(Base):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     admin_user: Mapped[AdminUser] = relationship(back_populates="sessions")
@@ -220,20 +240,32 @@ class QuotaReservation(Base):
     external_tool_destination_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    external_tool_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_tool_route_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="RESTRICT"), nullable=True
+    )
     reserved_cost_eur: Mapped[Decimal] = mapped_column(
         Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
     )
-    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    reserved_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=text("1"))
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reserved_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    reserved_requests: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=1, server_default=text("1")
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     gateway_key: Mapped[GatewayKey] = relationship(
         back_populates="quota_reservations",
-        primaryjoin="quota_reservations.c.gateway_key_id == remote(gateway_keys.c.id)",
+        foreign_keys=[gateway_key_id],
     )
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="quota_reservation")
 
@@ -242,24 +274,40 @@ class QuotaReservation(Base):
             f"status in {STATUS_VALUES_QUOTA_RESERVATIONS}",
             name="quota_reservations_status_allowed_values",
         ),
-        CheckConstraint("reserved_cost_eur >= 0", name="quota_reservations_reserved_cost_eur_non_negative"),
-        CheckConstraint("reserved_tokens >= 0", name="quota_reservations_reserved_tokens_non_negative"),
-        CheckConstraint("reserved_requests >= 0", name="quota_reservations_reserved_requests_non_negative"),
+        CheckConstraint(
+            "reserved_cost_eur >= 0", name="quota_reservations_reserved_cost_eur_non_negative"
+        ),
+        CheckConstraint(
+            "reserved_tokens >= 0", name="quota_reservations_reserved_tokens_non_negative"
+        ),
+        CheckConstraint(
+            "reserved_requests >= 0", name="quota_reservations_reserved_requests_non_negative"
+        ),
         CheckConstraint(
             f"quota_mode in {QUOTA_MODES_QUOTA_RESERVATIONS}",
             name="quota_reservations_quota_mode_allowed_values",
         ),
         CheckConstraint(
+            "jsonb_typeof(external_tool_capabilities) = 'array' "
+            "and jsonb_typeof(external_tool_destination_ids) = 'array'",
+            name="quota_reservations_external_tool_facts_array_shape",
+        ),
+        CheckConstraint(
             "(quota_mode = 'strict_bounded') = "
             "(external_tool_capabilities = '[]'::jsonb "
-            "and external_tool_destination_ids = '[]'::jsonb)",
+            "and external_tool_destination_ids = '[]'::jsonb "
+            "and external_tool_provider is null "
+            "and external_tool_route_id is null)",
             name="quota_reservations_strict_mode_empty_external_facts",
         ),
         CheckConstraint(
             "(quota_mode = 'external_tool_fenced') = "
-            "(jsonb_typeof(external_tool_capabilities) = 'array' "
-            "and external_tool_capabilities <> '[]'::jsonb)",
-            name="quota_reservations_fenced_mode_nonempty_capabilities",
+            "(external_tool_capabilities <> '[]'::jsonb "
+            "and external_tool_provider is not null "
+            "and btrim(external_tool_provider) <> '' "
+            "and length(external_tool_provider) <= 255 "
+            "and external_tool_route_id is not null)",
+            name="quota_reservations_fenced_mode_bound_facts",
         ),
         Index("ix_quota_reservations_gateway_key_id", "gateway_key_id"),
         Index("ix_quota_reservations_status_expires_at", "status", "expires_at"),
@@ -282,7 +330,9 @@ class GatewayKey(Base):
     hash_algorithm: Mapped[str] = mapped_column(
         Text, nullable=False, default="hmac-sha256", server_default=text("'hmac-sha256'")
     )
-    hmac_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    hmac_key_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owners.id", ondelete="RESTRICT"), nullable=False
@@ -291,7 +341,9 @@ class GatewayKey(Base):
         UUID(as_uuid=True), ForeignKey("cohorts.id", ondelete="SET NULL"), nullable=True
     )
 
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default=text("'active'")
+    )
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -302,8 +354,12 @@ class GatewayKey(Base):
     cost_used_eur: Mapped[Decimal] = mapped_column(
         Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
     )
-    tokens_used_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    requests_used_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    tokens_used_total: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    requests_used_total: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
 
     cost_reserved_eur: Mapped[Decimal] = mapped_column(
         Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
@@ -319,7 +375,9 @@ class GatewayKey(Base):
     rate_limit_tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_concurrent_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    allow_all_models: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    allow_all_models: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     allowed_models: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
@@ -330,7 +388,9 @@ class GatewayKey(Base):
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
 
-    key_purpose: Mapped[str] = mapped_column(Text, nullable=False, default="standard", server_default=text("'standard'"))
+    key_purpose: Mapped[str] = mapped_column(
+        Text, nullable=False, default="standard", server_default=text("'standard'")
+    )
     capability_policy_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="standard", server_default=text("'standard'")
     )
@@ -365,18 +425,26 @@ class GatewayKey(Base):
         UUID(as_uuid=True), ForeignKey("key_templates.id", ondelete="SET NULL"), nullable=True
     )
     template_revision_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("key_template_revisions.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("key_template_revisions.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    quota_reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_quota_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quota_reset_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
     created_by_admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -385,14 +453,20 @@ class GatewayKey(Base):
 
     owner: Mapped[Owner] = relationship(back_populates="gateway_keys")
     cohort: Mapped[Cohort | None] = relationship(back_populates="gateway_keys")
-    created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
+    created_by_admin_user: Mapped[AdminUser | None] = relationship(
+        back_populates="gateway_keys_created"
+    )
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(
         back_populates="gateway_key",
         foreign_keys=[QuotaReservation.gateway_key_id],
     )
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
-    response_references: Mapped[list[ResponseReference]] = relationship(back_populates="gateway_key")
-    conversation_references: Mapped[list[ConversationReference]] = relationship(back_populates="gateway_key")
+    response_references: Mapped[list[ResponseReference]] = relationship(
+        back_populates="gateway_key"
+    )
+    conversation_references: Mapped[list[ConversationReference]] = relationship(
+        back_populates="gateway_key"
+    )
     codex_replay_references: Mapped[list[CodexReplayReference]] = relationship(
         back_populates="gateway_key"
     )
@@ -400,7 +474,9 @@ class GatewayKey(Base):
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="gateway_key")
     email_deliveries: Mapped[list[EmailDelivery]] = relationship(back_populates="gateway_key")
     template: Mapped[KeyTemplate | None] = relationship(foreign_keys=[template_id])
-    template_revision: Mapped[KeyTemplateRevision | None] = relationship(foreign_keys=[template_revision_id])
+    template_revision: Mapped[KeyTemplateRevision | None] = relationship(
+        foreign_keys=[template_revision_id]
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -426,8 +502,12 @@ class GatewayKey(Base):
             name="gateway_keys_trusted_calibration_request_limit_required",
         ),
         CheckConstraint("cost_used_eur >= 0", name="gateway_keys_cost_used_eur_non_negative"),
-        CheckConstraint("cost_reserved_eur >= 0", name="gateway_keys_cost_reserved_eur_non_negative"),
-        CheckConstraint("tokens_used_total >= 0", name="gateway_keys_tokens_used_total_non_negative"),
+        CheckConstraint(
+            "cost_reserved_eur >= 0", name="gateway_keys_cost_reserved_eur_non_negative"
+        ),
+        CheckConstraint(
+            "tokens_used_total >= 0", name="gateway_keys_tokens_used_total_non_negative"
+        ),
         CheckConstraint(
             "tokens_reserved_total >= 0",
             name="gateway_keys_tokens_reserved_total_non_negative",
@@ -440,7 +520,9 @@ class GatewayKey(Base):
             "requests_reserved_total >= 0",
             name="gateway_keys_requests_reserved_total_non_negative",
         ),
-        CheckConstraint("valid_until > valid_from", name="gateway_keys_valid_until_after_valid_from"),
+        CheckConstraint(
+            "valid_until > valid_from", name="gateway_keys_valid_until_after_valid_from"
+        ),
         CheckConstraint(
             f"external_tool_fence_state in {FENCE_STATES_GATEWAY_KEYS}",
             name="gateway_keys_external_tool_fence_state_allowed_values",
@@ -474,6 +556,11 @@ class GatewayKey(Base):
             "external_tool_fence_state",
             "external_tool_fence_expires_at",
         ),
+        Index(
+            "ix_gateway_keys_external_tool_fence_reservation_id_unique",
+            "external_tool_fence_reservation_id",
+            unique=True,
+        ),
     )
 
 
@@ -501,14 +588,18 @@ class ResponseReference(Base):
     route_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="SET NULL"), nullable=True
     )
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default=text("'active'")
+    )
     provider_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reference_metadata: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -520,7 +611,9 @@ class ResponseReference(Base):
             f"status in {STATUS_VALUES_RESPONSE_REFERENCES}",
             name="response_references_status_allowed_values",
         ),
-        UniqueConstraint("provider", "provider_response_id", name="uq_response_references_provider_response"),
+        UniqueConstraint(
+            "provider", "provider_response_id", name="uq_response_references_provider_response"
+        ),
         Index("ix_response_references_gateway_key_id_status", "gateway_key_id", "status"),
         Index("ix_response_references_provider_response_id", "provider", "provider_response_id"),
         Index("ix_response_references_route_id", "route_id"),
@@ -551,13 +644,17 @@ class ConversationReference(Base):
     route_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="SET NULL"), nullable=True
     )
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default=text("'active'")
+    )
     provider_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reference_metadata: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -607,7 +704,9 @@ class CodexReplayReference(Base):
     hmac_key_version: Mapped[int] = mapped_column(Integer, nullable=False)
     tool_namespace: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     gateway_key: Mapped[GatewayKey] = relationship(back_populates="codex_replay_references")
@@ -721,12 +820,16 @@ class UsageLedger(Base):
     institution_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     cohort_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     endpoint: Mapped[str] = mapped_column(Text, nullable=False)
-    http_method: Mapped[str] = mapped_column(Text, nullable=False, default="POST", server_default=text("'POST'"))
+    http_method: Mapped[str] = mapped_column(
+        Text, nullable=False, default="POST", server_default=text("'POST'")
+    )
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     upstream_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    streaming: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    streaming: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     accounting_status: Mapped[str] = mapped_column(
         Text, nullable=False, default="pending", server_default=text("'pending'")
@@ -734,13 +837,27 @@ class UsageLedger(Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    completion_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    cached_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    reasoning_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    input_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    cached_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    reasoning_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    total_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     estimated_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     actual_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     actual_cost_native: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
@@ -754,9 +871,13 @@ class UsageLedger(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
-    quota_reservation: Mapped[QuotaReservation | None] = relationship(back_populates="usage_ledger_rows")
+    quota_reservation: Mapped[QuotaReservation | None] = relationship(
+        back_populates="usage_ledger_rows"
+    )
     gateway_key: Mapped[GatewayKey] = relationship(back_populates="usage_ledger_rows")
     owner: Mapped[Owner | None] = relationship(back_populates="usage_ledger_rows")
     institution: Mapped[Institution | None] = relationship(back_populates="usage_ledger_rows")
@@ -772,7 +893,9 @@ class UsageLedger(Base):
             name="usage_ledger_accounting_status_allowed_values",
         ),
         CheckConstraint("prompt_tokens >= 0", name="usage_ledger_prompt_tokens_non_negative"),
-        CheckConstraint("completion_tokens >= 0", name="usage_ledger_completion_tokens_non_negative"),
+        CheckConstraint(
+            "completion_tokens >= 0", name="usage_ledger_completion_tokens_non_negative"
+        ),
         CheckConstraint("input_tokens >= 0", name="usage_ledger_input_tokens_non_negative"),
         CheckConstraint("output_tokens >= 0", name="usage_ledger_output_tokens_non_negative"),
         CheckConstraint("cached_tokens >= 0", name="usage_ledger_cached_tokens_non_negative"),
@@ -801,7 +924,10 @@ class UsageProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     usage_ledger_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("usage_ledger.id", ondelete="RESTRICT"), nullable=False, unique=True
+        UUID(as_uuid=True),
+        ForeignKey("usage_ledger.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
     )
     gateway_key_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
@@ -835,12 +961,16 @@ class UsageProfile(Base):
     provider_reported_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     slaif_calculated_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     cost_currency: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cost_source: Mapped[str] = mapped_column(Text, nullable=False, default="unknown", server_default=text("'unknown'"))
+    cost_source: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unknown", server_default=text("'unknown'")
+    )
     gateway_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     profile_metadata: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
     usage_ledger: Mapped[UsageLedger] = relationship(back_populates="usage_profile")
     gateway_key: Mapped[GatewayKey] = relationship(back_populates="usage_profile_rows")
@@ -893,15 +1023,26 @@ class ProviderConfig(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(
-        Text, nullable=False, default="openai_compatible", server_default=text("'openai_compatible'")
+        Text,
+        nullable=False,
+        default="openai_compatible",
+        server_default=text("'openai_compatible'"),
     )
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
     api_key_env_var: Mapped[str] = mapped_column(Text, nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
-    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default=text("300"))
-    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default=text("2"))
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    timeout_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=300, server_default=text("300")
+    )
+    max_retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default=text("2")
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -920,14 +1061,23 @@ class ModelRoute(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     requested_model: Mapped[str] = mapped_column(Text, nullable=False)
-    match_type: Mapped[str] = mapped_column(Text, nullable=False, default="exact", server_default=text("'exact'"))
+    match_type: Mapped[str] = mapped_column(
+        Text, nullable=False, default="exact", server_default=text("'exact'")
+    )
     endpoint: Mapped[str] = mapped_column(
-        Text, nullable=False, default="/v1/chat/completions", server_default=text("'/v1/chat/completions'")
+        Text,
+        nullable=False,
+        default="/v1/chat/completions",
+        server_default=text("'/v1/chat/completions'"),
     )
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     upstream_model: Mapped[str] = mapped_column(Text, nullable=False)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=100, server_default=text("100")
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     visible_in_models: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
@@ -938,7 +1088,9 @@ class ModelRoute(Base):
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -962,9 +1114,14 @@ class PricingRule(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     upstream_model: Mapped[str] = mapped_column(Text, nullable=False)
     endpoint: Mapped[str] = mapped_column(
-        Text, nullable=False, default="/v1/chat/completions", server_default=text("'/v1/chat/completions'")
+        Text,
+        nullable=False,
+        default="/v1/chat/completions",
+        server_default=text("'/v1/chat/completions'"),
     )
-    currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD", server_default=text("'USD'"))
+    currency: Mapped[str] = mapped_column(
+        Text, nullable=False, default="USD", server_default=text("'USD'")
+    )
     input_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     cached_input_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     output_price_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
@@ -975,10 +1132,14 @@ class PricingRule(Base):
     )
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -1000,9 +1161,20 @@ class PricingRule(Base):
             "reasoning_price_per_1m is null or reasoning_price_per_1m >= 0",
             name="pricing_rules_reasoning_price_per_1m_non_negative",
         ),
-        CheckConstraint("request_price is null or request_price >= 0", name="pricing_rules_request_price_non_negative"),
-        UniqueConstraint("provider", "upstream_model", "endpoint", "valid_from", name="uq_pricing_rules_identity"),
-        Index("ix_pricing_rules_provider_upstream_model_endpoint_enabled", "provider", "upstream_model", "endpoint", "enabled"),
+        CheckConstraint(
+            "request_price is null or request_price >= 0",
+            name="pricing_rules_request_price_non_negative",
+        ),
+        UniqueConstraint(
+            "provider", "upstream_model", "endpoint", "valid_from", name="uq_pricing_rules_identity"
+        ),
+        Index(
+            "ix_pricing_rules_provider_upstream_model_endpoint_enabled",
+            "provider",
+            "upstream_model",
+            "endpoint",
+            "enabled",
+        ),
         Index("ix_pricing_rules_valid_from_valid_until", "valid_from", "valid_until"),
     )
 
@@ -1017,11 +1189,15 @@ class FxRate(Base):
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
     __table_args__ = (
         CheckConstraint("rate > 0", name="fx_rates_rate_positive"),
-        UniqueConstraint("base_currency", "quote_currency", "valid_from", name="uq_fx_rates_pair_valid_from"),
+        UniqueConstraint(
+            "base_currency", "quote_currency", "valid_from", name="uq_fx_rates_pair_valid_from"
+        ),
         Index(
             "ix_fx_rates_base_quote_valid_from_valid_until",
             "base_currency",
@@ -1048,7 +1224,9 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
     admin_user: Mapped[AdminUser | None] = relationship()
 
@@ -1066,11 +1244,15 @@ class KeyTemplate(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default=text("'active'")
+    )
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
@@ -1085,7 +1267,9 @@ class KeyTemplate(Base):
         back_populates="key_templates_created",
         foreign_keys=[created_by_admin_id],
     )
-    archived_by_admin_user: Mapped[AdminUser | None] = relationship(foreign_keys=[archived_by_admin_id])
+    archived_by_admin_user: Mapped[AdminUser | None] = relationship(
+        foreign_keys=[archived_by_admin_id]
+    )
     revisions: Mapped[list[KeyTemplateRevision]] = relationship(
         back_populates="template",
         cascade="all, delete-orphan",
@@ -1116,7 +1300,9 @@ class KeyTemplateRevision(Base):
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     source_type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -1126,8 +1312,12 @@ class KeyTemplateRevision(Base):
     source_calibration_gateway_key_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="SET NULL"), nullable=True
     )
-    source_time_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    source_time_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_time_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_time_window_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     source_multiplier: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
     allowed_endpoints: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
@@ -1153,7 +1343,9 @@ class KeyTemplateRevision(Base):
     max_input_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_output_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_total_tokens_per_request: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    max_single_request_cost_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    max_single_request_cost_eur: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 9), nullable=True
+    )
     rate_limit_policy: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -1174,18 +1366,28 @@ class KeyTemplateRevision(Base):
         back_populates="key_template_revisions_created",
         foreign_keys=[created_by_admin_id],
     )
-    source_calibration_gateway_key: Mapped[GatewayKey | None] = relationship(foreign_keys=[source_calibration_gateway_key_id])
+    source_calibration_gateway_key: Mapped[GatewayKey | None] = relationship(
+        foreign_keys=[source_calibration_gateway_key_id]
+    )
     created_audit_log: Mapped[AuditLog | None] = relationship(foreign_keys=[created_audit_log_id])
 
     __table_args__ = (
-        UniqueConstraint("template_id", "revision_number", name="uq_key_template_revisions_template_revision"),
-        CheckConstraint("revision_number > 0", name="key_template_revisions_revision_number_positive"),
+        UniqueConstraint(
+            "template_id", "revision_number", name="uq_key_template_revisions_template_revision"
+        ),
+        CheckConstraint(
+            "revision_number > 0", name="key_template_revisions_revision_number_positive"
+        ),
         CheckConstraint(
             f"source_type in {SOURCE_VALUES_KEY_TEMPLATE_REVISIONS}",
             name="key_template_revisions_source_type_allowed_values",
         ),
-        CheckConstraint("request_limit_total > 0", name="key_template_revisions_request_limit_positive"),
-        CheckConstraint("token_limit_total >= 0", name="key_template_revisions_token_limit_non_negative"),
+        CheckConstraint(
+            "request_limit_total > 0", name="key_template_revisions_request_limit_positive"
+        ),
+        CheckConstraint(
+            "token_limit_total >= 0", name="key_template_revisions_token_limit_non_negative"
+        ),
         CheckConstraint(
             "input_token_limit_total is null or input_token_limit_total >= 0",
             name="key_template_revisions_input_token_limit_non_negative",
@@ -1248,11 +1450,17 @@ class OneTimeSecret(Base):
     )
     encrypted_payload: Mapped[str] = mapped_column(Text, nullable=False)
     nonce: Mapped[str] = mapped_column(Text, nullable=False)
-    encryption_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    encryption_key_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
     owner: Mapped[Owner | None] = relationship(back_populates="one_time_secrets")
     gateway_key: Mapped[GatewayKey | None] = relationship(back_populates="one_time_secrets")
@@ -1290,10 +1498,14 @@ class EmailDelivery(Base):
     recipient_email: Mapped[str] = mapped_column(CITEXT, nullable=False)
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     template_name: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
     provider_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -1319,7 +1531,9 @@ class BackgroundJob(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     celery_task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     job_type: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued", server_default=text("'queued'"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default=text("'queued'")
+    )
     created_by_admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
@@ -1330,7 +1544,9 @@ class BackgroundJob(Base):
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -1344,5 +1560,9 @@ class BackgroundJob(Base):
         Index("ix_background_jobs_celery_task_id", "celery_task_id"),
         Index("ix_background_jobs_job_type_created_at", "job_type", "created_at"),
         Index("ix_background_jobs_status_created_at", "status", "created_at"),
-        Index("ix_background_jobs_created_by_admin_user_id_created_at", "created_by_admin_user_id", "created_at"),
+        Index(
+            "ix_background_jobs_created_by_admin_user_id_created_at",
+            "created_by_admin_user_id",
+            "created_at",
+        ),
     )

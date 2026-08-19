@@ -268,7 +268,14 @@ implements the fence and reservation foundation only: fence state, reservation
 pointer, and timestamps live on the locked `gateway_keys` row; the locked
 PostgreSQL key row is the single concurrency authority (Redis is not); fence
 expiry never means safe release; and emergency suspend or revoke stops
-admission without settling accounting. Stored policy is not consumed by
+admission without settling accounting. The fence is bound to the exact
+provider name and route UUID of the admitted route; an exact retry must
+reproduce every identity fact, and changing provider or route alone is a
+fixed conflict. A fence and any committed pending reservation or non-zero
+reserved counter can never coexist, in either lock order, and only exact
+terminal reservation/ledger evidence with all reserved counters exactly zero
+clears the fence; fence acquisition and resolution are audited. Stored
+policy is not consumed by
 provider forwarding, authentication and ordinary quota admission fail closed
 against a committed fence, and provider-hosted forwarding and the
 unknown-cost hold remain denied pending objectives 015 and 016. Raw URLs,

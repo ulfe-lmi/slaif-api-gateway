@@ -174,7 +174,10 @@ on keys, immutable template snapshots, and routes, and adds narrowed settings
 plus audited admin/CLI controls; objective 013 storage adds no request
 forwarding, fence, hold, or provider integration. Objective 014 implements the
 fence and full-remaining-balance reservation foundation on the locked key row
-(no forwarding, no hold); the runtime remains deny-only for
+(no forwarding, no hold): the reservation binds the exact provider and
+route identity, the fence is exclusive against any committed pending
+reservation or unreconciled counter in either lock order, and only exact
+zero-counter terminal evidence clears it. The runtime remains deny-only for
 provider-hosted/external tools, external forwarding and the unknown-cost hold
 are still not implemented, fence expiry never means safe release, and the
 exact overrun promise remains conditional on the later provider activation
