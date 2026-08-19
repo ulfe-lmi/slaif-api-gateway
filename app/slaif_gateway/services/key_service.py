@@ -46,6 +46,7 @@ from slaif_gateway.services.chat_streaming_live_burn import (
 )
 from slaif_gateway.services.key_errors import (
     GatewayKeyAlreadyActiveError,
+    KeyManagementError,
     GatewayKeyAlreadyRevokedError,
     GatewayKeyAlreadySuspendedError,
     GatewayKeyNotFoundError,
@@ -78,6 +79,16 @@ from slaif_gateway.services.responses_streaming_live_burn import (
 from slaif_gateway.utils.crypto import generate_gateway_key, hmac_sha256_token
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.secrets import encrypt_secret
+
+
+class GatewayKeyExternalToolFenceActiveError(KeyManagementError):
+    status_code = 409
+    error_type = "conflict_error"
+    error_code = "gateway_key_external_tool_fence_active"
+    message = (
+        "This gateway key has an active exclusive external-tool fence; "
+        "the management operation is blocked until the reservation is settled"
+    )
 
 
 class KeyService:
@@ -341,6 +352,7 @@ class KeyService:
             )
 
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        self._require_not_external_tool_fenced(gateway_key, operation="policy update")
         request_policy = await self._validate_request_policy(
             allowed_models=payload.allowed_models,
             allowed_endpoints=payload.allowed_endpoints,
@@ -472,6 +484,10 @@ class KeyService:
         old_values = self._validity_audit_values(gateway_key)
         action = "extend_key" if payload.valid_until > gateway_key.valid_until else "shorten_key"
         now = self._now()
+        if not (new_valid_from <= now < payload.valid_until):
+            self._require_not_external_tool_fenced(
+                gateway_key, operation="validity window update"
+            )
         updated = await self._gateway_keys_repository.update_gateway_key_validity(
             gateway_key.id,
             valid_from=payload.valid_from,
@@ -499,6 +515,7 @@ class KeyService:
     ) -> GatewayKeyManagementResult:
         """Update key limits. Lowering below current use is allowed; future reservations fail."""
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        self._require_not_external_tool_fenced(gateway_key, operation="limit update")
         cost_limit = self._validate_optional_positive_decimal(
             payload.cost_limit_eur,
             param="cost_limit_eur",
@@ -556,6 +573,9 @@ class KeyService:
                 param="reason",
             )
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        self._require_not_external_tool_fenced(
+            gateway_key, operation="external-tool policy update"
+        )
         policy = self._validate_external_tool_policy(
             payload.external_tool_policy,
             key_purpose=str(getattr(gateway_key, "key_purpose", KEY_PURPOSE_STANDARD)),
@@ -679,6 +699,7 @@ class KeyService:
             raise InvalidGatewayKeyUsageResetError("At least one counter family must be reset")
 
         gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        self._require_not_external_tool_fenced(gateway_key, operation="usage reset")
         old_values = self._usage_audit_values(gateway_key)
         now = self._now()
         await self._gateway_keys_repository.reset_gateway_key_usage_counters(
@@ -708,6 +729,7 @@ class KeyService:
         old_key = await self._get_gateway_key(payload.gateway_key_id)
         if old_key.status == "revoked":
             raise GatewayKeyRotationError("Revoked gateway keys cannot be rotated")
+        self._require_not_external_tool_fenced(old_key, operation="key rotation")
 
         active_hmac_version, active_hmac_secret = self._settings.get_active_hmac_secret()
         if not self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY:
@@ -924,6 +946,18 @@ class KeyService:
     def _set_updated_at(gateway_key: object, updated_at: datetime) -> None:
         if hasattr(gateway_key, "updated_at"):
             gateway_key.updated_at = updated_at
+
+    @staticmethod
+    def _require_not_external_tool_fenced(gateway_key: object, *, operation: str) -> None:
+        """Block management mutations while an exclusive external-tool fence is bound.
+
+        Suspend, revoke, and activate are intentionally not guarded here; they change
+        key status only and must never clear a bound fence or its reservation.
+        """
+        if getattr(gateway_key, "external_tool_fence_state", "none") in ("active", "held"):
+            raise GatewayKeyExternalToolFenceActiveError(
+                f"{GatewayKeyExternalToolFenceActiveError.message} (blocked operation: {operation})"
+            )
 
     @staticmethod
     def _require_status(

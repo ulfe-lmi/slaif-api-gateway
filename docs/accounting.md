@@ -185,12 +185,26 @@ following requests after exhaustion, and retain a blocking accounting hold
 when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
 This is not an invoice guarantee or zero-overrun promise.
 
-Objectives 014–017 must implement the exclusive key fence, durable hold,
-reconciliation, selected provider contracts, and runtime integration before the
-fenced mode can run. Current runtime remains deny-only; objective 013 adds no
-migration, reservation behavior, forwarding, or provider call. Fenced policy
-cannot be stored without positive finite request, token, and EUR limits, and
-later limit clearing is rejected before mutation or audit.
+Objective 014 implements the exclusive-key fence and full-remaining-balance
+reservation foundation only: fence state, reservation pointer, and timestamps
+live on the locked `gateway_keys` row, the locked PostgreSQL key row is the
+single concurrency authority (Redis is not), and acquisition atomically
+reserves the complete remaining cost, token, and one request of balance in
+one `external_tool_fenced` reservation. The foundation is implemented, but
+external forwarding and the unknown-cost hold are still not implemented and
+provider-hosted tools remain denied; objectives 015 and 016 own the
+hold/reconciliation and selected provider execution transitions. Fence expiry
+is an inspection threshold and never means safe release; a committed fence
+survives process restart and keeps blocking admission. Emergency suspend or
+revoke stops admission but does not settle accounting, and the exact overrun
+and one-winner concurrency promise above remains conditional on the later
+provider activation. Ordinary stale-reservation reconciliation identifies
+external-mode pending reservations as requiring external-tool review and never
+auto-releases them; see the
+[`stale-reservation-reconciliation`](runbooks/stale-reservation-reconciliation.md)
+runbook. Fenced policy cannot be stored without positive finite request,
+token, and EUR limits, and later limit clearing is rejected before mutation or
+audit.
 
 ## Chat Completions Streaming Live-Burn Margin
 

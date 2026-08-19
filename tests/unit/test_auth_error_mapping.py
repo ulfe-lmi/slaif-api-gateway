@@ -4,6 +4,7 @@ from slaif_gateway.api.auth_errors import openai_error_from_auth_error
 from slaif_gateway.api.errors import openai_error_response
 from slaif_gateway.services.auth_service import (
     GatewayKeyDigestMismatchError,
+    GatewayKeyExternalToolFenceActiveError,
     GatewayKeyExpiredError,
     GatewayKeyRevokedError,
     GatewayKeySuspendedError,
@@ -32,11 +33,24 @@ def test_auth_error_mapping_status_and_type_by_domain_exception() -> None:
     expired = openai_error_from_auth_error(GatewayKeyExpiredError())
     misconfigured = openai_error_from_auth_error(MissingTokenHmacSecretError())
 
+    fence = openai_error_from_auth_error(GatewayKeyExternalToolFenceActiveError())
+
     assert suspended.status_code == 403
     assert suspended.error_type == "permission_error"
     assert revoked.status_code == 403
     assert expired.status_code == 401
     assert misconfigured.status_code == 500
+    assert fence.status_code == 409
+    assert fence.error_type == "rate_limit_error"
+    assert fence.code == "external_tool_fence_active"
+    fence_response = openai_error_response(
+        message=fence.message,
+        status_code=fence.status_code,
+        error_type=fence.error_type,
+        code=fence.code,
+    )
+    assert fence_response.status_code == 409
+    assert "external_tool_fence_active" in fence_response.body.decode("utf-8")
 
 
 def test_auth_error_mapping_never_contains_plaintext_or_hash_material() -> None:

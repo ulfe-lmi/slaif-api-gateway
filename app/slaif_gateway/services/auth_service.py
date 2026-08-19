@@ -89,6 +89,19 @@ class GatewayKeyNotYetValidError(GatewayAuthError):
     message = "Gateway key is not yet valid"
 
 
+class GatewayKeyExternalToolFenceActiveError(GatewayAuthError):
+    """Raised when a durable unresolved external-tool fence blocks admission.
+
+    This is a fixed safe rejection: it exposes no request, reservation,
+    provider, or tool content.
+    """
+
+    status_code = 409
+    error_type = "rate_limit_error"
+    error_code = "external_tool_fence_active"
+    message = "A durable external-tool request is pending for this key"
+
+
 class MissingTokenHmacSecretError(GatewayAuthError):
     status_code = 500
     error_type = "server_error"
@@ -136,6 +149,8 @@ class GatewayAuthService:
             raise GatewayKeyDigestMismatchError()
 
         self._validate_status(gateway_key.status)
+
+        self._validate_external_tool_fence(gateway_key=gateway_key)
 
         check_now = now or datetime.now(UTC)
         self._validate_time_window(gateway_key=gateway_key, now=check_now)
@@ -261,6 +276,13 @@ class GatewayAuthService:
             raise MalformedGatewayKeyError()
 
         return token
+
+    @staticmethod
+    def _validate_external_tool_fence(*, gateway_key: GatewayKey) -> None:
+        """Fail closed for a later bearer request on a fenced key row."""
+        fence_state = getattr(gateway_key, "external_tool_fence_state", "none")
+        if fence_state in ("active", "held"):
+            raise GatewayKeyExternalToolFenceActiveError()
 
     @staticmethod
     def _validate_status(status: str) -> None:

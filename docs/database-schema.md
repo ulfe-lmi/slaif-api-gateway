@@ -429,6 +429,12 @@ cost_reserved_eur numeric(18,9) not null default 0
 tokens_reserved_total bigint not null default 0
 requests_reserved_total bigint not null default 0
 
+external_tool_fence_state text not null default 'none'
+external_tool_fence_reservation_id UUID null references quota_reservations(id) on delete restrict
+external_tool_fence_request_id text null
+external_tool_fence_acquired_at timestamptz null
+external_tool_fence_expires_at timestamptz null
+
 rate_limit_requests_per_minute integer null
 rate_limit_tokens_per_minute bigint null
 max_concurrent_requests integer null
@@ -494,7 +500,33 @@ check(
   (key_purpose = 'trusted_calibration' and capability_policy_mode = 'trusted_calibration_discovery')
 )
 check(key_purpose != 'trusted_calibration' or request_limit_total is not null)
+index(external_tool_fence_state, external_tool_fence_expires_at)
+check(external_tool_fence_state in ('none', 'active', 'held'))
+check(
+  (external_tool_fence_state = 'none') =
+  (external_tool_fence_reservation_id is null and external_tool_fence_request_id is null
+   and external_tool_fence_acquired_at is null and external_tool_fence_expires_at is null)
+)
+check(
+  (external_tool_fence_state in ('active', 'held')) =
+  (external_tool_fence_reservation_id is not null and external_tool_fence_request_id is not null
+   and external_tool_fence_acquired_at is not null and external_tool_fence_expires_at is not null)
+)
 ```
+
+External-tool fence fields (objective 014):
+
+```text
+external_tool_fence_state none       no unresolved external request; all fence fields null
+external_tool_fence_state active     one unresolved external request; all four bound fields set
+external_tool_fence_state held       reserved for objective 015; objective 014 never writes it
+```
+
+The locked `gateway_keys` row is the single concurrency authority for fence
+acquisition (Redis is not), and the shape constraints make a partially bound
+fence impossible. Objective 014 writes only `none` and `active`; fence expiry
+is an inspection threshold and never means safe release, and emergency suspend
+or revoke does not clear fence fields, reservations, or counters.
 
 Policy semantics:
 
@@ -554,9 +586,13 @@ Trusted calibration key rules:
 Objective 012 defines the exact version-1 schemas. Objective 013 stores them in
 existing JSON only: `gateway_keys.metadata.external_tool_policy`, immutable
 `key_template_revisions.template_snapshot.external_tool_policy`, and
-`model_routes.capabilities.external_tools`. No column, table, constraint, or migration was added.
-Missing historical metadata means exact strict. Current
-runtime remains deny-only and does not consume these objects.
+`model_routes.capabilities.external_tools`. Objective 013 added no column,
+table, constraint, or migration; its policy storage is JSON only. Alembic
+migration 0015 adds exactly the fence and external-fact columns documented
+above. Missing historical metadata means exact strict. Current runtime
+remains deny-only for provider-hosted/external forwarding; objective 014's
+fence acquisition validates the stored policy snapshot but enables no
+forwarding.
 
 Canonical per-key `external_tool_policy`:
 
@@ -657,6 +693,9 @@ gateway_key_id UUID not null references gateway_keys(id) on delete restrict
 request_id text not null
 endpoint text not null
 requested_model text null
+quota_mode text not null default 'strict_bounded'
+external_tool_capabilities jsonb not null default '[]'
+external_tool_destination_ids jsonb not null default '[]'
 reserved_cost_eur numeric(18,9) not null default 0
 reserved_tokens bigint not null default 0
 reserved_requests bigint not null default 1
@@ -686,6 +725,15 @@ check(status in ('pending', 'finalized', 'released', 'expired'))
 check(reserved_cost_eur >= 0)
 check(reserved_tokens >= 0)
 check(reserved_requests >= 0)
+check(quota_mode in ('strict_bounded', 'external_tool_fenced'))
+check(
+  (quota_mode = 'strict_bounded') =
+  (external_tool_capabilities = '[]'::jsonb and external_tool_destination_ids = '[]'::jsonb)
+)
+check(
+  (quota_mode = 'external_tool_fenced') =
+  (jsonb_typeof(external_tool_capabilities) = 'array' and external_tool_capabilities <> '[]'::jsonb)
+)
 ```
 
 Rules:
@@ -693,6 +741,8 @@ Rules:
 - Every quota-affecting request should create one reservation.
 - Stale `pending` reservations must be released by a scheduled cleanup job.
 - Finalization must adjust `gateway_keys.*_reserved_*` and `gateway_keys.*_used_*` counters atomically.
+- `strict_bounded` is the default/backfilled mode with empty external arrays; `external_tool_fenced` rows carry a canonical non-empty capability snapshot and opaque destination IDs only.
+- Stale `pending` reservations in `external_tool_fenced` mode are never auto-released by ordinary reconciliation; they require external-tool review (objective 015) and the key fence keeps blocking admission.
 
 ---
 
@@ -2075,6 +2125,7 @@ CSRF plaintext tokens
 full prompt payloads
 full completion payloads
 uploaded file contents
+external-tool fence/reservation/ledger rows beyond IDs, states, timestamps, canonical capability/destination IDs, and numeric totals
 ```
 
 These belong in environment variables, Docker secrets, ephemeral process memory, object storage with separate policy, or nowhere at all.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -15,7 +17,20 @@ from slaif_gateway.services.key_errors import (
     InvalidGatewayKeyUsageResetError,
     InvalidGatewayKeyPolicyError,
 )
+from slaif_gateway.services.key_service import GatewayKeyExternalToolFenceActiveError
+
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
+
+
+def _fenced_row() -> FakeGatewayKeyRow:
+    now = datetime.now(UTC)
+    return FakeGatewayKeyRow(
+        external_tool_fence_state="active",
+        external_tool_fence_reservation_id=uuid.uuid4(),
+        external_tool_fence_request_id="req-fenced",
+        external_tool_fence_acquired_at=now,
+        external_tool_fence_expires_at=now + timedelta(minutes=15),
+    )
 
 
 pytestmark = pytest.mark.asyncio
@@ -277,3 +292,70 @@ async def test_fenced_external_tool_key_limits_cannot_be_cleared() -> None:
 
     assert keys_repo.limit_calls == []
     assert audit_repo.calls == []
+
+
+async def test_limits_update_on_fenced_row_is_blocked_without_mutation() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError) as excinfo:
+        await service.update_gateway_key_limits(
+            UpdateGatewayKeyLimitsInput(
+                gateway_key_id=row.id,
+                cost_limit_eur=Decimal("1.000000000"),
+                reason="blocked",
+            )
+        )
+
+    assert excinfo.value.error_code == "gateway_key_external_tool_fence_active"
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.error_type == "conflict_error"
+    assert keys_repo.limit_calls == []
+    assert audit_repo.calls == []
+    assert row.cost_limit_eur == Decimal("25.000000000")
+    assert row.external_tool_fence_state == "active"
+
+
+async def test_usage_reset_on_fenced_row_is_blocked_without_mutation() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+        await service.reset_gateway_key_usage(
+            ResetGatewayKeyUsageInput(
+                gateway_key_id=row.id,
+                reset_used_counters=True,
+                reset_reserved_counters=True,
+                reason="blocked",
+            )
+        )
+
+    assert keys_repo.reset_calls == []
+    assert audit_repo.calls == []
+    assert row.cost_used_eur == Decimal("1.250000000")
+    assert row.cost_reserved_eur == Decimal("0.500000000")
+    assert row.tokens_reserved_total == 50
+    assert row.requests_reserved_total == 1
+
+
+async def test_rate_limit_update_on_fenced_row_stays_allowed() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_rate_limits(
+        UpdateGatewayKeyRateLimitsInput(
+            gateway_key_id=row.id,
+            rate_limit_policy={
+                "requests_per_minute": 30,
+                "tokens_per_minute": 6000,
+                "max_concurrent_requests": 1,
+                "window_seconds": 30,
+            },
+            reason="throttle while fenced",
+        )
+    )
+
+    assert result.rate_limit_policy["requests_per_minute"] == 30
+    assert row.external_tool_fence_state == "active"
+    assert row.external_tool_fence_reservation_id is not None
+    assert audit_repo.calls[0]["action"] == "update_key_rate_limits"

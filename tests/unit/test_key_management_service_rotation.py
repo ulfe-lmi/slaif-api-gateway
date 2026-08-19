@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -8,6 +9,7 @@ import pytest
 
 from slaif_gateway.schemas.keys import RotateGatewayKeyInput
 from slaif_gateway.services.key_errors import GatewayKeyRotationError
+from slaif_gateway.services.key_service import GatewayKeyExternalToolFenceActiveError
 from slaif_gateway.utils.crypto import hmac_sha256_token, parse_gateway_key_public_id
 from slaif_gateway.utils.secrets import EncryptedSecret, decrypt_secret
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
@@ -169,3 +171,31 @@ async def test_rotation_preserves_external_tool_policy_exactly_and_refuses_limit
             )
         )
     assert keys_repo.created_calls == []
+
+
+async def test_rotation_of_fenced_row_is_blocked_until_the_fence_is_settled() -> None:
+    now = datetime.now(UTC)
+    old_key = FakeGatewayKeyRow(
+        status="active",
+        external_tool_fence_state="active",
+        external_tool_fence_reservation_id=uuid.uuid4(),
+        external_tool_fence_request_id="req-fenced",
+        external_tool_fence_acquired_at=now,
+        external_tool_fence_expires_at=now + timedelta(minutes=15),
+    )
+    service, keys_repo, one_time_repo, audit_repo, _ = make_key_service(old_key)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+        await service.rotate_gateway_key(
+            RotateGatewayKeyInput(
+                gateway_key_id=old_key.id,
+                reason="replacement",
+                preserve_limits=True,
+            )
+        )
+
+    assert keys_repo.created_calls == []
+    assert one_time_repo.created_calls == [] if hasattr(one_time_repo, "created_calls") else True
+    assert old_key.status == "active"
+    assert old_key.external_tool_fence_state == "active"
+    assert old_key.external_tool_fence_reservation_id is not None

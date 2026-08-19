@@ -78,3 +78,16 @@ class KeyNotReservableError(QuotaError):
     error_type = "permission_error"
     error_code = "key_not_reservable"
     message = "Gateway key cannot reserve quota"
+
+
+class ExternalToolFenceActiveError(QuotaError):
+    """Raised when a durable unresolved external-tool fence blocks quota admission.
+
+    This is a fixed safe rejection: it exposes no request, reservation,
+    provider, or tool content.
+    """
+
+    status_code = 409
+    error_type = "rate_limit_error"
+    error_code = "external_tool_fence_active"
+    message = "A durable external-tool request is pending for this key"

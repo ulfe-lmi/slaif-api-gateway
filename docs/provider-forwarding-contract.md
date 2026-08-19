@@ -511,9 +511,15 @@ does not make a request valid or forwardable.
 does not consume the future
 `external_tool_fenced` mode requires exact key/route/operator intersection and
 the exclusive-fence/overrun/hold/following-block promise in
-[`accounting.md`](accounting.md). Objectives 014–17 must implement the runtime
-fence, hold, accounting, and provider contracts. No new tool is enabled or
-forwarded by objective 013, and trusted-calibration
+[`accounting.md`](accounting.md). Objective 014 implements the PostgreSQL-authoritative fence and
+full-remaining-balance reservation foundation on the locked key row (the
+key-row lock is the single concurrency authority, Redis is not, and fence
+expiry never means safe release), but external forwarding and the unknown-cost
+hold are still not implemented; objectives 015–17 own the hold,
+reconciliation, selected provider contracts, and runtime integration, and the
+exact overrun and one-winner concurrency promise remains conditional on that
+later activation. No new tool is enabled or
+forwarded by objectives 013 or 014, and trusted-calibration
 observation is not standard-key authorization.
 Authority classification never substitutes for existing endpoint-specific
 shape, size, content, pricing, or provider-contract validation; a known local

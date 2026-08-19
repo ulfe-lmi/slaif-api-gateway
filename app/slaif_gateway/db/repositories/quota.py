@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
@@ -30,12 +31,18 @@ class QuotaReservationsRepository:
         reserved_tokens: int = 0,
         reserved_requests: int = 1,
         status: str = "pending",
+        quota_mode: str = "strict_bounded",
+        external_tool_capabilities: Sequence[str] = (),
+        external_tool_destination_ids: Sequence[str] = (),
     ) -> QuotaReservation:
         row = QuotaReservation(
             gateway_key_id=gateway_key_id,
             request_id=request_id,
             endpoint=endpoint,
             requested_model=requested_model,
+            quota_mode=quota_mode,
+            external_tool_capabilities=list(external_tool_capabilities),
+            external_tool_destination_ids=list(external_tool_destination_ids),
             reserved_cost_eur=reserved_cost_eur,
             reserved_tokens=reserved_tokens,
             reserved_requests=reserved_requests,

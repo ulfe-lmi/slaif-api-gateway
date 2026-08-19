@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
 from slaif_gateway.schemas.keys import (
+    RevokeGatewayKeyInput,
+    SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyPolicyInput,
+    UpdateGatewayKeyValidityInput,
 )
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
+from slaif_gateway.services.key_service import GatewayKeyExternalToolFenceActiveError
 
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
 
@@ -277,3 +283,129 @@ async def test_update_external_tool_policy_rejects_without_reason_or_confirmatio
 
     assert keys_repo.metadata_calls == []
     assert audit_repo.calls == []
+
+
+def _fenced_row() -> FakeGatewayKeyRow:
+    now = datetime.now(UTC)
+    return FakeGatewayKeyRow(
+        external_tool_fence_state="active",
+        external_tool_fence_reservation_id=uuid.uuid4(),
+        external_tool_fence_request_id="req-fenced",
+        external_tool_fence_acquired_at=now,
+        external_tool_fence_expires_at=now + timedelta(minutes=15),
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_update_on_fenced_row_is_blocked_without_mutation() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+        await service.update_gateway_key_policy(
+            UpdateGatewayKeyPolicyInput(
+                gateway_key_id=row.id,
+                allowed_models=["gpt-test-mini"],
+                reason="blocked while fenced",
+            )
+        )
+
+    assert keys_repo.policy_calls == []
+    assert audit_repo.calls == []
+    assert row.external_tool_fence_state == "active"
+    assert row.allowed_models == ["gpt-test-mini"]
+
+
+@pytest.mark.asyncio
+async def test_external_tool_policy_update_on_fenced_row_is_blocked_without_mutation() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+        await service.update_gateway_key_external_tool_policy(
+            UpdateGatewayKeyExternalToolPolicyInput(
+                gateway_key_id=row.id,
+                external_tool_policy=_fenced_policy(),
+                confirm_external_tool_fenced=True,
+                reason="blocked while fenced",
+            )
+        )
+
+    assert keys_repo.metadata_calls == []
+    assert audit_repo.calls == []
+    assert row.external_tool_fence_state == "active"
+
+
+@pytest.mark.asyncio
+async def test_validity_shorten_on_fenced_row_is_blocked_until_settled() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+        await service.update_gateway_key_validity(
+            UpdateGatewayKeyValidityInput(
+                gateway_key_id=row.id,
+                valid_until=datetime.now(UTC) - timedelta(hours=1),
+                reason="shorten while fenced",
+            )
+        )
+
+    assert keys_repo.validity_calls == []
+    assert audit_repo.calls == []
+    assert row.external_tool_fence_state == "active"
+
+
+@pytest.mark.asyncio
+async def test_validity_pure_extension_on_fenced_row_is_allowed() -> None:
+    row = _fenced_row()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+    previous_valid_until = row.valid_until
+
+    result = await service.update_gateway_key_validity(
+        UpdateGatewayKeyValidityInput(
+            gateway_key_id=row.id,
+            valid_until=previous_valid_until + timedelta(days=30),
+            reason="extend while fenced",
+        )
+    )
+
+    assert result.valid_until > previous_valid_until
+    assert audit_repo.calls[0]["action"] == "extend_key"
+    assert row.external_tool_fence_state == "active"
+    assert row.external_tool_fence_reservation_id is not None
+
+
+@pytest.mark.asyncio
+async def test_suspend_on_fenced_row_succeeds_and_preserves_fence_and_counters() -> None:
+    row = _fenced_row()
+    service, _, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.suspend_gateway_key(
+        SuspendGatewayKeyInput(gateway_key_id=row.id, reason="emergency stop")
+    )
+
+    assert result.status == "suspended"
+    assert row.status == "suspended"
+    assert row.external_tool_fence_state == "active"
+    assert row.external_tool_fence_reservation_id is not None
+    assert row.external_tool_fence_request_id == "req-fenced"
+    assert row.cost_reserved_eur == Decimal("0.500000000")
+    assert audit_repo.calls[0]["action"] == "suspend_key"
+
+
+@pytest.mark.asyncio
+async def test_revoke_on_fenced_row_succeeds_and_preserves_fence_and_counters() -> None:
+    row = _fenced_row()
+    service, _, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.revoke_gateway_key(
+        RevokeGatewayKeyInput(gateway_key_id=row.id, reason="terminate")
+    )
+
+    assert result.status == "revoked"
+    assert row.status == "revoked"
+    assert row.external_tool_fence_state == "active"
+    assert row.external_tool_fence_reservation_id is not None
+    assert row.cost_reserved_eur == Decimal("0.500000000")
+    assert row.tokens_reserved_total == 50
+    assert audit_repo.calls[0]["action"] == "revoke_key"

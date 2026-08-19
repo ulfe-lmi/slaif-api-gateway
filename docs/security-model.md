@@ -263,9 +263,16 @@ Objective 012 defines the version-1 external-tool policy contract. Objective
 013 persists only canonical safe IDs, caps, booleans, mode, and version in
 existing key/template/route JSON and adds audited admin/CLI controls.
 `strict_bounded` remains the default/current deny-only mode.
-`external_tool_fenced` is a future explicit standard-key mode. Stored policy is
-not wired to Chat/Responses runtime, quota/accounting, or providers; those paths
-remain deny-only pending objectives 014–016. Raw URLs, credentials, labels,
+`external_tool_fenced` is a future explicit standard-key mode. Objective 014
+implements the fence and reservation foundation only: fence state, reservation
+pointer, and timestamps live on the locked `gateway_keys` row; the locked
+PostgreSQL key row is the single concurrency authority (Redis is not); fence
+expiry never means safe release; and emergency suspend or revoke stops
+admission without settling accounting. Stored policy is not consumed by
+provider forwarding, authentication and ordinary quota admission fail closed
+against a committed fence, and provider-hosted forwarding and the
+unknown-cost hold remain denied pending objectives 015 and 016. Raw URLs,
+credentials, labels,
 request content, and provider secrets are never stored in this policy.
 
 The taxonomy treats client-operated tools, provider-hosted authority, remote

@@ -18,6 +18,7 @@ from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.quota_errors import (
+    ExternalToolFenceActiveError,
     InvalidQuotaEstimateError,
     KeyNotReservableError,
     QuotaConcurrencyError,
@@ -80,6 +81,7 @@ class QuotaService:
             raise KeyNotReservableError("Gateway key cannot reserve quota")
 
         self._validate_key_can_reserve(gateway_key=gateway_key, now=check_now)
+        self._validate_external_tool_fence(gateway_key=gateway_key)
         self._validate_limits(
             gateway_key=gateway_key,
             reserved_cost_eur=reserved_cost_eur,
@@ -145,6 +147,18 @@ class QuotaService:
             released_at=released_at,
         )
         return _reservation_result(updated)
+
+    @staticmethod
+    def _validate_external_tool_fence(*, gateway_key: GatewayKey) -> None:
+        """Fail closed when a durable unresolved external-tool fence exists.
+
+        The key row is already locked here, so this is the authoritative
+        cross-worker check for requests authenticated before another worker
+        committed a fence.
+        """
+        fence_state = getattr(gateway_key, "external_tool_fence_state", "none")
+        if fence_state in ("active", "held"):
+            raise ExternalToolFenceActiveError()
 
     def _validate_key_can_reserve(self, *, gateway_key: GatewayKey, now: datetime) -> None:
         if gateway_key.status != "active":

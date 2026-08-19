@@ -91,6 +91,10 @@ class ReservationReconciliationService:
             raise ReservationNotPendingError()
         if _aware_now(reservation.expires_at) > checked_at:
             raise ReservationNotExpiredError()
+        if reservation.quota_mode == "external_tool_fenced":
+            raise ReconciliationInvariantError(
+                "External-tool fenced reservations are never released by the ordinary stale-reservation reconciliation path; the fence resolution path owns their settlement"
+            )
 
         existing_ledger = await self._usage_ledger_repository.get_usage_record_by_request_id(
             reservation.request_id
@@ -169,7 +173,11 @@ class ReservationReconciliationService:
         """Reconcile a deterministic batch of expired pending reservations."""
         candidates = await self.list_expired_pending_reservations(now=now, limit=limit)
         results: list[ReservationReconciliationResult] = []
+        skipped_count = 0
         for candidate in candidates:
+            if candidate.requires_external_tool_review:
+                skipped_count += 1
+                continue
             results.append(
                 await self.reconcile_expired_pending_reservation(
                     candidate.reservation_id,
@@ -185,7 +193,7 @@ class ReservationReconciliationService:
             checked_count=len(candidates),
             candidate_count=len(candidates),
             reconciled_count=reconciled_count,
-            skipped_count=0,
+            skipped_count=skipped_count,
             dry_run=dry_run,
             results=results,
         )
@@ -474,6 +482,7 @@ def _candidate(row: QuotaReservation) -> StaleReservationCandidate:
         reserved_requests=row.reserved_requests,
         expires_at=row.expires_at,
         created_at=row.created_at,
+        requires_external_tool_review=row.quota_mode == "external_tool_fenced",
     )
 
 

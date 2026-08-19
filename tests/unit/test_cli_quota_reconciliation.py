@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli import quota as quota_cli
 from slaif_gateway.cli.main import app
+from slaif_gateway.schemas.external_tool_fence import ExternalToolFenceProjection
 from slaif_gateway.schemas.reconciliation import (
     ReservationReconciliationResult,
     ReservationReconciliationSummary,
@@ -53,6 +54,7 @@ def test_quota_help_includes_reconciliation_commands() -> None:
     result = runner.invoke(app, ["quota", "--help"])
 
     assert result.exit_code == 0
+    assert "list-external-tool-fences" in result.stdout
     assert "list-expired-reservations" in result.stdout
     assert "reconcile-expired-reservations" in result.stdout
     assert "reconcile-reservation" in result.stdout
@@ -179,3 +181,59 @@ def test_reconcile_reservation_domain_error_is_safe(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["error"]["code"] == "reservation_not_expired"
     assert "secret" not in result.stdout.lower()
+
+
+def _fence() -> ExternalToolFenceProjection:
+    return ExternalToolFenceProjection(
+        gateway_key_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+        fence_state="active",
+        reservation_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        request_id="req-fenced",
+        acquired_at=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        expires_at=datetime(2026, 1, 1, 0, 16, tzinfo=UTC),
+    )
+
+
+def test_list_external_tool_fences_prints_safe_text(monkeypatch) -> None:
+    async def fake_list(*, limit):
+        assert limit == 10
+        return [_fence()]
+
+    monkeypatch.setattr(quota_cli, "_list_external_tool_fences", fake_list)
+
+    result = runner.invoke(app, ["quota", "list-external-tool-fences", "--limit", "10"])
+
+    assert result.exit_code == 0
+    assert "req-fenced" in result.stdout
+    assert "active" in result.stdout
+    assert "33333333-3333-3333-3333-333333333333" in result.stdout
+    for forbidden in ("token_hash", "plaintext_key", "provider_api_key", "encrypted_payload", "nonce"):
+        assert forbidden not in result.stdout
+
+
+def test_list_external_tool_fences_json_is_valid(monkeypatch) -> None:
+    async def fake_list(*, limit):
+        return [_fence()]
+
+    monkeypatch.setattr(quota_cli, "_list_external_tool_fences", fake_list)
+
+    result = runner.invoke(app, ["quota", "list-external-tool-fences", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    row = payload["external_tool_fences"][0]
+    assert row["fence_state"] == "active"
+    assert row["reservation_id"] == "33333333-3333-3333-3333-333333333333"
+    assert row["expires_at"] == "2026-01-01T00:16:00+00:00"
+
+
+def test_list_external_tool_fences_empty_state(monkeypatch) -> None:
+    async def fake_list(*, limit):
+        return []
+
+    monkeypatch.setattr(quota_cli, "_list_external_tool_fences", fake_list)
+
+    result = runner.invoke(app, ["quota", "list-external-tool-fences"])
+
+    assert result.exit_code == 0
+    assert "No active or held external-tool fences found." in result.stdout
