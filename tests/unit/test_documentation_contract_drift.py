@@ -244,7 +244,9 @@ def test_external_tool_schema_and_taxonomy_match_the_pure_contract() -> None:
     assert str(ABSOLUTE_MAX_APPROVED_DESTINATIONS) in schema
     assert str(ABSOLUTE_MAX_PROVIDER_TOOL_DECLARATIONS) in schema
     assert str(ABSOLUTE_MAX_PROVIDER_TOOL_CALLS) in schema
-    assert "No column, table, constraint, or migration was added" in schema
+    normalized_schema = re.sub(r"\s+", " ", schema)
+    assert "Objective 013 added no column, table, constraint, or migration" in normalized_schema
+    assert "migration 0015 adds exactly the fence and external-fact columns" in normalized_schema
     assert "gateway_keys.metadata.external_tool_policy" in schema
     assert "model_routes.capabilities.external_tools" in schema
 
@@ -279,6 +281,7 @@ def test_external_tool_contract_is_wired_only_to_policy_surfaces_not_runtime_or_
     module_path = REPO_ROOT / "app/slaif_gateway/services/external_tool_policy_contract.py"
     allowed_consumers = {
         REPO_ROOT / "app/slaif_gateway/config.py",
+        REPO_ROOT / "app/slaif_gateway/services/external_tool_fence.py",
         REPO_ROOT / "app/slaif_gateway/api/admin.py",
         REPO_ROOT / "app/slaif_gateway/cli/keys.py",
         REPO_ROOT / "app/slaif_gateway/cli/routes.py",

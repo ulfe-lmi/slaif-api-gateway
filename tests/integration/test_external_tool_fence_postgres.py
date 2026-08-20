@@ -1,0 +1,1694 @@
+"""PostgreSQL integration tests for the exclusive external-tool fence foundation.
+
+Objective 014 scope: migration backfills, constraint violations, exact
+acquisition arithmetic, idempotent retry, blocking of later requests, the
+``held`` state behavior (set only via raw SQL; the service never writes it),
+restart durability, evidence-gated resolution, and reconciliation skipping.
+No provider calls, no real email, and no prompt/body content is stored.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from slaif_gateway.config import Settings
+from slaif_gateway.db.models import AuditLog, GatewayKey, ModelRoute, QuotaReservation, UsageLedger
+from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
+from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.external_tool_fence import (
+    ExternalToolFenceAcquireInput,
+    ExternalToolFenceResolveInput,
+    ExternalToolFenceRouteFacts,
+)
+from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services import auth_service
+from slaif_gateway.services.auth_service import GatewayKeyExternalToolFenceActiveError
+from slaif_gateway.services.external_tool_fence import (
+    ExternalToolFenceActiveError,
+    ExternalToolFenceConflictError,
+    ExternalToolFenceExhaustedError,
+    ExternalToolFenceInvariantError,
+    ExternalToolFenceOccupiedError,
+    ExternalToolFenceService,
+)
+from slaif_gateway.services.external_tool_policy_contract import ExternalToolAdmissionDecision
+from slaif_gateway.services.quota_errors import (
+    ExternalToolFenceActiveError as QuotaFenceActiveError,
+)
+from slaif_gateway.services.quota_service import QuotaService
+from slaif_gateway.utils.crypto import hmac_sha256_token
+
+pytestmark = pytest.mark.skipif(
+    not os.getenv("TEST_DATABASE_URL"),
+    reason="TEST_DATABASE_URL is not set; skipping PostgreSQL external tool fence tests.",
+)
+
+HMAC_SECRET = "h" * 48
+KEY_SECRET = "s" * 43
+ENDPOINT = "/v1/chat/completions"
+REQUESTED_MODEL = "classroom-cheap"
+PROVIDER = "openai"
+CAPABILITIES = ("provider_connector", "provider_remote_mcp")
+DESTINATIONS = ("connector:demo", "remote_mcp:demo")
+TTL = timedelta(minutes=15)
+
+STORED_POLICY = {
+    "version": 1,
+    "mode": "external_tool_fenced",
+    "allowed_capabilities": ["provider_connector", "provider_remote_mcp"],
+    "allowed_destination_ids": ["connector:demo", "remote_mcp:demo"],
+    "max_provider_tool_calls_per_request": 2,
+    "single_request_overrun_acknowledged": True,
+}
+
+
+def _decision() -> ExternalToolAdmissionDecision:
+    """Build the exact positive objective-012 fenced admission decision."""
+    return ExternalToolAdmissionDecision(
+        allowed=True,
+        quota_mode="external_tool_fenced",
+        effective_tool_call_cap=2,
+        reason_code="external_tool_fenced_allowed",
+        exclusive_key_fence_required=True,
+        single_request_overrun_accepted=True,
+        hold_on_missing_or_ambiguous_final_cost=True,
+        following_requests_block_after_exhaustion=True,
+    )
+
+
+def _fence_service(session) -> ExternalToolFenceService:
+    return ExternalToolFenceService(
+        gateway_keys_repository=GatewayKeysRepository(session),
+        quota_reservations_repository=QuotaReservationsRepository(session),
+        usage_ledger_repository=UsageLedgerRepository(session),
+        audit_repository=AuditRepository(session),
+    )
+
+
+def _route_facts(
+    route_id: uuid.UUID,
+    *,
+    requested_model: str = REQUESTED_MODEL,
+    provider: str = PROVIDER,
+) -> ExternalToolFenceRouteFacts:
+    return ExternalToolFenceRouteFacts(
+        endpoint=ENDPOINT,
+        requested_model=requested_model,
+        provider=provider,
+        route_id=route_id,
+    )
+
+
+async def _create_model_route(session_factory) -> uuid.UUID:
+    """Insert a real model route so fence reservations satisfy the 0015 FK."""
+    async with session_factory() as session:
+        route = ModelRoute(
+            requested_model=REQUESTED_MODEL,
+            match_type="exact",
+            endpoint=ENDPOINT,
+            provider=PROVIDER,
+            upstream_model="gpt-4.1-mini",
+        )
+        session.add(route)
+        await session.commit()
+        return route.id
+
+
+def _auth_service(session) -> auth_service.GatewayAuthService:
+    return auth_service.GatewayAuthService(
+        settings=Settings(
+            TOKEN_HMAC_SECRET_V1=HMAC_SECRET, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"
+        ),
+        gateway_keys_repository=GatewayKeysRepository(session),
+    )
+
+
+def _quota_service(session) -> QuotaService:
+    return QuotaService(
+        gateway_keys_repository=GatewayKeysRepository(session),
+        quota_reservations_repository=QuotaReservationsRepository(session),
+    )
+
+
+async def _create_key(
+    session_factory,
+    *,
+    cost_limit: Decimal,
+    token_limit: int,
+    request_limit: int,
+    fenced_policy: bool,
+) -> tuple[uuid.UUID, uuid.UUID, str, str]:
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        owner = await OwnersRepository(session).create_owner(
+            name="Fence",
+            surname="Integration",
+            email=f"fence-integration-{uuid.uuid4()}@example.test",
+        )
+        public_key_id = f"k_{uuid.uuid4().hex}"
+        token = f"sk-slaif-{public_key_id}.{KEY_SECRET}"
+        row = await GatewayKeysRepository(session).create_gateway_key_record(
+            public_key_id=public_key_id,
+            token_hash=hmac_sha256_token(token, HMAC_SECRET),
+            owner_id=owner.id,
+            valid_from=now - timedelta(minutes=5),
+            valid_until=now + timedelta(hours=6),
+            cost_limit_eur=cost_limit,
+            token_limit_total=token_limit,
+            request_limit_total=request_limit,
+            allow_all_models=True,
+            allow_all_endpoints=True,
+            metadata_json={"external_tool_policy": STORED_POLICY} if fenced_policy else None,
+        )
+        await session.commit()
+        return owner.id, row.id, public_key_id, token
+
+
+def _acquire_input(
+    gateway_key_id: uuid.UUID,
+    request_id: str,
+    route_id: uuid.UUID,
+    *,
+    requested_model: str = REQUESTED_MODEL,
+    provider: str = PROVIDER,
+) -> ExternalToolFenceAcquireInput:
+    return ExternalToolFenceAcquireInput(
+        gateway_key_id=gateway_key_id,
+        request_id=request_id,
+        route=_route_facts(route_id, requested_model=requested_model, provider=provider),
+        capabilities=CAPABILITIES,
+        destination_ids=DESTINATIONS,
+        decision=_decision(),
+        now=datetime.now(UTC),
+        ttl=TTL,
+    )
+
+
+async def _acquire(
+    session_factory,
+    gateway_key_id: uuid.UUID,
+    request_id: str,
+    route_id: uuid.UUID,
+    *,
+    requested_model: str = REQUESTED_MODEL,
+    provider: str = PROVIDER,
+):
+    async with session_factory() as session:
+        result = await _fence_service(session).acquire(
+            _acquire_input(
+                gateway_key_id,
+                request_id,
+                route_id,
+                requested_model=requested_model,
+                provider=provider,
+            )
+        )
+        await session.commit()
+        return result
+
+
+async def _load_key(session_factory, gateway_key_id: uuid.UUID) -> GatewayKey:
+    async with session_factory() as session:
+        row = await GatewayKeysRepository(session).get_gateway_key_by_id(gateway_key_id)
+        await session.commit()
+        assert row is not None
+        return row
+
+
+async def _load_reservation(session_factory, reservation_id: uuid.UUID) -> QuotaReservation:
+    async with session_factory() as session:
+        row = await QuotaReservationsRepository(session).get_reservation_by_id(reservation_id)
+        await session.commit()
+        assert row is not None
+        return row
+
+
+async def _seed_counters(
+    session_factory,
+    key_id: uuid.UUID,
+    *,
+    used: tuple[Decimal, int, int],
+    reserved: tuple[Decimal, int, int],
+) -> None:
+    async with session_factory() as session:
+        keys = GatewayKeysRepository(session)
+        row = await keys.get_gateway_key_for_update(key_id)
+        assert row is not None
+        row.cost_used_eur = used[0]
+        row.tokens_used_total = used[1]
+        row.requests_used_total = used[2]
+        await keys.add_reserved_counters(
+            row,
+            cost_reserved_eur=reserved[0],
+            tokens_reserved_total=reserved[1],
+            requests_reserved_total=reserved[2],
+        )
+        await session.commit()
+
+
+async def _cleanup_leftover_fenced_keys(engine) -> None:
+    """Remove fenced keys committed by earlier tests in this file.
+
+    Earlier fence tests commit their keys/reservations/ledger rows on purpose,
+    so this final listing test must start from a clean fence state to assert
+    its exact projection set. Only rows owned by active/held fences are
+    removed; nothing else is touched.
+    """
+    fenced = "gk.external_tool_fence_state IN ('active', 'held')"
+    async with engine.begin() as conn:
+        fenced_key_ids = (
+            (await conn.execute(text(f"SELECT gk.id FROM gateway_keys gk WHERE {fenced}")))
+            .scalars()
+            .all()
+        )
+        if not fenced_key_ids:
+            return
+        await conn.execute(
+            text(
+                "DELETE FROM usage_ledger WHERE quota_reservation_id IN ("
+                " SELECT qr.id FROM quota_reservations qr"
+                f" JOIN gateway_keys gk ON gk.id = qr.gateway_key_id WHERE {fenced})"
+            )
+        )
+        await conn.execute(
+            text(
+                "UPDATE gateway_keys gk"
+                " SET external_tool_fence_state = 'none',"
+                " external_tool_fence_reservation_id = NULL,"
+                " external_tool_fence_request_id = NULL,"
+                " external_tool_fence_acquired_at = NULL,"
+                " external_tool_fence_expires_at = NULL"
+                f" WHERE {fenced}"
+            )
+        )
+        await conn.execute(
+            text(
+                "DELETE FROM quota_reservations WHERE gateway_key_id IN ("
+                " SELECT gk.id FROM gateway_keys gk WHERE gk.id = ANY(:key_ids))"
+            ),
+            {"key_ids": list(fenced_key_ids)},
+        )
+        await conn.execute(
+            text("DELETE FROM gateway_keys WHERE id = ANY(:key_ids)"),
+            {"key_ids": list(fenced_key_ids)},
+        )
+
+
+@pytest.mark.asyncio
+async def test_backfilled_rows_get_fence_and_quota_mode_defaults(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    key_id: uuid.UUID | None = None
+    try:
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("100"),
+            token_limit=10_000,
+            request_limit=100,
+            fenced_policy=False,
+        )
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(session).create_reservation(
+                gateway_key_id=key_id,
+                request_id=f"plain-{uuid.uuid4()}",
+                endpoint=ENDPOINT,
+                requested_model=REQUESTED_MODEL,
+                reserved_cost_eur=Decimal("0.5"),
+                reserved_tokens=10,
+                reserved_requests=1,
+                status="pending",
+                expires_at=datetime.now(UTC) + TTL,
+            )
+            await session.commit()
+            key = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+            assert key.external_tool_fence_state == "none"
+            assert key.external_tool_fence_reservation_id is None
+            assert key.external_tool_fence_request_id is None
+            assert key.external_tool_fence_acquired_at is None
+            assert key.external_tool_fence_expires_at is None
+            assert reservation.quota_mode == "strict_bounded"
+            assert reservation.external_tool_capabilities == []
+            assert reservation.external_tool_destination_ids == []
+            assert reservation.external_tool_provider is None
+            assert reservation.external_tool_route_id is None
+    finally:
+        # This backfill row intentionally has no counter movement, so if
+        # its reservation expired, a later whole-database stale-reservation
+        # batch (this file's held-fence test) would raise a counter
+        # invariant error. Delete the ledger, reservation, and key so no
+        # later run of the suite can be poisoned by this test.
+        if key_id is not None:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM usage_ledger WHERE request_id IN "
+                        "(SELECT request_id FROM quota_reservations "
+                        "WHERE gateway_key_id = :key_id)"
+                    ),
+                    {"key_id": key_id},
+                )
+                await conn.execute(
+                    text("DELETE FROM quota_reservations WHERE gateway_key_id = :key_id"),
+                    {"key_id": key_id},
+                )
+                await conn.execute(
+                    text("DELETE FROM gateway_keys WHERE id = :key_id"),
+                    {"key_id": key_id},
+                )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fence_column_constraint_violations(migrated_postgres_url: str) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("100"),
+            token_limit=10_000,
+            request_limit=100,
+            fenced_policy=False,
+        )
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(session).create_reservation(
+                gateway_key_id=key_id,
+                request_id=f"plain-{uuid.uuid4()}",
+                endpoint=ENDPOINT,
+                requested_model=REQUESTED_MODEL,
+                reserved_cost_eur=Decimal("0.5"),
+                reserved_tokens=10,
+                reserved_requests=1,
+                status="pending",
+                expires_at=datetime.now(UTC) + TTL,
+            )
+            await session.commit()
+            reservation_id = reservation.id
+
+        now = datetime.now(UTC)
+
+        # Bound fence states require all four bound columns to be set.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'active' WHERE id = :key_id"
+                    ),
+                    {"key_id": key_id},
+                )
+
+        # none state requires all four bound columns to be NULL.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'none',"
+                        " external_tool_fence_request_id = :request_id WHERE id = :key_id"
+                    ),
+                    {"key_id": key_id, "request_id": "req-x"},
+                )
+
+        # Unknown fence state values are rejected.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'bogus' WHERE id = :key_id"
+                    ),
+                    {"key_id": key_id},
+                )
+
+        # Both external fact columns must be JSON arrays in every mode.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET external_tool_capabilities = "
+                        "'{\"a\": 1}'::jsonb WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET external_tool_destination_ids = "
+                        "'{\"a\": 1}'::jsonb WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id},
+                )
+
+        # strict_bounded rows must keep empty arrays and null provider/route.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET external_tool_capabilities = '"
+                        '["provider_connector"]\'::jsonb WHERE id = :reservation_id'
+                    ),
+                    {"reservation_id": reservation_id},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET external_tool_provider = :provider"
+                        " WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id, "provider": "openai"},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET external_tool_route_id = :route_id"
+                        " WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id, "route_id": route_id},
+                )
+
+        # external_tool_fenced rows require the full bound fact set: a
+        # non-empty capability array, an array destination value, a non-empty
+        # bounded provider string, and a non-null route UUID.
+        fenced_prefix = (
+            "UPDATE quota_reservations SET quota_mode = 'external_tool_fenced',"
+            ' external_tool_capabilities = \'["provider_connector", "provider_remote_mcp"]\'::jsonb,'
+            ' external_tool_destination_ids = \'["connector:demo", "remote_mcp:demo"]\'::jsonb'
+        )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(f"{fenced_prefix} WHERE id = :reservation_id"),
+                    {"reservation_id": reservation_id},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        f"{fenced_prefix}, external_tool_provider = :provider"
+                        " WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id, "provider": "openai"},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        f"{fenced_prefix}, external_tool_provider = :provider,"
+                        " external_tool_route_id = NULL WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id, "provider": "openai"},
+                )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        f"{fenced_prefix}, external_tool_provider = '' WHERE id = :reservation_id"
+                    ),
+                    {"reservation_id": reservation_id},
+                )
+
+        # A key that owns a fence cannot be deleted (FK RESTRICT).
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    f"{fenced_prefix}, external_tool_provider = :provider,"
+                    " external_tool_route_id = :route_id"
+                    " WHERE id = :reservation_id"
+                ),
+                {
+                    "reservation_id": reservation_id,
+                    "provider": PROVIDER,
+                    "route_id": route_id,
+                },
+            )
+            await conn.execute(
+                text(
+                    "UPDATE gateway_keys SET external_tool_fence_state = 'active',"
+                    " external_tool_fence_reservation_id = :reservation_id,"
+                    " external_tool_fence_request_id = :request_id,"
+                    " external_tool_fence_acquired_at = :acquired_at,"
+                    " external_tool_fence_expires_at = :expires_at WHERE id = :key_id"
+                ),
+                {
+                    "key_id": key_id,
+                    "reservation_id": reservation_id,
+                    "request_id": "req-fenced",
+                    "acquired_at": now,
+                    "expires_at": now + TTL,
+                },
+            )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM gateway_keys WHERE id = :key_id"),
+                    {"key_id": key_id},
+                )
+
+        # The fence reservation pointer is unique: one reservation can be the
+        # durable pointer for at most one key.
+        _, second_key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("100"),
+            token_limit=10_000,
+            request_limit=100,
+            fenced_policy=False,
+        )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'active',"
+                        " external_tool_fence_reservation_id = :reservation_id,"
+                        " external_tool_fence_request_id = :request_id,"
+                        " external_tool_fence_acquired_at = :acquired_at,"
+                        " external_tool_fence_expires_at = :expires_at WHERE id = :key_id"
+                    ),
+                    {
+                        "key_id": second_key_id,
+                        "reservation_id": reservation_id,
+                        "request_id": "req-second",
+                        "acquired_at": now,
+                        "expires_at": now + TTL,
+                    },
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_acquire_reserves_exact_remaining_and_is_idempotent(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        # A fence can only be taken on a fully reconciled key: zero reserved.
+        await _seed_counters(
+            session_factory,
+            key_id,
+            used=(Decimal("1.25"), 100, 2),
+            reserved=(Decimal("0"), 0, 0),
+        )
+
+        request_id = f"req-fence-{uuid.uuid4()}"
+        acquired = await _acquire(session_factory, key_id, request_id, route_id)
+
+        # Remaining exposure is reserved in full: 25-1.25-0, 100000-100-0, requests=1.
+        assert acquired.fence_state == "active"
+        assert acquired.idempotent is False
+        assert acquired.reserved_cost_eur == Decimal("23.75")
+        assert acquired.reserved_tokens == 99_900
+        assert acquired.reserved_requests == 1
+        assert acquired.capabilities == CAPABILITIES
+        assert acquired.destination_ids == DESTINATIONS
+
+        key = await _load_key(session_factory, key_id)
+        assert key.external_tool_fence_state == "active"
+        assert key.external_tool_fence_reservation_id == acquired.reservation_id
+        assert key.external_tool_fence_request_id == request_id
+        assert key.external_tool_fence_acquired_at == acquired.acquired_at
+        assert key.external_tool_fence_expires_at == acquired.expires_at
+        assert key.cost_used_eur == Decimal("1.25")
+        assert key.tokens_used_total == 100
+        assert key.requests_used_total == 2
+        assert key.cost_reserved_eur == Decimal("23.75")
+        assert key.tokens_reserved_total == 99_900
+        assert key.requests_reserved_total == 1
+
+        reservation = await _load_reservation(session_factory, acquired.reservation_id)
+        assert reservation.quota_mode == "external_tool_fenced"
+        assert reservation.external_tool_capabilities == list(CAPABILITIES)
+        assert reservation.external_tool_destination_ids == list(DESTINATIONS)
+        assert reservation.external_tool_provider == PROVIDER
+        assert reservation.external_tool_route_id == route_id
+        assert reservation.status == "pending"
+        assert reservation.reserved_cost_eur == Decimal("23.75")
+        assert reservation.reserved_tokens == 99_900
+        assert reservation.reserved_requests == 1
+        assert reservation.expires_at == acquired.expires_at
+
+        async with session_factory() as session:
+            audits = (
+                (
+                    await session.execute(
+                        select(AuditLog).where(
+                            AuditLog.entity_type == "gateway_key",
+                            AuditLog.entity_id == key_id,
+                            AuditLog.action == "external_tool_fence_acquired",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            await session.commit()
+        assert [audit.request_id for audit in audits] == [request_id]
+        assert all(audit.note == "external tool fence acquired" for audit in audits)
+
+        # Idempotent retry: same request id and identical route facts.
+        retry = await _acquire(session_factory, key_id, request_id, route_id)
+        assert retry.idempotent is True
+        assert retry.reservation_id == acquired.reservation_id
+        key = await _load_key(session_factory, key_id)
+        assert key.cost_reserved_eur == Decimal("23.75")
+        assert key.tokens_reserved_total == 99_900
+        assert key.requests_reserved_total == 1
+        assert key.external_tool_fence_state == "active"
+    finally:
+        await engine.dispose()
+
+
+def _authenticated_key(row: GatewayKey) -> AuthenticatedGatewayKey:
+    return AuthenticatedGatewayKey(
+        gateway_key_id=row.id,
+        owner_id=row.owner_id,
+        cohort_id=row.cohort_id,
+        public_key_id=row.public_key_id,
+        status=row.status,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        allow_all_models=row.allow_all_models,
+        allowed_models=tuple(row.allowed_models),
+        allow_all_endpoints=row.allow_all_endpoints,
+        allowed_endpoints=tuple(row.allowed_endpoints),
+        allowed_providers=None,
+        cost_limit_eur=row.cost_limit_eur,
+        token_limit_total=row.token_limit_total,
+        request_limit_total=row.request_limit_total,
+        rate_limit_policy={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_fence_blocks_auth_quota_and_other_acquires(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, token = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(session_factory, key_id, f"req-fence-{uuid.uuid4()}", route_id)
+
+        before = await _load_key(session_factory, key_id)
+
+        async with session_factory() as session:
+            with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+                await _auth_service(session).authenticate_authorization_header(f"Bearer {token}")
+            await session.rollback()
+
+        async with session_factory() as session:
+            row = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+            assert row is not None
+            with pytest.raises(QuotaFenceActiveError):
+                await _quota_service(session).reserve_for_chat_completion(
+                    authenticated_key=_authenticated_key(row),
+                    route=RouteResolutionResult(
+                        requested_model=REQUESTED_MODEL,
+                        resolved_model="gpt-4.1-mini",
+                        provider=PROVIDER,
+                        route_id=uuid.uuid4(),
+                        route_match_type="exact",
+                        route_pattern=REQUESTED_MODEL,
+                        priority=100,
+                    ),
+                    policy=ChatCompletionPolicyResult(
+                        effective_body={
+                            "model": REQUESTED_MODEL,
+                            "messages": [],
+                            "max_completion_tokens": 5,
+                        },
+                        requested_output_tokens=5,
+                        effective_output_tokens=5,
+                        estimated_input_tokens=5,
+                        injected_default_output_tokens=False,
+                    ),
+                    cost_estimate=ChatCostEstimate(
+                        provider=PROVIDER,
+                        requested_model=REQUESTED_MODEL,
+                        resolved_model="gpt-4.1-mini",
+                        native_currency="EUR",
+                        estimated_input_tokens=5,
+                        estimated_output_tokens=5,
+                        estimated_input_cost_native=Decimal("0.01"),
+                        estimated_output_cost_native=Decimal("0.01"),
+                        estimated_total_cost_native=Decimal("0.02"),
+                        estimated_total_cost_eur=Decimal("0.02"),
+                        pricing_rule_id=None,
+                        fx_rate_id=None,
+                    ),
+                    request_id=f"req-quota-{uuid.uuid4()}",
+                )
+            await session.rollback()
+
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceActiveError):
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, f"req-other-{uuid.uuid4()}", route_id)
+                )
+            await session.rollback()
+
+        after = await _load_key(session_factory, key_id)
+        assert after.cost_reserved_eur == before.cost_reserved_eur
+        assert after.tokens_reserved_total == before.tokens_reserved_total
+        assert after.requests_reserved_total == before.requests_reserved_total
+        assert after.external_tool_fence_reservation_id == acquired.reservation_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_acquire_conflicts_and_exhaustion(migrated_postgres_url: str) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        request_id = f"req-conflict-{uuid.uuid4()}"
+        await _acquire(session_factory, key_id, request_id, route_id)
+
+        # Same request id but a changed requested model is a conflict: the
+        # durable reservation facts no longer match exactly.
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceConflictError):
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, request_id, route_id, requested_model="other-model")
+                )
+            await session.rollback()
+
+        # Same request id and model but a changed provider is a conflict.
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceConflictError):
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, request_id, route_id, provider="other-provider")
+                )
+            await session.rollback()
+
+        # Same request id but a different bound route UUID is a conflict.
+        other_route_id = await _create_model_route(session_factory)
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceConflictError):
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, request_id, other_route_id)
+                )
+            await session.rollback()
+
+        # Clearing the fence (owner action) leaves the pending reservation:
+        # a new acquisition must fail closed on the unreconciled exposure
+        # before it can even see the durable request id.
+        async with session_factory() as session:
+            keys = GatewayKeysRepository(session)
+            row = await keys.get_gateway_key_for_update(key_id)
+            assert row is not None
+            await keys.set_external_tool_fence(
+                row,
+                state="none",
+                reservation_id=None,
+                request_id=None,
+                acquired_at=None,
+                expires_at=None,
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceOccupiedError) as exc_info:
+                await _fence_service(session).acquire(_acquire_input(key_id, request_id, route_id))
+            assert exc_info.value.error_code == "external_tool_fence_pending_reservation"
+            await session.rollback()
+
+        # Reconcile the fence exposure away (operator action): finalize the
+        # reservation and zero the reserved counters. The request id stays
+        # non-reusable: a fresh acquisition with the same id now hits the
+        # durable request-id collision.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET status = 'finalized',"
+                    " finalized_at = :now WHERE gateway_key_id = :key_id"
+                ),
+                {"key_id": key_id, "now": datetime.now(UTC)},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE gateway_keys SET cost_reserved_eur = 0,"
+                    " tokens_reserved_total = 0, requests_reserved_total = 0"
+                    " WHERE id = :key_id"
+                ),
+                {"key_id": key_id},
+            )
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceConflictError) as exc_info:
+                await _fence_service(session).acquire(_acquire_input(key_id, request_id, route_id))
+            assert exc_info.value.error_code == "external_tool_fence_request_id_reused"
+            await session.rollback()
+
+        # Exhausted key: no remaining quota on any dimension.
+        _, exhausted_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("1"),
+            token_limit=10,
+            request_limit=1,
+            fenced_policy=True,
+        )
+        await _seed_counters(
+            session_factory,
+            exhausted_id,
+            used=(Decimal("1"), 10, 1),
+            reserved=(Decimal("0"), 0, 0),
+        )
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceExhaustedError):
+                await _fence_service(session).acquire(
+                    _acquire_input(exhausted_id, f"req-exhausted-{uuid.uuid4()}", route_id)
+                )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_held_fence_blocks_and_never_auto_releases(migrated_postgres_url: str) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, token = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(session_factory, key_id, f"req-held-{uuid.uuid4()}", route_id)
+
+        # ``held`` is only reachable via operator-level raw SQL in this scope.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE gateway_keys SET external_tool_fence_state = 'held' WHERE id = :key_id"
+                ),
+                {"key_id": key_id},
+            )
+
+        before = await _load_key(session_factory, key_id)
+        assert before.external_tool_fence_state == "held"
+
+        async with session_factory() as session:
+            with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+                await _auth_service(session).authenticate_authorization_header(f"Bearer {token}")
+            await session.rollback()
+
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceActiveError):
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, f"req-other-{uuid.uuid4()}", route_id)
+                )
+            await session.rollback()
+
+        # Resolution is a no-op for held fences: 015 owns that transition.
+        async with session_factory() as session:
+            result = await _fence_service(session).resolve(
+                ExternalToolFenceResolveInput(gateway_key_id=key_id, request_id=acquired.request_id)
+            )
+            await session.commit()
+        assert result.fence_state == "held"
+        assert result.resolved is False
+        after = await _load_key(session_factory, key_id)
+        assert after.external_tool_fence_state == "held"
+        assert after.cost_reserved_eur == before.cost_reserved_eur
+
+        # Force the fence reservation to expire, then prove ordinary
+        # reconciliation never auto-releases it.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE quota_reservations SET expires_at = :past WHERE id = :reservation_id"),
+                {
+                    "past": datetime.now(UTC) - timedelta(minutes=1),
+                    "reservation_id": acquired.reservation_id,
+                },
+            )
+
+        from slaif_gateway.services.reservation_reconciliation import (
+            ReservationReconciliationService,
+        )
+
+        async with session_factory() as session:
+            summary = await ReservationReconciliationService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            ).reconcile_expired_pending_reservations(now=datetime.now(UTC))
+            await session.commit()
+        assert summary.skipped_count >= 1
+        assert summary.reconciled_count == 0
+        reservation = await _load_reservation(session_factory, acquired.reservation_id)
+        assert reservation.status == "pending"
+        held = await _load_key(session_factory, key_id)
+        assert held.external_tool_fence_state == "held"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["held", "finalized"])
+async def test_same_request_retry_requires_active_pending_reservation(
+    migrated_postgres_url: str, status: str
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(
+            session_factory, key_id, f"req-retry-state-{uuid.uuid4()}", route_id
+        )
+        async with engine.begin() as conn:
+            if status == "held":
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'held' "
+                        "WHERE id = :key_id"
+                    ),
+                    {"key_id": key_id},
+                )
+            else:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET status = :status "
+                        "WHERE id = :reservation_id"
+                    ),
+                    {"status": status, "reservation_id": acquired.reservation_id},
+                )
+
+        async with session_factory() as session:
+            if status == "held":
+                with pytest.raises(ExternalToolFenceActiveError) as raised:
+                    await _fence_service(session).acquire(
+                        _acquire_input(key_id, acquired.request_id, route_id)
+                    )
+                expected_code = "external_tool_fence_active"
+            else:
+                with pytest.raises(ExternalToolFenceInvariantError) as raised:
+                    await _fence_service(session).acquire(
+                        _acquire_input(key_id, acquired.request_id, route_id)
+                    )
+                expected_code = "external_tool_fence_reservation_not_pending"
+            await session.rollback()
+        assert raised.value.error_code == expected_code
+        key = await _load_key(session_factory, key_id)
+        assert key.external_tool_fence_state == ("held" if status == "held" else "active")
+        assert key.external_tool_fence_reservation_id == acquired.reservation_id
+        reservation = await _load_reservation(session_factory, acquired.reservation_id)
+        assert reservation.gateway_key_id == key_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_same_request_retry_rejects_cross_key_pointed_reservation(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        _, other_key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(
+            session_factory, key_id, f"req-retry-cross-{uuid.uuid4()}", route_id
+        )
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET gateway_key_id = :other_key_id "
+                    "WHERE id = :reservation_id"
+                ),
+                {"other_key_id": other_key_id, "reservation_id": acquired.reservation_id},
+            )
+
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as raised:
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, acquired.request_id, route_id)
+                )
+            await session.rollback()
+        assert raised.value.error_code == "external_tool_fence_reservation_key_mismatch"
+        key = await _load_key(session_factory, key_id)
+        assert key.external_tool_fence_state == "active"
+        assert key.external_tool_fence_reservation_id == acquired.reservation_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fence_survives_restart_and_resolves_from_finalized_evidence(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        owner_id, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(session_factory, key_id, f"req-restart-{uuid.uuid4()}", route_id)
+    finally:
+        await engine.dispose()
+
+    # Restart: a brand-new engine/connection sees the committed fence.
+    restart_engine = create_async_engine(migrated_postgres_url, future=True)
+    restart_factory = async_sessionmaker(restart_engine, expire_on_commit=False)
+    try:
+        async with restart_factory() as session:
+            row = await GatewayKeysRepository(session).get_gateway_key_for_update(key_id)
+            await session.commit()
+            assert row is not None
+            assert row.external_tool_fence_state == "active"
+            assert row.external_tool_fence_reservation_id == acquired.reservation_id
+            assert row.external_tool_fence_request_id == acquired.request_id
+            assert row.external_tool_fence_acquired_at is not None
+            assert row.external_tool_fence_expires_at is not None
+
+        # Simulate authoritative accounting finalization (owned by later
+        # objectives): move reserved counters into used counters, finalize the
+        # reservation, and record exactly one finalized success ledger row.
+        async with restart_factory() as session:
+            keys = GatewayKeysRepository(session)
+            row = await keys.get_gateway_key_for_update(key_id)
+            assert row is not None
+            await keys.finalize_reserved_counters(
+                row,
+                reserved_cost_eur=acquired.reserved_cost_eur,
+                reserved_tokens_total=acquired.reserved_tokens,
+                reserved_requests_total=acquired.reserved_requests,
+                actual_cost_eur=Decimal("0.20"),
+                actual_tokens_total=30,
+                actual_requests_total=1,
+                last_used_at=datetime.now(UTC),
+            )
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired.reservation_id)
+            assert reservation is not None
+            reservation.status = "finalized"
+            reservation.finalized_at = datetime.now(UTC)
+            session.add(
+                UsageLedger(
+                    request_id=acquired.request_id,
+                    quota_reservation_id=reservation.id,
+                    gateway_key_id=key_id,
+                    owner_id=owner_id,
+                    endpoint=ENDPOINT,
+                    http_method="POST",
+                    provider=PROVIDER,
+                    requested_model=REQUESTED_MODEL,
+                    resolved_model="gpt-4.1-mini",
+                    streaming=False,
+                    success=True,
+                    accounting_status="finalized",
+                    http_status=200,
+                    input_tokens=10,
+                    output_tokens=20,
+                    total_tokens=30,
+                    actual_cost_eur=Decimal("0.20"),
+                    native_currency="EUR",
+                    usage_raw={},
+                    response_metadata={},
+                    started_at=datetime.now(UTC) - timedelta(seconds=1),
+                    finished_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+
+        async with restart_factory() as session:
+            result = await _fence_service(session).resolve(
+                ExternalToolFenceResolveInput(gateway_key_id=key_id, request_id=acquired.request_id)
+            )
+            await session.commit()
+        assert result.fence_state == "none"
+        assert result.resolved is True
+
+        async with restart_factory() as session:
+            row = await GatewayKeysRepository(session).get_gateway_key_for_update(key_id)
+            await session.commit()
+            assert row is not None
+            assert row.external_tool_fence_state == "none"
+            assert row.external_tool_fence_reservation_id is None
+            assert row.external_tool_fence_request_id is None
+            assert row.external_tool_fence_acquired_at is None
+            assert row.external_tool_fence_expires_at is None
+            audits = (
+                (
+                    await session.execute(
+                        select(AuditLog).where(
+                            AuditLog.entity_type == "gateway_key",
+                            AuditLog.entity_id == key_id,
+                            AuditLog.action == "external_tool_fence_resolved",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert [audit.request_id for audit in audits] == [acquired.request_id]
+
+        # Re-resolution is a no-op once the fence is cleared.
+        async with restart_factory() as session:
+            result = await _fence_service(session).resolve(
+                ExternalToolFenceResolveInput(gateway_key_id=key_id, request_id=acquired.request_id)
+            )
+            await session.commit()
+        assert result.fence_state == "none"
+        assert result.resolved is False
+    finally:
+        await restart_engine.dispose()
+
+
+def _ledger(
+    reservation_id: uuid.UUID,
+    key_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    *,
+    request_id: str,
+    success: bool,
+    accounting_status: str,
+    endpoint: str = ENDPOINT,
+) -> UsageLedger:
+    now = datetime.now(UTC)
+    return UsageLedger(
+        request_id=request_id,
+        quota_reservation_id=reservation_id,
+        gateway_key_id=key_id,
+        owner_id=owner_id,
+        endpoint=endpoint,
+        http_method="POST",
+        provider=PROVIDER,
+        requested_model=REQUESTED_MODEL,
+        resolved_model="gpt-4.1-mini",
+        streaming=False,
+        success=success,
+        accounting_status=accounting_status,
+        http_status=200 if success else 502,
+        input_tokens=10,
+        output_tokens=20,
+        total_tokens=30,
+        actual_cost_eur=Decimal("0.20") if success else None,
+        native_currency="EUR",
+        usage_raw={},
+        response_metadata={},
+        started_at=now - timedelta(seconds=1),
+        finished_at=now,
+    )
+
+
+async def _finalize_reservation(
+    session,
+    reservation,
+    owner_id: uuid.UUID,
+    *,
+    request_id: str,
+    success: bool,
+    accounting_status: str,
+    key_id: uuid.UUID | None = None,
+    endpoint: str = ENDPOINT,
+) -> None:
+    """Terminalize a reservation with exactly one linked usage ledger.
+
+    The ledger carries the reservation's own request id so endpoint,
+    provider, requested model, and request-id facts can be agreed exactly;
+    only the named facts may be drifted for negative cases.
+    """
+    reservation.status = "finalized"
+    reservation.finalized_at = datetime.now(UTC)
+    session.add(
+        _ledger(
+            reservation.id,
+            key_id or reservation.gateway_key_id,
+            owner_id,
+            request_id=request_id,
+            success=success,
+            accounting_status=accounting_status,
+            endpoint=endpoint,
+        )
+    )
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_resolve_negative_evidence_never_clears_fence(migrated_postgres_url: str) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+
+        # Key A: reservation is not terminal.
+        owner_a, key_a, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_a = await _acquire(session_factory, key_a, f"req-neg-{uuid.uuid4()}", route_id)
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_a, request_id=acquired_a.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_reservation_not_terminal"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_a)).external_tool_fence_state == "active"
+
+        # Key B: finalized reservation with missing, duplicated, foreign-key,
+        # foreign-fact, and status-mismatched ledgers.
+        owner_b, key_b, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_b = await _acquire(session_factory, key_b, f"req-neg-{uuid.uuid4()}", route_id)
+
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_b.reservation_id)
+            assert reservation is not None
+            reservation.status = "finalized"
+            reservation.finalized_at = datetime.now(UTC)
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_b, request_id=acquired_b.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_ledger_count"
+            await session.rollback()
+
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_b.reservation_id)
+            assert reservation is not None
+            session.add(
+                _ledger(
+                    reservation.id,
+                    key_b,
+                    owner_b,
+                    request_id=acquired_b.request_id,
+                    success=True,
+                    accounting_status="finalized",
+                )
+            )
+            session.add(
+                _ledger(
+                    reservation.id,
+                    key_b,
+                    owner_b,
+                    request_id=f"ledger-extra-{uuid.uuid4()}",
+                    success=True,
+                    accounting_status="finalized",
+                )
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_b, request_id=acquired_b.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_ledger_count"
+            await session.rollback()
+
+        # Exactly one ledger, but it belongs to a different gateway key.
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_b.reservation_id)
+            assert reservation is not None
+            await session.execute(
+                text("DELETE FROM usage_ledger WHERE quota_reservation_id = :reservation_id"),
+                {"reservation_id": acquired_b.reservation_id},
+            )
+            session.add(
+                _ledger(
+                    reservation.id,
+                    key_a,
+                    owner_b,
+                    request_id=acquired_b.request_id,
+                    success=True,
+                    accounting_status="finalized",
+                )
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_b, request_id=acquired_b.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_ledger_key_mismatch"
+            await session.rollback()
+
+        # Exactly one ledger on the right key, but its endpoint fact drifts.
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_b.reservation_id)
+            assert reservation is not None
+            await session.execute(
+                text("DELETE FROM usage_ledger WHERE quota_reservation_id = :reservation_id"),
+                {"reservation_id": acquired_b.reservation_id},
+            )
+            session.add(
+                _ledger(
+                    reservation.id,
+                    key_b,
+                    owner_b,
+                    request_id=acquired_b.request_id,
+                    success=True,
+                    accounting_status="finalized",
+                    endpoint="/v1/responses",
+                )
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_b, request_id=acquired_b.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_ledger_facts_mismatch"
+            await session.rollback()
+
+        # Exactly one fully-matching ledger, but a failed ledger under a
+        # finalized reservation.
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_b.reservation_id)
+            assert reservation is not None
+            await session.execute(
+                text("DELETE FROM usage_ledger WHERE quota_reservation_id = :reservation_id"),
+                {"reservation_id": acquired_b.reservation_id},
+            )
+            await _finalize_reservation(
+                session,
+                reservation,
+                owner_b,
+                request_id=acquired_b.request_id,
+                success=False,
+                accounting_status="failed",
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_b, request_id=acquired_b.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_ledger_mismatch"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_b)).external_tool_fence_state == "active"
+
+        # Key C: resolve input request id does not match the fence.
+        owner_c, key_c, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        await _acquire(session_factory, key_c, f"req-neg-{uuid.uuid4()}", route_id)
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceConflictError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_c, request_id=f"req-other-{uuid.uuid4()}"
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_resolution_request_mismatch"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_c)).external_tool_fence_state == "active"
+
+        # Key D: the fence's reservation has been re-bound to another key.
+        owner_d, key_d, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_d = await _acquire(session_factory, key_d, f"req-neg-{uuid.uuid4()}", route_id)
+        _, other_key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET gateway_key_id = :other"
+                    " WHERE id = :reservation_id"
+                ),
+                {"other": other_key_id, "reservation_id": acquired_d.reservation_id},
+            )
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_d, request_id=acquired_d.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_reservation_key_mismatch"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_d)).external_tool_fence_state == "active"
+
+        # Key E: the fence's reservation carries a different request id.
+        owner_e, key_e, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_e = await _acquire(session_factory, key_e, f"req-neg-{uuid.uuid4()}", route_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET request_id = :other WHERE id = :reservation_id"
+                ),
+                {
+                    "other": f"req-rebound-{uuid.uuid4()}",
+                    "reservation_id": acquired_e.reservation_id,
+                },
+            )
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_e, request_id=acquired_e.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_reservation_request_mismatch"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_e)).external_tool_fence_state == "active"
+
+        # Key F: the fence's reservation is no longer in fenced mode.
+        owner_f, key_f, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_f = await _acquire(session_factory, key_f, f"req-neg-{uuid.uuid4()}", route_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET quota_mode = 'strict_bounded',"
+                    " external_tool_capabilities = '[]'::jsonb,"
+                    " external_tool_destination_ids = '[]'::jsonb,"
+                    " external_tool_provider = NULL,"
+                    " external_tool_route_id = NULL WHERE id = :reservation_id"
+                ),
+                {"reservation_id": acquired_f.reservation_id},
+            )
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_f, request_id=acquired_f.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_reservation_not_fenced"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_f)).external_tool_fence_state == "active"
+
+        # Key G: perfect terminal evidence, but the key's reserved counters
+        # are not exactly zero; the fence must stay for operator reconciliation.
+        owner_g, key_g, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired_g = await _acquire(session_factory, key_g, f"req-neg-{uuid.uuid4()}", route_id)
+        async with session_factory() as session:
+            reservation = await QuotaReservationsRepository(
+                session
+            ).get_reservation_by_id_for_update(acquired_g.reservation_id)
+            assert reservation is not None
+            await _finalize_reservation(
+                session,
+                reservation,
+                owner_g,
+                request_id=acquired_g.request_id,
+                success=True,
+                accounting_status="finalized",
+            )
+            await session.commit()
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as exc_info:
+                await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_g, request_id=acquired_g.request_id
+                    )
+                )
+            assert exc_info.value.error_code == "external_tool_fence_counters_inconsistent"
+            await session.rollback()
+        assert (await _load_key(session_factory, key_g)).external_tool_fence_state == "active"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_list_unresolved_fences_projects_bound_fences_only(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await _cleanup_leftover_fenced_keys(engine)
+        route_id = await _create_model_route(session_factory)
+        _, active_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        active = await _acquire(session_factory, active_id, f"req-list-{uuid.uuid4()}", route_id)
+
+        _, held_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        held = await _acquire(session_factory, held_id, f"req-list-{uuid.uuid4()}", route_id)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE gateway_keys SET external_tool_fence_state = 'held' WHERE id = :key_id"
+                ),
+                {"key_id": held_id},
+            )
+
+        _, plain_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=False,
+        )
+
+        async with session_factory() as session:
+            projections = await _fence_service(session).list_unresolved_fences(limit=100)
+            await session.commit()
+        by_key = {p.gateway_key_id: p for p in projections}
+        assert set(by_key) == {active_id, held_id}
+        assert plain_id not in by_key
+        assert by_key[active_id].fence_state == "active"
+        assert by_key[active_id].reservation_id == active.reservation_id
+        assert by_key[active_id].request_id == active.request_id
+        assert by_key[active_id].acquired_at == active.acquired_at
+        assert by_key[active_id].expires_at == active.expires_at
+        assert by_key[held_id].fence_state == "held"
+        assert by_key[held_id].reservation_id == held.reservation_id
+        assert by_key[held_id].request_id == held.request_id
+    finally:
+        await engine.dispose()

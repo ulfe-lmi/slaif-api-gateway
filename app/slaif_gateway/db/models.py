@@ -22,7 +22,11 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, INET, JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 from slaif_gateway.db.base import Base
 
@@ -30,8 +34,10 @@ from slaif_gateway.db.base import Base
 STATUS_VALUES_GATEWAY_KEYS = ("active", "suspended", "revoked")
 PURPOSE_VALUES_GATEWAY_KEYS = ("standard", "trusted_calibration")
 CAPABILITY_POLICY_MODE_VALUES_GATEWAY_KEYS = ("standard", "trusted_calibration_discovery")
+FENCE_STATES_GATEWAY_KEYS = ("none", "active", "held")
 ROLE_VALUES_ADMIN_USERS = ("viewer", "operator", "admin", "superadmin")
 STATUS_VALUES_QUOTA_RESERVATIONS = ("pending", "finalized", "released", "expired")
+QUOTA_MODES_QUOTA_RESERVATIONS = ("strict_bounded", "external_tool_fenced")
 STATUS_VALUES_USAGE_LEDGER_ACCOUNTING = (
     "pending",
     "finalized",
@@ -194,6 +200,85 @@ class AdminSession(Base):
     )
 
 
+class QuotaReservation(Base):
+    __tablename__ = "quota_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
+    )
+    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quota_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="strict_bounded", server_default=text("'strict_bounded'")
+    )
+    external_tool_capabilities: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    external_tool_destination_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    external_tool_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_tool_route_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_routes.id", ondelete="RESTRICT"), nullable=True
+    )
+    reserved_cost_eur: Mapped[Decimal] = mapped_column(
+        Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    reserved_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=text("1"))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    gateway_key: Mapped[GatewayKey] = relationship(
+        back_populates="quota_reservations",
+        foreign_keys=[gateway_key_id],
+    )
+    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="quota_reservation")
+
+    __table_args__ = (
+        CheckConstraint(
+            f"status in {STATUS_VALUES_QUOTA_RESERVATIONS}",
+            name="quota_reservations_status_allowed_values",
+        ),
+        CheckConstraint("reserved_cost_eur >= 0", name="quota_reservations_reserved_cost_eur_non_negative"),
+        CheckConstraint("reserved_tokens >= 0", name="quota_reservations_reserved_tokens_non_negative"),
+        CheckConstraint("reserved_requests >= 0", name="quota_reservations_reserved_requests_non_negative"),
+        CheckConstraint(
+            f"quota_mode in {QUOTA_MODES_QUOTA_RESERVATIONS}",
+            name="quota_reservations_quota_mode_allowed_values",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(external_tool_capabilities) = 'array' "
+            "and jsonb_typeof(external_tool_destination_ids) = 'array'",
+            name="quota_reservations_external_tool_facts_array_shape",
+        ),
+        CheckConstraint(
+            "(quota_mode = 'strict_bounded') = "
+            "(external_tool_capabilities = '[]'::jsonb "
+            "and external_tool_destination_ids = '[]'::jsonb "
+            "and external_tool_provider is null "
+            "and external_tool_route_id is null)",
+            name="quota_reservations_strict_mode_empty_external_facts",
+        ),
+        CheckConstraint(
+            "(quota_mode = 'external_tool_fenced') = "
+            "(external_tool_capabilities <> '[]'::jsonb "
+            "and external_tool_provider is not null "
+            "and btrim(external_tool_provider) <> '' "
+            "and length(external_tool_provider) <= 255 "
+            "and external_tool_route_id is not null)",
+            name="quota_reservations_fenced_mode_bound_facts",
+        ),
+        Index("ix_quota_reservations_gateway_key_id", "gateway_key_id"),
+        Index("ix_quota_reservations_status_expires_at", "status", "expires_at"),
+    )
+
+
 class GatewayKey(Base):
     __tablename__ = "gateway_keys"
 
@@ -270,6 +355,25 @@ class GatewayKey(Base):
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
 
+    external_tool_fence_state: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="none",
+        server_default=text("'none'"),
+    )
+    external_tool_fence_reservation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quota_reservations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    external_tool_fence_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_tool_fence_acquired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    external_tool_fence_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("key_templates.id", ondelete="SET NULL"), nullable=True
     )
@@ -295,7 +399,10 @@ class GatewayKey(Base):
     owner: Mapped[Owner] = relationship(back_populates="gateway_keys")
     cohort: Mapped[Cohort | None] = relationship(back_populates="gateway_keys")
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
-    quota_reservations: Mapped[list[QuotaReservation]] = relationship(back_populates="gateway_key")
+    quota_reservations: Mapped[list[QuotaReservation]] = relationship(
+        back_populates="gateway_key",
+        foreign_keys=[QuotaReservation.gateway_key_id],
+    )
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="gateway_key")
     response_references: Mapped[list[ResponseReference]] = relationship(back_populates="gateway_key")
     conversation_references: Mapped[list[ConversationReference]] = relationship(back_populates="gateway_key")
@@ -347,6 +454,26 @@ class GatewayKey(Base):
             name="gateway_keys_requests_reserved_total_non_negative",
         ),
         CheckConstraint("valid_until > valid_from", name="gateway_keys_valid_until_after_valid_from"),
+        CheckConstraint(
+            f"external_tool_fence_state in {FENCE_STATES_GATEWAY_KEYS}",
+            name="gateway_keys_external_tool_fence_state_allowed_values",
+        ),
+        CheckConstraint(
+            "(external_tool_fence_state = 'none') = "
+            "(external_tool_fence_reservation_id is null "
+            "and external_tool_fence_request_id is null "
+            "and external_tool_fence_acquired_at is null "
+            "and external_tool_fence_expires_at is null)",
+            name="gateway_keys_external_tool_fence_none_shape",
+        ),
+        CheckConstraint(
+            "(external_tool_fence_state in ('active', 'held')) = "
+            "(external_tool_fence_reservation_id is not null "
+            "and external_tool_fence_request_id is not null "
+            "and external_tool_fence_acquired_at is not null "
+            "and external_tool_fence_expires_at is not null)",
+            name="gateway_keys_external_tool_fence_bound_shape",
+        ),
         Index("ix_gateway_keys_owner_id", "owner_id"),
         Index("ix_gateway_keys_cohort_id", "cohort_id"),
         Index("ix_gateway_keys_status", "status"),
@@ -355,6 +482,16 @@ class GatewayKey(Base):
         Index("ix_gateway_keys_capability_policy_mode", "capability_policy_mode"),
         Index("ix_gateway_keys_template_id", "template_id"),
         Index("ix_gateway_keys_template_revision_id", "template_revision_id"),
+        Index(
+            "ix_gateway_keys_external_tool_fence_state_expires_at",
+            "external_tool_fence_state",
+            "external_tool_fence_expires_at",
+        ),
+        Index(
+            "ix_gateway_keys_external_tool_fence_reservation_id_unique",
+            "external_tool_fence_reservation_id",
+            unique=True,
+        ),
     )
 
 
@@ -571,43 +708,6 @@ class CodexReplayReference(Base):
         ),
         Index("ix_codex_replay_references_usage_ledger_id", "usage_ledger_id"),
         Index("ix_codex_replay_references_expires_at", "expires_at"),
-    )
-
-
-class QuotaReservation(Base):
-    __tablename__ = "quota_reservations"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    gateway_key_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("gateway_keys.id", ondelete="RESTRICT"), nullable=False
-    )
-    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
-    requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reserved_cost_eur: Mapped[Decimal] = mapped_column(
-        Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
-    )
-    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
-    reserved_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=text("1"))
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default=text("'pending'"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    gateway_key: Mapped[GatewayKey] = relationship(back_populates="quota_reservations")
-    usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="quota_reservation")
-
-    __table_args__ = (
-        CheckConstraint(
-            f"status in {STATUS_VALUES_QUOTA_RESERVATIONS}",
-            name="quota_reservations_status_allowed_values",
-        ),
-        CheckConstraint("reserved_cost_eur >= 0", name="quota_reservations_reserved_cost_eur_non_negative"),
-        CheckConstraint("reserved_tokens >= 0", name="quota_reservations_reserved_tokens_non_negative"),
-        CheckConstraint("reserved_requests >= 0", name="quota_reservations_reserved_requests_non_negative"),
-        Index("ix_quota_reservations_gateway_key_id", "gateway_key_id"),
-        Index("ix_quota_reservations_status_expires_at", "status", "expires_at"),
     )
 
 

@@ -37,6 +37,11 @@ class FakeGatewayKeyRow:
     rate_limit_tokens_per_minute: int | None = 12_000
     max_concurrent_requests: int | None = 2
     metadata_json: dict[str, object] = field(default_factory=dict)
+    external_tool_fence_state: str = "none"
+    external_tool_fence_reservation_id: uuid.UUID | None = None
+    external_tool_fence_request_id: str | None = None
+    external_tool_fence_acquired_at: datetime | None = None
+    external_tool_fence_expires_at: datetime | None = None
     allow_all_models: bool = False
     allowed_models: list[str] = field(default_factory=lambda: ["gpt-test-mini"])
     allow_all_endpoints: bool = False

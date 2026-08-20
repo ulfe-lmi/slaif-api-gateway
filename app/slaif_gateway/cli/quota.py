@@ -22,6 +22,7 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.schemas.external_tool_fence import ExternalToolFenceProjection
 from slaif_gateway.schemas.reconciliation import (
     ProviderCompletedReconciliationCandidate,
     ProviderCompletedReconciliationResult,
@@ -30,6 +31,7 @@ from slaif_gateway.schemas.reconciliation import (
     ReservationReconciliationSummary,
     StaleReservationCandidate,
 )
+from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 
 app = typer.Typer(help="Inspect and repair quota reservations")
@@ -42,6 +44,17 @@ def _service(session) -> ReservationReconciliationService:
         usage_ledger_repository=UsageLedgerRepository(session),
         audit_repository=AuditRepository(session),
     )
+
+
+async def _list_external_tool_fences(*, limit: int) -> list[ExternalToolFenceProjection]:
+    async with cli_db_session() as (_, session):
+        service = ExternalToolFenceService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        return await service.list_unresolved_fences(limit=limit)
 
 
 async def _list_expired_reservations(*, limit: int) -> list[StaleReservationCandidate]:
@@ -127,6 +140,31 @@ async def _reconcile_provider_completed(
 @app.callback()
 def quota() -> None:
     """Inspect and repair quota reservations."""
+
+
+@app.command("list-external-tool-fences")
+def list_external_tool_fences(
+    limit: Annotated[
+        int, typer.Option("--limit", help="Maximum active or held external-tool fences to list")
+    ] = 100,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """List active or held exclusive external-tool fences without mutating state."""
+    try:
+        require_positive_limit(limit)
+        rows = run_async(_list_external_tool_fences(limit=limit))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+
+    payload = [_fence_row_dict(row) for row in rows]
+    if json_output:
+        emit_json({"external_tool_fences": payload})
+        return
+    if not rows:
+        typer.echo("No active or held external-tool fences found.")
+        return
+    _emit_fences(rows)
 
 
 @app.command("list-expired-reservations")
@@ -302,6 +340,29 @@ def reconcile_provider_completed(
         _emit_provider_completed_summary(result)
     else:
         echo_kv(payload)
+
+
+def _fence_row_dict(row: ExternalToolFenceProjection) -> dict[str, object]:
+    return asdict(row)
+
+
+def _emit_fences(rows: list[ExternalToolFenceProjection]) -> None:
+    typer.echo(
+        "gateway_key_id\tfence_state\treservation_id\trequest_id\tacquired_at\texpires_at"
+    )
+    for row in rows:
+        typer.echo(
+            "\t".join(
+                (
+                    str(row.gateway_key_id),
+                    row.fence_state,
+                    str(row.reservation_id) if row.reservation_id is not None else "",
+                    row.request_id or "",
+                    row.acquired_at.isoformat() if row.acquired_at is not None else "",
+                    row.expires_at.isoformat() if row.expires_at is not None else "",
+                )
+            )
+        )
 
 
 def _row_dict(

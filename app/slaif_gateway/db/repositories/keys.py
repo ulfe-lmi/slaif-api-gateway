@@ -100,7 +100,12 @@ class GatewayKeysRepository:
 
     async def get_gateway_key_for_update(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
         """Return a gateway key row locked for administrative mutation."""
-        statement = select(GatewayKey).where(GatewayKey.id == gateway_key_id).with_for_update()
+        statement = (
+            select(GatewayKey)
+            .where(GatewayKey.id == gateway_key_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
@@ -350,6 +355,36 @@ class GatewayKeysRepository:
         gateway_key.cost_reserved_eur += cost_reserved_eur
         gateway_key.tokens_reserved_total += tokens_reserved_total
         gateway_key.requests_reserved_total += requests_reserved_total
+        await self._session.flush()
+        return gateway_key
+
+    async def list_external_tool_fences(self, *, limit: int = 100) -> list[GatewayKey]:
+        """Return gateway key rows carrying an unresolved external-tool fence."""
+        statement = (
+            select(GatewayKey)
+            .where(GatewayKey.external_tool_fence_state.in_(["active", "held"]))
+            .order_by(GatewayKey.external_tool_fence_expires_at.asc().nulls_last())
+            .limit(max(1, min(int(limit), 1000)))
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def set_external_tool_fence(
+        self,
+        gateway_key: GatewayKey,
+        *,
+        state: str,
+        reservation_id: uuid.UUID | None,
+        request_id: str | None,
+        acquired_at: datetime | None,
+        expires_at: datetime | None,
+    ) -> GatewayKey:
+        """Set or clear the exclusive external-tool fence on an already locked key row."""
+        gateway_key.external_tool_fence_state = state
+        gateway_key.external_tool_fence_reservation_id = reservation_id
+        gateway_key.external_tool_fence_request_id = request_id
+        gateway_key.external_tool_fence_acquired_at = acquired_at
+        gateway_key.external_tool_fence_expires_at = expires_at
         await self._session.flush()
         return gateway_key
 

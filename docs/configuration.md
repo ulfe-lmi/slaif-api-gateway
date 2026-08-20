@@ -848,7 +848,11 @@ behavior. Current runtime remains deny-only for
 provider-hosted tools, remote MCP/connectors, provider URL fetch, and unknown
 authority.
 
-Objectives 014–017 own runtime/provider completion. Local function/custom and
+Objective 014 implements the fence and full-remaining-balance reservation
+foundation on the locked key row; these settings remain validation-only and
+enable neither the fenced mode nor any forwarding. Objectives 015–017 own the
+hold, reconciliation, selected provider contracts, and runtime integration.
+Local function/custom and
 gated Codex client-tool request caps
 listed above remain active independent controls; they do not enable hosted
 tools, MCP/connectors, web/file search, code interpreter, hosted shell, computer

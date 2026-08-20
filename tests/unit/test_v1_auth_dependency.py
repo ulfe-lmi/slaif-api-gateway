@@ -263,3 +263,44 @@ def test_dependency_module_safety_constraints() -> None:
     lowered_source = source.lower()
     for term in _DISALLOWED_LOGIC_TERMS:
         assert term not in lowered_source
+
+
+def test_external_tool_fence_active_auth_error_returns_openai_shaped_409(monkeypatch) -> None:
+    from slaif_gateway.api import dependencies as dependency_module
+    from slaif_gateway.services import auth_service
+
+    monkeypatch.setenv("GATEWAY_KEY_PREFIX", "sk-slaif-")
+    monkeypatch.setenv("GATEWAY_KEY_ACCEPTED_PREFIXES", "sk-slaif-")
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    async def _dummy_db_session():
+        yield object()
+
+    async def _raise_fence_active(self, authorization_header, now=None):
+        raise auth_service.GatewayKeyExternalToolFenceActiveError()
+
+    monkeypatch.setattr(
+        dependency_module,
+        "_get_db_session_after_auth_header_check",
+        _dummy_db_session,
+    )
+    monkeypatch.setattr(
+        dependency_module.GatewayAuthService,
+        "authenticate_authorization_header",
+        _raise_fence_active,
+    )
+
+    response = client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer sk-slaif-public1234abcd.sssssssssssssssssssssssssssssssssssssssssss"},
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert "error" in body
+    assert body["error"]["type"] == "rate_limit_error"
+    assert body["error"]["code"] == "external_tool_fence_active"
+    get_settings.cache_clear()

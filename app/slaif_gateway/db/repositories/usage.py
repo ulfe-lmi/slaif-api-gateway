@@ -255,6 +255,15 @@ class UsageLedgerRepository:
         result = await self._session.execute(select(UsageLedger).where(UsageLedger.request_id == request_id))
         return result.scalar_one_or_none()
 
+    async def get_usage_records_by_reservation_id(
+        self, reservation_id: uuid.UUID
+    ) -> list[UsageLedger]:
+        """Return every usage ledger row linked to a quota reservation (0 or 1 expected)."""
+        result = await self._session.execute(
+            select(UsageLedger).where(UsageLedger.quota_reservation_id == reservation_id)
+        )
+        return list(result.scalars().all())
+
     async def list_usage_for_key(
         self,
         gateway_key_id: uuid.UUID,

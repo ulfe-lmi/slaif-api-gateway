@@ -13,6 +13,7 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.quota_errors import (
+    ExternalToolFenceActiveError,
     InvalidQuotaEstimateError,
     QuotaCounterInvariantError,
     QuotaLimitExceededError,
@@ -24,6 +25,7 @@ from slaif_gateway.services.quota_service import QuotaService
 class FakeGatewayKeyRow:
     id: uuid.UUID
     status: str = "active"
+    external_tool_fence_state: str = "none"
     valid_from: datetime = datetime(2026, 1, 1, tzinfo=UTC)
     valid_until: datetime = datetime(2027, 1, 1, tzinfo=UTC)
     cost_limit_eur: Decimal | None = Decimal("10")
@@ -468,3 +470,28 @@ def test_quota_service_uses_locking_repository_methods_for_atomicity() -> None:
     service_source = inspect.getsource(QuotaService)
     assert "get_gateway_key_by_id_for_quota_update" in service_source
     assert "get_reservation_by_id_for_update" in service_source
+
+
+@pytest.mark.asyncio
+async def test_fenced_key_reservation_raises_fence_active_error_without_mutation() -> None:
+    key = FakeGatewayKeyRow(id=uuid.uuid4(), external_tool_fence_state="active")
+    service, key_repo, quota_repo = _service(key)
+
+    with pytest.raises(ExternalToolFenceActiveError) as exc_info:
+        await service.reserve_for_chat_completion(
+            authenticated_key=_authenticated_key(key.id),
+            route=_route(),
+            policy=_policy(),
+            cost_estimate=_estimate(),
+            request_id="req_fenced",
+            now=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.error_code == "external_tool_fence_active"
+    assert key_repo.lock_calls == [key.id]
+    assert quota_repo.create_calls == 0
+    assert key.cost_reserved_eur == Decimal("2")
+    assert key.tokens_reserved_total == 200
+    assert key.requests_reserved_total == 2
+    assert key_repo.commits == 0

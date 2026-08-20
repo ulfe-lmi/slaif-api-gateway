@@ -10,6 +10,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.services.auth_service import (
     GatewayAuthService,
+    GatewayKeyExternalToolFenceActiveError,
     GatewayKeyDigestMismatchError,
     GatewayKeyExpiredError,
     GatewayKeyNotFoundError,
@@ -36,6 +37,7 @@ class _FakeGatewayKey:
     status: str
     valid_from: datetime
     valid_until: datetime
+    external_tool_fence_state: str = "none"
     cohort_id: uuid.UUID | None = None
     allow_all_models: bool = False
     allowed_models: list[str] = field(default_factory=list)
@@ -385,3 +387,32 @@ async def test_legacy_prefix_rejected_when_not_configured() -> None:
 
     with pytest.raises(MalformedGatewayKeyError):
         await service.authenticate_authorization_header(f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence_state", ["active", "held"])
+async def test_external_tool_fenced_key_raises_fence_active_error(fence_state: str) -> None:
+    token = f"sk-slaif-public1234abcd.{LONG_SECRET}"
+    now = datetime.now(UTC)
+    row = _FakeGatewayKey(
+        id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        public_key_id="public1234abcd",
+        token_hash=hmac_sha256_token(token, "h" * 48),
+        hmac_key_version=1,
+        status="active",
+        valid_from=now - timedelta(minutes=5),
+        valid_until=now + timedelta(minutes=30),
+        external_tool_fence_state=fence_state,
+    )
+    repo = _FakeGatewayKeysRepository(row)
+    service = GatewayAuthService(
+        settings=Settings(TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"),
+        gateway_keys_repository=repo,
+    )
+    with pytest.raises(GatewayKeyExternalToolFenceActiveError) as exc_info:
+        await service.authenticate_authorization_header(f"Bearer {token}", now=now)
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.error_type == "rate_limit_error"
+    assert exc_info.value.error_code == "external_tool_fence_active"
+    assert repo.lookup_calls == ["public1234abcd"]

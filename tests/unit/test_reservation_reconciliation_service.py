@@ -32,6 +32,7 @@ class FakeReservation:
     request_id: str
     endpoint: str = "/v1/chat/completions"
     requested_model: str | None = "gpt-test-mini"
+    quota_mode: str = "strict_bounded"
     reserved_cost_eur: Decimal = Decimal("0.300000000")
     reserved_tokens: int = 200
     reserved_requests: int = 1
@@ -315,3 +316,84 @@ async def test_batch_reconciliation_fails_on_invariant_error() -> None:
             now=datetime(2026, 1, 1, 1, tzinfo=UTC),
             limit=100,
         )
+
+
+@pytest.mark.asyncio
+async def test_list_flags_external_tool_fenced_reservations_for_review() -> None:
+    key = FakeGatewayKey(id=uuid.uuid4())
+    strict = FakeReservation(id=uuid.uuid4(), gateway_key_id=key.id, request_id="strict")
+    fenced = FakeReservation(
+        id=uuid.uuid4(),
+        gateway_key_id=key.id,
+        request_id="fenced",
+        quota_mode="external_tool_fenced",
+    )
+    service = ReservationReconciliationService(
+        gateway_keys_repository=FakeKeysRepo(key),
+        quota_reservations_repository=FakeQuotaRepo([strict, fenced]),
+        usage_ledger_repository=FakeUsageRepo(),
+        audit_repository=FakeAuditRepo(),
+    )
+
+    rows = await service.list_expired_pending_reservations(now=datetime(2026, 1, 1, 1, tzinfo=UTC))
+
+    by_id = {row.request_id: row for row in rows}
+    assert by_id["strict"].requires_external_tool_review is False
+    assert by_id["fenced"].requires_external_tool_review is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_single_external_tool_fenced_reservation_is_never_reconciled(dry_run: bool) -> None:
+    service, reservation, key, usage_repo, audit_repo = _service(
+        reservation=FakeReservation(
+            id=uuid.uuid4(),
+            gateway_key_id=uuid.uuid4(),
+            request_id="fenced-req",
+            quota_mode="external_tool_fenced",
+        ),
+        key=FakeGatewayKey(id=uuid.uuid4()),
+    )
+
+    with pytest.raises(ReconciliationInvariantError):
+        await service.reconcile_expired_pending_reservation(
+            reservation.id,
+            now=datetime(2026, 1, 1, 1, tzinfo=UTC),
+            dry_run=dry_run,
+        )
+
+    assert reservation.status == "pending"
+    assert key.cost_reserved_eur == Decimal("0.300000000")
+    assert usage_repo.records == []
+    assert audit_repo.records == []
+
+
+@pytest.mark.asyncio
+async def test_batch_skips_external_tool_fenced_rows_and_reconciles_ordinary_rows() -> None:
+    key = FakeGatewayKey(id=uuid.uuid4())
+    ordinary = FakeReservation(id=uuid.uuid4(), gateway_key_id=key.id, request_id="ordinary")
+    fenced = FakeReservation(
+        id=uuid.uuid4(),
+        gateway_key_id=key.id,
+        request_id="fenced",
+        quota_mode="external_tool_fenced",
+    )
+    service = ReservationReconciliationService(
+        gateway_keys_repository=FakeKeysRepo(key),
+        quota_reservations_repository=FakeQuotaRepo([ordinary, fenced]),
+        usage_ledger_repository=FakeUsageRepo(),
+        audit_repository=FakeAuditRepo(),
+    )
+
+    summary = await service.reconcile_expired_pending_reservations(
+        now=datetime(2026, 1, 1, 1, tzinfo=UTC),
+        limit=100,
+    )
+
+    assert summary.checked_count == 2
+    assert summary.candidate_count == 2
+    assert summary.reconciled_count == 1
+    assert summary.skipped_count == 1
+    assert [row.request_id for row in summary.results] == ["ordinary"]
+    assert ordinary.status == "expired"
+    assert fenced.status == "pending"

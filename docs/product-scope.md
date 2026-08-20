@@ -171,8 +171,17 @@ in the runtime. It is deny-only for those surfaces, provider URL fetch
 authority, and unknown/ambiguous authority. Objective 012 adds the version-1
 taxonomy and policy/admission contract. Objective 013 stores canonical policy
 on keys, immutable template snapshots, and routes, and adds narrowed settings
-plus audited admin/CLI controls. Storage adds no request forwarding, fence,
-hold, or provider integration. Implemented local/client-side function, custom,
+plus audited admin/CLI controls; objective 013 storage adds no request
+forwarding, fence, hold, or provider integration. Objective 014 implements the
+fence and full-remaining-balance reservation foundation on the locked key row
+(no forwarding, no hold): the reservation binds the exact provider and
+route identity, the fence is exclusive against any committed pending
+reservation or unreconciled counter in either lock order, and only exact
+zero-counter terminal evidence clears it. The runtime remains deny-only for
+provider-hosted/external tools, external forwarding and the unknown-cost hold
+are still not implemented, fence expiry never means safe release, and the
+exact overrun promise remains conditional on the later provider activation
+owned by objectives 015 and 016. Implemented local/client-side function, custom,
 namespace, local-shell, and client-side apply-patch workflows keep their
 existing independent gates and do not grant SLAIF provider/external authority.
 
@@ -198,8 +207,10 @@ storage rules, negative tests, auditability, and operator-visible limits.
 ### Non-goals / not current
 
 - No stored hosted-tool, MCP, or external-tool policy is consumed by runtime
-  request admission. Objectives 014–016 must implement the fence, hold,
-  accounting, and provider contracts before activation.
+  request admission. The objective-014 fence and reservation foundation is
+  implemented, but external forwarding and the unknown-cost hold are still
+  not implemented; objectives 015 and 016 own the hold/reconciliation and
+  selected provider execution before activation.
 - No claim of exact mid-request external-tool interruption or tool-budget
   enforcement.
 - No claim that local function/custom tool support authorizes provider-hosted

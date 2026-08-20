@@ -21,6 +21,7 @@ class StaleReservationCandidate:
     reserved_requests: int
     expires_at: datetime
     created_at: datetime
+    requires_external_tool_review: bool = False
 
 
 @dataclass(frozen=True, slots=True)

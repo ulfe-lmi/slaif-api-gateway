@@ -641,8 +641,12 @@ fails closed. Client MCP/network behavior outside provider wire authority is a
 client responsibility; SLAIF cannot claim to observe or block undeclared client
 action. Provider background execution, stored/previous-response state, and
 provider authentication remain distinct unsupported surfaces and are not
-implicitly enabled. Objectives 014–17 own the fence, hold, selected-provider
-contracts, and runtime integration. Current Responses
+implicitly enabled. Objective 014 implements the fence and
+full-remaining-balance reservation foundation on the locked key row, but
+external forwarding and the unknown-cost hold are still not implemented;
+objectives 015–17 own the hold, reconciliation, selected-provider contracts,
+and runtime integration, and the exact overrun and one-winner concurrency
+promise remains conditional on that later activation. Current Responses
 runtime remains deny-only for every provider-hosted/external tool.
 
 ## Key Policy

@@ -866,6 +866,20 @@ strict depth/count bounds and cannot hide provider-hosted, MCP/connector,
 unknown, malformed, or mixed authority. This position-aware classification
 changes no current runtime denial and grants no forwarding or execution.
 
+Objective 014 implements the fence and reservation foundation for that
+promise on the serialized key row: an exclusive fence state, reservation
+pointer, and timestamps on the locked `gateway_keys` row plus one
+`external_tool_fenced` quota reservation holding the key's complete remaining
+cost, token, and one request of balance. The foundation is implemented, but
+external forwarding and the unknown-cost hold are still not implemented and
+provider-hosted tools remain denied; objectives 015 and 016 own the
+hold/reconciliation and selected provider execution transitions. The locked
+PostgreSQL key row is the single concurrency authority; Redis is not. Fence
+expiry is an inspection threshold and never means safe release. Emergency
+suspend or revoke stops admission but does not settle accounting, and the
+exact overrun and one-winner concurrency promise above remains conditional on
+the later provider activation.
+
 Key templates are versioned snapshots for the currently implemented safe
 policy vocabulary. A reviewed template revision can create one normal gateway
 key and records template/revision provenance. Editing a template never silently
