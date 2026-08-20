@@ -1016,6 +1016,97 @@ async def _run_gateway_created_hold_reconciliation(
             else:
                 assert updated_key.cost_used_eur == Decimal("0")
                 assert updated_key.tokens_used_total == 0
+
+        follow_controller = SimpleNamespace(
+            calls=[],
+            block_first=False,
+            entered=asyncio.Event(),
+            release=asyncio.Event(),
+        )
+        follow_app, follow_client, follow_released = await _gateway_client(
+            monkeypatch,
+            None,
+            key,
+            route_row,
+            provider_response=_provider_response(),
+            session_factory=factory,
+            provider_controller=follow_controller,
+        )
+        _ = follow_app
+        if action == ExternalToolHoldAction.FINALIZE_ACTUAL:
+            async with follow_client:
+                follow_ordinary = await follow_client.post(
+                    "/v1/responses",
+                    json={
+                        "model": route_row.requested_model,
+                        "input": "hello",
+                        "store": False,
+                    },
+                )
+                follow_hosted = await follow_client.post(
+                    "/v1/responses", json=request_body
+                )
+            assert follow_ordinary.status_code == 429
+            assert follow_hosted.status_code == 429
+            assert follow_controller.calls == []
+            assert len(follow_released) == 2
+            async with factory() as after:
+                after_key = await GatewayKeysRepository(after).get_gateway_key_by_id(key.id)
+                assert after_key is not None
+                assert after_key.external_tool_fence_state == "none"
+                assert after_key.cost_reserved_eur == Decimal("0")
+                assert after_key.tokens_reserved_total == 0
+                assert after_key.requests_reserved_total == 0
+                after_ledgers = await UsageLedgerRepository(after).get_usage_records_by_reservation_id(
+                    reservation_id
+                )
+                assert len(after_ledgers) == 1
+                assert after_ledgers[0].id == ledger.id
+                after_audits = [
+                    audit
+                    for audit in await AuditRepository(after).list_audit_logs()
+                    if audit.entity_id == key.id
+                ]
+                assert len(after_audits) == 4
+                assert "provider-reconciliation-canary" not in repr(after_ledgers)
+        else:
+            async with follow_client:
+                follow_hosted = await follow_client.post(
+                    "/v1/responses", json=request_body
+                )
+            assert follow_hosted.status_code == 200, follow_hosted.text
+            assert len(follow_controller.calls) == 1
+            assert len(follow_released) == 1
+            assert "provider-reconciliation-canary" not in follow_hosted.text
+            async with factory() as after:
+                after_key = await GatewayKeysRepository(after).get_gateway_key_by_id(key.id)
+                assert after_key is not None
+                assert after_key.external_tool_fence_state == "none"
+                assert after_key.cost_reserved_eur == Decimal("0")
+                assert after_key.tokens_reserved_total == 0
+                after_ledgers = list(
+                    (
+                        await after.execute(
+                            select(UsageLedger).where(UsageLedger.gateway_key_id == key.id)
+                        )
+                    ).scalars()
+                )
+                assert len(after_ledgers) == 2
+                assert sum(ledger.success is True for ledger in after_ledgers) == 1
+                after_audits = [
+                    audit
+                    for audit in await AuditRepository(after).list_audit_logs()
+                    if audit.entity_id == key.id
+                ]
+                assert sum(
+                    audit.action == "external_tool_accounting_hold_reconciled"
+                    for audit in after_audits
+                ) == 1
+                assert sum(
+                    audit.action == "external_tool_accounting_hold_created"
+                    for audit in after_audits
+                ) == 1
+                assert "provider-reconciliation-canary" not in repr(after_ledgers)
         assert len(released) == 3
     finally:
         await engine.dispose()
