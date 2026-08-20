@@ -348,6 +348,18 @@ class ExternalToolFenceService:
                 "Gateway key could not be locked for fence resolution",
                 code="external_tool_fence_key_missing",
             )
+        if permit_held and (
+            state != FENCE_HELD or gateway_key.external_tool_fence_state != FENCE_HELD
+        ):
+            if gateway_key.external_tool_fence_state == FENCE_NONE:
+                return ExternalToolFenceResolveResult(
+                    gateway_key_id=resolve_input.gateway_key_id,
+                    fence_state=FENCE_NONE,
+                    resolved=False,
+                )
+            raise ExternalToolFenceConflictError(
+                code="external_tool_fence_held_state_changed"
+            )
         if state == FENCE_ACTIVE and gateway_key.external_tool_fence_state == FENCE_HELD and not permit_held:
             return ExternalToolFenceResolveResult(
                 gateway_key_id=resolve_input.gateway_key_id,

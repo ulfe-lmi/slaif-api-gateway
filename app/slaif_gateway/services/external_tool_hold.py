@@ -28,25 +28,29 @@ from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceConflictError,
     ExternalToolFenceService,
 )
+from slaif_gateway.services.reconciliation_errors import ReconciliationError
 
 _EXTERNAL_TOOL_FENCED = "external_tool_fenced"
 
 
-class ExternalToolAccountingHoldError(Exception):
+class ExternalToolAccountingHoldError(ReconciliationError):
     """Safe domain error for hold placement."""
 
     status_code = 409
     error_code = "external_tool_accounting_hold_error"
+    message = "External-tool accounting hold reconciliation failed"
 
 
 class InvalidExternalToolAccountingHoldError(ExternalToolAccountingHoldError):
     status_code = 400
     error_code = "invalid_external_tool_accounting_hold"
+    message = "Invalid external-tool accounting hold request"
 
 
 class ExternalToolAccountingHoldInvariantError(ExternalToolAccountingHoldError):
     status_code = 500
-    error_code = "external_tool_accounting_hold_invariant"
+    error_code = "external_tool_accounting_hold_invariant_error"
+    message = "External-tool accounting hold invariant violation"
 
 
 class ExternalToolAccountingHoldService:
@@ -95,23 +99,29 @@ class ExternalToolAccountingHoldService:
         if gateway_key is None:
             raise ExternalToolAccountingHoldInvariantError("Hold gateway key is missing")
 
-        self._validate_reservation_and_fence(hold_input, reservation, gateway_key)
         ledgers = await self._usage_ledger_repository.get_usage_records_by_reservation_id(
             reservation.id
         )
-        if len(ledgers) == 1 and gateway_key.external_tool_fence_state == FENCE_HELD:
+        if gateway_key.external_tool_fence_state == FENCE_HELD:
+            if len(ledgers) != 1:
+                raise ExternalToolAccountingHoldInvariantError(
+                    "A held fence requires exactly one linked usage ledger"
+                )
             ledger = ledgers[0]
+            self._validate_locked_candidate(ledger, reservation, gateway_key)
             if _ledger_matches_hold(
                 ledger,
-                reason_code=hold_input.reason_code,
-                evidence_quality=hold_input.evidence_quality,
-                partial_total_tokens=hold_input.partial_total_tokens,
-                estimated_cost_eur=hold_input.estimated_cost_eur,
+                hold_input=hold_input,
             ):
                 return _projection(gateway_key, reservation, ledger)
             raise ExternalToolFenceConflictError(
                 code="external_tool_accounting_hold_retry_conflict"
             )
+        if gateway_key.external_tool_fence_state != FENCE_ACTIVE:
+            raise ExternalToolAccountingHoldInvariantError(
+                "A new hold requires an active fence"
+            )
+        self._validate_reservation_and_fence(hold_input, reservation, gateway_key)
         if ledgers:
             raise ExternalToolAccountingHoldInvariantError(
                 "A new hold requires zero linked usage ledgers"
@@ -200,32 +210,8 @@ class ExternalToolAccountingHoldService:
             if gateway_key is None:
                 continue
             try:
-                self._validate_reservation_and_fence(
-                    ExternalToolAccountingHoldInput(
-                        gateway_key_id=gateway_key.id,
-                        reservation_id=reservation.id,
-                        request_id=reservation.request_id,
-                        reason_code=ExternalToolHoldReasonCode(
-                            ((ledger.response_metadata or {}).get("external_tool_accounting_hold") or {})[
-                                "reason_code"
-                            ]
-                        ),
-                        evidence_quality=ExternalToolHoldEvidenceQuality(
-                            ((ledger.response_metadata or {}).get("external_tool_accounting_hold") or {})[
-                                "evidence_quality"
-                            ]
-                        ),
-                        streaming=ledger.streaming,
-                        now=ledger.created_at,
-                        partial_total_tokens=ledger.total_tokens or None,
-                        estimated_cost_eur=ledger.estimated_cost_eur,
-                    ),
-                    reservation,
-                    gateway_key,
-                )
+                self._validate_locked_candidate(ledger, reservation, gateway_key)
             except (KeyError, ValueError, ExternalToolAccountingHoldError):
-                continue
-            if ledger.accounting_status not in ("estimated", "interrupted"):
                 continue
             projections.append(_projection(gateway_key, reservation, ledger))
         return projections[:limit]
@@ -258,6 +244,14 @@ class ExternalToolAccountingHoldService:
         )
         if gateway_key is None:
             raise ExternalToolAccountingHoldInvariantError("Hold gateway key is missing")
+
+        locked_ledgers = await self._usage_ledger_repository.get_usage_records_by_reservation_id(
+            reservation.id
+        )
+        if len(locked_ledgers) != 1 or locked_ledgers[0].id != ledger.id:
+            raise ExternalToolAccountingHoldInvariantError(
+                "Reconciliation requires exactly one linked hold ledger"
+            )
 
         prior = _reconciliation_metadata(ledger)
         if reservation.status in ("finalized", "released") and gateway_key.external_tool_fence_state == "none":
@@ -357,7 +351,7 @@ class ExternalToolAccountingHoldService:
                 "actual_total_tokens": ledger.total_tokens,
                 "success": ledger.success,
             },
-            note="external tool accounting hold reconciled",
+            note=request.reason.strip(),
         )
         await self._fence_service.resolve(
             ExternalToolFenceResolveInput(
@@ -436,17 +430,22 @@ class ExternalToolAccountingHoldService:
         ):
             raise ExternalToolAccountingHoldInvariantError("Hold ledger ownership mismatch")
         if (
+            getattr(ledger, "actual_cost_eur", None) is not None
+            or getattr(ledger, "actual_cost_native", None) is not None
+            or getattr(ledger, "usage_raw", {}) != {}
+        ):
+            raise ExternalToolAccountingHoldInvariantError(
+                "Hold ledger contains terminal cost or raw usage evidence"
+            )
+        if (
             gateway_key.cost_reserved_eur != reservation.reserved_cost_eur
             or gateway_key.tokens_reserved_total != reservation.reserved_tokens
             or gateway_key.requests_reserved_total != reservation.reserved_requests
         ):
             raise ExternalToolAccountingHoldInvariantError("Hold reservation counters are inconsistent")
-        hold = (ledger.response_metadata or {}).get("external_tool_accounting_hold")
+        hold = _exact_hold_metadata(ledger)
         if (
-            not isinstance(hold, dict)
-            or hold.get("version") != 1
-            or hold.get("state") != "held"
-            or hold.get("needs_reconciliation") is not True
+            hold is None
             or ledger.accounting_status not in ("estimated", "interrupted")
             or ledger.success is not None
         ):
@@ -456,10 +455,21 @@ class ExternalToolAccountingHoldService:
 def _validate_reconciliation_input(request: ExternalToolHoldReconciliationInput) -> None:
     if not isinstance(request.action, ExternalToolHoldAction):
         raise InvalidExternalToolAccountingHoldError("Unknown reconciliation action")
-    if request.actor_admin_id is None or not isinstance(request.actor_admin_id, UUID):
-        raise InvalidExternalToolAccountingHoldError("An admin actor is required")
-    if not isinstance(request.reason, str) or not request.reason.strip() or len(request.reason) > 500:
-        raise InvalidExternalToolAccountingHoldError("A bounded reconciliation reason is required")
+    if request.actor_admin_id is not None and not isinstance(request.actor_admin_id, UUID):
+        raise InvalidExternalToolAccountingHoldError("Admin actor must be a UUID")
+    if request.reason is not None and (
+        not isinstance(request.reason, str)
+        or not request.reason.strip()
+        or len(request.reason) > 500
+    ):
+        raise InvalidExternalToolAccountingHoldError("Reconciliation reason is invalid")
+    if request.execute:
+        if request.actor_admin_id is None:
+            raise InvalidExternalToolAccountingHoldError("An admin actor is required")
+        if request.reason is None or not request.reason.strip():
+            raise InvalidExternalToolAccountingHoldError(
+                "A bounded reconciliation reason is required"
+            )
     if request.action == ExternalToolHoldAction.FINALIZE_ACTUAL:
         if request.confirm_no_charge:
             raise InvalidExternalToolAccountingHoldError("No-charge confirmation is incompatible")
@@ -477,8 +487,25 @@ def _validate_reconciliation_input(request: ExternalToolHoldReconciliationInput)
             raise InvalidExternalToolAccountingHoldError("Actual tokens must be non-negative")
         if not isinstance(request.success, bool):
             raise InvalidExternalToolAccountingHoldError("Provider outcome must be explicit")
-    elif not request.confirm_no_charge:
-        raise InvalidExternalToolAccountingHoldError("No-charge release requires explicit confirmation")
+    else:
+        if (
+            request.actual_cost_eur is not None
+            or request.actual_total_tokens is not None
+            or request.success is not None
+        ):
+            raise InvalidExternalToolAccountingHoldError(
+                "No-charge release cannot include actual usage or outcome fields"
+            )
+        if not request.confirm_no_charge:
+            raise InvalidExternalToolAccountingHoldError(
+                "No-charge release requires explicit confirmation"
+            )
+
+
+def validate_reconciliation_input(request: ExternalToolHoldReconciliationInput) -> None:
+    """Validate CLI/service action flags before opening a database session."""
+
+    _validate_reconciliation_input(request)
 
 
 def _reconciliation_metadata(ledger) -> dict[str, object] | None:
@@ -553,6 +580,34 @@ def _reconciliation_result(request, *, ledger, reservation, gateway_key, idempot
         idempotent=idempotent,
     )
 
+def _exact_hold_metadata(ledger) -> dict[str, object] | None:
+    hold = (ledger.response_metadata or {}).get("external_tool_accounting_hold")
+    if not isinstance(hold, dict):
+        return None
+    if set(hold) != {
+        "version",
+        "state",
+        "reason_code",
+        "needs_reconciliation",
+        "evidence_quality",
+        "held_at",
+    }:
+        return None
+    if hold.get("version") != 1 or hold.get("state") != "held":
+        return None
+    if hold.get("needs_reconciliation") is not True:
+        return None
+    try:
+        ExternalToolHoldReasonCode(str(hold["reason_code"]))
+        ExternalToolHoldEvidenceQuality(str(hold["evidence_quality"]))
+        held_at = datetime.fromisoformat(str(hold["held_at"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if held_at.tzinfo is None or held_at.utcoffset() is None:
+        return None
+    return hold
+
+
 def _validate_input(value: ExternalToolAccountingHoldInput) -> None:
     if not isinstance(value.reason_code, ExternalToolHoldReasonCode):
         raise InvalidExternalToolAccountingHoldError("Unknown hold reason code")
@@ -573,22 +628,17 @@ def _aware_now(value: datetime) -> datetime:
 def _ledger_matches_hold(
     ledger,
     *,
-    reason_code: ExternalToolHoldReasonCode,
-    evidence_quality: ExternalToolHoldEvidenceQuality,
-    partial_total_tokens: int | None,
-    estimated_cost_eur: Decimal | None,
+    hold_input: ExternalToolAccountingHoldInput,
 ) -> bool:
-    hold = (ledger.response_metadata or {}).get("external_tool_accounting_hold")
+    hold = _exact_hold_metadata(ledger)
     return (
-        ledger.accounting_status in ("estimated", "interrupted")
-        and ledger.success is None
-        and isinstance(hold, dict)
-        and hold.get("version") == 1
-        and hold.get("state") == "held"
-        and hold.get("reason_code") == reason_code.value
-        and hold.get("evidence_quality") == evidence_quality.value
-        and ledger.total_tokens == (partial_total_tokens or 0)
-        and ledger.estimated_cost_eur == estimated_cost_eur
+        hold is not None
+        and hold.get("reason_code") == hold_input.reason_code.value
+        and hold.get("evidence_quality") == hold_input.evidence_quality.value
+        and ledger.streaming == hold_input.streaming
+        and ledger.total_tokens
+        == (hold_input.partial_total_tokens if hold_input.partial_total_tokens is not None else 0)
+        and ledger.estimated_cost_eur == hold_input.estimated_cost_eur
     )
 
 
@@ -613,7 +663,9 @@ def _projection(gateway_key, reservation, ledger):
         reserved_cost_eur=reservation.reserved_cost_eur,
         reserved_tokens=reservation.reserved_tokens,
         reserved_requests=reservation.reserved_requests,
-        partial_total_tokens=ledger.total_tokens or None,
+        partial_total_tokens=(
+            ledger.total_tokens if ledger.accounting_status == "estimated" else None
+        ),
         estimated_cost_eur=ledger.estimated_cost_eur,
     )
 

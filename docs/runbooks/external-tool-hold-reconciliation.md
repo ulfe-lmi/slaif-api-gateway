@@ -16,8 +16,9 @@ Operators may inspect candidates with:
 slaif-gateway quota list-external-tool-holds --limit 100 --json
 ```
 
-Reconciliation is dry-run by default. Only an authenticated operator action
-with an admin UUID, bounded reason, and `--execute` can either provide explicit
+Reconciliation is dry-run by default. Dry-run validates the proposed action and
+evidence and does not require an actor UUID or reason. Only an authenticated
+operator action with an admin UUID, bounded reason, and `--execute` can either provide explicit
 actual cost/tokens and a boolean provider outcome, or release with
 `--confirm-no-charge`. The supplied actual amount is reconciliation evidence,
 not a provider-invoice equivalence guarantee. A charged provider failure is
@@ -58,3 +59,11 @@ reconciliation inspects and alerts on holds only; it never auto-executes them.
 Redis is not used for hold truth, and no raw provider/tool content, URLs,
 credentials, prompts, responses, arguments, results, or diagnostics are
 stored.
+
+The `finalize-actual` and `release-no-charge` evidence flags are mutually
+exclusive and strict: release rejects supplied actual cost, token, or success
+facts, while finalize requires all three explicit facts and rejects
+`--confirm-no-charge`. The bounded operator reason is retained as the audit
+event note. Only the exact held-fence, pending-reservation, single-ledger
+shape is eligible; malformed, missing, or multiply linked ledgers are reported
+for inspection and are never repaired or retried automatically.

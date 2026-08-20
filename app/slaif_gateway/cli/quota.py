@@ -14,6 +14,7 @@ from slaif_gateway.cli.common import (
     echo_kv,
     emit_json,
     handle_cli_error,
+    parse_decimal,
     parse_uuid,
     require_positive_limit,
     run_async,
@@ -37,7 +38,10 @@ from slaif_gateway.schemas.reconciliation import (
     StaleReservationCandidate,
 )
 from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
-from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
+from slaif_gateway.services.external_tool_hold import (
+    ExternalToolAccountingHoldService,
+    validate_reconciliation_input,
+)
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 
 app = typer.Typer(help="Inspect and repair quota reservations")
@@ -271,8 +275,6 @@ def reconcile_external_tool_hold(
     """Dry-run by default; explicitly reconcile one held external-tool request."""
     try:
         parsed_action = ExternalToolHoldAction(action)
-        from decimal import Decimal
-
         request = ExternalToolHoldReconciliationInput(
             reservation_id=parse_uuid(reservation_id, field_name="reservation_id"),
             action=parsed_action,
@@ -281,11 +283,12 @@ def reconcile_external_tool_hold(
             if actor_admin_id
             else None,
             reason=reason,
-            actual_cost_eur=Decimal(actual_cost_eur) if actual_cost_eur is not None else None,
+            actual_cost_eur=parse_decimal(actual_cost_eur, field_name="actual_cost_eur"),
             actual_total_tokens=actual_total_tokens,
             success=success,
             confirm_no_charge=confirm_no_charge,
         )
+        validate_reconciliation_input(request)
         result = run_async(_reconcile_external_tool_hold(request))
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)

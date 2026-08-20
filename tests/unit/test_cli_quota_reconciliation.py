@@ -10,6 +10,11 @@ from typer.testing import CliRunner
 from slaif_gateway.cli import quota as quota_cli
 from slaif_gateway.cli.main import app
 from slaif_gateway.schemas.external_tool_fence import ExternalToolFenceProjection
+from slaif_gateway.schemas.external_tool_hold import (
+    ExternalToolAccountingHoldProjection,
+    ExternalToolHoldAction,
+    ExternalToolHoldReconciliationResult,
+)
 from slaif_gateway.schemas.reconciliation import (
     ReservationReconciliationResult,
     ReservationReconciliationSummary,
@@ -58,6 +63,131 @@ def test_quota_help_includes_reconciliation_commands() -> None:
     assert "list-expired-reservations" in result.stdout
     assert "reconcile-expired-reservations" in result.stdout
     assert "reconcile-reservation" in result.stdout
+    assert "list-external-tool-holds" in result.stdout
+    assert "reconcile-external-tool-hold" in result.stdout
+
+
+def _hold_projection() -> ExternalToolAccountingHoldProjection:
+    return ExternalToolAccountingHoldProjection(
+        gateway_key_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+        reservation_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        usage_ledger_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        request_id="req-held",
+        fence_state="held",
+        accounting_status="interrupted",
+        reason_code="missing_final_cost",
+        evidence_quality="missing",
+        held_at=datetime(2026, 1, 1, tzinfo=UTC),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        expires_at=datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+        provider="openai",
+        endpoint="/v1/chat/completions",
+        requested_model="gpt-test",
+        reserved_cost_eur=Decimal("1.2"),
+        reserved_tokens=100,
+        reserved_requests=1,
+        partial_total_tokens=None,
+        estimated_cost_eur=None,
+    )
+
+
+def test_list_external_tool_holds_prints_safe_text_and_json(monkeypatch) -> None:
+    async def fake_list(*, limit):
+        return [_hold_projection()]
+
+    monkeypatch.setattr(quota_cli, "_list_external_tool_holds", fake_list)
+    text_result = runner.invoke(app, ["quota", "list-external-tool-holds"])
+    json_result = runner.invoke(app, ["quota", "list-external-tool-holds", "--json"])
+
+    assert text_result.exit_code == 0
+    assert "req-held" in text_result.stdout
+    assert "token_hash" not in text_result.stdout
+    assert json.loads(json_result.stdout)["external_tool_holds"][0]["fence_state"] == "held"
+
+
+def test_list_external_tool_holds_empty_state(monkeypatch) -> None:
+    async def fake_list(*, limit):
+        return []
+
+    monkeypatch.setattr(quota_cli, "_list_external_tool_holds", fake_list)
+    result = runner.invoke(app, ["quota", "list-external-tool-holds"])
+
+    assert result.exit_code == 0
+    assert "No external-tool accounting holds found." in result.stdout
+
+
+def test_external_tool_hold_dry_run_needs_no_actor_or_reason(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_reconcile(request):
+        seen["request"] = request
+        return ExternalToolHoldReconciliationResult(
+            reservation_id=request.reservation_id,
+            usage_ledger_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+            action=request.action.value,
+            executed=False,
+            fence_state="held",
+            reservation_status="pending",
+            accounting_status="interrupted",
+            actual_cost_eur=None,
+            actual_total_tokens=0,
+            success=None,
+        )
+
+    monkeypatch.setattr(quota_cli, "_reconcile_external_tool_hold", fake_reconcile)
+    result = runner.invoke(
+        app,
+        [
+            "quota",
+            "reconcile-external-tool-hold",
+            "--reservation-id",
+            str(_hold_projection().reservation_id),
+            "--action",
+            ExternalToolHoldAction.FINALIZE_ACTUAL.value,
+            "--actual-cost-eur",
+            "0.1",
+            "--actual-total-tokens",
+            "10",
+            "--success",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["request"].execute is False
+    assert seen["request"].actor_admin_id is None
+
+
+def test_external_tool_hold_execute_and_release_flag_errors_are_safe() -> None:
+    base = [
+        "quota",
+        "reconcile-external-tool-hold",
+        "--reservation-id",
+        str(_hold_projection().reservation_id),
+        "--action",
+        "release-no-charge",
+        "--execute",
+        "--confirm-no-charge",
+        "--json",
+    ]
+    missing_actor = runner.invoke(app, base)
+    incompatible = runner.invoke(
+        app,
+        base
+        + [
+            "--actor-admin-id",
+            str(uuid.uuid4()),
+            "--reason",
+            "confirmed",
+            "--actual-cost-eur",
+            "0",
+        ],
+    )
+
+    assert missing_actor.exit_code == 1
+    assert json.loads(missing_actor.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
+    assert incompatible.exit_code == 1
+    assert json.loads(incompatible.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
 
 
 def test_list_expired_reservations_prints_safe_text(monkeypatch) -> None:

@@ -70,6 +70,7 @@ class FakeLedger:
     estimated_cost_eur: Decimal | None
     response_metadata: dict[str, object]
     actual_cost_eur: Decimal | None = None
+    streaming: bool = False
     created_at: datetime = NOW
 
 
@@ -132,6 +133,7 @@ class Usage:
             total_tokens=kwargs["total_tokens"],
             estimated_cost_eur=kwargs["estimated_cost_eur"],
             response_metadata=kwargs["response_metadata"],
+            streaming=kwargs["streaming"],
         )
         self.rows.append(row)
         return row
