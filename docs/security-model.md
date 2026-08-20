@@ -259,8 +259,9 @@ The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
-Objective 016's provider-contract-qualified OpenAI Responses `web_search`
-shape remains runtime-denied pending Objective 017. Its safe evidence is
+Objective 017 activates only the provider-contract-qualified OpenAI Responses
+`web_search` shape for an explicit `external_tool_fenced` standard key and an
+exactly matching route. Its safe evidence is
 limited to provider/capability, admitted cap, completed-call count, pricing
 source and fee, authoritative status, and a bounded reason code. Queries,
 URLs, sources, results, citations, search content, tool arguments/results,
@@ -271,9 +272,10 @@ Objective 012 defines the version-1 external-tool policy contract. Objective
 013 persists only canonical safe IDs, caps, booleans, mode, and version in
 existing key/template/route JSON and adds audited admin/CLI controls.
 `strict_bounded` remains the default/current deny-only mode.
-`external_tool_fenced` is a future explicit standard-key mode. Objective 014
-implements the fence and reservation foundation only: fence state, reservation
-pointer, and timestamps live on the locked `gateway_keys` row; the locked
+`external_tool_fenced` is an explicit standard-key mode only for the bounded
+OpenAI Responses web-search contract. Objective 014 implements the fence and
+reservation foundation: fence state, reservation pointer, and timestamps live
+on the locked `gateway_keys` row; the locked
 PostgreSQL key row is the single concurrency authority (Redis is not); fence
 expiry never means safe release; and emergency suspend or revoke stops
 admission without settling accounting. The fence is bound to the exact
@@ -291,8 +293,8 @@ gateway key and revalidates the fence pointer and evidence after both locks.
 policy is not consumed by
 provider forwarding, authentication and ordinary quota admission fail closed
 against a committed fence. Objective 015 provides the accounting hold and
-reconciliation foundation; provider-hosted forwarding remains denied pending
-the later runtime activation. Raw URLs,
+reconciliation foundation used when the web-search provider outcome is
+unknown. Raw URLs,
 credentials, labels,
 request content, and provider secrets are never stored in this policy.
 

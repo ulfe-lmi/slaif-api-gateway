@@ -31,6 +31,7 @@ _SUPPORTED_FIELDS = frozenset(
         "input",
         "instructions",
         "max_output_tokens",
+        "max_tool_calls",
         "temperature",
         "top_p",
         "metadata",
@@ -320,6 +321,7 @@ class ResponsesRequestPolicy:
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_extended_limits: bool = False,
         allow_codex_compaction_replay: bool = False,
+        allow_external_tool_request: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -415,7 +417,10 @@ class ResponsesRequestPolicy:
             allow_codex_request_envelope=allow_codex_request_envelope,
         )
         self._validate_codex_client_tool_controls(effective_body)
-        tools_schema_bytes = self._validate_tools(effective_body)
+        tools_schema_bytes = self._validate_tools(
+            effective_body,
+            allow_external_tool_request=allow_external_tool_request,
+        )
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
         custom_tools_requested = responses_custom_tools_requested(effective_body)
@@ -2611,6 +2616,14 @@ class ResponsesRequestPolicy:
             body.get("temperature"), param="temperature", minimum=0, maximum=2
         )
         self._validate_number_range(body.get("top_p"), param="top_p", minimum=0, maximum=1)
+        if "max_tool_calls" in body:
+            value = body.get("max_tool_calls")
+            if type(value) is not int or value <= 0:
+                _raise(
+                    "max_tool_calls",
+                    "responses_external_tool_invalid",
+                    "The hosted tool call limit must be a positive integer.",
+                )
 
     def _validate_input_token_count_controls(self, body: Mapping[str, Any]) -> None:
         parallel_tool_calls = body.get("parallel_tool_calls")
@@ -3085,7 +3098,12 @@ class ResponsesRequestPolicy:
             )
         return value
 
-    def _validate_tools(self, body: dict[str, Any]) -> int:
+    def _validate_tools(
+        self,
+        body: dict[str, Any],
+        *,
+        allow_external_tool_request: bool = False,
+    ) -> int:
         value = body.get("tools")
         if value is None:
             return 0
@@ -3115,6 +3133,25 @@ class ResponsesRequestPolicy:
         custom_tools_count = 0
         seen_names: set[str] = set()
         for index, tool in enumerate(value):
+            if allow_external_tool_request and isinstance(tool, Mapping) and tool.get("type") == "web_search":
+                allowed_fields = {"type", "search_context_size"}
+                if set(tool) - allowed_fields:
+                    _raise(
+                        f"tools[{index}]",
+                        "responses_external_tool_invalid",
+                        "The hosted web-search declaration contains unsupported fields.",
+                    )
+                context = tool.get("search_context_size")
+                if context is not None and context not in {"low", "medium", "high"}:
+                    _raise(
+                        f"tools[{index}].search_context_size",
+                        "responses_external_tool_invalid",
+                        "The hosted web-search context size is invalid.",
+                    )
+                canonical_tools.append(
+                    {"type": "web_search", **({"search_context_size": context} if context is not None else {})}
+                )
+                continue
             canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
                 tool,
                 param=f"tools[{index}]",

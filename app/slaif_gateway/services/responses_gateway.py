@@ -12,6 +12,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import anyio
+from sqlalchemy import select
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
@@ -27,9 +28,10 @@ from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_err
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import ConversationReference, ResponseReference
+from slaif_gateway.db.models import ConversationReference, ModelRoute, ResponseReference
 from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
 from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepository
+from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
@@ -63,6 +65,16 @@ from slaif_gateway.providers.streaming import (
 )
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.external_tool_fence import (
+    ExternalToolFenceAcquireInput,
+    ExternalToolFenceRouteFacts,
+    ExternalToolFenceResolveInput,
+)
+from slaif_gateway.schemas.external_tool_hold import (
+    ExternalToolAccountingHoldInput,
+    ExternalToolHoldEvidenceQuality,
+    ExternalToolHoldReasonCode,
+)
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
@@ -81,6 +93,14 @@ from slaif_gateway.services.codex_replay_service import (
     CodexReplayAuthorization,
     CodexReplayReferenceError,
     CodexReplayService,
+)
+from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
+from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
+from slaif_gateway.services.openai_web_search_contract import (
+    EXTERNAL_TOOL_FENCED,
+    parse_web_search_output,
+    parse_web_search_stream,
+    parse_key_external_tool_policy,
 )
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
@@ -106,6 +126,11 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     safe_responses_streaming_interrupted_estimate_metadata,
 )
 from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
+from slaif_gateway.services.responses_external_tool_runtime import (
+    ExternalToolRuntimeError,
+    admit_web_search_request,
+    with_pricing,
+)
 from slaif_gateway.services.responses_request_policy import (
     apply_codex_route_limits,
     CodexReplayRequestCandidate,
@@ -199,6 +224,12 @@ _CONVERSATION_ITEMS_ALLOWED_QUERY_KEYS = frozenset(
 _CONVERSATION_ITEMS_ALLOWED_INCLUDE_VALUES = frozenset({"message.input_image.image_url"})
 _ALLOWED_RESPONSES_STREAM_EVENT_TYPES = RESPONSES_TEXT_STREAM_EVENT_TYPES
 
+
+def _key_allows_external_web_search(authenticated_key: AuthenticatedGatewayKey) -> bool:
+    """Permit candidate parsing only for a canonical fenced key policy."""
+    parsed = parse_key_external_tool_policy(authenticated_key.external_tool_policy)
+    return bool(parsed.valid and parsed.policy is not None and parsed.policy.mode == EXTERNAL_TOOL_FENCED)
+
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
 
@@ -208,6 +239,7 @@ class _ResponsesQuotaReservation:
     cost_estimate: ChatCostEstimate
     reservation: QuotaReservationResult
     live_burn_budget: ResponsesStreamingLiveBurnBudget | None
+    external_tool_pricing: object | None = None
 
 
 def _build_safe_responses_upstream_body(
@@ -759,6 +791,13 @@ async def handle_response_create(
     ):
         if field in payload.model_fields_set and field not in body:
             body[field] = None
+    external_web_search_requested = any(
+        isinstance(tool, Mapping) and tool.get("type") == "web_search"
+        for tool in body.get("tools", [])
+    ) if isinstance(body.get("tools", []), list) else False
+    allow_external_tool_request = _key_allows_external_web_search(
+        authenticated_key
+    ) if external_web_search_requested else False
     codex_client_tools_requested = responses_codex_client_tools_requested(body)
     codex_request_envelope_requested = (
         responses_codex_request_envelope_requested(body) or codex_client_tools_requested
@@ -802,6 +841,7 @@ async def handle_response_create(
             allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
             allow_codex_extended_limits=codex_extended_limits_requested,
             allow_codex_compaction_replay=allow_codex_compaction,
+            allow_external_tool_request=allow_external_tool_request,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -856,6 +896,22 @@ async def handle_response_create(
         authorization=replay_authorization,
         route=route,
     )
+    external_web_search_admission = None
+    if external_web_search_requested:
+        try:
+            external_web_search_admission = admit_web_search_request(
+                policy_result.effective_body,
+                authenticated_key=authenticated_key,
+                route_provider=route.provider,
+                route_capabilities=route.capabilities,
+            )
+        except ExternalToolRuntimeError as exc:
+            raise OpenAICompatibleError(
+                "The requested hosted web-search contract is not enabled for this key and route.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="responses_external_tool_not_allowed",
+            ) from exc
     if previous_response_id_requested(policy_result.effective_body):
         await _verify_previous_response_reference(
             previous_response_id=str(policy_result.effective_body["previous_response_id"]),
@@ -889,9 +945,22 @@ async def handle_response_create(
             request_id=request_id,
             settings=settings,
             request=request,
+            external_tool_admission=external_web_search_admission,
         )
         cost_estimate = quota.cost_estimate
         reservation = quota.reservation
+        if external_web_search_admission is not None:
+            if quota.external_tool_pricing is None:
+                raise OpenAICompatibleError(
+                    "External-tool pricing is not configured for the resolved model.",
+                    status_code=500,
+                    error_type="server_error",
+                    code="external_tool_pricing_missing",
+                )
+            external_web_search_admission = with_pricing(
+                external_web_search_admission,
+                pricing=quota.external_tool_pricing,
+            )
 
         pre_provider_live_burn = pre_provider_responses_streaming_live_burn_error(
             quota.live_burn_budget
@@ -946,7 +1015,10 @@ async def handle_response_create(
                         declared_client_tools=codex_client_tool_declarations(
                             policy_result.effective_body
                         ),
+                        web_search=external_web_search_admission is not None,
                     ),
+                    external_web_search_admission=external_web_search_admission,
+                    external_tool_pricing=quota.external_tool_pricing,
                 )
                 return response
             except ProviderError as exc:
@@ -983,29 +1055,53 @@ async def handle_response_create(
                 call=lambda: adapter.forward_response(provider_request),
             )
         except ProviderError as exc:
-            await _record_provider_failure_and_release(
-                reservation=reservation,
-                authenticated_key=authenticated_key,
-                route=route,
-                policy_result=policy_result,
-                cost_estimate=cost_estimate,
-                request_id=request_id,
-                provider_error=exc,
-                request=request,
-            )
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.PROVIDER_ERROR_UNKNOWN_CHARGE,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                )
+            else:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=exc,
+                    request=request,
+                )
             raise openai_error_from_provider_error(exc) from exc
 
         try:
-            accounting_result = await _finalize_successful_response(
-                reservation=reservation,
-                authenticated_key=authenticated_key,
-                route=route,
-                policy_result=policy_result,
-                cost_estimate=cost_estimate,
-                provider_response=provider_response,
-                request_id=request_id,
-                request=request,
-            )
+            if external_web_search_admission is not None:
+                accounting_result = await _finalize_external_web_search_response(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    provider_response=provider_response,
+                    request_id=request_id,
+                    request=request,
+                    admission=external_web_search_admission,
+                )
+            else:
+                accounting_result = await _finalize_successful_response(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    provider_response=provider_response,
+                    request_id=request_id,
+                    request=request,
+                )
             _record_success_metrics(
                 route=route,
                 provider_response=provider_response,
@@ -1019,6 +1115,16 @@ async def handle_response_create(
                     request=request,
                 )
         except AccountingError as exc:
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                )
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc
         except QuotaError as exc:
@@ -1739,6 +1845,7 @@ async def _reserve_responses_quota(
     settings: Settings,
     request: Request | None,
     endpoint: str = RESPONSES_ENDPOINT,
+    external_tool_admission=None,
 ) -> _ResponsesQuotaReservation:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1759,6 +1866,104 @@ async def _reserve_responses_quota(
             )
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
+
+        external_tool_pricing = None
+        if external_tool_admission is not None:
+            try:
+                pricing_row = await pricing_service.find_active_pricing_rule(
+                    provider=route.provider,
+                    model=route.resolved_model,
+                    endpoint=endpoint,
+                )
+            except PricingError as exc:
+                raise openai_error_from_pricing_error(exc) from exc
+            external_tool_pricing = pricing_row.external_tool_pricing
+            if external_tool_pricing is None:
+                raise openai_error_from_pricing_error(
+                    PricingError(
+                        "External-tool pricing is not configured for the resolved model.",
+                        param="model",
+                    )
+                )
+
+            fence_service = ExternalToolFenceService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+            fence_route_id = route.route_id
+            if fence_route_id is not None:
+                try:
+                    fence_route_id = uuid.UUID(str(fence_route_id))
+                except (TypeError, ValueError, AttributeError):
+                    fence_route_id = None
+            if fence_route_id is None:
+                fence_route_id = (
+                    await session.execute(
+                        select(ModelRoute.id)
+                        .where(
+                            ModelRoute.requested_model.in_(
+                                {
+                                    route.route_pattern,
+                                    route.requested_model,
+                                    route.resolved_model,
+                                }
+                            ),
+                            ModelRoute.endpoint == RESPONSES_ENDPOINT,
+                            ModelRoute.provider == route.provider,
+                            ModelRoute.enabled.is_(True),
+                        )
+                        .order_by(ModelRoute.priority.asc(), ModelRoute.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if fence_route_id is not None:
+                    fence_route_id = uuid.UUID(str(fence_route_id))
+            if fence_route_id is None:
+                raise OpenAICompatibleError(
+                    "The resolved route has no durable route identifier for external-tool accounting.",
+                    status_code=500,
+                    error_type="server_error",
+                    code="external_tool_route_id_missing",
+                )
+            try:
+                fence_result = await fence_service.acquire(
+                    ExternalToolFenceAcquireInput(
+                        gateway_key_id=authenticated_key.gateway_key_id,
+                        request_id=request_id,
+                        route=ExternalToolFenceRouteFacts(
+                            endpoint=endpoint,
+                            requested_model=route.requested_model,
+                            provider=route.provider,
+                            route_id=fence_route_id,
+                        ),
+                        capabilities=(external_tool_admission.request.capability,),
+                        destination_ids=(),
+                        decision=external_tool_admission.decision,
+                        now=datetime.now(UTC),
+                    )
+                )
+            except Exception:
+                raise
+            reservation = QuotaReservationResult(
+                reservation_id=fence_result.reservation_id,
+                gateway_key_id=fence_result.gateway_key_id,
+                request_id=fence_result.request_id,
+                reserved_cost_eur=fence_result.reserved_cost_eur,
+                reserved_tokens=fence_result.reserved_tokens,
+                status="pending",
+                expires_at=fence_result.expires_at,
+            )
+            live_burn_budget = None
+            if hasattr(session, "commit"):
+                await session.commit()
+            return _ResponsesQuotaReservation(
+                cost_estimate=cost_estimate,
+                reservation=reservation,
+                live_burn_budget=live_burn_budget,
+                external_tool_pricing=external_tool_pricing,
+            )
 
         gateway_keys_repository = GatewayKeysRepository(session)
         quota_service = QuotaService(
@@ -1799,6 +2004,7 @@ async def _reserve_responses_quota(
             cost_estimate=cost_estimate,
             reservation=reservation,
             live_burn_budget=live_burn_budget,
+            external_tool_pricing=external_tool_pricing,
         )
     finally:
         await session_iterator.aclose()
@@ -1818,6 +2024,8 @@ def _streaming_responses_response(
     upstream_body: dict[str, object],
     live_burn_budget: ResponsesStreamingLiveBurnBudget | None,
     stream_validation_profile: ResponsesStreamValidationProfile | None = None,
+    external_web_search_admission=None,
+    external_tool_pricing=None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -1874,23 +2082,33 @@ def _streaming_responses_response(
                             "by this gateway."
                         )
                     )
-                    await _finalize_responses_stream_interruption_after_output(
-                        reservation=reservation,
-                        authenticated_key=authenticated_key,
-                        route=route,
-                        policy_result=policy_result,
-                        cost_estimate=cost_estimate,
-                        request_id=request_id,
-                        provider_error=ProviderError(
-                            safe_message,
-                            provider=route.provider,
-                            upstream_status_code=200,
-                            error_code=error_code,
-                        ),
-                        request=request,
-                        estimate_reason="responses_streaming_provider_error_estimated",
-                        stream_estimate_monitor=stream_estimate_monitor,
-                    )
+                    if external_web_search_admission is not None:
+                        await _place_external_web_search_hold(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            request_id=request_id,
+                            request=request,
+                            reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                            evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                        )
+                    else:
+                        await _finalize_responses_stream_interruption_after_output(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            route=route,
+                            policy_result=policy_result,
+                            cost_estimate=cost_estimate,
+                            request_id=request_id,
+                            provider_error=ProviderError(
+                                safe_message,
+                                provider=route.provider,
+                                upstream_status_code=200,
+                                error_code=error_code,
+                            ),
+                            request=request,
+                            estimate_reason="responses_streaming_provider_error_estimated",
+                            stream_estimate_monitor=stream_estimate_monitor,
+                        )
                     provider_status = "incomplete"
                     yield format_responses_error_event(
                         message=safe_message,
@@ -1905,15 +2123,27 @@ def _streaming_responses_response(
                     continue
                 live_burn_estimate = stream_estimate_monitor.observe_chunk(chunk.json_body)
                 if live_burn_estimate is not None:
-                    await _record_streaming_live_burn_abort_estimate(
-                        reservation=reservation,
-                        authenticated_key=authenticated_key,
-                        route=route,
-                        cost_estimate=cost_estimate,
-                        request_id=request_id,
-                        estimate=live_burn_estimate,
-                        request=request,
-                    )
+                    if external_web_search_admission is not None:
+                        await _place_external_web_search_hold(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            request_id=request_id,
+                            request=request,
+                            reason_code=ExternalToolHoldReasonCode.AMBIGUOUS_FINAL_COST,
+                            evidence_quality=ExternalToolHoldEvidenceQuality.PARTIAL_ESTIMATE,
+                            partial_total_tokens=live_burn_estimate.estimated_total_tokens,
+                            estimated_cost_eur=live_burn_estimate.estimated_cost_eur,
+                        )
+                    else:
+                        await _record_streaming_live_burn_abort_estimate(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            route=route,
+                            cost_estimate=cost_estimate,
+                            request_id=request_id,
+                            estimate=live_burn_estimate,
+                            request=request,
+                        )
                     provider_status = "interrupted"
                     yield format_responses_error_event(
                         message=RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
@@ -1928,67 +2158,102 @@ def _streaming_responses_response(
                     chunk=completed_chunk,
                     upstream_request_id=upstream_request_id,
                 )
-                provider_completed_record = await _record_provider_completed_before_finalization(
-                    reservation=reservation,
-                    authenticated_key=authenticated_key,
-                    route=route,
-                    cost_estimate=cost_estimate,
-                    provider_response=provider_response,
-                    request_id=request_id,
-                    request=request,
-                )
-                try:
-                    accounting_result = await _finalize_successful_response(
+                provider_completed_record = None
+                streaming_evidence = None
+                if external_web_search_admission is not None:
+                    streaming_evidence = parse_web_search_stream(
+                        stream_event_validator.take_web_search_evidence(),
+                        admitted_call_cap=external_web_search_admission.request.effective_tool_call_cap,
+                        pricing=external_tool_pricing,
+                        provider=route.provider,
+                        tool_choice=policy_result.effective_body.get("tool_choice"),
+                    )
+                    if not streaming_evidence.authoritative:
+                        raise AccountingError("Authoritative web-search stream evidence is required")
+                else:
+                    provider_completed_record = await _record_provider_completed_before_finalization(
                         reservation=reservation,
                         authenticated_key=authenticated_key,
                         route=route,
-                        policy_result=policy_result,
                         cost_estimate=cost_estimate,
                         provider_response=provider_response,
                         request_id=request_id,
                         request=request,
-                        streaming=True,
-                        provider_completed_usage_ledger_id=(
-                            provider_completed_record.usage_ledger_id
-                        ),
                     )
+                try:
+                    if external_web_search_admission is not None:
+                        accounting_result = await _finalize_external_web_search_response(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            route=route,
+                            policy_result=policy_result,
+                            cost_estimate=cost_estimate,
+                            provider_response=provider_response,
+                            request_id=request_id,
+                            request=request,
+                            admission=external_web_search_admission,
+                            streaming=True,
+                            streaming_evidence=streaming_evidence,
+                        )
+                    else:
+                        accounting_result = await _finalize_successful_response(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            route=route,
+                            policy_result=policy_result,
+                            cost_estimate=cost_estimate,
+                            provider_response=provider_response,
+                            request_id=request_id,
+                            request=request,
+                            streaming=True,
+                            provider_completed_usage_ledger_id=(
+                                provider_completed_record.usage_ledger_id
+                            ),
+                        )
                 except AccountingError as exc:
-                    await _mark_provider_completed_finalization_failed(
-                        usage_ledger_id=provider_completed_record.usage_ledger_id,
-                        reservation_id=reservation.reservation_id,
-                        error=exc,
-                        request=request,
-                    )
+                    if provider_completed_record is not None:
+                        await _mark_provider_completed_finalization_failed(
+                            usage_ledger_id=provider_completed_record.usage_ledger_id,
+                            reservation_id=reservation.reservation_id,
+                            error=exc,
+                            request=request,
+                        )
                     raise
                 except QuotaError as exc:
-                    await _mark_provider_completed_finalization_failed(
-                        usage_ledger_id=provider_completed_record.usage_ledger_id,
-                        reservation_id=reservation.reservation_id,
-                        error=exc,
-                        request=request,
-                    )
+                    if provider_completed_record is not None:
+                        await _mark_provider_completed_finalization_failed(
+                            usage_ledger_id=provider_completed_record.usage_ledger_id,
+                            reservation_id=reservation.reservation_id,
+                            error=exc,
+                            request=request,
+                        )
                     raise
                 replay_reference_candidates = (
                     stream_event_validator.take_replay_reference_candidates()
                 )
-                try:
-                    await _persist_codex_replay_references(
-                        candidates=replay_reference_candidates,
-                        authenticated_key=authenticated_key,
-                        usage_ledger_id=provider_completed_record.usage_ledger_id,
-                        request_id=request_id,
-                        route=route,
-                        settings=settings,
-                        request=request,
-                    )
-                except CodexReplayReferenceError as exc:
-                    provider_status = "incomplete"
-                    yield format_responses_error_event(
-                        message=exc.safe_message,
-                        code=exc.error_code,
-                        request_id=request_id,
-                    )
-                    return
+                if replay_reference_candidates:
+                    try:
+                        await _persist_codex_replay_references(
+                            candidates=replay_reference_candidates,
+                            authenticated_key=authenticated_key,
+                            usage_ledger_id=(
+                                provider_completed_record.usage_ledger_id
+                                if provider_completed_record is not None
+                                else accounting_result.usage_ledger_id
+                            ),
+                            request_id=request_id,
+                            route=route,
+                            settings=settings,
+                            request=request,
+                        )
+                    except CodexReplayReferenceError as exc:
+                        provider_status = "incomplete"
+                        yield format_responses_error_event(
+                            message=exc.safe_message,
+                            code=exc.error_code,
+                            request_id=request_id,
+                        )
+                        return
                 _record_success_metrics(
                     route=route,
                     provider_response=provider_response,
@@ -2000,23 +2265,33 @@ def _streaming_responses_response(
                 if terminal_done_event is not None:
                     yield terminal_done_event
             else:
-                await _finalize_responses_stream_interruption_after_output(
-                    reservation=reservation,
-                    authenticated_key=authenticated_key,
-                    route=route,
-                    policy_result=policy_result,
-                    cost_estimate=cost_estimate,
-                    request_id=request_id,
-                    provider_error=ProviderError(
-                        "Provider Responses stream completed without final usage.",
-                        provider=route.provider,
-                        upstream_status_code=200 if completed else None,
-                        error_code="responses_stream_usage_missing",
-                    ),
-                    request=request,
-                    estimate_reason="responses_streaming_usage_missing_estimated",
-                    stream_estimate_monitor=stream_estimate_monitor,
-                )
+                if external_web_search_admission is not None:
+                    await _place_external_web_search_hold(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        request_id=request_id,
+                        request=request,
+                        reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_USAGE,
+                        evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    )
+                else:
+                    await _finalize_responses_stream_interruption_after_output(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        provider_error=ProviderError(
+                            "Provider Responses stream completed without final usage.",
+                            provider=route.provider,
+                            upstream_status_code=200 if completed else None,
+                            error_code="responses_stream_usage_missing",
+                        ),
+                        request=request,
+                        estimate_reason="responses_streaming_usage_missing_estimated",
+                        stream_estimate_monitor=stream_estimate_monitor,
+                    )
                 provider_status = "incomplete"
                 yield format_responses_error_event(
                     message=(
@@ -2028,6 +2303,45 @@ def _streaming_responses_response(
                 )
         except asyncio.CancelledError:
             with anyio.CancelScope(shield=True):
+                if external_web_search_admission is not None:
+                    await _place_external_web_search_hold(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        request_id=request_id,
+                        request=request,
+                        reason_code=ExternalToolHoldReasonCode.INTERRUPTION_DISCONNECT,
+                        evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                    )
+                else:
+                    await _finalize_responses_stream_interruption_after_output(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        provider_error=ProviderError(
+                            "Client disconnected during streaming Responses request.",
+                            provider=route.provider,
+                            error_code="client_disconnected",
+                        ),
+                        request=request,
+                        estimate_reason="responses_streaming_client_disconnected_estimated",
+                        stream_estimate_monitor=stream_estimate_monitor,
+                    )
+            raise
+        except ProviderError as exc:
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.PROVIDER_ERROR_UNKNOWN_CHARGE,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                )
+            else:
                 await _finalize_responses_stream_interruption_after_output(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
@@ -2035,34 +2349,25 @@ def _streaming_responses_response(
                     policy_result=policy_result,
                     cost_estimate=cost_estimate,
                     request_id=request_id,
-                    provider_error=ProviderError(
-                        "Client disconnected during streaming Responses request.",
-                        provider=route.provider,
-                        error_code="client_disconnected",
-                    ),
+                    provider_error=exc,
                     request=request,
-                    estimate_reason="responses_streaming_client_disconnected_estimated",
+                    estimate_reason="responses_streaming_provider_error_estimated",
                     stream_estimate_monitor=stream_estimate_monitor,
                 )
-            raise
-        except ProviderError as exc:
-            await _finalize_responses_stream_interruption_after_output(
-                reservation=reservation,
-                authenticated_key=authenticated_key,
-                route=route,
-                policy_result=policy_result,
-                cost_estimate=cost_estimate,
-                request_id=request_id,
-                provider_error=exc,
-                request=request,
-                estimate_reason="responses_streaming_provider_error_estimated",
-                stream_estimate_monitor=stream_estimate_monitor,
-            )
             yield format_responses_error_event(
                 message=exc.safe_message,
                 code=exc.error_code,
             )
         except AccountingError as exc:
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                )
             increment_accounting_failure(exc.error_code)
             yield format_responses_error_event(
                 message=exc.safe_message,
@@ -2449,6 +2754,158 @@ async def _finalize_successful_response(
         if hasattr(session, "commit"):
             await session.commit()
         return result
+    finally:
+        await session_iterator.aclose()
+
+
+async def _finalize_external_web_search_response(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ResponsesPolicyResult,
+    cost_estimate: ChatCostEstimate,
+    provider_response: ProviderResponse,
+    request_id: str,
+    request: Request | None,
+    admission,
+    streaming: bool = False,
+    streaming_evidence=None,
+) -> FinalizedAccountingResult:
+    """Finalize model usage plus authoritative content-free web-search evidence."""
+    evidence = streaming_evidence or parse_web_search_output(
+        provider_response.json_body,
+        admitted_call_cap=admission.request.effective_tool_call_cap,
+        pricing=admission.pricing if hasattr(admission, "pricing") else None,
+        provider=route.provider,
+        tool_choice=policy_result.effective_body.get("tool_choice"),
+    )
+    if not evidence.authoritative:
+        raise AccountingError(
+            f"Authoritative web-search accounting evidence is required ({evidence.reason_code})"
+        )
+
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        accounting_service = AccountingService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+        )
+        usage = accounting_service.extract_usage(provider_response)
+        model_cost = accounting_service.compute_actual_cost(
+            provider_response,
+            route,
+            usage,
+            cost_estimate,
+        )
+        pricing = admission.pricing
+        pricing_service = PricingService(
+            pricing_rules_repository=PricingRulesRepository(session),
+            fx_rates_repository=FxRatesRepository(session),
+        )
+        tool_fee_eur, _ = await pricing_service.convert_to_eur(
+            evidence.total_tool_fee_native or Decimal("0"),
+            pricing.currency,
+        )
+        actual_eur = model_cost.actual_cost_eur + tool_fee_eur
+        final = await accounting_service.finalize_successful_custom_response(
+            reservation.reservation_id,
+            authenticated_key,
+            route,
+            cost_estimate,
+            provider_response,
+            request_id,
+            endpoint=RESPONSES_PROVIDER_ENDPOINT,
+            usage=usage,
+            actual_cost_eur=actual_eur,
+            actual_cost_native=actual_eur,
+            native_currency="EUR",
+            cost_source="slaif_calculated",
+            cost_confidence="slaif_calculated_external_tool_authoritative",
+            component_costs_native={
+                "model": model_cost.actual_cost_eur,
+                "external_tool": tool_fee_eur,
+            },
+            component_token_counts={
+                "model_total": usage.total_tokens,
+                "external_tool_calls": evidence.completed_call_count,
+            },
+            response_metadata_extra={
+                "external_tool_contract_version": 1,
+                "external_tool_capability": evidence.capability,
+                "external_tool_admitted_call_cap": evidence.admitted_call_cap,
+                "external_tool_completed_call_count": evidence.completed_call_count,
+                "external_tool_pricing_source": evidence.pricing_source,
+                "external_tool_unit_fee_native": str(evidence.unit_tool_fee_native),
+                "external_tool_total_fee_native": str(evidence.total_tool_fee_native),
+                "external_tool_cost_source": "openai_published_per_call",
+                "external_tool_cost_confidence": "authoritative",
+            },
+            streaming=streaming,
+        )
+        fence_service = ExternalToolFenceService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        await fence_service.resolve(
+            ExternalToolFenceResolveInput(
+                gateway_key_id=authenticated_key.gateway_key_id,
+                request_id=request_id,
+            )
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
+        return final
+    finally:
+        await session_iterator.aclose()
+
+
+async def _place_external_web_search_hold(
+    *,
+    reservation: QuotaReservationResult,
+    authenticated_key: AuthenticatedGatewayKey,
+    request_id: str,
+    request: Request | None,
+    reason_code: ExternalToolHoldReasonCode,
+    evidence_quality: ExternalToolHoldEvidenceQuality,
+    partial_total_tokens: int | None = None,
+    estimated_cost_eur: Decimal | None = None,
+) -> None:
+    """Keep the full fenced reservation when terminal evidence is uncertain."""
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        hold_service = ExternalToolAccountingHoldService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+            usage_ledger_repository=UsageLedgerRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        await hold_service.place(
+            ExternalToolAccountingHoldInput(
+                gateway_key_id=authenticated_key.gateway_key_id,
+                reservation_id=reservation.reservation_id,
+                request_id=request_id,
+                reason_code=reason_code,
+                evidence_quality=evidence_quality,
+                streaming=False,
+                now=datetime.now(UTC),
+                partial_total_tokens=partial_total_tokens,
+                estimated_cost_eur=estimated_cost_eur,
+            )
+        )
+        if hasattr(session, "commit"):
+            await session.commit()
     finally:
         await session_iterator.aclose()
 

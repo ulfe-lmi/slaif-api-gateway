@@ -37,3 +37,4 @@ class ResponsesCreateRequest(BaseModel):
     stream: bool | None = False
     store: bool | None = None
     max_output_tokens: int | None = None
+    max_tool_calls: int | None = None

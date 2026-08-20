@@ -15,7 +15,7 @@ from slaif_gateway.main import create_app
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderTimeoutError
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.pricing import ChatCostEstimate, ExternalToolPricing
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -31,7 +31,10 @@ def _fake_authenticated_gateway_key(
     allowed_endpoints: tuple[str, ...] = ("/v1/responses",),
     cost_limit_eur: Decimal | None = None,
     token_limit_total: int | None = None,
+    request_limit_total: int | None = None,
     responses_streaming_live_burn_policy: dict[str, object] | None = None,
+    external_tool_policy: dict[str, object] | None = None,
+    key_purpose: str = "standard",
 ) -> AuthenticatedGatewayKey:
     now = datetime.now(UTC)
     return AuthenticatedGatewayKey(
@@ -49,9 +52,11 @@ def _fake_authenticated_gateway_key(
         allowed_providers=None,
         cost_limit_eur=cost_limit_eur,
         token_limit_total=token_limit_total,
-        request_limit_total=None,
+        request_limit_total=request_limit_total,
         rate_limit_policy={},
         responses_streaming_live_burn_policy=responses_streaming_live_burn_policy,
+        external_tool_policy=external_tool_policy,
+        key_purpose=key_purpose,
     )
 
 
@@ -72,6 +77,7 @@ def _route_result(
     responses_list_input_items: bool = False,
     responses_compact: bool = False,
     responses_conversations: bool = False,
+    external_tool_policy: dict[str, object] | None = None,
 ) -> RouteResolutionResult:
     capabilities = default_responses_capabilities()
     capabilities["streaming"] = responses_streaming
@@ -87,6 +93,9 @@ def _route_result(
     capabilities["list_input_items"] = responses_list_input_items
     capabilities["compact"] = responses_compact
     capabilities["conversations"] = responses_conversations
+    route_capabilities: dict[str, object] = {"responses": capabilities}
+    if external_tool_policy is not None:
+        route_capabilities["external_tools"] = external_tool_policy
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
@@ -95,7 +104,7 @@ def _route_result(
         route_match_type="exact",
         route_pattern=requested_model,
         priority=100,
-        capabilities={"responses": capabilities},
+        capabilities=route_capabilities,
         supports_streaming=route_supports_streaming,
     )
 
@@ -339,11 +348,32 @@ def _wire_successful_forwarding(monkeypatch) -> list[str]:
         async def forward_response(self, request):
             assert request.endpoint == "responses"
             assert request.body["store"] is False
+            if "max_tool_calls" in request.body:
+                assert request.body["tools"] == [
+                    {"type": "web_search", "search_context_size": "low"}
+                ]
+                assert request.body["max_tool_calls"] == 1
+                assert "external_tool_policy" not in request.body
+            json_body: dict[str, object] = {"id": "resp_test", "object": "response"}
+            if "max_tool_calls" in request.body:
+                json_body.update(
+                    {
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "web_search_call",
+                                "id": "call_search_1",
+                                "status": "completed",
+                                "action": {"type": "search"},
+                            }
+                        ],
+                    }
+                )
             return ProviderResponse(
                 provider=request.provider,
                 upstream_model=request.upstream_model,
                 status_code=200,
-                json_body={"id": "resp_test", "object": "response"},
+                json_body=json_body,
                 usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             )
 
@@ -409,11 +439,181 @@ def test_valid_responses_path_reserves_finalizes_then_returns_provider_response(
 
     response = TestClient(app).post("/v1/responses", json=_responses_request())
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["id"] == "resp_test"
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
     assert finalize_calls == ["classroom-responses"]
+
+
+def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
+    key_policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
+    route_policy = {
+        "version": 1,
+        "supported_capabilities": ["provider_web_search"],
+        "approved_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "call_limit_enforced": True,
+        "final_usage_required": True,
+        "final_cost_required": True,
+    }
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(
+            cost_limit_eur=Decimal("10"),
+            token_limit_total=1000,
+            request_limit_total=10,
+            external_tool_policy=key_policy,
+        ),
+    )
+    import slaif_gateway.services.responses_gateway as main_module
+    _wire_successful_route_pricing_quota(monkeypatch)
+
+    async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key)
+        assert endpoint == "/v1/responses"
+        return _route_result(requested_model, external_tool_policy=route_policy)
+
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+        _ = (self, route, policy, at)
+        assert endpoint == "/v1/responses"
+        return _estimate()
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "estimate_chat_completion_cost",
+        _fake_estimate_chat_completion_cost,
+    )
+    async def _fake_find_active_pricing_rule(self, *, provider, model, endpoint, at=None):
+        _ = (self, provider, model, endpoint, at)
+        return SimpleNamespace(
+            external_tool_pricing=ExternalToolPricing(
+                currency="USD",
+                unit_price_native=Decimal("0.01"),
+                source="openai_published_per_call",
+            )
+        )
+
+    async def _fake_acquire(self, acquire_input):
+        assert acquire_input.route.provider == "openai"
+        assert acquire_input.capabilities == ("provider_web_search",)
+        return SimpleNamespace(
+            reservation_id=uuid.uuid4(),
+            gateway_key_id=acquire_input.gateway_key_id,
+            request_id=acquire_input.request_id,
+            reserved_cost_eur=Decimal("10"),
+            reserved_tokens=1000,
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "find_active_pricing_rule",
+        _fake_find_active_pricing_rule,
+    )
+    async def _fake_convert_to_eur(self, amount, native_currency, at=None):
+        _ = (self, native_currency, at)
+        return amount, SimpleNamespace(rate=Decimal("1"))
+
+    monkeypatch.setattr(main_module.PricingService, "convert_to_eur", _fake_convert_to_eur)
+    monkeypatch.setattr(main_module.ExternalToolFenceService, "acquire", _fake_acquire)
+    _wire_successful_forwarding(monkeypatch)
+
+    async def _fake_finalize_external(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return FinalizedAccountingResult(
+            usage_ledger_id=uuid.uuid4(),
+            reservation_id=uuid.uuid4(),
+            gateway_key_id=uuid.uuid4(),
+            request_id="request",
+            estimated_cost_eur=Decimal("0.003"),
+            actual_cost_eur=Decimal("0.013"),
+            actual_cost_native=Decimal("0.013"),
+            native_currency="EUR",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            accounting_status="finalized",
+        )
+
+    async def _fake_resolve(self, resolve_input, *, permit_held=False):
+        _ = (self, resolve_input, permit_held)
+        return SimpleNamespace(resolved=True)
+
+    monkeypatch.setattr(
+        main_module.AccountingService,
+        "finalize_successful_custom_response",
+        _fake_finalize_external,
+    )
+    monkeypatch.setattr(main_module.ExternalToolFenceService, "resolve", _fake_resolve)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={
+            **_responses_request(),
+            "store": False,
+            "tools": [{"type": "web_search", "search_context_size": "low"}],
+            "tool_choice": "auto",
+            "max_tool_calls": 1,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == "resp_test"
+
+
+@pytest.mark.parametrize("key_policy", [None, {
+    "version": 1,
+    "mode": "strict_bounded",
+    "allowed_capabilities": [],
+    "allowed_destination_ids": [],
+    "max_provider_tool_calls_per_request": 0,
+    "single_request_overrun_acknowledged": False,
+}])
+def test_web_search_is_denied_for_strict_key_before_gateway_work(monkeypatch, key_policy) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(external_tool_policy=key_policy),
+    )
+    calls: list[str] = []
+
+    async def _must_not_resolve(*args, **kwargs):
+        calls.append("route")
+        raise AssertionError("strict hosted-tool denial must precede route resolution")
+
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _must_not_resolve)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json={
+            **_responses_request(),
+            "store": False,
+            "tools": [{"type": "web_search"}],
+            "tool_choice": "auto",
+            "max_tool_calls": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] in {
+        "responses_hosted_tool_not_supported",
+        "responses_external_tool_not_allowed",
+    }
+    assert calls == []
 
 
 def test_stored_response_create_requires_capability_and_persists_safe_reference(monkeypatch) -> None:

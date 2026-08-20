@@ -274,8 +274,9 @@ boundaries, not positive marketing claims.
   evidence.
 
 Nothing in this product contract changes runtime behavior or release status.
-# Objective 015 boundary
+# Objective 017 boundary
 
-External-tool accounting hold placement and manual reconciliation are bounded
-foundation capabilities. Provider forwarding remains disabled in this scope;
-the feature does not claim unrestricted hosted-tool or provider compatibility.
+OpenAI Responses web search is available only as the exact bounded,
+content-minimized, PostgreSQL-fenced contract described in the compatibility
+and security documents. Remote MCP/connectors and all other hosted families
+remain denied; this is not unrestricted hosted-tool or provider compatibility.

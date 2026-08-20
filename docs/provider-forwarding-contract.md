@@ -779,6 +779,14 @@ usage-backed finalization succeeds; if an upstream provider also sends
 `data: [DONE]`, it is held behind the completed event and is not emitted on
 missing-usage or finalization-failure paths.
 
+The bounded OpenAI Responses `web_search` runtime forwards only the canonical
+`tools=[{"type":"web_search", ...}]` declaration and `max_tool_calls`, plus
+ordinary approved Responses fields. Gateway policy, fence state, quota facts,
+pricing, credentials, diagnostics, queries, URLs, sources, and provider
+responses are never added to the upstream body or stored as content. Only an
+exact OpenAI route/key/capability match may reach this path; other hosted
+families remain denied.
+
 Streaming does not expand request policy beyond the exact independently gated
 Codex declaration/call/replay slice. Hosted/provider-side tools, arbitrary
 custom tools, web search, MCP/connectors, external web access, file/audio

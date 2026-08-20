@@ -20,6 +20,8 @@ from slaif_gateway.schemas.pricing import ExternalToolPricing
 from slaif_gateway.services.external_tool_policy_contract import (
     DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
     EXTERNAL_TOOL_FENCED,
+    ExternalToolAdmissionDecision,  # noqa: F401 - re-exported for runtime boundary
+    ExternalToolKeyLimitFacts,  # noqa: F401 - re-exported for runtime boundary
     PROVIDER_WEB_SEARCH,
     CLIENT_OPERATED_AUTHORITY,
     KeyPolicyParseResult,

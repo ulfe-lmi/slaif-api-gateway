@@ -362,7 +362,8 @@ def _external_tool_policy_summary(
         f"{', '.join(capabilities) if capabilities else 'none'}; destinations: "
         f"{', '.join(destinations) if destinations else 'none'}; max calls: "
         f"{policy['max_provider_tool_calls_per_request']}; overrun acknowledged: "
-        f"{str(policy['single_request_overrun_acknowledged']).lower()}; runtime: denied"
+        f"{str(policy['single_request_overrun_acknowledged']).lower()}; runtime: "
+        "exact OpenAI web-search fenced contract only; other hosted families denied"
     )
 
 
