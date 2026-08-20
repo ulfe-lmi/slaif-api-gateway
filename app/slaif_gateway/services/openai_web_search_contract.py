@@ -34,6 +34,8 @@ from slaif_gateway.services.external_tool_policy_contract import (
 MAX_SAFE_ID_LENGTH: Final = 256
 MAX_SAFE_INDEX: Final = 1_000_000
 MAX_SAFE_SEQUENCE: Final = 10_000_000
+MAX_SAFE_CONTENT_LENGTH: Final = 4_096
+MAX_SAFE_ACTION_LIST: Final = 64
 _SEARCH_ACTIONS: Final = frozenset({"search", "open_page", "find_in_page"})
 _ALLOWED_SEARCH_DECLARATION_FIELDS: Final = frozenset({"type", "search_context_size"})
 _STATeless_REJECT_FIELDS: Final = frozenset(
@@ -159,6 +161,8 @@ def parse_web_search_output(
 ) -> WebSearchAccountingEvidence:
     """Parse a non-stream output into content-free completed-call evidence."""
     _positive_int(admitted_call_cap, "admitted_call_cap")
+    if provider != "openai":
+        return _non_authoritative("openai", admitted_call_cap, "provider_not_supported")
     if tool_choice is not None and tool_choice != "auto":
         return _non_authoritative(provider, admitted_call_cap, "non_neutral_tool_choice")
     if not isinstance(output, Mapping):
@@ -169,8 +173,10 @@ def parse_web_search_output(
     if not isinstance(items, list):
         return _non_authoritative(provider, admitted_call_cap, "output_items_missing")
     calls: dict[str, _LifecycleCall] = {}
-    for item in items:
-        call = _parse_call_item(item)
+    for output_index, item in enumerate(items):
+        if output_index > MAX_SAFE_INDEX:
+            return _non_authoritative(provider, admitted_call_cap, "output_index_invalid")
+        call = _parse_call_item(item, index=output_index, sequence=output_index)
         if call is None:
             if isinstance(item, Mapping) and item.get("type") == "web_search_call":
                 return _non_authoritative(provider, admitted_call_cap, "output_item_invalid")
@@ -196,6 +202,8 @@ def parse_web_search_stream(
 ) -> WebSearchAccountingEvidence:
     """Parse official Responses SSE event shapes without retaining payloads."""
     _positive_int(admitted_call_cap, "admitted_call_cap")
+    if provider != "openai":
+        return _non_authoritative("openai", admitted_call_cap, "provider_not_supported")
     if tool_choice is not None and tool_choice != "auto":
         return _non_authoritative(provider, admitted_call_cap, "non_neutral_tool_choice")
     if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
@@ -217,6 +225,15 @@ def parse_web_search_stream(
         if event_type == "response.completed":
             if not _valid_sequence(event.get("sequence_number")):
                 return _non_authoritative(provider, admitted_call_cap, "sequence_invalid")
+            response = event.get("response")
+            if not isinstance(response, Mapping):
+                return _non_authoritative(provider, admitted_call_cap, "terminal_response_invalid")
+            if response.get("status") != "completed" or not isinstance(
+                response.get("usage"), Mapping
+            ):
+                return _non_authoritative(provider, admitted_call_cap, "terminal_response_invalid")
+            if terminal:
+                return _non_authoritative(provider, admitted_call_cap, "conflicting_terminal_response")
             terminal = True
             continue
         if not isinstance(event_type, str) or not event_type.startswith("response.web_search_call."):
@@ -292,7 +309,7 @@ def _parse_call_item(
     if not _safe_id(call_id) or status not in {"completed", "in_progress", "searching", "failed"}:
         return None
     action = value.get("action")
-    if not isinstance(action, Mapping) or action.get("type") not in _SEARCH_ACTIONS:
+    if not _valid_action(action):
         return None
     item_index = value.get("output_index", 0) if index is None else index
     item_sequence = value.get("sequence_number", 0) if sequence is None else sequence
@@ -364,7 +381,7 @@ def _authoritative(
 
 def _non_authoritative(provider: str, cap: int, reason: str) -> WebSearchAccountingEvidence:
     return WebSearchAccountingEvidence(
-        provider=provider,
+        provider="openai",
         capability=PROVIDER_WEB_SEARCH,
         admitted_call_cap=cap,
         completed_call_count=0,
@@ -407,6 +424,56 @@ def _valid_pricing(value: ExternalToolPricing) -> bool:
         and value.unit_price_native >= 0
         and value.source == "openai_published_per_call"
     )
+
+
+def _valid_content_string(value: object, *, required: bool = False) -> bool:
+    if value is None:
+        return not required
+    return isinstance(value, str) and len(value) <= MAX_SAFE_CONTENT_LENGTH
+
+
+def _valid_action(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    action_type = value.get("type")
+    if action_type == "search":
+        if set(value) - {"type", "query", "queries", "sources"}:
+            return False
+        query = value.get("query")
+        if query is not None and not _valid_content_string(query):
+            return False
+        queries = value.get("queries")
+        if queries is not None and (
+            not isinstance(queries, list)
+            or len(queries) > MAX_SAFE_ACTION_LIST
+            or any(not _valid_content_string(item) for item in queries)
+        ):
+            return False
+        sources = value.get("sources")
+        if sources is not None and (
+            not isinstance(sources, list)
+            or len(sources) > MAX_SAFE_ACTION_LIST
+            or any(
+                not isinstance(source, Mapping)
+                or set(source) != {"type", "url"}
+                or source.get("type") != "url"
+                or not _valid_content_string(source.get("url"))
+                for source in sources
+            )
+        ):
+            return False
+        return True
+    if action_type == "open_page":
+        return set(value) <= {"type", "url"} and (
+            "url" not in value or _valid_content_string(value.get("url"))
+        )
+    if action_type == "find_in_page":
+        return (
+            set(value) == {"type", "url", "pattern"}
+            and _valid_content_string(value.get("url"), required=True)
+            and _valid_content_string(value.get("pattern"), required=True)
+        )
+    return False
 
 
 def _positive_int(value: object, field: str) -> None:

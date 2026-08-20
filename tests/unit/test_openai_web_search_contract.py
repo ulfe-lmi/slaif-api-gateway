@@ -174,7 +174,11 @@ def test_stream_requires_terminal_and_accepts_duplicate_completion_evidence() ->
                     "action": {"type": "search"},
                 },
             },
-            {"type": "response.completed", "sequence_number": 3},
+            {
+                "type": "response.completed",
+                "sequence_number": 3,
+                "response": {"status": "completed", "usage": {}},
+            },
         ],
         admitted_call_cap=1,
         pricing=pricing,
@@ -205,7 +209,13 @@ def test_completed_zero_call_outcomes_are_authoritative_only_with_pricing() -> N
         pricing=pricing,
     )
     stream = parse_web_search_stream(
-        [{"type": "response.completed", "sequence_number": 0}],
+        [
+            {
+                "type": "response.completed",
+                "sequence_number": 0,
+                "response": {"status": "completed", "usage": {}},
+            }
+        ],
         admitted_call_cap=2,
         pricing=pricing,
     )
@@ -277,3 +287,95 @@ def test_tool_fee_helpers_are_exact_decimal_arithmetic() -> None:
     pricing = ExternalToolPricing("EUR", Decimal("0.010000000"), "openai_published_per_call")
     assert maximum_tool_fee(3, pricing) == Decimal("0.030000000")
     assert actual_tool_fee(2, pricing) == Decimal("0.020000000")
+
+
+def test_provider_canary_is_rejected_without_reflection() -> None:
+    canary = "PRIVATE-PROVIDER-CANARY"
+    result = parse_web_search_output(
+        {"status": "completed", "output": []},
+        admitted_call_cap=1,
+        pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+        provider=canary,
+    )
+    assert result.authoritative is False
+    assert result.reason_code == "provider_not_supported"
+    assert canary not in repr(result)
+    assert canary not in repr(result.to_safe_dict())
+
+
+def test_stream_terminal_requires_official_completed_response_and_usage() -> None:
+    base_event = {"type": "response.completed", "sequence_number": 0}
+    for response in [None, {}, {"status": "incomplete", "usage": {}}, {"status": "completed"}]:
+        event = dict(base_event)
+        if response is not None:
+            event["response"] = response
+        result = parse_web_search_stream(
+            [event],
+            admitted_call_cap=1,
+            pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+        )
+        assert result.authoritative is False
+        assert result.reason_code == "terminal_response_invalid"
+
+
+def test_non_stream_duplicate_id_at_distinct_positions_requires_hold() -> None:
+    result = parse_web_search_output(
+        {
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "id": "same", "status": "completed", "action": {"type": "search"}},
+                {"type": "web_search_call", "id": "same", "status": "completed", "action": {"type": "search"}},
+            ],
+        },
+        admitted_call_cap=2,
+        pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+    )
+    assert result.authoritative is False
+    assert result.reason_code == "conflicting_call_evidence"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "search", "query": "q", "queries": ["q2"], "sources": [{"type": "url", "url": "https://example.invalid"}]},
+        {"type": "open_page", "url": "https://example.invalid"},
+        {"type": "find_in_page", "url": "https://example.invalid", "pattern": "needle"},
+    ],
+)
+def test_official_action_variants_are_validated_without_retention(action: dict[str, object]) -> None:
+    secret = "PRIVATE-ACTION-CANARY"
+    action = {key: (secret if key in {"query", "url", "pattern"} else value) for key, value in action.items()}
+    result = parse_web_search_output(
+        {
+            "status": "completed",
+            "output": [{"type": "web_search_call", "id": "call", "status": "completed", "action": action}],
+        },
+        admitted_call_cap=1,
+        pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+    )
+    assert result.authoritative is True
+    assert secret not in repr(result)
+    assert secret not in repr(result.to_safe_dict())
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "search", "query": 1},
+        {"type": "search", "unknown": "x"},
+        {"type": "open_page", "url": 1},
+        {"type": "find_in_page", "url": "x"},
+        {"type": "find_in_page", "url": "x", "pattern": "y", "extra": "z"},
+    ],
+)
+def test_malformed_official_actions_require_hold(action: dict[str, object]) -> None:
+    result = parse_web_search_output(
+        {
+            "status": "completed",
+            "output": [{"type": "web_search_call", "id": "call", "status": "completed", "action": action}],
+        },
+        admitted_call_cap=1,
+        pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+    )
+    assert result.authoritative is False
+    assert result.reason_code == "output_item_invalid"
