@@ -177,7 +177,15 @@ def _stream_chunk(payload: dict[str, object], *, usage: ProviderUsage | None = N
     )
 
 
-async def _gateway_client(monkeypatch, async_test_session, key, route_row, *, provider_response):
+async def _gateway_client(
+    monkeypatch,
+    async_test_session,
+    key,
+    route_row,
+    *,
+    provider_response,
+    model_price: Decimal = Decimal("1000"),
+):
     import slaif_gateway.api.dependencies as dependencies
     import slaif_gateway.services.responses_gateway as gateway
     import slaif_gateway.services.pricing as pricing_module
@@ -203,8 +211,8 @@ async def _gateway_client(monkeypatch, async_test_session, key, route_row, *, pr
     )
     pricing_row = SimpleNamespace(
         currency="EUR",
-        input_price_per_1m=Decimal("1000"),
-        output_price_per_1m=Decimal("1000"),
+        input_price_per_1m=model_price,
+        output_price_per_1m=model_price,
         cached_input_price_per_1m=None,
         reasoning_price_per_1m=None,
         audio_output_price_per_1m=None,
@@ -317,6 +325,61 @@ async def test_gateway_post_start_failures_create_one_full_hold(
     assert ledgers[0].streaming is False
     assert "canary" not in repr(ledgers[0].response_metadata).lower()
     assert len(released) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_overrun_then_ordinary_and_hosted_admission_fail(
+    async_test_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    key = await _create_key(async_test_session)
+    route_row = ModelRoute(
+        requested_model="gpt-responses-web-search-overrun",
+        match_type="exact",
+        endpoint="/v1/responses",
+        provider="openai",
+        upstream_model="gpt-4.1-mini",
+    )
+    async_test_session.add(route_row)
+    await async_test_session.flush()
+    app, client, released = await _gateway_client(
+        monkeypatch,
+        async_test_session,
+        key,
+        route_row,
+        provider_response=_provider_response(),
+        model_price=Decimal("500000"),
+    )
+    body = {
+        "model": route_row.requested_model,
+        "input": "hello",
+        "store": False,
+        "tools": [{"type": "web_search"}],
+        "tool_choice": "auto",
+        "max_tool_calls": 1,
+    }
+    async with client:
+        first = await client.post("/v1/responses", json=body)
+        ordinary = await client.post(
+            "/v1/responses",
+            json={"model": route_row.requested_model, "input": "ordinary", "store": False},
+        )
+        hosted_again = await client.post("/v1/responses", json=body)
+    assert first.status_code == 200, first.text
+    assert ordinary.status_code in {400, 409, 429}
+    assert hosted_again.status_code in {400, 409, 429}
+    assert len(released) == 3
+    await async_test_session.refresh(key)
+    assert key.external_tool_fence_state == "none"
+    assert key.cost_used_eur > key.cost_limit_eur
+    ledgers = list(
+        (
+            await async_test_session.execute(
+                select(UsageLedger).where(UsageLedger.gateway_key_id == key.id)
+            )
+        ).scalars()
+    )
+    assert len(ledgers) == 1
 
 
 @pytest.mark.asyncio
