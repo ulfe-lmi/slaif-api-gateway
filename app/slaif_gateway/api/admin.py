@@ -277,7 +277,7 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_policy_updated": ("success", "Gateway key request policy updated."),
     "key_external_tool_policy_updated": (
         "success",
-        "External-tool policy updated; runtime remains deny-only.",
+        "External-tool policy updated; only exact fenced OpenAI Responses web_search can run.",
     ),
     "key_chat_streaming_live_burn_updated": (
         "success",
@@ -7329,14 +7329,14 @@ def _template_external_tool_summary(
     settings: Settings,
 ) -> str:
     if revision is None:
-        return "External tools: strict_bounded; runtime denied"
+        return "External tools: strict_bounded; all hosted runtime denied"
     try:
         return external_tool_policy_summary_for_template_revision(
             revision,
             ceilings=settings.get_external_tool_operator_ceilings(),
         )
     except KeyTemplateError:
-        return "External tools: invalid template policy; runtime denied"
+        return "External tools: invalid template policy; all hosted runtime denied"
 
 
 async def _render_key_policy_error(

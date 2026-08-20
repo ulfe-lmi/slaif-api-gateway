@@ -830,7 +830,7 @@ provider-side file upload/lifecycle, file search/retrieval tools, server-side
 fetching, parsing, OCR, indexing, audio input/output, or Office/spreadsheet
 formats outside the configured allowlist.
 
-## Planned Responses Tool Configuration
+## External-tool policy configuration
 
 Objective 012 defines the `strict_bounded` / `external_tool_fenced` contract
 and immutable absolute maxima. Objective 013 adds four positive installation
@@ -843,21 +843,23 @@ EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST=16
 EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST=16
 ```
 
-They validate persisted key/template/route policy and do not enable runtime
-behavior. Current runtime remains deny-only for
-provider-hosted tools, remote MCP/connectors, provider URL fetch, and unknown
-authority.
+They bound validation of persisted key/template/route policy. They are not
+global enable switches: runtime also requires the exact request, key, route,
+provider, pricing, and quota contract. The sole implemented hosted path is
+OpenAI Responses canonical `web_search` with matching `provider_web_search`
+fenced policy. Remote MCP/connectors, provider URL fetch, unknown authority, and
+every other hosted family remain denied.
 
-Objective 014 implements the fence and full-remaining-balance reservation
-foundation on the locked key row; these settings remain validation-only and
-enable neither the fenced mode nor any forwarding. Objectives 015–017 own the
-hold, reconciliation, selected provider contracts, and runtime integration.
+The fence and full-remaining-balance reservation use the locked key row; these
+settings remain ceilings rather than standalone authorization. The bounded
+web-search runtime also requires the hold/reconciliation and selected provider
+contract documented in the compatibility and accounting contracts.
 Local function/custom and
 gated Codex client-tool request caps
 listed above remain active independent controls; they do not enable hosted
 tools, MCP/connectors, web/file search, code interpreter, hosted shell, computer
 use, image generation, tool search, skills, storage, provider authentication,
-or background mode. The future fenced mode also requires the exact exclusive-
+or background mode. The fenced web-search mode also requires the exact exclusive-
 key fence, single-request-overrun acknowledgement, following-request block, and
 missing/ambiguous-cost hold contract documented in
 [`accounting.md`](accounting.md).

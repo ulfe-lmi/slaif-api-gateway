@@ -265,10 +265,14 @@ historical snapshots without it mean exact strict. Explicit fenced template
 creation requires confirmation, an audit reason, and positive finite request,
 token, and EUR limits. One key created from that revision copies the exact
 policy and provenance. Trusted-calibration observations remain review input
-and never silently become permission. Runtime remains deny-only.
+and never silently become permission. A standard key created from a fenced
+revision can authorize only the exact bounded OpenAI Responses `web_search`
+runtime when an enabled OpenAI route independently supplies matching
+`provider_web_search` policy and pricing. Every other hosted family remains
+deny-only.
 
 A template revision may carry external-tool policy only through the reviewed
-objective-013 operator workflow. Such a snapshot must
+operator workflow. Such a snapshot must
 preserve exact versioned key/route schemas, opaque reviewed destination IDs,
 operator ceilings, positive finite request/token/EUR limits, explicit
 single-request-overrun acknowledgement, exclusive-key fencing, following-

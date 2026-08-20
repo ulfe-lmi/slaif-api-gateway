@@ -117,12 +117,15 @@ presets. Cross-project tenancy or content capture is not implied.
 **Current:** unattended or developer-agent use can receive a gateway key with
 explicit endpoint/model/provider/capability policy, conservative request/token/
 cost budgets, and fail-closed handling of unknown or unsupported fields. Current
-hosted/provider-side tools and external connectors remain denied.
+Codex qualification covers bounded client-operated tools and does not itself
+grant provider-hosted authority. A separately configured standard key may use
+the exact bounded OpenAI Responses `web_search` contract described below;
+remote MCP/connectors and every other hosted family remain denied.
 
-**Approved target:** narrowly reviewed agent presets and conditional external-
-tool policy only after its permission, accounting, privacy, and overrun contract
-is implemented. An Agent/Codex profile is not authorization for unrestricted
-remote execution.
+**Approved target:** narrowly reviewed agent presets and additional conditional
+external-tool families only after each permission, accounting, privacy, and
+overrun contract is implemented. An Agent/Codex profile is not authorization
+for unrestricted remote execution.
 
 ### 5. Trusted Evaluation
 
@@ -166,34 +169,33 @@ implemented invariants and failure behavior.
 
 ### Current
 
-Current: hosted/provider-side tools and external MCP/connectors are unsupported
-in the runtime. It is deny-only for those surfaces, provider URL fetch
-authority, and unknown/ambiguous authority. Objective 012 adds the version-1
-taxonomy and policy/admission contract. Objective 013 stores canonical policy
-on keys, immutable template snapshots, and routes, and adds narrowed settings
-plus audited admin/CLI controls; objective 013 storage adds no request
-  forwarding, fence, hold, or provider integration. Objective 014 implements the
-fence and full-remaining-balance reservation foundation on the locked key row
-(no forwarding, no hold): the reservation binds the exact provider and
-route identity, the fence is exclusive against any committed pending
-reservation or unreconciled counter in either lock order, and only exact
-zero-counter terminal evidence clears it. The runtime remains deny-only for
-provider-hosted/external tools, external forwarding and the unknown-cost hold
-are still not implemented, fence expiry never means safe release, and the
-  exact overrun promise remains conditional on the later provider activation
-  owned by Objective 017. Objective 016 qualifies the first exact OpenAI
-  Responses `web_search` provider contract only; it does not activate forwarding.
-  Implemented local/client-side function, custom,
-namespace, local-shell, and client-side apply-patch workflows keep their
-existing independent gates and do not grant SLAIF provider/external authority.
+`strict_bounded` is the default and denies provider-hosted/external authority.
+The sole implemented opt-in is OpenAI Responses canonical `web_search` for a
+standard key in `external_tool_fenced` mode and an exactly matching route with
+`provider_web_search`. The request must be stateless (`store=false`), carry a
+positive bounded `max_tool_calls`, use finite request/token/EUR key limits and
+configured per-call pricing, and include explicit single-request-overrun
+acknowledgement. PostgreSQL acquires an exclusive per-key fence and reserves the
+complete remaining balance before forwarding. One admitted request may overrun;
+concurrent requests are rejected, later requests fail after exhaustion, and
+unknown or ambiguous final accounting leaves a durable blocking hold until
+audited reconciliation. Both non-streaming and bounded typed-SSE execution are
+implemented with mocked-provider evidence; this is not a real-provider or
+production-qualification claim.
+
+Implemented local/client-side function, custom, namespace, local-shell, and
+client-side apply-patch workflows keep their independent gates and do not grant
+SLAIF provider/external authority. OpenRouter hosted tools, Chat Completions
+hosted tools, remote MCP/connectors, provider URL fetch, file search, code
+interpreter, hosted shell/patch, image generation, computer use, skills, and
+every other hosted family remain denied.
 
 ### Approved target
 
-Approved target: every key must be able to prohibit external tools.
-`strict_bounded` is the default approved mode and denies provider-hosted/
-external authority. `external_tool_fenced` is the only approved future opt-in
-mode for a standard key with exact route support, operator ceilings, positive
-finite request/token/EUR limits, and explicit acknowledgement.
+Every key can prohibit external tools through the default `strict_bounded`
+mode. Additional `external_tool_fenced` families remain approved targets only
+after their exact provider contract, route support, pricing, privacy, and
+evidence semantics are separately implemented and reviewed.
 
 Its promise is exact: one admitted provider-hosted external-tool request may
 exceed the key's remaining token or cost quota before SLAIF regains control.
@@ -202,18 +204,15 @@ unresolved, finalize authoritative provider usage/cost when available, reject
 following requests after exhaustion, and retain a blocking accounting hold
 when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
 
-Any such implementation requires explicit per-key permissions, fail-closed
+Any additional implementation requires explicit per-key permissions, fail-closed
 unknowns, route/model/tool capability, pricing and bounded exposure, privacy and
 storage rules, negative tests, auditability, and operator-visible limits.
 
 ### Non-goals / not current
 
-- No stored hosted-tool, MCP, or external-tool policy is consumed by runtime
-  request admission. The objective-014 fence and reservation foundation and
-  Objective-015 hold/reconciliation are implemented, but external forwarding
-  remains disabled. Objective 016 qualifies only the exact OpenAI Responses
-  `web_search` provider contract; Objective 017 owns any later runtime
-  activation.
+- No stored external-tool policy authorizes a family other than the exact
+  bounded OpenAI Responses `web_search` contract. Remote MCP/connectors and all
+  other hosted families remain denied.
 - No claim of exact mid-request external-tool interruption or tool-budget
   enforcement.
 - No claim that local function/custom tool support authorizes provider-hosted
@@ -274,9 +273,3 @@ boundaries, not positive marketing claims.
   evidence.
 
 Nothing in this product contract changes runtime behavior or release status.
-# Objective 017 boundary
-
-OpenAI Responses web search is available only as the exact bounded,
-content-minimized, PostgreSQL-fenced contract described in the compatibility
-and security documents. Remote MCP/connectors and all other hosted families
-remain denied; this is not unrestricted hosted-tool or provider compatibility.

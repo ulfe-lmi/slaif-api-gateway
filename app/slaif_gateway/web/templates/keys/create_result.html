@@ -133,7 +133,7 @@
           destinations {{ policy.external_tool_policy.allowed_destination_ids|join(', ') or 'none' }};
           max calls {{ policy.external_tool_policy.max_provider_tool_calls_per_request }};
           overrun acknowledged {{ 'yes' if policy.external_tool_policy.single_request_overrun_acknowledged else 'no' }}.
-          <span class="warning-text">Runtime remains denied pending objectives 014–016.</span>
+          <span class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match; all other hosted families remain denied.</span>
         </dd>
         {% endif %}
         {% if policy.responses_policy_summary %}

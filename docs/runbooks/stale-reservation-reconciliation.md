@@ -83,8 +83,8 @@ review and skips them, and the fence survives process restart, expiry, and
 every ordinary reconciliation run. Expiry is an inspection threshold only and
 never means safe release; the locked PostgreSQL key row is the single
 concurrency authority (Redis is not), and emergency suspend or revoke stops
-admission without settling accounting. Resolution requires objective-015
-accounting evidence and explicit operator action; there is no automatic
+admission without settling accounting. Resolution requires the external-tool
+hold/reconciliation evidence and explicit operator action; there is no automatic
 resolution. Read-only inspection:
 
 ```bash

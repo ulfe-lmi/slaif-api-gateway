@@ -566,7 +566,8 @@ def external_tool_policy_summary_for_template_revision(
         f"External tools: {policy.mode}; capabilities "
         f"{', '.join(policy.allowed_capabilities) or 'none'}; destinations "
         f"{', '.join(policy.allowed_destination_ids) or 'none'}; max calls "
-        f"{policy.max_provider_tool_calls_per_request}; runtime denied"
+        f"{policy.max_provider_tool_calls_per_request}; runtime: exact OpenAI Responses "
+        "web_search only when key/route policy matches; all others denied"
     )
 
 

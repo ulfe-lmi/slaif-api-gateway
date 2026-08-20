@@ -30,7 +30,7 @@ product boundary and profile definitions, see
 verification scope, and known limitations, see
 [`docs/rc-beta.md`](docs/rc-beta.md) and
 [`docs/beta-readiness.md`](docs/beta-readiness.md). For the locked RC2 target
-and the required missing features, see
+classifications and remaining verification/release gates, see
 [`docs/rc2-feature-scope.md`](docs/rc2-feature-scope.md). A green full-harness
 run means verification-clean for the implemented scope; it does not mean
 feature-full RC2.
@@ -44,7 +44,8 @@ For exact reviewer-facing behavior, see:
   first RC-beta release-candidate notes and tagging checklist.
 - [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
 - [`docs/responses-compatibility.md`](docs/responses-compatibility.md) for the
-  current local/stored Responses subset and future RC2 Responses contract.
+  current local, stored, Codex, and bounded hosted-web-search Responses
+  contract.
 - [`docs/key-templates.md`](docs/key-templates.md) for implemented template
   snapshots and single-key creation from template revisions, and
   [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for local pricing
@@ -78,6 +79,18 @@ Implemented:
   Final provider usage/cost remains authoritative when available.
 - Chat Completions policy remains fail-closed for unknown fields and unsupported request shapes. Hosted/provider-side tools, MCP/connectors, web search, file search, code interpreter, computer use, image-generation tools, tool search, non-default service tiers, streaming custom tools, streaming audio output, file IDs/provider-side file lifecycle, and `n > 1` with audio output remain unsupported unless future explicit policy, pricing/accounting, forwarding, and tests add them.
 - Local `POST /v1/responses` with text output, string input or bounded text item arrays, route-enabled image input to text output, route-enabled file input to text output, non-streaming JSON, typed SSE streaming for stateless requests, non-streaming structured `text.format` JSON object/schema output, local function tools, local custom tools, string-only function/custom tool output follow-up items, explicit key endpoint permission, route/model Responses capability metadata, route resolution, `/v1/responses` pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization. Streaming requires explicit Responses streaming route capability and finalizes from provider usage on the completed response event. The gateway injects `store=false` when omitted. Non-streaming `store=true` create plus ownership-checked `GET`/`DELETE /v1/responses/{response_id}` and `GET /v1/responses/{response_id}/input_items` are implemented behind explicit stored/list-input-items capability and safe local response-reference metadata; SLAIF does not store response content or input-item content. Non-streaming `previous_response_id` is supported only for active, locally recorded, same-key provider response references after provider/route compatibility checks. `POST /v1/conversations`, owned `POST`/`GET`/`DELETE /v1/conversations/{conversation_id}`, owned `POST`/`GET`/`DELETE /v1/conversations/{conversation_id}/items`, and non-streaming `POST /v1/responses` with an owned `conversation` ID are implemented through safe local conversation-reference metadata; SLAIF does not store conversation item content or conversation update metadata locally. `POST /v1/responses/compact` is implemented as a bounded non-streaming text-focused compaction endpoint behind explicit endpoint permission, route capability, endpoint-specific pricing, quota reservation, provider usage finalization, and no compact input/output storage. Safe key-template `responses_policy` metadata is implemented for the supported local/stored/stateful/compact capabilities. `POST /v1/responses/input_tokens` is implemented as a separate provider-reported input-token count endpoint for the same local subset, behind explicit endpoint permission and route capability, without creating a Response or reserving generation quota.
+- OpenAI Responses canonical `web_search` is the sole implemented
+  provider-hosted tool family. It requires a stateless `store=false` request,
+  positive `max_tool_calls`, an explicit `external_tool_fenced` standard-key
+  policy, an exactly matching OpenAI route with `provider_web_search`, finite
+  request/token/EUR limits, configured per-call pricing, and explicit overrun
+  acknowledgement. PostgreSQL reserves the key's full remaining balance and
+  admits at most one unresolved hosted request for that key. One admitted
+  request may overrun; later requests are rejected after exhaustion, and
+  missing or ambiguous final usage/cost leaves a durable blocking hold for
+  audited reconciliation. Non-streaming and bounded typed-SSE execution have
+  mocked-provider coverage; no real-provider or production-qualification claim
+  follows.
 - `slaif-gateway bootstrap openai-completions-catalog` for seeding the local OpenAI provider config, exact Chat Completions routes, and explicit pricing rows from a curated in-repo catalog and an operator-controlled pricing CSV.
 - Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
 - Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
@@ -94,16 +107,17 @@ Implemented:
 
 Not implemented yet:
 
-- Responses hosted/provider-side tools, MCP/connectors, web/file search, code
-  interpreter, shell, `apply_patch`, local environments/skills/containers,
+- Responses hosted/provider-side tools other than the exact bounded OpenAI
+  `web_search` contract, including MCP/connectors, file search, code
+  interpreter, hosted shell, provider-side `apply_patch`, skills/containers,
   computer use, image generation, audio input/output, `/v1/files`, `file_id`
-  lifecycle, response cancel/list endpoints,
+  lifecycle, response cancel/list endpoints, OpenRouter hosted tools,
   and multimodal output. The implemented Responses subset remains text-output
   only, with provider-reported input-token count, bounded non-streaming
   compact, non-streaming stored create, owned previous-response chaining,
   owned retrieve/delete/input-item listing, owned Conversations resource/item
-  lifecycle, and local/client-side tools only in the documented bounded
-  subsets.
+  lifecycle, local/client-side tools, and the separately gated OpenAI
+  `web_search` contract only in their documented bounded subsets.
 - Legacy `/v1/completions`, `/v1/files`, image generation endpoints, batch
   endpoints, and Realtime call/WebSocket/SIP surfaces beyond
   `POST /v1/realtime/client_secrets`.

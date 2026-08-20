@@ -128,7 +128,7 @@
   <section class="action-panel" aria-labelledby="email-result-external-tool-policy-heading">
     <h2 id="email-result-external-tool-policy-heading">External-tool Policy</h2>
     <p>Mode {{ key_result.external_tool_policy.mode }}; capabilities {{ key_result.external_tool_policy.allowed_capabilities|join(', ') or 'none' }}; destinations {{ key_result.external_tool_policy.allowed_destination_ids|join(', ') or 'none' }}; max calls {{ key_result.external_tool_policy.max_provider_tool_calls_per_request }}.</p>
-    <p class="warning-text">Configuration only. Runtime remains denied pending objectives 014–016.</p>
+    <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match; all other hosted families remain denied.</p>
   </section>
   {% endif %}
 

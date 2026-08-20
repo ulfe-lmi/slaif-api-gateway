@@ -30,16 +30,15 @@ bounded `POST /v1/realtime/client_secrets` foundation are now implemented; the
 remaining deferred Realtime sub-surfaces are tracked precisely in
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
-Current external-tool boundary (2026-08-18): objective 012 defines a pure
-version-1 taxonomy and `strict_bounded` / `external_tool_fenced` admission
-contract only. Runtime remains deny-only for provider-hosted tools, remote MCP/
-connectors, provider URL fetch, and unknown authority. No migration, stored
-policy, settings, admin/CLI, fence/hold, forwarding, or provider call is added.
-The future fenced promise acknowledges one admitted request may cross remaining
-quota, requires an exclusive per-key fence, blocks following requests after
-exhaustion, and retains a blocking hold for missing/ambiguous final cost.
-Objectives 013–017 remain separately required; this historical readiness report
-does not represent that future behavior as implemented.
+Current external-tool boundary: `strict_bounded` is the default deny mode. The
+sole implemented `external_tool_fenced` runtime is exact OpenAI Responses
+canonical `web_search` for a standard key and matching `provider_web_search`
+route, with finite limits, configured pricing, explicit overrun acknowledgement,
+an exclusive PostgreSQL full-balance fence, following-request blocking, and a
+durable unknown-outcome hold. One admitted request may overrun. OpenRouter,
+Chat hosted tools, remote MCP/connectors, provider URL fetch, and every other
+hosted family remain denied. Mocked-provider evidence is not real-provider or
+production qualification.
 
 The external review archive now includes Review 6.0 / RC1 as the latest RC1
 baseline. It supports RC-beta readiness for the implemented scope and identifies
@@ -272,7 +271,10 @@ No Review 5.0 remediation item remains open for the RC-beta scope.
   Conversation create/update/retrieve/delete, Conversation item
   create/list/retrieve/delete, and non-streaming Responses create with an owned
   conversation reference are supported through safe local conversation-reference
-  metadata. Hosted/provider-side Responses tools,
+  metadata. Exact bounded OpenAI Responses canonical `web_search` is
+  implemented separately with fenced key/route policy, PostgreSQL full-balance
+  reservation, per-call pricing, content-free accounting, and durable
+  unknown-outcome holds. Other hosted/provider-side Responses tools,
   streaming conversation state, streaming
   previous-response state, compact `previous_response_id`, background mode,
   cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
@@ -337,11 +339,11 @@ truth, not current `main` status.
 
 - Add MFA and role-gated permissions if required for the deployment context.
 - Add formal security review or penetration testing before production claims.
-- Further Responses expansion beyond the current implemented RC2 boundary is
-  separately scoped work under `responses-compatibility.md`; decide separately
-  whether to implement Responses hosted tools, background/cancel/list routes,
-  stateful streaming, files, multimodal output, bulk key send-now, and native
-  provider adapters.
+- Further Responses expansion beyond the exact bounded OpenAI `web_search`
+  exception is separately scoped work under `responses-compatibility.md`;
+  decide separately whether to implement additional hosted families,
+  background/cancel/list routes, stateful streaming, files, multimodal output,
+  bulk key send-now, and native provider adapters.
 - Extend Responses live-burn beyond the current stateless text-output
   streaming subset only as separate scoped work under
   `streaming-live-burn-margin.md`.
@@ -352,8 +354,8 @@ truth, not current `main` status.
 
 Final verdict for the historical 2026-05-01 snapshot: verification-clean for
 its implemented and documented scope: yes. Feature-full RC2: no — the current
-scope matrix has zero `RC2_REQUIRED_MISSING` rows, but a clean post-PR-220
-current-main qualification and a human release decision remain outstanding;
+scope matrix has zero `RC2_REQUIRED_MISSING` rows, but a clean current-main
+release qualification and a human release decision remain outstanding;
 see [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 Tag-specific release notes for the historical first RC-beta tag are in

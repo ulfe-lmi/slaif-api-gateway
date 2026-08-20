@@ -141,7 +141,7 @@
     {% if current_revision.allowed_hosted_capabilities %}
     <p class="warning-text">This revision has hosted capabilities requiring review. Single-key creation is blocked until a later explicit hosted-capability participant policy workflow exists.</p>
     {% endif %}
-    <p class="warning-text">The copied external-tool policy is immutable provenance only; runtime remains denied pending objectives 014–016.</p>
+    <p class="warning-text">A copied fenced policy can authorize only exact OpenAI Responses <code>web_search</code> when the created key and route also match; all other hosted families remain denied.</p>
     <form method="post" action="/admin/templates/{{ template.id }}/revisions/{{ current_revision.id }}/create-key">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">

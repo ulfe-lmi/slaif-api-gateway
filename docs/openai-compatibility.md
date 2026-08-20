@@ -35,7 +35,7 @@ authorize a real provider call. See
 | `GET /v1/models` | Implemented | Required | No usage charge; model visibility is filtered by key policy and enabled routes | Not applicable | Unit and integration coverage for model catalog visibility |
 | `POST /v1/chat/completions` | Implemented | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response | Non-streaming and SSE streaming | Unit, integration, and mocked official OpenAI Python client E2E coverage |
 | `POST /v1/completions` | Not implemented | Not applicable | Not implemented | Not implemented | Unsupported route/error behavior only; legacy endpoint support requires a separate endpoint, forwarding, accounting, pricing, and test slice |
-| `POST /v1/responses` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization after provider response or completed stream event | Non-streaming and typed SSE streaming for stateless requests; stored create, `previous_response_id`, and `conversation` are non-streaming only | Text-output foundation with string input or bounded input item arrays, user-message `input_image` URL/data URL parts behind explicit Responses image capability, user-message `input_file` URL/data URL parts behind explicit Responses file capability, non-streaming structured `text.format` JSON mode/schema support, local/client-side function/custom tools, non-streaming `store=true` create behind explicit stored-response route capability, non-streaming `previous_response_id` only for owned locally recorded provider response references, and non-streaming `conversation` only for owned locally recorded provider conversation references. Requires explicit key endpoint permission, route/model Responses capability, and `/v1/responses` pricing. Streaming requires explicit Responses streaming route capability. Function-tool/custom-tool streaming, streaming `previous_response_id`, streaming `conversation`, hosted tools, background, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
+| `POST /v1/responses` | Limited | Required | Ordinary requests use PostgreSQL quota reservation/finalization; the selected hosted web-search path uses an exclusive PostgreSQL full-balance fence, one admitted overrun, and a durable unknown-outcome hold | Non-streaming and typed SSE streaming for stateless requests; stored create, `previous_response_id`, and `conversation` are non-streaming only | Text-output foundation with string or bounded item input, gated image/file input-to-text, structured text formats, local/client-side tools, stored/owned lifecycle, and Conversations. The sole hosted exception is exact OpenAI Responses canonical `web_search`: stateless `store=false`, positive `max_tool_calls`, explicit `external_tool_fenced` standard-key policy, exactly matching `provider_web_search` OpenAI route, finite limits, configured per-call pricing, and overrun acknowledgement. Function/custom tool streaming, stateful hosted execution, OpenRouter hosted tools, every other hosted family, MCP/connectors, background, file IDs, `/v1/files`, audio input/output, image generation, file search/retrieval tools, and multimodal output are rejected |
 | `POST /v1/responses/compact` | Limited | Required | PostgreSQL quota reservation before provider call; usage ledger finalization from provider usage | Non-streaming only | Bounded text-focused compaction with required input, optional instructions, string input or message arrays with `input_text`/`output_text` parts, explicit endpoint permission, `/v1/responses/compact` route/pricing, and `capabilities.responses.compact=true`. `previous_response_id`, conversations, tools, media inputs, streaming, background mode, and unknown fields are rejected. Compact input/output and encrypted compaction content are not stored |
 | `GET /v1/responses/{response_id}` / `DELETE /v1/responses/{response_id}` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for provider-stored Responses created through SLAIF. The gateway looks up a safe local response reference for the authenticated key before proxying; missing, non-owned, or deleted references return OpenAI-shaped 404. Response content is not stored locally |
 | `GET /v1/responses/{response_id}/input_items` | Limited | Required | No generation quota reservation or normal generation usage ledger row | Not applicable | Ownership-checked proxying for input items from provider-stored Responses created through SLAIF. Requires explicit endpoint permission, an owned active local response reference, compatible provider/route metadata, and `capabilities.responses.list_input_items=true`. Input-item content is not stored locally |
@@ -113,7 +113,9 @@ Current support is intentionally narrow:
 - non-streaming `conversation` only for active locally recorded provider
   conversation IDs owned by the same gateway key and compatible with the
   resolved provider route;
-- no hosted/provider-side tools;
+- exact OpenAI canonical `web_search` only when the standard key and route match
+  the bounded `external_tool_fenced` contract; no other hosted/provider-side
+  tools and no OpenRouter hosted tools;
 - no MCP/connectors;
 - no `input_image.file_id`, `input_file.file_id`, `input_audio`, audio output,
   image generation, `/v1/files`, file search/retrieval tools, or multimodal
@@ -655,26 +657,29 @@ Provider errors are normalized to safe OpenAI-shaped client errors. Raw provider
 
 Unsupported endpoints and unsupported provider adapter endpoints are explicit errors; they are not silently proxied.
 
-Objective 012 records the tool aliases in a versioned authority contract.
-Objective 013 stores canonical reviewed policy on keys/templates/routes and
-exposes audited operator controls. It classifies client-operated tools separately
+The versioned authority contract records tool aliases, stores canonical
+reviewed policy on keys/templates/routes, and exposes audited operator controls.
+It classifies client-operated tools separately
 from provider web/file search, code interpreter, hosted shell, image generation,
 computer use, tool search, skills, remote MCP/connectors, provider URL fetch,
-and `unknown_external_authority`. This taxonomy is not an OpenAI compatibility
-claim, and stored policy does not enable a request field. Current runtime
-remains deny-only.
+and `unknown_external_authority`. This taxonomy alone is not an OpenAI
+compatibility claim. Runtime consumes it only for the exact bounded OpenAI
+Responses `provider_web_search` key/route intersection; all other external
+authority remains denied.
 
-`strict_bounded` is the default mode. `external_tool_fenced` is a future opt-in
-that requires exact key/route/operator intersection and the documented
+`strict_bounded` is the default mode. `external_tool_fenced` is implemented
+only for that selected web-search contract and requires exact key/route/operator
+intersection plus the documented
 exclusive-fence, single-request-overrun, following-block, and unresolved-cost
 hold obligations. Client-provided MCP URLs/connector IDs/authorization are never
 approved destinations, and local/client tools do not imply provider authority.
-Objectives 014–17 own runtime and provider-specific implementation.
 
 ## What Is Not Implemented
 
 - Responses cancel/list endpoints,
-  Responses hosted tools, audio input/output, image generation, multimodal
+  Responses hosted tools other than exact bounded OpenAI Responses
+  `web_search`, audio
+  input/output, image generation, multimodal
   output, background mode, streaming conversation state, streaming
   previous-response state,
   `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
@@ -684,11 +689,11 @@ Objectives 014–17 own runtime and provider-specific implementation.
   non-streaming stored create plus owned retrieve/delete/input-item listing and
   the ownership-checked conversation resource/update/item foundation; see
   `docs/responses-compatibility.md`.
-- Hosted/provider-side tool support for normal participant keys. Local function
+- Other hosted/provider-side tool families for standard keys. Local function
   tools remain allowed as ordinary client-side behavior. Trusted calibration
   keys can use broad discovery policy only for routed Chat Completions requests.
-- Embeddings API.
-- Files, images, audio, or batch endpoints.
+- Files, image-generation, or batch endpoints. The bounded standalone Audio and
+  Embeddings endpoint subsets listed in the endpoint table are implemented.
 - Native Anthropic API.
 - New provider types beyond OpenAI and OpenRouter.
 - Bulk key send-now execution, owner/institution/cohort delete or anonymization workflows,

@@ -456,7 +456,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert "Do not issue them to participants" in html
                     assert 'name="external_tool_mode"' in html
                     assert 'name="confirm_external_tool_fenced"' in html
-                    assert "runtime still denies provider-hosted tools" in html
+                    assert "Runtime permits only exact OpenAI Responses" in html
                 if path == "/admin":
                     assert 'href="/admin/templates"' in html
                 if path == "/admin/templates":
@@ -467,7 +467,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert "trusted_calibration" not in html
                     assert 'action="/admin/keys/' in html
                     assert "/external-tool-policy" in html
-                    assert "Configured policy is not runtime authority" in html
+                    assert "Configured policy is only one part of runtime authority" in html
                 if path == f"/admin/keys/{data['trusted_key_id']}":
                     assert "Preview calibration policy" in html
                     assert "Trusted Calibration Key" in html
@@ -476,7 +476,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert 'name="multiplier"' in html
                     assert "does not mutate gateway key policy" in html
                 if path == "/admin/routes/new":
-                    assert "runtime remains denied pending objectives 014" in html
+                    assert "Runtime consumes it only for exact OpenAI Responses" in html
 
             _assert_page_ok(page, "/admin", "Admin Dashboard")
             page.click('form[action="/admin/logout"] button[type="submit"]')

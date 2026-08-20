@@ -450,14 +450,16 @@ Responses-specific rules for the current foundation:
 
 OpenRouter's Responses API is beta and stateless. OpenAI's Responses API exposes
 stateful/background/storage and hosted-tool surfaces. SLAIF fails closed on
-those differences until the policy, pricing, ownership, and accounting contracts
-are implemented and tested. OpenRouter Responses is available only through
-explicit `/v1/responses` route metadata; model allowlists alone do not enable it.
+each difference until its exact policy, pricing, ownership, and accounting
+contract is implemented and tested; the bounded OpenAI `web_search` exception
+below is the sole hosted contract that currently meets that bar. OpenRouter
+Responses is available only through explicit `/v1/responses` route metadata;
+model allowlists alone do not enable it.
 
-### Provider-contract-qualified web search
+### Bounded OpenAI Responses web search
 
-Objective 016 qualifies one pure OpenAI Responses provider contract for the
-canonical `web_search` declaration. The first shape permits only
+The sole implemented provider-hosted forwarding contract is OpenAI Responses
+canonical `web_search`. The supported shape permits only
 `search_context_size` (`low`, `medium`, or `high`) and a positive top-level
 `max_tool_calls` bounded by the exact fenced key/route policy decision. It is
 stateless (`store=false`), accepts only neutral absent/`auto` tool choice, and
@@ -466,8 +468,8 @@ aliases, filters, locations, external-web controls, returned-token controls,
 arbitrary instructions, other hosted tools, MCP, connectors, and approval or
 provider-state continuation remain rejected.
 
-This is provider-contract qualification only: runtime forwarding remains
-deny-only pending Objective 017. If later activated, accounting combines the
+The runtime forwards this exact shape after policy, pricing, and PostgreSQL
+fenced admission. Accounting combines the
 published per-call web-search fee with provider-reported model token usage,
 uses full-balance fenced admission, permits only the bounded acknowledged
 single-request overrun, and holds on unknown or ambiguous final evidence.
@@ -482,10 +484,10 @@ function tools, legacy `functions` / `function_call`, `response_format`, JSON
 mode, and normal streaming. SLAIF does not execute or police downstream
 application code that handles a local function call.
 
-Hosted/provider-side tools are denied by default for Chat Completions because no
-persisted hosted-tool policy exists. Requests are rejected before Redis rate
-limiting, route resolution, pricing lookup, PostgreSQL quota reservation, or
-provider forwarding when they include `web_search_options`, hosted tool types
+Hosted/provider-side tools are denied for Chat Completions because that endpoint
+does not consume the Responses external-tool policy. Requests are rejected
+before Redis rate limiting, route resolution, pricing lookup, PostgreSQL quota
+reservation, or provider forwarding when they include `web_search_options`, hosted tool types
 such as `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
 `computer` / `computer_use`, `image_generation`, or `tool_search`,
 MCP/connectors markers such as `server_url`, `connector_id`, provider-side
@@ -526,28 +528,25 @@ payloads as provider authority, and it does not retain that content. Namespace
 child declarations are inspected with strict depth/count bounds, so a nested
 provider tool, raw MCP/connector, unknown or malformed declaration, or cycle cannot hide external
 authority. Provider filter/query/schema payloads are likewise not treated as a
-second authority grant; objective 016 still owns their complete provider-
-contract validation. Existing endpoint validators retain independent shape,
-size, depth, content, and secret enforcement, so client-operated classification
-does not make a request valid or forwardable.
+second authority grant; the selected web-search contract retains complete
+provider-contract validation. Existing endpoint validators retain independent
+shape, size, depth, content, and secret enforcement, so client-operated
+classification does not make a request valid or forwardable.
 
-`strict_bounded` is the current/default deny mode. Objective 013 persists but
-does not consume the future
-`external_tool_fenced` mode requires exact key/route/operator intersection and
+`strict_bounded` is the current/default deny mode. The runtime consumes
+`external_tool_fenced` only for the exact OpenAI Responses `provider_web_search`
+key/route/operator intersection and
 the exclusive-fence/overrun/hold/following-block promise in
-[`accounting.md`](accounting.md). Objective 014 implements the PostgreSQL-authoritative fence and
-full-remaining-balance reservation foundation on the locked key row (the
+[`accounting.md`](accounting.md). The PostgreSQL-authoritative fence and
+full-remaining-balance reservation live on the locked key row (the
 key-row lock is the single concurrency authority, Redis is not, and fence
 expiry never means safe release), binding the reservation to the exact
-provider name and route UUID of the admitted route so the later provider
-execution inherits one unambiguous route identity. Objective 015 implements
-the manual accounting hold/reconciliation path; external forwarding remains
-disabled. Objective 016 qualifies the selected OpenAI web-search provider
-contract, and Objective 017 owns runtime integration. The exact overrun and
-one-winner concurrency promise remains conditional on that later activation.
-No new tool is enabled or
-forwarded by objectives 013 or 014, and trusted-calibration
-observation is not standard-key authorization.
+provider name and route UUID of the admitted route so provider execution
+inherits one unambiguous route identity. Unknown outcomes use the
+manual accounting hold/reconciliation path. The exact overrun and one-winner
+concurrency promise is implemented for this one selected contract. No other
+hosted tool is enabled, and trusted-calibration observation is not standard-key
+authorization.
 Authority classification never substitutes for existing endpoint-specific
 shape, size, content, pricing, or provider-contract validation; a known local
 or provider alias alone cannot make a malformed request forwardable.
@@ -787,12 +786,14 @@ responses are never added to the upstream body or stored as content. Only an
 exact OpenAI route/key/capability match may reach this path; other hosted
 families remain denied.
 
-Streaming does not expand request policy beyond the exact independently gated
-Codex declaration/call/replay slice. Hosted/provider-side tools, arbitrary
-custom tools, web search, MCP/connectors, external web access, file/audio
-content, non-default `service_tier`, background/provider-state lifecycle
-fields, and unknown top-level fields remain rejected before provider
-forwarding. Streaming `n > 1` is supported for Chat when route metadata
+Ordinary Chat and non-hosted Responses streaming do not expand request policy
+beyond their independently gated local/Codex slices. Chat hosted tools,
+arbitrary custom tools, MCP/connectors, external web access, unsupported
+file/audio content, non-default `service_tier`, background/provider-state
+lifecycle fields, and unknown top-level fields remain rejected before provider
+forwarding. The separately fenced OpenAI Responses `web_search` stream is the
+only hosted exception and follows the boundary above. Streaming `n > 1` is
+supported for Chat when route metadata
 explicitly enables multiple choices; SSE chunks, choice indexes, finish
 reasons, the final usage chunk, and `[DONE]` are preserved without buffering
 the full stream.

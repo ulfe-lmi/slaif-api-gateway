@@ -48,7 +48,7 @@
           <td>{{ template.created_at.isoformat() }}</td>
           <td>
             <div>{{ template.revisions|length }} revision{{ "" if template.revisions|length == 1 else "s" }}</div>
-            <div class="muted small">{{ template_external_tool_summaries.get(template.id|string, "External tools: strict_bounded; runtime denied") }}</div>
+            <div class="muted small">{{ template_external_tool_summaries.get(template.id|string, "External tools: strict_bounded; all hosted runtime denied") }}</div>
             <div class="muted small">Bulk key creation is future work.</div>
           </td>
         </tr>

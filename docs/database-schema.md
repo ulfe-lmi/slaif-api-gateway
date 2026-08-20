@@ -520,14 +520,16 @@ External-tool fence fields (objective 014):
 ```text
 external_tool_fence_state none       no unresolved external request; all fence fields null
 external_tool_fence_state active     one unresolved external request; all four bound fields set
-external_tool_fence_state held       reserved for objective 015; objective 014 never writes it
+external_tool_fence_state held       unresolved external request with unknown/ambiguous final accounting; blocks admission until audited reconciliation
 ```
 
 The locked `gateway_keys` row is the single concurrency authority for fence
 acquisition (Redis is not), and the shape constraints make a partially bound
 fence impossible. The fence reservation pointer is additionally a unique index
 (`ix_gateway_keys_external_tool_fence_reservation_id_unique`), so one
-reservation can never be the durable pointer for two keys. Objective 014 writes only `none` and `active`; fence expiry
+reservation can never be the durable pointer for two keys. Normal acquisition
+writes `active`; the hold path writes `held` when final accounting is not
+authoritative. Fence expiry
 is an inspection threshold and never means safe release, and emergency suspend
 or revoke does not clear fence fields, reservations, or counters.
 
@@ -584,7 +586,7 @@ Trusted calibration key rules:
   one key from a template must not mutate the template revision or any existing
   gateway keys.
 
-### External-tool policy JSON (stored, runtime deny-only)
+### External-tool policy JSON and bounded runtime
 
 Objective 012 defines the exact version-1 schemas. Objective 013 stores them in
 existing JSON only: `gateway_keys.metadata.external_tool_policy`, immutable
@@ -592,10 +594,10 @@ existing JSON only: `gateway_keys.metadata.external_tool_policy`, immutable
 `model_routes.capabilities.external_tools`. Objective 013 added no column,
 table, constraint, or migration; its policy storage is JSON only. Alembic
 migration 0015 adds exactly the fence and external-fact columns documented
-above. Missing historical metadata means exact strict. Current runtime
-remains deny-only for provider-hosted/external forwarding; objective 014's
-fence acquisition validates the stored policy snapshot but enables no
-forwarding.
+above. Missing historical metadata means exact strict. Runtime consumes
+`external_tool_fenced` only for the exact bounded OpenAI Responses
+`provider_web_search` key/route intersection; every other provider-hosted/
+external family remains denied.
 
 Canonical per-key `external_tool_policy`:
 
@@ -660,13 +662,13 @@ per request, and 16 provider calls/iterations per request. Objective 013 adds
 positive installation settings with those defaults; they may only narrow the
 absolute maxima.
 
-`strict_bounded` remains the current/default quota mode. The future
-`external_tool_fenced` promise permits one admitted request to cross remaining
-token/cost quota before control returns, while requiring an exclusive per-key
-fence, following-request block after exhaustion, and blocking accounting hold
-for missing, ambiguous, interrupted, or unreconciled final cost. Provider final
-usage/cost remains authoritative when available; this is not provider-invoice
-truth or a zero-overrun guarantee.
+`strict_bounded` remains the current/default quota mode. The selected OpenAI
+Responses `web_search` runtime consumes `external_tool_fenced` and permits one
+admitted request to cross remaining token/cost quota before control returns,
+while requiring an exclusive per-key fence, following-request block after
+exhaustion, and blocking accounting hold for missing, ambiguous, interrupted,
+or unreconciled final cost. Provider final usage/cost remains authoritative when
+available; this is not provider-invoice truth or a zero-overrun guarantee.
 
 The version-1 taxonomy examines provider markers only at semantic declaration/
 control positions. Local function parameters/JSON Schema, descriptions, and
@@ -675,8 +677,10 @@ not retained in its DTOs; existing endpoint validators still independently
 enforce their shape, size, depth, content, and secret rules. Bounded namespace
 child traversal fails closed when a child is provider-hosted, MCP/connector,
 unknown, malformed, cyclic, excessively nested, or over the child-count bound.
-This correction grants no runtime support. Objective 013 changes JSON storage
-only and retains the no-migration status above.
+This taxonomy grants no runtime support by itself; the selected web-search path
+performs separate request, key, route, provider, pricing, and fence validation.
+Objective 013 changed JSON storage only and retained the no-migration status
+above.
 
 Quota rule:
 
@@ -750,7 +754,7 @@ Rules:
 - `strict_bounded` is the default/backfilled mode with empty external arrays and null external provider/route; `external_tool_fenced` rows carry a canonical non-empty capability snapshot, opaque destination IDs, a bounded non-empty provider name, and a non-null route UUID.
 - PostgreSQL enforces the four named external-fact checks (`quota_reservations_quota_mode_allowed_values`, `quota_reservations_external_tool_facts_array_shape`, `quota_reservations_strict_mode_empty_external_facts`, `quota_reservations_fenced_mode_bound_facts`) in every valid mode; canonical capability/destination values remain a service-layer responsibility.
 - `external_tool_route_id` references `model_routes.id` with `ON DELETE RESTRICT`, so a route referenced by a reservation cannot be deleted out from under it.
-- Stale `pending` reservations in `external_tool_fenced` mode are never auto-released by ordinary reconciliation; they require external-tool review (objective 015) and the key fence keeps blocking admission.
+- Stale `pending` reservations in `external_tool_fenced` mode are never auto-released by ordinary reconciliation; they require the external-tool hold/reconciliation workflow and the key fence keeps blocking admission.
 
 ---
 
@@ -1691,14 +1695,14 @@ Rules:
   row before the request can reserve quota. This metadata value is a decimal
   price per one million provider-reported audio output tokens; it is not derived
   from audio bytes, transcript length, duration, format, or voice.
-- Objective 016 may use the existing `pricing_metadata` JSONB without a
-  migration for the provider-contract-qualified OpenAI Responses web-search
+- The bounded OpenAI Responses web-search runtime uses the existing
+  `pricing_metadata` JSONB without a migration for its
   fee. Its exact optional shape is
   `{"external_tool_pricing":{"openai_web_search_call_price_native":"0.010000000","source":"openai_published_per_call"}}`.
   The value is a finite non-negative Decimal in the pricing row's currency;
   missing, malformed, unknown, or negative selected-tool pricing fails closed.
   It is a per-call fee, separate from provider-reported model token usage, and
-  does not activate runtime forwarding or add a hosted-tool ledger column.
+  adds no hosted-tool ledger column.
 - Codex cache-write and long-context accounting uses an exact nested object;
   it is never inferred from a model name:
 

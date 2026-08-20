@@ -99,7 +99,7 @@
         Capabilities JSON
         <textarea name="capabilities">{{ form.capabilities }}</textarea>
       </label>
-      <p class="warning-text">External-tool route metadata is canonical future-support evidence only. It does not enable forwarding; runtime remains denied pending objectives 014–016.</p>
+      <p class="warning-text">External-tool route metadata is one part of authorization. Runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code> with matching key/provider/pricing facts; all other hosted capabilities remain denied.</p>
       <label>
         Notes
         <textarea name="notes">{{ form.notes }}</textarea>

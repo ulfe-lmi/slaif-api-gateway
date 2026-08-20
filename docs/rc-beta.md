@@ -231,7 +231,11 @@ migrations automatically.
   Conversation create/update/retrieve/delete, Conversation item
   create/list/retrieve/delete, and non-streaming Responses create with an owned
   conversation reference are supported through safe local conversation-reference
-  metadata. Hosted/provider-side Responses tools,
+  metadata. The exact bounded OpenAI Responses canonical `web_search` contract
+  is implemented separately with stateless execution, explicit fenced key/route
+  policy, full-balance PostgreSQL reservation, provider token plus per-call
+  pricing, one admitted overrun, following-request blocking, and durable
+  unknown-outcome holds. Other hosted/provider-side Responses tools,
   streaming conversation state, streaming
   previous-response state, compact `previous_response_id`, background mode,
   cancel/list routes, `input_image.file_id`, `input_file.file_id`, `/v1/files`, file
@@ -277,20 +281,19 @@ migrations automatically.
 
 ## Current External-Tool Contract Boundary
 
-Objective 012 defines the future version-1 `strict_bounded` and
-`external_tool_fenced` taxonomy/admission contract only. It does not change the
-implemented RC-beta/RC2 runtime boundary: provider-hosted tools, remote MCP/
-connectors, provider URL fetch authority, and unknown authority remain
-deny-only for standard keys. No migration, policy storage, settings, admin/CLI,
-fence/hold, provider forwarding, or real provider call is included.
+`strict_bounded` is the default and denies provider-hosted/external authority.
+The sole implemented `external_tool_fenced` runtime is OpenAI Responses
+canonical `web_search` for an exact standard-key/route `provider_web_search`
+intersection with positive finite limits, configured pricing, and explicit
+overrun acknowledgement. PostgreSQL provides the exclusive per-key fence,
+full-remaining-balance reservation, authoritative finalization, following-
+request blocking after exhaustion, and blocking hold for missing, ambiguous,
+interrupted, or unreconciled final cost. One admitted request may overrun. This
+is neither a zero-overrun nor provider-invoice guarantee, and mocked-provider
+coverage is not real-provider qualification.
 
-The future fenced promise explicitly permits one admitted request to exceed
-remaining token/cost quota before SLAIF regains control, while requiring
-exclusive per-key concurrency fencing, authoritative finalization, following-
-request blocking after exhaustion, and a blocking hold for missing, ambiguous,
-interrupted, or unreconciled final cost. This is neither a zero-overrun nor
-provider-invoice guarantee. Objectives 013–017 remain required before any
-external-tool opt-in is current functionality.
+Chat Completions hosted tools, OpenRouter hosted tools, remote MCP/connectors,
+provider URL fetch, and every other hosted family remain deny-only.
 
 ## Release Checklist
 
