@@ -550,6 +550,53 @@ def test_hosted_authority_unknown_and_provider_failure_events_fail_closed(
     assert PRIVATE_CANARY not in repr(validator.safe_evidence())
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "search", "query": PRIVATE_CANARY},
+        {"type": "open_page", "url": f"https://{PRIVATE_CANARY}.invalid"},
+        {
+            "type": "find_in_page",
+            "url": f"https://{PRIVATE_CANARY}.invalid",
+            "pattern": PRIVATE_CANARY,
+        },
+    ],
+)
+def test_web_search_stream_validates_all_official_actions_content_free(action) -> None:
+    validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(web_search=True, web_search_max_tool_calls=1)
+    )
+    event = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "web_search_call",
+            "id": "ws_action_1",
+            "status": "completed",
+            "action": action,
+        },
+    }
+    assert validator.validate(event)
+    evidence = validator.take_web_search_evidence()
+    assert evidence == (
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 1,
+            "item": {
+                "type": "web_search_call",
+                "id": "ws_action_1",
+                "status": "completed",
+                "output_index": 0,
+                "sequence_number": 1,
+                "action": {"type": action["type"]},
+            },
+        },
+    )
+    assert PRIVATE_CANARY not in repr(validator.__dict__)
+
+
 def test_orphan_delta_duplicate_ids_and_mismatched_done_fail_closed() -> None:
     validator = ResponsesStreamEventValidator(_profile())
     added = _added_tool(

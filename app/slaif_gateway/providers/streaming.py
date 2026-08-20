@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from slaif_gateway.services.openai_web_search_contract import validate_web_search_action
+
 
 RESPONSES_TEXT_STREAM_EVENT_TYPES = frozenset(
     {
@@ -227,13 +229,7 @@ class ResponsesStreamEventValidator:
                 return False
             if status not in {"completed", "in_progress", "searching", "failed"}:
                 return False
-            if not isinstance(action, Mapping) or action.get("type") != "search":
-                return False
-            if set(action) - {"type", "query", "domains"}:
-                return False
-            if "query" in action and (
-                not isinstance(action["query"], str) or len(action["query"].encode()) > 4096
-            ):
+            if not validate_web_search_action(action):
                 return False
             self._web_search_evidence.append(
                 {

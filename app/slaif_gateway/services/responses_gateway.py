@@ -93,8 +93,10 @@ from slaif_gateway.services.codex_replay_service import (
     CodexReplayReferenceError,
     CodexReplayService,
 )
-from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
-from slaif_gateway.services.external_tool_fence import ExternalToolFenceError
+from slaif_gateway.services.external_tool_fence import (
+    ExternalToolFenceError,
+    ExternalToolFenceService,
+)
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
 from slaif_gateway.services.openai_web_search_contract import (
     EXTERNAL_TOOL_FENCED,
@@ -1056,6 +1058,7 @@ async def handle_response_create(
                     provider_error=client_provider_error,
                     request=request,
                     streaming=True,
+                    external_tool=external_web_search_admission is not None,
                 )
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
                 rate_limit_reservation = None
@@ -1077,6 +1080,7 @@ async def handle_response_create(
                         provider_error=safe_error,
                         request=request,
                         streaming=True,
+                        external_tool=True,
                     )
                     raise openai_error_from_provider_error(safe_error) from exc
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
@@ -1122,6 +1126,9 @@ async def handle_response_create(
                     request_id=request_id,
                     provider_error=exc,
                     request=request,
+                    external_tool=(
+                        external_web_search_admission is not None and not provider_started
+                    ),
                 )
             client_provider_error = (
                 _safe_external_provider_error(exc)
@@ -1158,6 +1165,9 @@ async def handle_response_create(
                     request_id=request_id,
                     provider_error=safe_provider_error,
                     request=request,
+                    external_tool=(
+                        external_web_search_admission is not None and not provider_started
+                    ),
                 )
             raise openai_error_from_provider_error(safe_provider_error) from exc
 
@@ -2693,6 +2703,7 @@ async def _record_provider_failure_and_release(
     request: Request | None,
     streaming: bool = False,
     provider_endpoint: str = RESPONSES_PROVIDER_ENDPOINT,
+    external_tool: bool = False,
 ) -> None:
     session_iterator = _db_session_iterator(request)
     try:
@@ -2725,6 +2736,19 @@ async def _record_provider_failure_and_release(
             cost_estimate,
             **kwargs,
         )
+        if external_tool:
+            fence_service = ExternalToolFenceService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+            await fence_service.resolve(
+                ExternalToolFenceResolveInput(
+                    gateway_key_id=authenticated_key.gateway_key_id,
+                    request_id=request_id,
+                )
+            )
         if hasattr(session, "commit"):
             await session.commit()
     except AccountingError as exc:

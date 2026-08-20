@@ -19,16 +19,15 @@ from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceAcquireInput,
     ExternalToolFenceRouteFacts,
 )
-from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.pricing import ExternalToolPricing, FxConversionResult
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.schemas.routing import RouteResolutionResult
-from slaif_gateway.services.responses_gateway import _RateLimitReservation
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.external_tool_hold import (
     ExternalToolAccountingHoldInput,
@@ -38,6 +37,7 @@ from slaif_gateway.schemas.external_tool_hold import (
 from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
 from slaif_gateway.services.external_tool_policy_contract import ExternalToolAdmissionDecision
+import slaif_gateway.services.responses_gateway as gateway
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
@@ -142,14 +142,25 @@ def _route(route_row: ModelRoute) -> RouteResolutionResult:
 
 
 def _provider_response(*, usage: bool = True, malformed: bool = False) -> ProviderResponse:
-    output = [] if malformed else [
-        {
-            "type": "web_search_call",
-            "id": "call-canary-id",
-            "status": "completed",
-            "action": {"type": "search", "query": "query-canary"},
-        }
-    ]
+    output = (
+        [
+            {
+                "type": "web_search_call",
+                "id": "call-canary-id",
+                "status": "completed",
+                "action": {"type": "unsupported", "query": "query-canary"},
+            }
+        ]
+        if malformed
+        else [
+            {
+                "type": "web_search_call",
+                "id": "call-canary-id",
+                "status": "completed",
+                "action": {"type": "search", "query": "query-canary"},
+            }
+        ]
+    )
     return ProviderResponse(
         provider="openai",
         upstream_model="gpt-4.1-mini",
@@ -185,9 +196,9 @@ async def _gateway_client(
     *,
     provider_response,
     model_price: Decimal = Decimal("1000"),
+    construction_error: Exception | None = None,
 ):
     import slaif_gateway.api.dependencies as dependencies
-    import slaif_gateway.services.responses_gateway as gateway
     import slaif_gateway.services.pricing as pricing_module
 
     app = create_app()
@@ -249,13 +260,19 @@ async def _gateway_client(
             for chunk in getattr(provider_response, "stream_chunks", ()):
                 yield chunk
 
-    monkeypatch.setattr(gateway, "get_provider_adapter", lambda route, settings: Adapter())
+    def build_adapter(route, settings):
+        _ = (route, settings)
+        if construction_error is not None:
+            raise construction_error
+        return Adapter()
+
+    monkeypatch.setattr(gateway, "get_provider_adapter", build_adapter)
     released = []
     redis_requests = []
 
     async def reserve_redis(**kwargs):
         redis_requests.append(kwargs["request_id"])
-        return _RateLimitReservation(
+        return gateway._RateLimitReservation(
             service=SimpleNamespace(),
             policy=SimpleNamespace(),
             gateway_key_id=key.id,
@@ -401,6 +418,19 @@ async def test_gateway_hosted_stream_withholds_terminal_and_finalizes_content_fr
     chunks = (
         _stream_chunk({"type": "response.created", "sequence_number": 0}),
         _stream_chunk({"type": "response.output_text.delta", "delta": "safe text"}),
+        _stream_chunk(
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "sequence_number": 0,
+                "item": {
+                    "type": "message",
+                    "id": "message-stream",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "safe message"}],
+                },
+            }
+        ),
         _stream_chunk(
             {
                 "type": "response.web_search_call.completed",
@@ -598,6 +628,61 @@ async def test_gateway_same_key_fence_blocks_without_provider_work(
     assert response.status_code == 409
     assert "blocking-request" not in response.text
     assert len(released) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_stream_provider_construction_failure_releases_fence_atomically(
+    async_test_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    key = await _create_key(async_test_session)
+    route_row = ModelRoute(
+        requested_model="gpt-responses-web-search-construction-failure",
+        match_type="exact",
+        endpoint="/v1/responses",
+        provider="openai",
+        upstream_model="gpt-4.1-mini",
+    )
+    async_test_session.add(route_row)
+    await async_test_session.flush()
+    app, client, released = await _gateway_client(
+        monkeypatch,
+        async_test_session,
+        key,
+        route_row,
+        provider_response=SimpleNamespace(stream_chunks=()),
+        construction_error=RuntimeError("construction-canary"),
+    )
+    async with client:
+        response = await client.post(
+            "/v1/responses",
+            json={
+                "model": route_row.requested_model,
+                "input": "hello",
+                "store": False,
+                "stream": True,
+                "tools": [{"type": "web_search"}],
+                "tool_choice": "auto",
+                "max_tool_calls": 1,
+            },
+        )
+    assert response.status_code >= 400
+    assert "construction-canary" not in response.text
+    await async_test_session.refresh(key)
+    assert key.external_tool_fence_state == "none"
+    assert key.cost_reserved_eur == Decimal("0")
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    ledgers = list(
+        (
+            await async_test_session.execute(
+                select(UsageLedger).where(UsageLedger.gateway_key_id == key.id)
+            )
+        ).scalars()
+    )
+    assert len(ledgers) == 1
+    assert ledgers[0].success is False
+    assert released
 
 
 @pytest.mark.asyncio
