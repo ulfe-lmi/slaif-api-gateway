@@ -187,6 +187,8 @@ def parse_web_search_output(
             return _non_authoritative(provider, admitted_call_cap, "conflicting_call_evidence")
         calls[call.call_id] = call
     completed = [call for call in calls.values() if call.completed and not call.failed]
+    if not completed:
+        return _non_authoritative(provider, admitted_call_cap, "call_evidence_missing")
     if len(completed) > admitted_call_cap:
         return _non_authoritative(provider, admitted_call_cap, "call_cap_exceeded")
     if any(not call.completed or call.failed for call in calls.values()):
@@ -271,6 +273,8 @@ def parse_web_search_stream(
         return _non_authoritative(provider, admitted_call_cap, "call_cap_exceeded")
     if not terminal:
         return _non_authoritative(provider, admitted_call_cap, "stream_terminal_missing")
+    if not completed:
+        return _non_authoritative(provider, admitted_call_cap, "call_evidence_missing")
     if any(not call.completed or call.failed for call in calls.values()):
         return _non_authoritative(provider, admitted_call_cap, "call_not_successfully_completed")
     return _authoritative(provider, admitted_call_cap, len(completed), pricing)

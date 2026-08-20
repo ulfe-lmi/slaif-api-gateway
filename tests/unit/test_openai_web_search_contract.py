@@ -201,7 +201,7 @@ def test_stream_requires_terminal_and_accepts_duplicate_completion_evidence() ->
     assert incomplete.reason_code == "stream_terminal_missing"
 
 
-def test_completed_zero_call_outcomes_are_authoritative_only_with_pricing() -> None:
+def test_completed_zero_call_outcomes_are_non_authoritative_without_call_evidence() -> None:
     pricing = ExternalToolPricing("EUR", Decimal("0.010000000"), "openai_published_per_call")
     non_stream = parse_web_search_output(
         {"status": "completed", "output": []},
@@ -219,10 +219,9 @@ def test_completed_zero_call_outcomes_are_authoritative_only_with_pricing() -> N
         admitted_call_cap=2,
         pricing=pricing,
     )
-    assert non_stream.authoritative is True
-    assert stream.authoritative is True
-    assert non_stream.completed_call_count == stream.completed_call_count == 0
-    assert non_stream.total_tool_fee_native == stream.total_tool_fee_native == Decimal("0")
+    assert non_stream.authoritative is False
+    assert stream.authoritative is False
+    assert non_stream.reason_code == stream.reason_code == "call_evidence_missing"
     assert (
         parse_web_search_output(
             {"status": "completed", "output": []},
@@ -237,7 +236,7 @@ def test_completed_zero_call_outcomes_are_authoritative_only_with_pricing() -> N
         {"status": "completed", "output": []}, admitted_call_cap=2
     )
     assert missing_pricing.authoritative is False
-    assert missing_pricing.reason_code == "pricing_missing"
+    assert missing_pricing.reason_code == "call_evidence_missing"
 
 
 def test_official_event_bounds_and_conflicts_require_hold() -> None:

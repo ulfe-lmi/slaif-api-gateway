@@ -270,8 +270,10 @@ def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tu
         assert endpoint == "/v1/responses"
         return _route_result(requested_model)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, at)
+    async def _fake_estimate_chat_completion_cost(
+        self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
+    ):
+        _ = (self, route, policy, at, pricing, fx)
         assert endpoint == "/v1/responses"
         return _estimate()
 
@@ -483,8 +485,10 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
         assert endpoint == "/v1/responses"
         return _route_result(requested_model, external_tool_policy=route_policy)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, at)
+    async def _fake_estimate_chat_completion_cost(
+        self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
+    ):
+        _ = (self, route, policy, at, pricing, fx)
         assert endpoint == "/v1/responses"
         return _estimate()
 

@@ -57,6 +57,7 @@ class ResponsesStreamValidationProfile:
     codex_encrypted_reasoning_replay: bool = False
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
     web_search: bool = False
+    web_search_max_tool_calls: int | None = None
 
 
 @dataclass(slots=True)
@@ -94,6 +95,12 @@ class ResponsesStreamEventValidator:
         self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
         # The evidence window is a bounded state machine input, never an unbounded
         # copy of provider events.  Payload content is discarded at the boundary.
+        configured_cap = profile.web_search_max_tool_calls or 1
+        self._web_search_event_limit = min(
+            _MAX_WEB_SEARCH_EVIDENCE_EVENTS,
+            max(8, configured_cap * 8 + 8),
+        )
+        self._web_search_event_count = 0
         self._web_search_evidence: list[dict[str, object]] = []
         self._web_search_seen_sequences: set[int] = set()
 
@@ -149,8 +156,9 @@ class ResponsesStreamEventValidator:
 
     def _validate_web_search_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
         """Validate and retain only bounded lifecycle facts, never event content."""
-        if len(self._web_search_evidence) >= _MAX_WEB_SEARCH_EVIDENCE_EVENTS:
+        if self._web_search_event_count >= self._web_search_event_limit:
             return False
+        self._web_search_event_count += 1
         if event_type in RESPONSES_TEXT_STREAM_EVENT_TYPES:
             return self._validate_existing_text_event(payload, event_type)
         sequence = payload.get("sequence_number")
@@ -188,7 +196,7 @@ class ResponsesStreamEventValidator:
         if event_type.startswith("response.web_search_call."):
             item_id = payload.get("item_id")
             index = payload.get("output_index")
-            if not isinstance(item_id, str) or not item_id or type(index) is not int or index < 0:
+            if not _bounded_identifier(item_id, required=True) or not _valid_index(index):
                 return False
             if event_type.rsplit(".", 1)[-1] not in {"in_progress", "searching", "completed", "failed"}:
                 return False
@@ -201,10 +209,16 @@ class ResponsesStreamEventValidator:
                 }
             )
             return True
-        if event_type == "response.output_item.done":
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
             item = payload.get("item")
-            if not isinstance(item, Mapping) or item.get("type") != "web_search_call":
-                return self._validate_existing_text_event(payload, event_type)
+            if not isinstance(item, Mapping):
+                return False
+            if item.get("type") == "message":
+                return _validate_assistant_message_item(item)
+            if item.get("type") != "web_search_call":
+                return False
+            if event_type == "response.output_item.added":
+                return False
             item_id = item.get("id")
             index = payload.get("output_index")
             status = item.get("status")
@@ -232,7 +246,9 @@ class ResponsesStreamEventValidator:
                         "status": status,
                         "output_index": index,
                         "sequence_number": sequence,
-                        "action": dict(action),
+                        # The provider action was validated above; persist only
+                        # its content-free canonical type for accounting.
+                        "action": {"type": action["type"]},
                     },
                 }
             )

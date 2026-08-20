@@ -76,7 +76,7 @@ from slaif_gateway.schemas.external_tool_hold import (
 )
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
-from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.pricing import ChatCostEstimate, FxConversionResult, PricingLookupResult
 from slaif_gateway.schemas.providers import (
     ProviderRequest,
     ProviderResponse,
@@ -94,6 +94,7 @@ from slaif_gateway.services.codex_replay_service import (
     CodexReplayService,
 )
 from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
+from slaif_gateway.services.external_tool_fence import ExternalToolFenceError
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
 from slaif_gateway.services.openai_web_search_contract import (
     EXTERNAL_TOOL_FENCED,
@@ -239,6 +240,12 @@ class _ResponsesQuotaReservation:
     reservation: QuotaReservationResult
     live_burn_budget: ResponsesStreamingLiveBurnBudget | None
     external_tool_pricing: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalToolPricingFacts:
+    lookup: PricingLookupResult
+    fx: FxConversionResult
 
 
 def _build_safe_responses_upstream_body(
@@ -929,9 +936,9 @@ async def handle_response_create(
         policy_result=policy_result,
         upstream_model=route.resolved_model,
     )
-    external_tool_pricing = None
+    external_pricing_lookup = None
     if external_web_search_admission is not None:
-        external_tool_pricing = await _validate_external_tool_pricing(
+        external_pricing_lookup = await _validate_external_tool_pricing(
             route=route,
             endpoint=RESPONSES_ENDPOINT,
             request=request,
@@ -952,7 +959,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             external_tool_admission=external_web_search_admission,
-            external_tool_pricing=external_tool_pricing,
+            external_pricing_facts=external_pricing_lookup,
         )
         cost_estimate = quota.cost_estimate
         reservation = quota.reservation
@@ -1019,16 +1026,26 @@ async def handle_response_create(
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
                         ),
-                        declared_client_tools=codex_client_tool_declarations(
-                            policy_result.effective_body
-                        ),
-                        web_search=external_web_search_admission is not None,
+                            declared_client_tools=codex_client_tool_declarations(
+                                policy_result.effective_body
+                            ),
+                            web_search=external_web_search_admission is not None,
+                            web_search_max_tool_calls=(
+                                external_web_search_admission.request.effective_tool_call_cap
+                                if external_web_search_admission is not None
+                                else None
+                            ),
                     ),
                     external_web_search_admission=external_web_search_admission,
                     external_tool_pricing=quota.external_tool_pricing,
                 )
                 return response
             except ProviderError as exc:
+                client_provider_error = (
+                    _safe_external_provider_error(exc)
+                    if external_web_search_admission is not None
+                    else exc
+                )
                 await _record_provider_failure_and_release(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
@@ -1036,14 +1053,32 @@ async def handle_response_create(
                     policy_result=policy_result,
                     cost_estimate=cost_estimate,
                     request_id=request_id,
-                    provider_error=exc,
+                    provider_error=client_provider_error,
                     request=request,
                     streaming=True,
                 )
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
                 rate_limit_reservation = None
-                raise openai_error_from_provider_error(exc) from exc
-            except Exception:
+                raise openai_error_from_provider_error(client_provider_error) from exc
+            except Exception as exc:
+                if external_web_search_admission is not None:
+                    safe_error = ProviderError(
+                        "The upstream provider could not be constructed.",
+                        provider=route.provider,
+                        error_code="provider_configuration_error",
+                    )
+                    await _record_provider_failure_and_release(
+                        reservation=reservation,
+                        authenticated_key=authenticated_key,
+                        route=route,
+                        policy_result=policy_result,
+                        cost_estimate=cost_estimate,
+                        request_id=request_id,
+                        provider_error=safe_error,
+                        request=request,
+                        streaming=True,
+                    )
+                    raise openai_error_from_provider_error(safe_error) from exc
                 await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
                 raise
 
@@ -1054,15 +1089,17 @@ async def handle_response_create(
             body=upstream_body,
             request_id=request_id,
         )
+        provider_started = False
         try:
             adapter = get_provider_adapter(route, settings)
+            provider_started = True
             provider_response = await observe_provider_call(
                 provider=route.provider,
                 endpoint=RESPONSES_PROVIDER_ENDPOINT,
                 call=lambda: adapter.forward_response(provider_request),
             )
         except ProviderError as exc:
-            if external_web_search_admission is not None:
+            if external_web_search_admission is not None and provider_started:
                 await _place_external_web_search_hold(
                     reservation=reservation,
                     authenticated_key=authenticated_key,
@@ -1086,7 +1123,43 @@ async def handle_response_create(
                     provider_error=exc,
                     request=request,
                 )
-            raise openai_error_from_provider_error(exc) from exc
+            client_provider_error = (
+                _safe_external_provider_error(exc)
+                if external_web_search_admission is not None
+                else exc
+            )
+            raise openai_error_from_provider_error(client_provider_error) from exc
+        except Exception as exc:  # noqa: BLE001
+            safe_provider_error = ProviderError(
+                "The upstream provider call failed.",
+                provider=route.provider,
+                error_code="provider_request_error",
+            )
+            if external_web_search_admission is not None and provider_started:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.PROVIDER_ERROR_UNKNOWN_CHARGE,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur
+                        + _external_tool_max_fee_eur(external_web_search_admission, cost_estimate)
+                    ),
+                )
+            else:
+                await _record_provider_failure_and_release(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    cost_estimate=cost_estimate,
+                    request_id=request_id,
+                    provider_error=safe_provider_error,
+                    request=request,
+                )
+            raise openai_error_from_provider_error(safe_provider_error) from exc
 
         try:
             if external_web_search_admission is not None:
@@ -1143,6 +1216,27 @@ async def handle_response_create(
         except QuotaError as exc:
             increment_quota_rejection(exc.error_code)
             raise openai_error_from_quota_error(exc) from exc
+        except Exception as exc:  # noqa: BLE001
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur
+                        + _external_tool_max_fee_eur(external_web_search_admission, cost_estimate)
+                    ),
+                )
+                raise OpenAICompatibleError(
+                    "External-tool accounting could not be finalized safely.",
+                    status_code=500,
+                    error_type="server_error",
+                    code="external_tool_accounting_uncertain",
+                ) from exc
+            raise
 
         response = JSONResponse(
             status_code=provider_response.status_code,
@@ -1881,7 +1975,13 @@ async def _validate_external_tool_pricing(
                     param="model",
                 )
             )
-        return pricing_row.external_tool_pricing
+        pricing_currency = getattr(
+            pricing_row,
+            "currency",
+            pricing_row.external_tool_pricing.currency,
+        )
+        _, fx = await pricing_service.convert_to_eur(Decimal("0"), pricing_currency)
+        return _ExternalToolPricingFacts(lookup=pricing_row, fx=fx)
     finally:
         await session_iterator.aclose()
 
@@ -1896,7 +1996,7 @@ async def _reserve_responses_quota(
     request: Request | None,
     endpoint: str = RESPONSES_ENDPOINT,
     external_tool_admission=None,
-    external_tool_pricing=None,
+    external_pricing_facts: _ExternalToolPricingFacts | None = None,
 ) -> _ResponsesQuotaReservation:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1910,14 +2010,23 @@ async def _reserve_responses_quota(
             fx_rates_repository=FxRatesRepository(session),
         )
         try:
-            cost_estimate = await pricing_service.estimate_chat_completion_cost(
-                route=route,
-                policy=policy_result,
-                endpoint=endpoint,
-            )
+            estimate_kwargs = {
+                "route": route,
+                "policy": policy_result,
+                "endpoint": endpoint,
+            }
+            if external_pricing_facts is not None:
+                estimate_kwargs["pricing"] = external_pricing_facts.lookup
+                estimate_kwargs["fx"] = external_pricing_facts.fx
+            cost_estimate = await pricing_service.estimate_chat_completion_cost(**estimate_kwargs)
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
 
+        external_tool_pricing = (
+            external_pricing_facts.lookup.external_tool_pricing
+            if external_pricing_facts is not None
+            else None
+        )
         if external_tool_admission is not None:
             if external_tool_pricing is None:
                 raise openai_error_from_pricing_error(
@@ -1967,8 +2076,13 @@ async def _reserve_responses_quota(
                         now=datetime.now(UTC),
                     )
                 )
-            except Exception:
-                raise
+            except ExternalToolFenceError as exc:
+                raise OpenAICompatibleError(
+                    exc.safe_message,
+                    status_code=exc.status_code,
+                    error_type=exc.error_type,
+                    code=exc.error_code,
+                ) from exc
             reservation = QuotaReservationResult(
                 reservation_id=fence_result.reservation_id,
                 gateway_key_id=fence_result.gateway_key_id,
@@ -2398,9 +2512,14 @@ def _streaming_responses_response(
                     estimate_reason="responses_streaming_provider_error_estimated",
                     stream_estimate_monitor=stream_estimate_monitor,
                 )
+            wire_error = (
+                _safe_external_provider_error(exc)
+                if external_web_search_admission is not None
+                else exc
+            )
             yield format_responses_error_event(
-                message=exc.safe_message,
-                code=exc.error_code,
+                message=wire_error.safe_message,
+                code=wire_error.error_code,
             )
         except AccountingError as exc:
             if external_web_search_admission is not None:
@@ -2424,6 +2543,27 @@ def _streaming_responses_response(
                 message=exc.safe_message,
                 code=exc.error_code,
             )
+        except Exception:  # noqa: BLE001
+            if external_web_search_admission is not None:
+                await _place_external_web_search_hold(
+                    reservation=reservation,
+                    authenticated_key=authenticated_key,
+                    request_id=request_id,
+                    request=request,
+                    streaming=True,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur + external_tool_hold_fee_eur
+                    ),
+                )
+                yield format_responses_error_event(
+                    message="External-tool streaming accounting could not be finalized safely.",
+                    code="external_tool_accounting_uncertain",
+                    request_id=request_id,
+                )
+            else:
+                raise
         finally:
             with anyio.CancelScope(shield=True):
                 heartbeat_stop.set()
@@ -2595,6 +2735,17 @@ async def _record_provider_failure_and_release(
         raise openai_error_from_quota_error(exc) from exc
     finally:
         await session_iterator.aclose()
+
+
+def _safe_external_provider_error(error: ProviderError) -> ProviderError:
+    """Strip provider diagnostic text before exposing hosted-tool errors."""
+    return ProviderError(
+        "The upstream provider call failed.",
+        provider=error.provider,
+        upstream_status_code=error.upstream_status_code,
+        error_type=error.error_type,
+        error_code=error.error_code,
+    )
 
 
 async def _finalize_responses_stream_interruption_after_output(

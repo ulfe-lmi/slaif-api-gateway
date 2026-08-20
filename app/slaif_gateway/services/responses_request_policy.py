@@ -421,6 +421,15 @@ class ResponsesRequestPolicy:
             effective_body,
             allow_external_tool_request=allow_external_tool_request,
         )
+        if "max_tool_calls" in effective_body and not any(
+            isinstance(tool, Mapping) and tool.get("type") == "web_search"
+            for tool in effective_body.get("tools", [])
+        ):
+            _raise(
+                "max_tool_calls",
+                "responses_external_tool_invalid",
+                "The hosted tool call limit requires an admitted web-search declaration.",
+            )
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
         custom_tools_requested = responses_custom_tools_requested(effective_body)
