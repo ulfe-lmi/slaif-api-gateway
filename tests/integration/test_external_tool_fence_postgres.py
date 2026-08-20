@@ -988,6 +988,115 @@ async def test_held_fence_blocks_and_never_auto_releases(migrated_postgres_url: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["held", "finalized"])
+async def test_same_request_retry_requires_active_pending_reservation(
+    migrated_postgres_url: str, status: str
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(
+            session_factory, key_id, f"req-retry-state-{uuid.uuid4()}", route_id
+        )
+        async with engine.begin() as conn:
+            if status == "held":
+                await conn.execute(
+                    text(
+                        "UPDATE gateway_keys SET external_tool_fence_state = 'held' "
+                        "WHERE id = :key_id"
+                    ),
+                    {"key_id": key_id},
+                )
+            else:
+                await conn.execute(
+                    text(
+                        "UPDATE quota_reservations SET status = :status "
+                        "WHERE id = :reservation_id"
+                    ),
+                    {"status": status, "reservation_id": acquired.reservation_id},
+                )
+
+        async with session_factory() as session:
+            if status == "held":
+                with pytest.raises(ExternalToolFenceActiveError) as raised:
+                    await _fence_service(session).acquire(
+                        _acquire_input(key_id, acquired.request_id, route_id)
+                    )
+                expected_code = "external_tool_fence_active"
+            else:
+                with pytest.raises(ExternalToolFenceInvariantError) as raised:
+                    await _fence_service(session).acquire(
+                        _acquire_input(key_id, acquired.request_id, route_id)
+                    )
+                expected_code = "external_tool_fence_reservation_not_pending"
+            await session.rollback()
+        assert raised.value.error_code == expected_code
+        key = await _load_key(session_factory, key_id)
+        assert key.external_tool_fence_state == ("held" if status == "held" else "active")
+        assert key.external_tool_fence_reservation_id == acquired.reservation_id
+        reservation = await _load_reservation(session_factory, acquired.reservation_id)
+        assert reservation.gateway_key_id == key_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_same_request_retry_rejects_cross_key_pointed_reservation(
+    migrated_postgres_url: str,
+) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        route_id = await _create_model_route(session_factory)
+        _, key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        _, other_key_id, _, _ = await _create_key(
+            session_factory,
+            cost_limit=Decimal("25"),
+            token_limit=100_000,
+            request_limit=1000,
+            fenced_policy=True,
+        )
+        acquired = await _acquire(
+            session_factory, key_id, f"req-retry-cross-{uuid.uuid4()}", route_id
+        )
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE quota_reservations SET gateway_key_id = :other_key_id "
+                    "WHERE id = :reservation_id"
+                ),
+                {"other_key_id": other_key_id, "reservation_id": acquired.reservation_id},
+            )
+
+        async with session_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as raised:
+                await _fence_service(session).acquire(
+                    _acquire_input(key_id, acquired.request_id, route_id)
+                )
+            await session.rollback()
+        assert raised.value.error_code == "external_tool_fence_reservation_key_mismatch"
+        key = await _load_key(session_factory, key_id)
+        assert key.external_tool_fence_state == "active"
+        assert key.external_tool_fence_reservation_id == acquired.reservation_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_fence_survives_restart_and_resolves_from_finalized_evidence(
     migrated_postgres_url: str,
 ) -> None:

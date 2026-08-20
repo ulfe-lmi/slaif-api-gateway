@@ -275,6 +275,11 @@ fixed conflict. A fence and any committed pending reservation or non-zero
 reserved counter can never coexist, in either lock order, and only exact
 terminal reservation/ledger evidence with all reserved counters exactly zero
 clears the fence; fence acquisition and resolution are audited. Stored
+capability declarations reject duplicate IDs before any database mutation.
+Active retries require the exact active fence, a pending same-key reservation,
+and matching identity facts; held, terminal, missing, cross-key, and conflicting
+pointed reservations fail closed. Resolution locks the reservation before the
+gateway key and revalidates the fence pointer and evidence after both locks.
 policy is not consumed by
 provider forwarding, authentication and ordinary quota admission fail closed
 against a committed fence, and provider-hosted forwarding and the

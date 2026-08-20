@@ -180,11 +180,12 @@ class ExternalToolFenceService:
 
         if gateway_key.external_tool_fence_state in _BOUND_FENCE_STATES:
             if (
-                gateway_key.external_tool_fence_request_id == request_id
+                gateway_key.external_tool_fence_state == FENCE_ACTIVE
+                and gateway_key.external_tool_fence_request_id == request_id
                 and gateway_key.external_tool_fence_reservation_id is not None
             ):
                 reservation = (
-                    await self._quota_reservations_repository.get_reservation_by_id_for_update(
+                    await self._quota_reservations_repository.get_reservation_by_id(
                         gateway_key.external_tool_fence_reservation_id
                     )
                 )
@@ -193,15 +194,31 @@ class ExternalToolFenceService:
                         "Fence references a missing reservation",
                         code="external_tool_fence_reservation_missing",
                     )
+                if reservation.gateway_key_id != gateway_key.id:
+                    raise ExternalToolFenceInvariantError(
+                        "Fence reservation does not belong to the fenced key",
+                        code="external_tool_fence_reservation_key_mismatch",
+                    )
+                if reservation.status != "pending":
+                    raise ExternalToolFenceInvariantError(
+                        "Active fence retry requires a pending reservation",
+                        code="external_tool_fence_reservation_not_pending",
+                    )
+                if reservation.quota_mode != EXTERNAL_TOOL_FENCED:
+                    raise ExternalToolFenceInvariantError(
+                        "Active fence retry requires a fenced reservation",
+                        code="external_tool_fence_reservation_not_fenced",
+                    )
                 if self._reservation_matches(
                     reservation,
-                    request_id,
-                    endpoint,
-                    requested_model,
-                    provider,
-                    route_id,
-                    capabilities,
-                    destination_ids,
+                    gateway_key_id=gateway_key.id,
+                    request_id=request_id,
+                    endpoint=endpoint,
+                    requested_model=requested_model,
+                    provider=provider,
+                    route_id=route_id,
+                    capabilities=capabilities,
+                    destination_ids=destination_ids,
                 ):
                     return self._projection_result(gateway_key, reservation, idempotent=True)
                 raise ExternalToolFenceConflictError()
@@ -279,7 +296,7 @@ class ExternalToolFenceService:
         self,
         resolve_input: ExternalToolFenceResolveInput,
     ) -> ExternalToolFenceResolveResult:
-        gateway_key = await self._gateway_keys_repository.get_gateway_key_for_update(
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id(
             resolve_input.gateway_key_id
         )
         if gateway_key is None:
@@ -312,13 +329,42 @@ class ExternalToolFenceService:
                 code="external_tool_fence_resolution_request_mismatch",
             )
 
+        reservation_id = gateway_key.external_tool_fence_reservation_id
         reservation = await self._quota_reservations_repository.get_reservation_by_id_for_update(
-            gateway_key.external_tool_fence_reservation_id
+            reservation_id
         )
         if reservation is None:
             raise ExternalToolFenceInvariantError(
                 "Fence references a missing reservation",
                 code="external_tool_fence_reservation_missing",
+            )
+        gateway_key = await self._gateway_keys_repository.get_gateway_key_for_update(
+            resolve_input.gateway_key_id
+        )
+        if gateway_key is None:
+            raise ExternalToolFenceInvariantError(
+                "Gateway key could not be locked for fence resolution",
+                code="external_tool_fence_key_missing",
+            )
+        if (
+            gateway_key.external_tool_fence_state != FENCE_ACTIVE
+            or gateway_key.external_tool_fence_reservation_id != reservation_id
+            or gateway_key.external_tool_fence_request_id != resolve_input.request_id
+        ):
+            if gateway_key.external_tool_fence_state == FENCE_NONE:
+                return ExternalToolFenceResolveResult(
+                    gateway_key_id=resolve_input.gateway_key_id,
+                    fence_state=FENCE_NONE,
+                    resolved=False,
+                )
+            if gateway_key.external_tool_fence_state == FENCE_HELD:
+                return ExternalToolFenceResolveResult(
+                    gateway_key_id=resolve_input.gateway_key_id,
+                    fence_state=FENCE_HELD,
+                    resolved=False,
+                )
+            raise ExternalToolFenceConflictError(
+                code="external_tool_fence_resolution_state_changed",
             )
         if reservation.gateway_key_id != gateway_key.id:
             raise ExternalToolFenceInvariantError(
@@ -616,7 +662,12 @@ class ExternalToolFenceService:
                 "Capabilities must be known canonical external tool capability IDs",
                 code="external_tool_fence_capability_unknown",
             )
-        if len(set(values)) > DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS.max_distinct_capabilities:
+        if len(set(values)) != len(values):
+            raise InvalidExternalToolFenceInputError(
+                "Capabilities must be unique",
+                code="external_tool_fence_capability_duplicate",
+            )
+        if len(values) > DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS.max_distinct_capabilities:
             raise InvalidExternalToolFenceInputError(
                 "Capabilities exceed the operator ceiling",
                 code="external_tool_fence_capabilities_over_ceiling",
@@ -664,6 +715,8 @@ class ExternalToolFenceService:
     def _reservation_matches(
         self,
         reservation,
+        *,
+        gateway_key_id: UUID,
         request_id: str,
         endpoint: str,
         requested_model: str,
@@ -674,7 +727,8 @@ class ExternalToolFenceService:
     ) -> bool:
         """Exact retry identity: every durable request/policy/fence fact must agree."""
         return (
-            reservation.request_id == request_id
+            reservation.gateway_key_id == gateway_key_id
+            and reservation.request_id == request_id
             and reservation.endpoint == endpoint
             and reservation.requested_model == requested_model
             and reservation.external_tool_provider == provider

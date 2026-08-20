@@ -37,6 +37,7 @@ from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceAcquireInput,
+    ExternalToolFenceResolveInput,
     ExternalToolFenceResult,
     ExternalToolFenceRouteFacts,
 )
@@ -45,6 +46,7 @@ from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceActiveError,
+    ExternalToolFenceInvariantError,
     ExternalToolFenceOccupiedError,
     ExternalToolFenceService,
 )
@@ -608,9 +610,13 @@ async def test_race_ordinary_reservation_first_blocks_fence(
         assert not fence_task.done(), "fence must block on the uncommitted ordinary lock"
 
         await ordinary_session.commit()
-        with pytest.raises(ExternalToolFenceOccupiedError) as raised:
-            await fence_task
-        assert raised.value.error_code == "external_tool_fence_pending_reservation"
+        try:
+            fence_result = await fence_task
+        except ExternalToolFenceOccupiedError as raised:
+            fence_error = raised
+        else:
+            pytest.fail(f"fence acquisition unexpectedly succeeded: {fence_result!r}")
+        assert fence_error.error_code == "external_tool_fence_pending_reservation"
     finally:
         await ordinary_session.close()
         await ordinary_engine.dispose()
@@ -642,3 +648,74 @@ async def test_race_ordinary_reservation_first_blocks_fence(
     finally:
         await audit_engine.dispose()
     assert int(acquired_audit[0]) == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_waits_on_reservation_before_locking_key(
+    migrated_postgres_url: str,
+) -> None:
+    """An active resolve cannot hold the key while waiting on its reservation."""
+    dsn = migrated_postgres_url
+    key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
+
+    setup_engine = create_async_engine(dsn, future=True)
+    setup_factory = async_sessionmaker(setup_engine, expire_on_commit=False)
+    async with setup_factory() as session:
+        acquired = await _fence_service(session).acquire(
+            _acquire_input(key_id, f"req-resolve-lock-{uuid.uuid4()}", route_id)
+        )
+        await session.commit()
+    await setup_engine.dispose()
+
+    held_engine = create_async_engine(dsn, future=True)
+    held_factory = async_sessionmaker(held_engine, expire_on_commit=False)
+    resolver_engine = create_async_engine(dsn, future=True)
+    resolver_factory = async_sessionmaker(resolver_engine, expire_on_commit=False)
+    key_engine = create_async_engine(dsn, future=True)
+    key_factory = async_sessionmaker(key_engine, expire_on_commit=False)
+    held_session = held_factory()
+
+    async def resolve_worker() -> ExternalToolFenceInvariantError:
+        async with resolver_factory() as session:
+            with pytest.raises(ExternalToolFenceInvariantError) as raised:
+                await asyncio.wait_for(
+                    _fence_service(session).resolve(
+                        ExternalToolFenceResolveInput(
+                            gateway_key_id=key_id,
+                            request_id=acquired.request_id,
+                        )
+                    ),
+                    timeout=5,
+                )
+            await session.rollback()
+            return raised.value
+
+    try:
+        held_reservation = await QuotaReservationsRepository(held_session).get_reservation_by_id_for_update(
+            acquired.reservation_id
+        )
+        assert held_reservation is not None
+        resolver_task = asyncio.create_task(resolve_worker())
+        await asyncio.sleep(0.2)
+        assert not resolver_task.done(), "resolve must wait on the held reservation lock"
+
+        async with key_factory() as session:
+            await session.execute(text("SET LOCAL lock_timeout = '1000ms'"))
+            key = await GatewayKeysRepository(session).get_gateway_key_for_update(key_id)
+            assert key is not None, "resolve must not hold the key while waiting"
+            await session.rollback()
+
+        await held_session.rollback()
+        error = await asyncio.wait_for(resolver_task, timeout=5)
+        assert error.error_code == "external_tool_fence_reservation_not_terminal"
+    finally:
+        await held_session.close()
+        await held_engine.dispose()
+        await resolver_engine.dispose()
+        await key_engine.dispose()
+
+    key = await _load_key(dsn, key_id)
+    assert key.external_tool_fence_state == "active"
+    assert key.external_tool_fence_reservation_id == acquired.reservation_id
+    assert await _count_reservations(dsn, key_id) == 1

@@ -201,6 +201,10 @@ cannot be admitted while a committed fence exists. Resolution is authoritative
 evidence: it requires exact reservation and ledger ownership and fact
 agreement and all reserved counters to be exactly zero before the fence
 clears; any mismatch or unreconciled counter leaves the fence in place. The
+active retry is read-only after the key lock and requires the pointed
+reservation to be pending and owned by that same key; resolution locks the
+reservation first and then the key, matching the ordinary quota lifecycle
+order, so it never waits on an existing reservation while holding the key.
 foundation is implemented, but
 external forwarding and the unknown-cost hold are still not implemented and
 provider-hosted tools remain denied; objectives 015 and 016 own the

@@ -118,13 +118,43 @@ class FakeLedger:
     requested_model: str | None = "gpt-test-mini"
 
 
+def _set_acquire_cost_reserved(key: FakeKey) -> None:
+    key.cost_reserved_eur = Decimal("0.50")
+
+
+def _set_acquire_tokens_reserved(key: FakeKey) -> None:
+    key.tokens_reserved_total = 50
+
+
+def _set_acquire_requests_reserved(key: FakeKey) -> None:
+    key.requests_reserved_total = 1
+
+
+def _set_resolve_cost_reserved(key: FakeKey) -> None:
+    key.cost_reserved_eur = Decimal("0.01")
+
+
+def _set_resolve_tokens_reserved(key: FakeKey) -> None:
+    key.tokens_reserved_total = 1
+
+
+def _set_resolve_requests_reserved(key: FakeKey) -> None:
+    key.requests_reserved_total = 1
+
+
 class FakeKeyRepo:
-    def __init__(self, keys: dict[uuid.UUID, FakeKey]) -> None:
+    def __init__(self, keys: dict[uuid.UUID, FakeKey], *, events: list[str] | None = None) -> None:
         self.keys = keys
         self.lock_calls: list[uuid.UUID] = []
+        self.events = events
 
     async def get_gateway_key_for_update(self, key_id: uuid.UUID):
         self.lock_calls.append(key_id)
+        if self.events is not None:
+            self.events.append("key")
+        return self.keys.get(key_id)
+
+    async def get_gateway_key_by_id(self, key_id: uuid.UUID):
         return self.keys.get(key_id)
 
     async def set_external_tool_fence(
@@ -167,8 +197,14 @@ class FakeKeyRepo:
 
 
 class FakeQuotaRepo:
-    def __init__(self, reservations: list[FakeReservation] | None = None) -> None:
+    def __init__(
+        self,
+        reservations: list[FakeReservation] | None = None,
+        *,
+        events: list[str] | None = None,
+    ) -> None:
         self.reservations: dict[uuid.UUID, FakeReservation] = {}
+        self.events = events
         for row in reservations or []:
             self.reservations[row.id] = row
 
@@ -194,6 +230,11 @@ class FakeQuotaRepo:
         return row
 
     async def get_reservation_by_id_for_update(self, reservation_id: uuid.UUID):
+        if self.events is not None:
+            self.events.append("reservation")
+        return self.reservations.get(reservation_id)
+
+    async def get_reservation_by_id(self, reservation_id: uuid.UUID):
         return self.reservations.get(reservation_id)
 
     async def get_reservation_by_request_id(self, request_id: str):
@@ -303,9 +344,10 @@ def _service(
     quota_repo: FakeQuotaRepo | None = None,
     usage_repo: FakeUsageRepo | None = None,
     audit_repo: FakeAuditRepo | None = None,
+    events: list[str] | None = None,
 ) -> tuple[ExternalToolFenceService, FakeKeyRepo, FakeQuotaRepo, FakeUsageRepo, FakeAuditRepo]:
-    keys_repo = FakeKeyRepo({key.id: key})
-    quota_repo = quota_repo or FakeQuotaRepo()
+    keys_repo = FakeKeyRepo({key.id: key}, events=events)
+    quota_repo = quota_repo or FakeQuotaRepo(events=events)
     usage_repo = usage_repo or FakeUsageRepo()
     audit_repo = audit_repo or FakeAuditRepo()
     service = ExternalToolFenceService(
@@ -492,9 +534,9 @@ async def test_acquire_blocks_when_ordinary_pending_reservation_exists() -> None
 @pytest.mark.parametrize(
     "bump",
     [
-        lambda key: setattr(key, "cost_reserved_eur", Decimal("0.50")),
-        lambda key: setattr(key, "tokens_reserved_total", 50),
-        lambda key: setattr(key, "requests_reserved_total", 1),
+        _set_acquire_cost_reserved,
+        _set_acquire_tokens_reserved,
+        _set_acquire_requests_reserved,
     ],
 )
 async def test_acquire_blocks_when_reserved_counters_nonzero(bump) -> None:
@@ -708,6 +750,27 @@ async def test_acquire_rejects_requested_capability_not_in_stored_policy() -> No
 
 
 @pytest.mark.asyncio
+async def test_acquire_rejects_duplicate_request_capabilities_before_mutation() -> None:
+    key = FakeKey(id=uuid.uuid4())
+    service, keys_repo, quota_repo, _usage, audit_repo = _service(key)
+
+    with pytest.raises(InvalidExternalToolFenceInputError) as excinfo:
+        await service.acquire(
+            _input(
+                key,
+                request_id="req-duplicate-capability",
+                capabilities=("provider_web_search", "provider_web_search"),
+                destination_ids=(),
+            )
+        )
+
+    assert excinfo.value.error_code == "external_tool_fence_capability_duplicate"
+    assert keys_repo.lock_calls == []
+    assert quota_repo.reservations == {}
+    assert audit_repo.records == []
+
+
+@pytest.mark.asyncio
 async def test_acquire_rejects_requested_destination_not_in_stored_policy() -> None:
     key = FakeKey(id=uuid.uuid4())
     key.metadata_json = _fenced_policy(
@@ -858,6 +921,74 @@ async def test_held_fence_blocks_new_acquisition_like_active() -> None:
     assert key.external_tool_fence_request_id == "req-held"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["held", "finalized", "released", "expired"])
+async def test_same_request_retry_rejects_non_pending_pointed_reservation(status: str) -> None:
+    key = FakeKey(id=uuid.uuid4())
+    reservation = FakeReservation(
+        id=uuid.uuid4(),
+        gateway_key_id=key.id,
+        request_id="req-retry",
+        endpoint="/v1/chat/completions",
+        requested_model="gpt-test-mini",
+        reserved_cost_eur=Decimal("1"),
+        reserved_tokens=100,
+        reserved_requests=1,
+        status=status,
+        expires_at=NOW + TTL,
+        quota_mode="external_tool_fenced",
+        external_tool_capabilities=["provider_web_search"],
+        external_tool_destination_ids=[],
+        external_tool_provider="test-provider",
+        external_tool_route_id=ROUTE_ID,
+    )
+    key.external_tool_fence_state = "active"
+    key.external_tool_fence_request_id = reservation.request_id
+    key.external_tool_fence_reservation_id = reservation.id
+    service, _, quota_repo, _usage, _audit = _service(
+        key, quota_repo=FakeQuotaRepo([reservation])
+    )
+
+    with pytest.raises(ExternalToolFenceInvariantError) as excinfo:
+        await service.acquire(_input(key, request_id=reservation.request_id))
+
+    assert excinfo.value.error_code == "external_tool_fence_reservation_not_pending"
+    assert len(quota_repo.reservations) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_request_retry_rejects_pointed_reservation_bound_to_another_key() -> None:
+    key = FakeKey(id=uuid.uuid4())
+    reservation = FakeReservation(
+        id=uuid.uuid4(),
+        gateway_key_id=uuid.uuid4(),
+        request_id="req-cross-key",
+        endpoint="/v1/chat/completions",
+        requested_model="gpt-test-mini",
+        reserved_cost_eur=Decimal("1"),
+        reserved_tokens=100,
+        reserved_requests=1,
+        status="pending",
+        expires_at=NOW + TTL,
+        quota_mode="external_tool_fenced",
+        external_tool_capabilities=["provider_web_search"],
+        external_tool_destination_ids=[],
+        external_tool_provider="test-provider",
+        external_tool_route_id=ROUTE_ID,
+    )
+    key.external_tool_fence_state = "active"
+    key.external_tool_fence_request_id = reservation.request_id
+    key.external_tool_fence_reservation_id = reservation.id
+    service, _, _, _usage, _audit = _service(
+        key, quota_repo=FakeQuotaRepo([reservation])
+    )
+
+    with pytest.raises(ExternalToolFenceInvariantError) as excinfo:
+        await service.acquire(_input(key, request_id=reservation.request_id))
+
+    assert excinfo.value.error_code == "external_tool_fence_reservation_key_mismatch"
+
+
 # -- resolution ------------------------------------------------------------
 
 
@@ -982,6 +1113,24 @@ async def test_resolve_terminal_reservation_clears_fence_and_audits(status: str)
     )
     assert again.resolved is False
     assert len(audit_repo.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_locks_reservation_before_gateway_key() -> None:
+    key, reservation, ledger = _bound_key_and_reservation(status="finalized")
+    events: list[str] = []
+    service, _, _, _, _audit = _service(
+        key,
+        quota_repo=FakeQuotaRepo([reservation], events=events),
+        usage_repo=FakeUsageRepo([ledger]),
+        events=events,
+    )
+
+    await service.resolve(
+        ExternalToolFenceResolveInput(gateway_key_id=key.id, request_id="req-1")
+    )
+
+    assert events == ["reservation", "key"]
 
 
 @pytest.mark.asyncio
@@ -1186,9 +1335,9 @@ async def test_resolve_rejects_ledger_fact_mismatch(break_fact) -> None:
 @pytest.mark.parametrize(
     "bump",
     [
-        lambda key: setattr(key, "cost_reserved_eur", Decimal("0.01")),
-        lambda key: setattr(key, "tokens_reserved_total", 1),
-        lambda key: setattr(key, "requests_reserved_total", 1),
+        _set_resolve_cost_reserved,
+        _set_resolve_tokens_reserved,
+        _set_resolve_requests_reserved,
     ],
 )
 async def test_resolve_rejects_positive_unreconciled_counters_without_mutating(bump) -> None:
