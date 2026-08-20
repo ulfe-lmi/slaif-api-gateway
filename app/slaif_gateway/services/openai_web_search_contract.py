@@ -138,6 +138,7 @@ def validate_web_search_request(
         quota_mode=decision.quota_mode,
         decision_reason_code=decision.reason_code,
         _provider_body=frozen_provider_body(provider_body),
+        admission_decision=decision,
     )
 
 

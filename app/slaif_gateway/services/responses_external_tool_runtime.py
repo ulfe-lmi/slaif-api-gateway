@@ -10,7 +10,6 @@ from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai_web_search import WebSearchRequestFacts
 from slaif_gateway.services.openai_web_search_contract import (
     DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
-    EXTERNAL_TOOL_FENCED,
     ExternalToolAdmissionDecision,
     ExternalToolKeyLimitFacts,
 )
@@ -62,16 +61,9 @@ def admit_web_search_request(
         )
     except (TypeError, ValueError, WebSearchContractError) as exc:
         raise ExternalToolRuntimeError("The Responses hosted web-search contract is not permitted.") from exc
-    decision = ExternalToolAdmissionDecision(
-        allowed=True,
-        quota_mode=EXTERNAL_TOOL_FENCED,
-        effective_tool_call_cap=request.effective_tool_call_cap,
-        reason_code="external_tool_fenced_allowed",
-        exclusive_key_fence_required=True,
-        single_request_overrun_accepted=True,
-        hold_on_missing_or_ambiguous_final_cost=True,
-        following_requests_block_after_exhaustion=True,
-    )
+    decision = request.admission_decision
+    if not isinstance(decision, ExternalToolAdmissionDecision) or not decision.allowed:
+        raise ExternalToolRuntimeError("The Responses hosted web-search contract is not permitted.")
     return ExternalWebSearchAdmission(
         request=request,
         decision=decision,

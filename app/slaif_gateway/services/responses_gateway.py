@@ -12,7 +12,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import anyio
-from sqlalchemy import select
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
@@ -28,7 +27,7 @@ from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_err
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import ConversationReference, ModelRoute, ResponseReference
+from slaif_gateway.db.models import ConversationReference, ResponseReference
 from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
 from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -930,6 +929,13 @@ async def handle_response_create(
         policy_result=policy_result,
         upstream_model=route.resolved_model,
     )
+    external_tool_pricing = None
+    if external_web_search_admission is not None:
+        external_tool_pricing = await _validate_external_tool_pricing(
+            route=route,
+            endpoint=RESPONSES_ENDPOINT,
+            request=request,
+        )
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
@@ -946,6 +952,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             external_tool_admission=external_web_search_admission,
+            external_tool_pricing=external_tool_pricing,
         )
         cost_estimate = quota.cost_estimate
         reservation = quota.reservation
@@ -1063,7 +1070,10 @@ async def handle_response_create(
                     request=request,
                     reason_code=ExternalToolHoldReasonCode.PROVIDER_ERROR_UNKNOWN_CHARGE,
                     evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
-                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur
+                        + _external_tool_max_fee_eur(external_web_search_admission, cost_estimate)
+                    ),
                 )
             else:
                 await _record_provider_failure_and_release(
@@ -1123,7 +1133,10 @@ async def handle_response_create(
                     request=request,
                     reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
                     evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
-                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur
+                        + _external_tool_max_fee_eur(external_web_search_admission, cost_estimate)
+                    ),
                 )
             increment_accounting_failure(exc.error_code)
             raise openai_error_from_accounting_error(exc) from exc
@@ -1836,6 +1849,43 @@ async def _resolve_responses_route(
         await session_iterator.aclose()
 
 
+async def _validate_external_tool_pricing(
+    *,
+    route: RouteResolutionResult,
+    endpoint: str,
+    request: Request | None,
+):
+    """Validate immutable hosted-tool pricing before any Redis or fence mutation."""
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        pricing_service = PricingService(
+            pricing_rules_repository=PricingRulesRepository(session),
+            fx_rates_repository=FxRatesRepository(session),
+        )
+        try:
+            pricing_row = await pricing_service.find_active_pricing_rule(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+            )
+        except PricingError as exc:
+            raise openai_error_from_pricing_error(exc) from exc
+        if pricing_row.external_tool_pricing is None:
+            raise openai_error_from_pricing_error(
+                PricingError(
+                    "External-tool pricing is not configured for the resolved model.",
+                    param="model",
+                )
+            )
+        return pricing_row.external_tool_pricing
+    finally:
+        await session_iterator.aclose()
+
+
 async def _reserve_responses_quota(
     *,
     authenticated_key: AuthenticatedGatewayKey,
@@ -1846,6 +1896,7 @@ async def _reserve_responses_quota(
     request: Request | None,
     endpoint: str = RESPONSES_ENDPOINT,
     external_tool_admission=None,
+    external_tool_pricing=None,
 ) -> _ResponsesQuotaReservation:
     session_iterator = _db_session_iterator(request)
     try:
@@ -1867,17 +1918,7 @@ async def _reserve_responses_quota(
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
 
-        external_tool_pricing = None
         if external_tool_admission is not None:
-            try:
-                pricing_row = await pricing_service.find_active_pricing_rule(
-                    provider=route.provider,
-                    model=route.resolved_model,
-                    endpoint=endpoint,
-                )
-            except PricingError as exc:
-                raise openai_error_from_pricing_error(exc) from exc
-            external_tool_pricing = pricing_row.external_tool_pricing
             if external_tool_pricing is None:
                 raise openai_error_from_pricing_error(
                     PricingError(
@@ -1893,33 +1934,15 @@ async def _reserve_responses_quota(
                 audit_repository=AuditRepository(session),
             )
             fence_route_id = route.route_id
-            if fence_route_id is not None:
-                try:
-                    fence_route_id = uuid.UUID(str(fence_route_id))
-                except (TypeError, ValueError, AttributeError):
-                    fence_route_id = None
-            if fence_route_id is None:
-                fence_route_id = (
-                    await session.execute(
-                        select(ModelRoute.id)
-                        .where(
-                            ModelRoute.requested_model.in_(
-                                {
-                                    route.route_pattern,
-                                    route.requested_model,
-                                    route.resolved_model,
-                                }
-                            ),
-                            ModelRoute.endpoint == RESPONSES_ENDPOINT,
-                            ModelRoute.provider == route.provider,
-                            ModelRoute.enabled.is_(True),
-                        )
-                        .order_by(ModelRoute.priority.asc(), ModelRoute.created_at.asc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if fence_route_id is not None:
-                    fence_route_id = uuid.UUID(str(fence_route_id))
+            try:
+                fence_route_id = uuid.UUID(str(fence_route_id))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise OpenAICompatibleError(
+                    "The resolved route has no durable route identifier for external-tool accounting.",
+                    status_code=500,
+                    error_type="server_error",
+                    code="external_tool_route_id_missing",
+                ) from exc
             if fence_route_id is None:
                 raise OpenAICompatibleError(
                     "The resolved route has no durable route identifier for external-tool accounting.",
@@ -2052,6 +2075,18 @@ def _streaming_responses_response(
         stream_event_validator = ResponsesStreamEventValidator(
             stream_validation_profile or ResponsesStreamValidationProfile()
         )
+        external_tool_hold_fee_eur = Decimal("0")
+        if external_web_search_admission is not None and external_tool_pricing is not None:
+            if external_tool_pricing.currency == cost_estimate.native_currency:
+                hold_fx_rate = cost_estimate.fx_rate
+            elif external_tool_pricing.currency == "EUR":
+                hold_fx_rate = Decimal("1")
+            else:
+                hold_fx_rate = None
+            if hold_fx_rate is not None:
+                external_tool_hold_fee_eur = (
+                    external_web_search_admission.maximum_fee_native * hold_fx_rate
+                )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = _start_rate_limit_heartbeat(
             rate_limit_reservation,
@@ -2088,6 +2123,7 @@ def _streaming_responses_response(
                             authenticated_key=authenticated_key,
                             request_id=request_id,
                             request=request,
+                            streaming=True,
                             reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
                             evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
                         )
@@ -2129,10 +2165,13 @@ def _streaming_responses_response(
                             authenticated_key=authenticated_key,
                             request_id=request_id,
                             request=request,
+                            streaming=True,
                             reason_code=ExternalToolHoldReasonCode.AMBIGUOUS_FINAL_COST,
                             evidence_quality=ExternalToolHoldEvidenceQuality.PARTIAL_ESTIMATE,
                             partial_total_tokens=live_burn_estimate.estimated_total_tokens,
-                            estimated_cost_eur=live_burn_estimate.estimated_cost_eur,
+                            estimated_cost_eur=(
+                                live_burn_estimate.estimated_cost_eur + external_tool_hold_fee_eur
+                            ),
                         )
                     else:
                         await _record_streaming_live_burn_abort_estimate(
@@ -2271,6 +2310,7 @@ def _streaming_responses_response(
                         authenticated_key=authenticated_key,
                         request_id=request_id,
                         request=request,
+                        streaming=True,
                         reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_USAGE,
                         evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
                     )
@@ -2309,6 +2349,7 @@ def _streaming_responses_response(
                         authenticated_key=authenticated_key,
                         request_id=request_id,
                         request=request,
+                        streaming=True,
                         reason_code=ExternalToolHoldReasonCode.INTERRUPTION_DISCONNECT,
                         evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
                     )
@@ -2337,9 +2378,12 @@ def _streaming_responses_response(
                     authenticated_key=authenticated_key,
                     request_id=request_id,
                     request=request,
+                    streaming=True,
                     reason_code=ExternalToolHoldReasonCode.PROVIDER_ERROR_UNKNOWN_CHARGE,
                     evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
-                    estimated_cost_eur=cost_estimate.estimated_total_cost_eur,
+                    estimated_cost_eur=(
+                        cost_estimate.estimated_total_cost_eur + external_tool_hold_fee_eur
+                    ),
                 )
             else:
                 await _finalize_responses_stream_interruption_after_output(
@@ -2365,6 +2409,7 @@ def _streaming_responses_response(
                     authenticated_key=authenticated_key,
                     request_id=request_id,
                     request=request,
+                    streaming=True,
                     reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
                     evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
                 )
@@ -2804,14 +2849,19 @@ async def _finalize_external_web_search_response(
             cost_estimate,
         )
         pricing = admission.pricing
-        pricing_service = PricingService(
-            pricing_rules_repository=PricingRulesRepository(session),
-            fx_rates_repository=FxRatesRepository(session),
-        )
-        tool_fee_eur, _ = await pricing_service.convert_to_eur(
-            evidence.total_tool_fee_native or Decimal("0"),
-            pricing.currency,
-        )
+        if pricing.currency == cost_estimate.native_currency:
+            fx_rate = cost_estimate.fx_rate
+        elif pricing.currency == "EUR":
+            fx_rate = Decimal("1")
+        else:
+            fx_rate = None
+        # EUR-native test doubles may omit the explicit 1:1 fact; production
+        # reservations retain the pricing conversion rate before mutation.
+        if fx_rate is None and cost_estimate.native_currency == "EUR":
+            fx_rate = Decimal("1")
+        if fx_rate is None:
+            raise AccountingError("The reservation did not retain exact external-tool FX facts.")
+        tool_fee_eur = (evidence.total_tool_fee_native or Decimal("0")) * fx_rate
         actual_eur = model_cost.actual_cost_eur + tool_fee_eur
         final = await accounting_service.finalize_successful_custom_response(
             reservation.reservation_id,
@@ -2867,6 +2917,23 @@ async def _finalize_external_web_search_response(
         await session_iterator.aclose()
 
 
+def _external_tool_max_fee_eur(admission, cost_estimate: ChatCostEstimate) -> Decimal:
+    pricing = getattr(admission, "pricing", None)
+    if pricing is None:
+        return Decimal("0")
+    if pricing.currency == "EUR":
+        fx_rate = Decimal("1")
+    elif pricing.currency == cost_estimate.native_currency:
+        fx_rate = cost_estimate.fx_rate
+    else:
+        fx_rate = None
+    if fx_rate is None and cost_estimate.native_currency == "EUR":
+        fx_rate = Decimal("1")
+    if fx_rate is None:
+        raise AccountingError("The reservation did not retain exact external-tool FX facts.")
+    return admission.maximum_fee_native * fx_rate
+
+
 async def _place_external_web_search_hold(
     *,
     reservation: QuotaReservationResult,
@@ -2877,6 +2944,7 @@ async def _place_external_web_search_hold(
     evidence_quality: ExternalToolHoldEvidenceQuality,
     partial_total_tokens: int | None = None,
     estimated_cost_eur: Decimal | None = None,
+    streaming: bool = False,
 ) -> None:
     """Keep the full fenced reservation when terminal evidence is uncertain."""
     session_iterator = _db_session_iterator(request)
@@ -2898,7 +2966,7 @@ async def _place_external_web_search_hold(
                 request_id=request_id,
                 reason_code=reason_code,
                 evidence_quality=evidence_quality,
-                streaming=False,
+                streaming=streaming,
                 now=datetime.now(UTC),
                 partial_total_tokens=partial_total_tokens,
                 estimated_cost_eur=estimated_cost_eur,

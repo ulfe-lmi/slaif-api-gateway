@@ -20,6 +20,7 @@ class WebSearchRequestFacts:
     quota_mode: str
     decision_reason_code: str
     _provider_body: Mapping[str, Any]
+    admission_decision: Any = None
 
     @property
     def provider_body(self) -> dict[str, Any]:

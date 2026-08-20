@@ -44,6 +44,7 @@ _MAX_STREAM_ENCRYPTED_REASONING_BYTES = 1_048_576
 _MAX_STREAM_CONTENT_PARTS = 64
 _MAX_STREAM_INDEX = 1_000_000
 _MAX_STREAM_TOKEN_COUNT = 2**63 - 1
+_MAX_WEB_SEARCH_EVIDENCE_EVENTS = 256
 _ITEM_STATUSES = frozenset({"in_progress", "completed", "incomplete"})
 _MESSAGE_PHASES = frozenset({"commentary", "final_answer"})
 
@@ -91,7 +92,10 @@ class ResponsesStreamEventValidator:
         self._safe_event_bytes: Counter[str] = Counter()
         self._encrypted_reasoning_bytes = 0
         self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
+        # The evidence window is a bounded state machine input, never an unbounded
+        # copy of provider events.  Payload content is discarded at the boundary.
         self._web_search_evidence: list[dict[str, object]] = []
+        self._web_search_seen_sequences: set[int] = set()
 
     @property
     def profile(self) -> ResponsesStreamValidationProfile:
@@ -145,11 +149,16 @@ class ResponsesStreamEventValidator:
 
     def _validate_web_search_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
         """Validate and retain only bounded lifecycle facts, never event content."""
+        if len(self._web_search_evidence) >= _MAX_WEB_SEARCH_EVIDENCE_EVENTS:
+            return False
         if event_type in RESPONSES_TEXT_STREAM_EVENT_TYPES:
             return self._validate_existing_text_event(payload, event_type)
         sequence = payload.get("sequence_number")
         if type(sequence) is not int or sequence < 0 or sequence > _MAX_STREAM_INDEX:
             return False
+        if sequence in self._web_search_seen_sequences:
+            return False
+        self._web_search_seen_sequences.add(sequence)
         if event_type == "response.completed":
             response = payload.get("response")
             if not isinstance(response, Mapping) or response.get("status") != "completed":
@@ -199,9 +208,18 @@ class ResponsesStreamEventValidator:
             item_id = item.get("id")
             index = payload.get("output_index")
             status = item.get("status")
+            action = item.get("action")
             if not isinstance(item_id, str) or not item_id or type(index) is not int or index < 0:
                 return False
             if status not in {"completed", "in_progress", "searching", "failed"}:
+                return False
+            if not isinstance(action, Mapping) or action.get("type") != "search":
+                return False
+            if set(action) - {"type", "query", "domains"}:
+                return False
+            if "query" in action and (
+                not isinstance(action["query"], str) or len(action["query"].encode()) > 4096
+            ):
                 return False
             self._web_search_evidence.append(
                 {
@@ -214,7 +232,7 @@ class ResponsesStreamEventValidator:
                         "status": status,
                         "output_index": index,
                         "sequence_number": sequence,
-                        "action": {"type": "search"},
+                        "action": dict(action),
                     },
                 }
             )
