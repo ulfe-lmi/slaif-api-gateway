@@ -121,13 +121,14 @@ def test_client_function_can_coexist_but_other_hosted_tools_cannot() -> None:
 
 def test_output_counts_completed_search_once_and_hides_content() -> None:
     secret = "PRIVATE-CANARY-QUERY https://private.invalid token-secret"
+    private_id = "private-call-id-token"
     result = parse_web_search_output(
         {
             "status": "completed",
             "output": [
                 {
                     "type": "web_search_call",
-                    "id": "call_1",
+                    "id": private_id,
                     "status": "completed",
                     "action": {"type": "search", "query": secret},
                 },
@@ -142,15 +143,30 @@ def test_output_counts_completed_search_once_and_hides_content() -> None:
     assert result.total_tool_fee_native == Decimal("0.01")
     assert secret not in repr(result)
     assert secret not in repr(result.to_safe_dict())
+    assert private_id not in repr(result)
+    assert private_id not in repr(result.to_safe_dict())
 
 
 def test_stream_requires_terminal_and_accepts_duplicate_completion_evidence() -> None:
+    pricing = ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call")
     result = parse_web_search_stream(
         [
-            {"type": "response.web_search_call.in_progress", "item_id": "call_1"},
-            {"type": "response.web_search_call.completed", "item_id": "call_1"},
+            {
+                "type": "response.web_search_call.in_progress",
+                "item_id": "call_1",
+                "output_index": 0,
+                "sequence_number": 0,
+            },
+            {
+                "type": "response.web_search_call.completed",
+                "item_id": "call_1",
+                "output_index": 0,
+                "sequence_number": 1,
+            },
             {
                 "type": "response.output_item.done",
+                "output_index": 0,
+                "sequence_number": 2,
                 "item": {
                     "type": "web_search_call",
                     "id": "call_1",
@@ -158,19 +174,78 @@ def test_stream_requires_terminal_and_accepts_duplicate_completion_evidence() ->
                     "action": {"type": "search"},
                 },
             },
-            {"type": "response.completed"},
+            {"type": "response.completed", "sequence_number": 3},
         ],
         admitted_call_cap=1,
+        pricing=pricing,
     )
     assert result.authoritative is True
     assert result.completed_call_count == 1
 
     incomplete = parse_web_search_stream(
-        [{"type": "response.web_search_call.searching", "item_id": "call_1"}],
+        [
+            {
+                "type": "response.web_search_call.searching",
+                "item_id": "call_1",
+                "output_index": 0,
+                "sequence_number": 0,
+            }
+        ],
         admitted_call_cap=1,
     )
     assert incomplete.authoritative is False
     assert incomplete.reason_code == "stream_terminal_missing"
+
+
+def test_completed_zero_call_outcomes_are_authoritative_only_with_pricing() -> None:
+    pricing = ExternalToolPricing("EUR", Decimal("0.010000000"), "openai_published_per_call")
+    non_stream = parse_web_search_output(
+        {"status": "completed", "output": []},
+        admitted_call_cap=2,
+        pricing=pricing,
+    )
+    stream = parse_web_search_stream(
+        [{"type": "response.completed", "sequence_number": 0}],
+        admitted_call_cap=2,
+        pricing=pricing,
+    )
+    assert non_stream.authoritative is True
+    assert stream.authoritative is True
+    assert non_stream.completed_call_count == stream.completed_call_count == 0
+    assert non_stream.total_tool_fee_native == stream.total_tool_fee_native == Decimal("0")
+    assert (
+        parse_web_search_output(
+            {"status": "completed", "output": []},
+            admitted_call_cap=2,
+            pricing=pricing,
+            tool_choice="required",
+        ).reason_code
+        == "non_neutral_tool_choice"
+    )
+
+    missing_pricing = parse_web_search_output(
+        {"status": "completed", "output": []}, admitted_call_cap=2
+    )
+    assert missing_pricing.authoritative is False
+    assert missing_pricing.reason_code == "pricing_missing"
+
+
+def test_official_event_bounds_and_conflicts_require_hold() -> None:
+    malformed = parse_web_search_stream(
+        [
+            {
+                "type": "response.web_search_call.completed",
+                "item_id": "call_1",
+                "output_index": True,
+                "sequence_number": 0,
+            },
+            {"type": "response.completed", "sequence_number": 1},
+        ],
+        admitted_call_cap=1,
+        pricing=ExternalToolPricing("USD", Decimal("0.01"), "openai_published_per_call"),
+    )
+    assert malformed.authoritative is False
+    assert malformed.reason_code == "web_search_lifecycle_invalid"
 
 
 def test_cap_overflow_and_failed_output_require_hold() -> None:

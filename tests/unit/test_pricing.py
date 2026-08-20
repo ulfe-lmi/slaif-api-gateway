@@ -4,6 +4,7 @@ import pytest
 
 from slaif_gateway.services.pricing import parse_external_tool_pricing
 from slaif_gateway.services.pricing_errors import InvalidPricingDataError
+from slaif_gateway.schemas.pricing import ExternalToolPricing
 
 
 def _metadata(price: object = "0.010000000", source: str = "openai_published_per_call") -> dict[str, object]:
@@ -42,3 +43,9 @@ def test_malformed_selected_external_tool_pricing_fails_closed(metadata: dict[st
 def test_missing_external_tool_pricing_is_not_an_ordinary_pricing_error() -> None:
     assert parse_external_tool_pricing({}, currency="EUR") is None
     assert parse_external_tool_pricing(None, currency="EUR") is None
+
+
+@pytest.mark.parametrize("currency", ["", "US", "usd", "US$"])
+def test_direct_external_tool_pricing_rejects_invalid_currency(currency: str) -> None:
+    with pytest.raises(ValueError):
+        ExternalToolPricing(currency, Decimal("0.01"), "openai_published_per_call")

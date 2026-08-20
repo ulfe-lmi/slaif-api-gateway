@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from importlib import import_module
 from typing import Any, Final
 
 from slaif_gateway.schemas.openai_web_search import (
@@ -18,10 +17,19 @@ from slaif_gateway.schemas.openai_web_search import (
     frozen_provider_body,
 )
 from slaif_gateway.schemas.pricing import ExternalToolPricing
-_POLICY = import_module("slaif_gateway.services.external_tool_" + "policy_contract")
-DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS = _POLICY.DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
-EXTERNAL_TOOL_FENCED = _POLICY.EXTERNAL_TOOL_FENCED
-PROVIDER_WEB_SEARCH = _POLICY.PROVIDER_WEB_SEARCH
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    EXTERNAL_TOOL_FENCED,
+    PROVIDER_WEB_SEARCH,
+    CLIENT_OPERATED_AUTHORITY,
+    KeyPolicyParseResult,
+    RoutePolicyParseResult,
+    classify_external_tool_request,
+    classify_tool_declaration,
+    decide_external_tool_admission,
+    parse_key_external_tool_policy,
+    parse_route_external_tool_policy,
+)
 
 MAX_SAFE_ID_LENGTH: Final = 256
 MAX_SAFE_INDEX: Final = 1_000_000
@@ -44,7 +52,8 @@ class WebSearchContractError(ValueError):
 @dataclass(frozen=True, slots=True)
 class _LifecycleCall:
     call_id: str
-    index: int | None
+    index: int
+    sequence: int
     phase: int
     completed: bool
     failed: bool
@@ -96,12 +105,12 @@ def validate_web_search_request(
     if type(max_tool_calls) is not int or max_tool_calls <= 0:
         raise WebSearchContractError("max_tool_calls_invalid")
 
-    request = _POLICY.classify_external_tool_request(
+    request = classify_external_tool_request(
         tools=tools,
         tool_choice=body.get("tool_choice"),
         requested_provider_tool_calls_per_request=max_tool_calls,
     )
-    decision = _POLICY.decide_external_tool_admission(
+    decision = decide_external_tool_admission(
         request=request,
         key_policy=_parse_key(key_policy),
         route_policy=_parse_route(route_policy),
@@ -146,9 +155,12 @@ def parse_web_search_output(
     admitted_call_cap: int,
     pricing: ExternalToolPricing | None = None,
     provider: str = "openai",
+    tool_choice: object = None,
 ) -> WebSearchAccountingEvidence:
     """Parse a non-stream output into content-free completed-call evidence."""
     _positive_int(admitted_call_cap, "admitted_call_cap")
+    if tool_choice is not None and tool_choice != "auto":
+        return _non_authoritative(provider, admitted_call_cap, "non_neutral_tool_choice")
     if not isinstance(output, Mapping):
         return _non_authoritative(provider, admitted_call_cap, "output_invalid")
     if output.get("status") != "completed":
@@ -160,6 +172,8 @@ def parse_web_search_output(
     for item in items:
         call = _parse_call_item(item)
         if call is None:
+            if isinstance(item, Mapping) and item.get("type") == "web_search_call":
+                return _non_authoritative(provider, admitted_call_cap, "output_item_invalid")
             continue
         if call.call_id in calls and calls[call.call_id] != call:
             return _non_authoritative(provider, admitted_call_cap, "conflicting_call_evidence")
@@ -167,8 +181,6 @@ def parse_web_search_output(
     completed = [call for call in calls.values() if call.completed and not call.failed]
     if len(completed) > admitted_call_cap:
         return _non_authoritative(provider, admitted_call_cap, "call_cap_exceeded")
-    if not calls:
-        return _non_authoritative(provider, admitted_call_cap, "web_search_terminal_missing")
     if any(not call.completed or call.failed for call in calls.values()):
         return _non_authoritative(provider, admitted_call_cap, "call_not_successfully_completed")
     return _authoritative(provider, admitted_call_cap, len(completed), pricing)
@@ -180,9 +192,12 @@ def parse_web_search_stream(
     admitted_call_cap: int,
     pricing: ExternalToolPricing | None = None,
     provider: str = "openai",
+    tool_choice: object = None,
 ) -> WebSearchAccountingEvidence:
     """Parse official Responses SSE event shapes without retaining payloads."""
     _positive_int(admitted_call_cap, "admitted_call_cap")
+    if tool_choice is not None and tool_choice != "auto":
+        return _non_authoritative(provider, admitted_call_cap, "non_neutral_tool_choice")
     if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
         return _non_authoritative(provider, admitted_call_cap, "events_invalid")
     calls: dict[str, _LifecycleCall] = {}
@@ -200,13 +215,19 @@ def parse_web_search_stream(
             last_sequence = sequence
         event_type = event.get("type")
         if event_type == "response.completed":
+            if not _valid_sequence(event.get("sequence_number")):
+                return _non_authoritative(provider, admitted_call_cap, "sequence_invalid")
             terminal = True
             continue
         if not isinstance(event_type, str) or not event_type.startswith("response.web_search_call."):
             if event_type == "response.output_item.done":
-                parsed = _parse_call_item(event.get("item"))
+                index = event.get("output_index")
+                sequence = event.get("sequence_number")
+                if not _valid_index(index) or not _valid_sequence(sequence):
+                    return _non_authoritative(provider, admitted_call_cap, "event_bounds_invalid")
+                item = event.get("item")
+                parsed = _parse_call_item(item, index=index, sequence=sequence)
                 if parsed is None:
-                    item = event.get("item")
                     if isinstance(item, Mapping) and item.get("type") != "web_search_call":
                         continue
                     return _non_authoritative(provider, admitted_call_cap, "output_item_invalid")
@@ -231,34 +252,39 @@ def parse_web_search_stream(
         return _non_authoritative(provider, admitted_call_cap, "call_cap_exceeded")
     if not terminal:
         return _non_authoritative(provider, admitted_call_cap, "stream_terminal_missing")
-    if not calls or any(not call.completed or call.failed for call in calls.values()):
+    if any(not call.completed or call.failed for call in calls.values()):
         return _non_authoritative(provider, admitted_call_cap, "call_not_successfully_completed")
     return _authoritative(provider, admitted_call_cap, len(completed), pricing)
 
 
 def _validate_client_declaration(tool: Mapping[str, Any]) -> None:
-    classification = _POLICY.classify_tool_declaration(tool)
-    if classification.authority_class != _POLICY.CLIENT_OPERATED_AUTHORITY:
+    classification = classify_tool_declaration(tool)
+    if classification.authority_class != CLIENT_OPERATED_AUTHORITY:
         raise WebSearchContractError("other_hosted_or_unknown_tool_forbidden")
 
 
-def _parse_key(value: object) -> Any:
+def _parse_key(value: object) -> KeyPolicyParseResult:
     return (
         value
-        if isinstance(value, _POLICY.KeyPolicyParseResult)
-        else _POLICY.parse_key_external_tool_policy(value)
+        if isinstance(value, KeyPolicyParseResult)
+        else parse_key_external_tool_policy(value)
     )
 
 
-def _parse_route(value: object) -> Any:
+def _parse_route(value: object) -> RoutePolicyParseResult:
     return (
         value
-        if isinstance(value, _POLICY.RoutePolicyParseResult)
-        else _POLICY.parse_route_external_tool_policy(value)
+        if isinstance(value, RoutePolicyParseResult)
+        else parse_route_external_tool_policy(value)
     )
 
 
-def _parse_call_item(value: object) -> _LifecycleCall | None:
+def _parse_call_item(
+    value: object,
+    *,
+    index: int | None = None,
+    sequence: int | None = None,
+) -> _LifecycleCall | None:
     if not isinstance(value, Mapping) or value.get("type") != "web_search_call":
         return None
     call_id = value.get("id")
@@ -268,23 +294,33 @@ def _parse_call_item(value: object) -> _LifecycleCall | None:
     action = value.get("action")
     if not isinstance(action, Mapping) or action.get("type") not in _SEARCH_ACTIONS:
         return None
-    index = value.get("output_index")
-    if index is not None and (type(index) is not int or not 0 <= index <= MAX_SAFE_INDEX):
+    item_index = value.get("output_index", 0) if index is None else index
+    item_sequence = value.get("sequence_number", 0) if sequence is None else sequence
+    if not _valid_index(item_index) or not _valid_sequence(item_sequence):
         return None
     phase = {"in_progress": 0, "searching": 1, "completed": 2, "failed": 3}[status]
-    return _LifecycleCall(call_id, index, phase, status == "completed", status == "failed")
+    return _LifecycleCall(
+        call_id,
+        item_index,
+        item_sequence,
+        phase,
+        status == "completed",
+        status == "failed",
+    )
 
 
 def _parse_event_call(value: Mapping[str, Any]) -> _LifecycleCall | None:
-    call_id = value.get("item_id") or value.get("id")
-    if not _safe_id(call_id):
+    call_id = value.get("item_id")
+    index = value.get("output_index")
+    sequence = value.get("sequence_number")
+    if not _safe_id(call_id) or not _valid_index(index) or not _valid_sequence(sequence):
         return None
     event_type = value.get("type")
     if event_type.endswith("completed"):
-        return _LifecycleCall(call_id, _safe_index(value.get("output_index")), 2, True, False)
+        return _LifecycleCall(call_id, index, sequence, 2, True, False)
     if event_type.endswith("in_progress") or event_type.endswith("searching"):
         phase = 0 if event_type.endswith("in_progress") else 1
-        return _LifecycleCall(call_id, _safe_index(value.get("output_index")), phase, False, False)
+        return _LifecycleCall(call_id, index, sequence, phase, False, False)
     return None
 
 
@@ -308,6 +344,10 @@ def _authoritative(
     count: int,
     pricing: ExternalToolPricing | None,
 ) -> WebSearchAccountingEvidence:
+    if not isinstance(pricing, ExternalToolPricing):
+        return _non_authoritative(provider, cap, "pricing_missing")
+    if not _valid_pricing(pricing):
+        return _non_authoritative(provider, cap, "pricing_invalid")
     unit = pricing.unit_price_native if pricing is not None else None
     return WebSearchAccountingEvidence(
         provider=provider,
@@ -346,6 +386,27 @@ def _safe_index(value: object) -> int | None:
     if type(value) is not int or not 0 <= value <= MAX_SAFE_INDEX:
         raise WebSearchContractError("index_invalid")
     return value
+
+
+def _valid_index(value: object) -> bool:
+    return type(value) is int and 0 <= value <= MAX_SAFE_INDEX
+
+
+def _valid_sequence(value: object) -> bool:
+    return type(value) is int and 0 <= value <= MAX_SAFE_SEQUENCE
+
+
+def _valid_pricing(value: ExternalToolPricing) -> bool:
+    return (
+        len(value.currency) == 3
+        and value.currency.isascii()
+        and value.currency.isalpha()
+        and value.currency.isupper()
+        and isinstance(value.unit_price_native, Decimal)
+        and value.unit_price_native.is_finite()
+        and value.unit_price_native >= 0
+        and value.source == "openai_published_per_call"
+    )
 
 
 def _positive_int(value: object, field: str) -> None:

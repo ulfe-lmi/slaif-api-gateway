@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import re
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +16,16 @@ class ExternalToolPricing:
     currency: str
     unit_price_native: Decimal
     source: str
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[A-Z]{3}", self.currency):
+            raise ValueError("External-tool pricing currency is not canonical.")
+        if not isinstance(self.unit_price_native, Decimal):
+            raise ValueError("External-tool pricing amount is not Decimal.")
+        if not self.unit_price_native.is_finite() or self.unit_price_native < 0:
+            raise ValueError("External-tool pricing amount is not finite and non-negative.")
+        if self.source != "openai_published_per_call":
+            raise ValueError("External-tool pricing source is not canonical.")
 
 
 @dataclass(frozen=True, slots=True)
