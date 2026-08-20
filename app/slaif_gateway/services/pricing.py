@@ -118,13 +118,16 @@ class PricingService:
         policy: ChatCompletionPolicyResult | ResponsesPolicyResult,
         endpoint: str = "chat.completions",
         at: datetime | None = None,
+        pricing: PricingLookupResult | None = None,
+        fx: FxConversionResult | None = None,
     ) -> ChatCostEstimate:
-        pricing = await self.find_active_pricing_rule(
-            provider=route.provider,
-            model=route.resolved_model,
-            endpoint=endpoint,
-            at=at,
-        )
+        if pricing is None:
+            pricing = await self.find_active_pricing_rule(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+                at=at,
+            )
 
         input_tokens = policy.estimated_input_tokens
         output_tokens = policy.effective_output_tokens
@@ -161,7 +164,10 @@ class PricingService:
             output_price = max(output_price, pricing.audio_output_price_per_1m)
         output_cost_native = Decimal(output_tokens) / _ONE_MILLION * output_price
         total_native = input_cost_native + output_cost_native
-        total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        if fx is None:
+            total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        else:
+            total_eur = total_native * fx.rate
 
         return ChatCostEstimate(
             provider=route.provider,

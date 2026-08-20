@@ -1,7 +1,8 @@
 # External-tool accounting hold reconciliation
 
-This runbook covers the bounded external-tool accounting foundation. It does
-not enable provider forwarding or execute any provider-hosted tool request.
+This runbook covers the bounded external-tool accounting boundary used by the
+OpenAI Responses web-search contract. It does not enable remote MCP,
+connectors, or any other provider-hosted tool family.
 
 When a provider outcome has missing usage, missing or ambiguous final cost, an
 interruption/disconnect, or an error whose charge is unknown, the gateway keeps

@@ -217,7 +217,7 @@ async def test_external_tool_dashboard_policy_respects_narrow_installation_ceili
 
     assert detail.external_tool_policy["mode"] == "strict_bounded"
     assert detail.external_tool_policy["allowed_capabilities"] == []
-    assert "runtime: denied" in detail.external_tool_policy_summary
+    assert "exact OpenAI web-search fenced contract only" in detail.external_tool_policy_summary
 
 
 def test_computed_display_status_values() -> None:

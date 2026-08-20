@@ -61,6 +61,7 @@ RESPONSES_UPSTREAM_FIELDS: tuple[str, ...] = (
     "input",
     "instructions",
     "max_output_tokens",
+    "max_tool_calls",
     "temperature",
     "top_p",
     "metadata",

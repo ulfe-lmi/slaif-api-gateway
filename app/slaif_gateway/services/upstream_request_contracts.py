@@ -53,6 +53,7 @@ RESPONSES_UPSTREAM_ALLOWED_FIELDS = frozenset(
         "input",
         "instructions",
         "max_output_tokens",
+        "max_tool_calls",
         "temperature",
         "top_p",
         "metadata",
@@ -252,6 +253,7 @@ class NormalizedResponsesUpstreamRequest:
 
     instructions: object = _UNSET
     max_output_tokens: object = _UNSET
+    max_tool_calls: object = _UNSET
     temperature: object = _UNSET
     top_p: object = _UNSET
     metadata: object = _UNSET
@@ -575,6 +577,7 @@ def normalize_responses_upstream_request(
         ),
         instructions=_select_field(body.get("instructions", _UNSET)),
         max_output_tokens=_select_field(body.get("max_output_tokens", _UNSET)),
+        max_tool_calls=_select_field(body.get("max_tool_calls", _UNSET)),
         temperature=_select_field(body.get("temperature", _UNSET)),
         top_p=_select_field(body.get("top_p", _UNSET)),
         metadata=_select_field(body.get("metadata", _UNSET)),

@@ -20,6 +20,8 @@ from slaif_gateway.schemas.pricing import ExternalToolPricing
 from slaif_gateway.services.external_tool_policy_contract import (
     DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
     EXTERNAL_TOOL_FENCED,
+    ExternalToolAdmissionDecision,  # noqa: F401 - re-exported for runtime boundary
+    ExternalToolKeyLimitFacts,  # noqa: F401 - re-exported for runtime boundary
     PROVIDER_WEB_SEARCH,
     CLIENT_OPERATED_AUTHORITY,
     KeyPolicyParseResult,
@@ -136,6 +138,7 @@ def validate_web_search_request(
         quota_mode=decision.quota_mode,
         decision_reason_code=decision.reason_code,
         _provider_body=frozen_provider_body(provider_body),
+        admission_decision=decision,
     )
 
 
@@ -473,6 +476,11 @@ def _valid_action(value: object) -> bool:
             and _valid_content_string(value.get("pattern"), required=True)
         )
     return False
+
+
+def validate_web_search_action(value: object) -> bool:
+    """Validate one official web-search action before content-free projection."""
+    return _valid_action(value)
 
 
 def _positive_int(value: object, field: str) -> None:

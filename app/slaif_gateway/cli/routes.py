@@ -69,7 +69,7 @@ def _safe_route_dict(row: ModelRoute) -> dict[str, object]:
         "supports_streaming": row.supports_streaming,
         "capabilities": capabilities,
         "external_tool_policy": external_policy.to_metadata(),
-        "external_tool_runtime_status": "denied_pending_objectives_014_016",
+        "external_tool_runtime_status": "openai_web_search_fenced_only; other_hosted_families_denied",
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,

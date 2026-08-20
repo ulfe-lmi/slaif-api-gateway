@@ -844,6 +844,24 @@ Planned pricing behavior:
 See `docs/pricing-catalog.md` for the planned pricing and bounded-overrun
 contract.
 
+## Objective 017 hosted web-search boundary
+
+The gateway supports one bounded hosted family: OpenAI Responses `web_search`
+with the exact canonical declaration, `max_tool_calls`, `store=false`,
+stateless execution, OpenAI routing, explicit per-key and per-route
+`external_tool_fenced` policy, finite limits, and configured per-call pricing.
+Admission occurs before Redis, PostgreSQL mutation, or provider forwarding.
+PostgreSQL reserves the key's full remaining balance, permits one bounded
+overrun, and clears the fence only after authoritative usage and call evidence
+are finalized. Unknown outcomes keep the reservation in a durable hold for
+manual reconciliation. Streaming holds terminal completion until the same
+evidence and accounting boundary succeeds.
+
+Client function/custom tools remain client-operated and independent; Codex
+local tools cannot be combined with hosted tools in one request. OpenRouter,
+remote MCP/connectors, URL fetch, domain/location/source controls, background
+state, and every other hosted family remain denied.
+
 ## Explicit Unsupported Fields For RC2
 
 RC2 must reject these before provider forwarding unless a later contract updates

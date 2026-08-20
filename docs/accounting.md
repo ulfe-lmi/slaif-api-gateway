@@ -283,8 +283,11 @@ metadata JSON for the live-burn section. Prometheus live-burn counters remain
 future work.
 # External-tool accounting holds
 
-External-tool requests with unknown or ambiguous final accounting use a durable
-hold: the key fence is `held`, the full pending reservation remains reserved,
+The bounded OpenAI Responses web-search runtime uses the existing PostgreSQL
+fence and full-remaining-balance reservation. A successful response finalizes
+model token cost plus the configured per-call fee, writes one content-free
+ledger, and resolves the fence atomically. External-tool requests with unknown
+or ambiguous final accounting use a durable hold: the key fence is `held`, the full pending reservation remains reserved,
 and one safe ledger records the bounded reason and evidence quality. Expiry is
 not release authority. Only explicit audited manual reconciliation may provide
 actual usage/cost or confirm no charge; missing cost never becomes a zero-cost

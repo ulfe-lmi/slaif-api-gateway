@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from slaif_gateway.services.openai_web_search_contract import validate_web_search_action
+
 
 RESPONSES_TEXT_STREAM_EVENT_TYPES = frozenset(
     {
@@ -44,6 +46,7 @@ _MAX_STREAM_ENCRYPTED_REASONING_BYTES = 1_048_576
 _MAX_STREAM_CONTENT_PARTS = 64
 _MAX_STREAM_INDEX = 1_000_000
 _MAX_STREAM_TOKEN_COUNT = 2**63 - 1
+_MAX_WEB_SEARCH_EVIDENCE_EVENTS = 256
 _ITEM_STATUSES = frozenset({"in_progress", "completed", "incomplete"})
 _MESSAGE_PHASES = frozenset({"commentary", "final_answer"})
 
@@ -55,6 +58,8 @@ class ResponsesStreamValidationProfile:
     codex_streaming_tool_events: bool = False
     codex_encrypted_reasoning_replay: bool = False
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
+    web_search: bool = False
+    web_search_max_tool_calls: int | None = None
 
 
 @dataclass(slots=True)
@@ -90,6 +95,16 @@ class ResponsesStreamEventValidator:
         self._safe_event_bytes: Counter[str] = Counter()
         self._encrypted_reasoning_bytes = 0
         self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
+        # The evidence window is a bounded state machine input, never an unbounded
+        # copy of provider events.  Payload content is discarded at the boundary.
+        configured_cap = profile.web_search_max_tool_calls or 1
+        self._web_search_event_limit = min(
+            _MAX_WEB_SEARCH_EVIDENCE_EVENTS,
+            max(8, configured_cap * 8 + 8),
+        )
+        self._web_search_event_count = 0
+        self._web_search_evidence: list[dict[str, object]] = []
+        self._web_search_seen_sequences: set[int] = set()
 
     @property
     def profile(self) -> ResponsesStreamValidationProfile:
@@ -109,6 +124,12 @@ class ResponsesStreamEventValidator:
         self._replay_reference_candidates.clear()
         return candidates
 
+    def take_web_search_evidence(self) -> tuple[dict[str, object], ...]:
+        """Return bounded content-free web-search lifecycle evidence."""
+        evidence = tuple(self._web_search_evidence)
+        self._web_search_evidence.clear()
+        return evidence
+
     def validate(self, payload: Mapping[str, Any] | None) -> bool:
         """Return whether one event is allowed by this request's gated profile."""
         if not isinstance(payload, Mapping):
@@ -118,6 +139,12 @@ class ResponsesStreamEventValidator:
             return False
         if event_type in RESPONSES_PROVIDER_FAILURE_EVENT_TYPES:
             return False
+        if self._profile.web_search:
+            valid = self._validate_web_search_event(payload, event_type)
+            if valid:
+                self._safe_event_counts[event_type] += 1
+                self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
+            return valid
         if not self._profile.codex_streaming_tool_events:
             return self._validate_existing_text_event(payload, event_type)
         if event_type not in RESPONSES_CODEX_STREAM_EVENT_TYPES:
@@ -128,6 +155,101 @@ class ResponsesStreamEventValidator:
             self._safe_event_counts[event_type] += 1
             self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
         return valid
+
+    def _validate_web_search_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
+        """Validate and retain only bounded lifecycle facts, never event content."""
+        if self._web_search_event_count >= self._web_search_event_limit:
+            return False
+        self._web_search_event_count += 1
+        if event_type in RESPONSES_TEXT_STREAM_EVENT_TYPES:
+            return self._validate_existing_text_event(payload, event_type)
+        sequence = payload.get("sequence_number")
+        if type(sequence) is not int or sequence < 0 or sequence > _MAX_STREAM_INDEX:
+            return False
+        if sequence in self._web_search_seen_sequences:
+            return False
+        self._web_search_seen_sequences.add(sequence)
+        if event_type == "response.completed":
+            response = payload.get("response")
+            if not isinstance(response, Mapping) or response.get("status") != "completed":
+                return False
+            usage = response.get("usage")
+            if not isinstance(usage, Mapping):
+                return False
+            safe_usage = {
+                field: usage[field]
+                for field in (
+                    "input_tokens",
+                    "output_tokens",
+                    "total_tokens",
+                    "prompt_tokens",
+                    "completion_tokens",
+                )
+                if type(usage.get(field)) is int and usage[field] >= 0
+            }
+            self._web_search_evidence.append(
+                {
+                    "type": event_type,
+                    "sequence_number": sequence,
+                    "response": {"status": "completed", "usage": safe_usage},
+                }
+            )
+            return True
+        if event_type.startswith("response.web_search_call."):
+            item_id = payload.get("item_id")
+            index = payload.get("output_index")
+            if not _bounded_identifier(item_id, required=True) or not _valid_index(index):
+                return False
+            if event_type.rsplit(".", 1)[-1] not in {"in_progress", "searching", "completed", "failed"}:
+                return False
+            self._web_search_evidence.append(
+                {
+                    "type": event_type,
+                    "item_id": item_id,
+                    "output_index": index,
+                    "sequence_number": sequence,
+                }
+            )
+            return True
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            item = payload.get("item")
+            if not isinstance(item, Mapping):
+                return False
+            if item.get("type") == "message":
+                return _validate_assistant_message_item(item)
+            if item.get("type") != "web_search_call":
+                return False
+            if event_type == "response.output_item.added":
+                return False
+            item_id = item.get("id")
+            index = payload.get("output_index")
+            status = item.get("status")
+            action = item.get("action")
+            if not isinstance(item_id, str) or not item_id or type(index) is not int or index < 0:
+                return False
+            if status not in {"completed", "in_progress", "searching", "failed"}:
+                return False
+            if not validate_web_search_action(action):
+                return False
+            self._web_search_evidence.append(
+                {
+                    "type": event_type,
+                    "output_index": index,
+                    "sequence_number": sequence,
+                    "item": {
+                        "type": "web_search_call",
+                        "id": item_id,
+                        "status": status,
+                        "output_index": index,
+                        "sequence_number": sequence,
+                        # The provider action was validated above; persist only
+                        # its content-free canonical type for accounting.
+                        "action": {"type": action["type"]},
+                    },
+                }
+            )
+            return True
+        return False
 
     def _validate_existing_text_event(
         self,
