@@ -21,6 +21,7 @@ from slaif_gateway.schemas.external_tool_hold import (
     ExternalToolHoldReconciliationInput,
 )
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
+from slaif_gateway.services.external_tool_fence import ExternalToolFenceConflictError
 from tests.integration.test_external_tool_hold_postgres import _fixture
 
 pytestmark = pytest.mark.skipif(
@@ -76,7 +77,7 @@ async def test_eight_workers_have_one_mutation_and_seven_exact_retries():
                 await session.commit()
                 return result
 
-        results = await asyncio.gather(*(worker() for _ in range(8)))
+        results = await asyncio.wait_for(asyncio.gather(*(worker() for _ in range(8))), timeout=30)
         assert sum(not result.idempotent for result in results) == 1
         assert sum(result.idempotent for result in results) == 7
 
@@ -98,5 +99,116 @@ async def test_eight_workers_have_one_mutation_and_seven_exact_retries():
             assert len(ledgers) == 1 and ledgers[0].accounting_status == "finalized"
             assert len([audit for audit in audits if audit.request_id == request_id]) == 1
             await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_workers_have_one_mutation_and_one_exact_retry_with_timeout():
+    engine, sessions, key_id, reservation_id, request_id, actor = await _fixture()
+    try:
+        async with sessions() as session:
+            await ExternalToolAccountingHoldService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            ).place(
+                ExternalToolAccountingHoldInput(
+                    gateway_key_id=key_id,
+                    reservation_id=reservation_id,
+                    request_id=request_id,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    streaming=True,
+                    now=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+        request = ExternalToolHoldReconciliationInput(
+            reservation_id=reservation_id,
+            action=ExternalToolHoldAction.FINALIZE_ACTUAL,
+            execute=True,
+            actor_admin_id=actor,
+            reason="two worker reconciliation proof",
+            actual_cost_eur=Decimal("0.5"),
+            actual_total_tokens=50,
+            success=True,
+        )
+
+        async def worker():
+            async with sessions() as session:
+                result = await ExternalToolAccountingHoldService(
+                    gateway_keys_repository=GatewayKeysRepository(session),
+                    quota_reservations_repository=QuotaReservationsRepository(session),
+                    usage_ledger_repository=UsageLedgerRepository(session),
+                    audit_repository=AuditRepository(session),
+                ).reconcile(request)
+                await session.commit()
+                return result
+
+        results = await asyncio.wait_for(asyncio.gather(worker(), worker()), timeout=30)
+        assert sum(not result.idempotent for result in results) == 1
+        assert sum(result.idempotent for result in results) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_workers_with_changed_input_have_one_winner_and_one_conflict():
+    engine, sessions, key_id, reservation_id, request_id, actor = await _fixture()
+    try:
+        async with sessions() as session:
+            await ExternalToolAccountingHoldService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            ).place(
+                ExternalToolAccountingHoldInput(
+                    gateway_key_id=key_id,
+                    reservation_id=reservation_id,
+                    request_id=request_id,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_COST,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    streaming=True,
+                    now=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+        requests = [
+            ExternalToolHoldReconciliationInput(
+                reservation_id=reservation_id,
+                action=ExternalToolHoldAction.FINALIZE_ACTUAL,
+                execute=True,
+                actor_admin_id=actor,
+                reason=f"changed input {index}",
+                actual_cost_eur=Decimal("0.6") + Decimal(index) / Decimal("100"),
+                actual_total_tokens=60 + index,
+                success=True,
+            )
+            for index in range(2)
+        ]
+
+        async def worker(request):
+            async with sessions() as session:
+                try:
+                    result = await ExternalToolAccountingHoldService(
+                        gateway_keys_repository=GatewayKeysRepository(session),
+                        quota_reservations_repository=QuotaReservationsRepository(session),
+                        usage_ledger_repository=UsageLedgerRepository(session),
+                        audit_repository=AuditRepository(session),
+                    ).reconcile(request)
+                    await session.commit()
+                    return result
+                except Exception as exc:  # noqa: BLE001
+                    await session.rollback()
+                    return exc
+
+        results = await asyncio.wait_for(asyncio.gather(*(worker(request) for request in requests)), timeout=30)
+        assert sum(not isinstance(result, Exception) for result in results) == 1
+        conflicts = [result for result in results if isinstance(result, ExternalToolFenceConflictError)]
+        assert len(conflicts) == 1
+        assert conflicts[0].error_code == "external_tool_accounting_reconciliation_conflict"
     finally:
         await engine.dispose()

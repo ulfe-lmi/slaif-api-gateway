@@ -204,6 +204,11 @@ class ExternalToolAccountingHoldService:
             )
             if reservation is None:
                 continue
+            linked_ledgers = await self._usage_ledger_repository.get_usage_records_by_reservation_id(
+                reservation.id
+            )
+            if len(linked_ledgers) != 1 or linked_ledgers[0].id != ledger.id:
+                continue
             gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id(
                 ledger.gateway_key_id
             )
@@ -581,7 +586,10 @@ def _reconciliation_result(request, *, ledger, reservation, gateway_key, idempot
     )
 
 def _exact_hold_metadata(ledger) -> dict[str, object] | None:
-    hold = (ledger.response_metadata or {}).get("external_tool_accounting_hold")
+    metadata = ledger.response_metadata or {}
+    if set(metadata) != {"external_tool_accounting_hold"}:
+        return None
+    hold = metadata.get("external_tool_accounting_hold")
     if not isinstance(hold, dict):
         return None
     if set(hold) != {

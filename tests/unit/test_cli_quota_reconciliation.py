@@ -190,6 +190,138 @@ def test_external_tool_hold_execute_and_release_flag_errors_are_safe() -> None:
     assert json.loads(incompatible.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
 
 
+def test_external_tool_hold_cli_rejects_invalid_action_uuid_and_decimal_without_secret_output() -> None:
+    invalid_action = runner.invoke(
+        app,
+        [
+            "quota",
+            "reconcile-external-tool-hold",
+            "--reservation-id",
+            str(_hold_projection().reservation_id),
+            "--action",
+            "unknown-action",
+            "--json",
+        ],
+    )
+    invalid_uuid = runner.invoke(
+        app,
+        [
+            "quota",
+            "reconcile-external-tool-hold",
+            "--reservation-id",
+            "not-a-uuid",
+            "--action",
+            ExternalToolHoldAction.FINALIZE_ACTUAL.value,
+            "--json",
+        ],
+    )
+    invalid_decimal = runner.invoke(
+        app,
+        [
+            "quota",
+            "reconcile-external-tool-hold",
+            "--reservation-id",
+            str(_hold_projection().reservation_id),
+            "--action",
+            ExternalToolHoldAction.FINALIZE_ACTUAL.value,
+            "--actual-cost-eur",
+            "nan",
+            "--json",
+        ],
+    )
+
+    for result in (invalid_action, invalid_uuid, invalid_decimal):
+        assert result.exit_code == 1
+        output = result.stdout + result.stderr
+        assert "token_hash" not in output
+        assert "provider_api_key" not in output
+        assert "prompt" not in output.lower()
+        assert "response" not in output.lower()
+    assert json.loads(invalid_action.stdout)["error"]["code"] == "invalid_value"
+    assert "valid UUID" in json.loads(invalid_uuid.stdout)["error"]["message"]
+    assert "finite" in json.loads(invalid_decimal.stdout)["error"]["message"]
+
+
+def test_external_tool_hold_cli_finalize_flag_matrix_is_strict(monkeypatch) -> None:
+    monkeypatch.setattr(
+        quota_cli,
+        "_reconcile_external_tool_hold",
+        lambda request: None,
+    )
+    base = [
+        "quota",
+        "reconcile-external-tool-hold",
+        "--reservation-id",
+        str(_hold_projection().reservation_id),
+        "--action",
+        ExternalToolHoldAction.FINALIZE_ACTUAL.value,
+        "--execute",
+        "--actor-admin-id",
+        str(uuid.uuid4()),
+        "--reason",
+        "bounded reason",
+        "--json",
+    ]
+    missing_cost = runner.invoke(app, base + ["--actual-total-tokens", "1", "--success"])
+    missing_tokens = runner.invoke(app, base + ["--actual-cost-eur", "0.1", "--success"])
+    missing_success = runner.invoke(app, base + ["--actual-cost-eur", "0.1", "--actual-total-tokens", "1"])
+    incompatible = runner.invoke(
+        app,
+        base
+        + [
+            "--actual-cost-eur",
+            "0.1",
+            "--actual-total-tokens",
+            "1",
+            "--success",
+            "--confirm-no-charge",
+        ],
+    )
+    for result in (missing_cost, missing_tokens, missing_success, incompatible):
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
+
+
+def test_external_tool_hold_cli_execute_requires_reason_and_release_confirmation() -> None:
+    common = [
+        "quota",
+        "reconcile-external-tool-hold",
+        "--reservation-id",
+        str(_hold_projection().reservation_id),
+        "--execute",
+        "--actor-admin-id",
+        str(uuid.uuid4()),
+        "--json",
+    ]
+    missing_reason = runner.invoke(
+        app,
+        common
+        + [
+            "--action",
+            ExternalToolHoldAction.FINALIZE_ACTUAL.value,
+            "--actual-cost-eur",
+            "0.1",
+            "--actual-total-tokens",
+            "1",
+            "--success",
+        ],
+    )
+    missing_confirmation = runner.invoke(
+        app,
+        common
+        + [
+            "--action",
+            ExternalToolHoldAction.RELEASE_NO_CHARGE.value,
+            "--reason",
+            "release",
+        ],
+    )
+    assert missing_reason.exit_code == 1
+    assert missing_confirmation.exit_code == 1
+    assert json.loads(missing_reason.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
+    assert json.loads(missing_confirmation.stdout)["error"]["code"] == "invalid_external_tool_accounting_hold"
+
+
 def test_list_expired_reservations_prints_safe_text(monkeypatch) -> None:
     async def fake_list(*, limit):
         assert limit == 10
