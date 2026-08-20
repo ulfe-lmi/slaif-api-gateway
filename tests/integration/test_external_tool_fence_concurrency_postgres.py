@@ -676,20 +676,19 @@ async def test_resolve_waits_on_reservation_before_locking_key(
     key_factory = async_sessionmaker(key_engine, expire_on_commit=False)
     held_session = held_factory()
 
-    async def resolve_worker() -> ExternalToolFenceInvariantError:
+    async def resolve_worker():
         async with resolver_factory() as session:
-            with pytest.raises(ExternalToolFenceInvariantError) as raised:
-                await asyncio.wait_for(
-                    _fence_service(session).resolve(
-                        ExternalToolFenceResolveInput(
-                            gateway_key_id=key_id,
-                            request_id=acquired.request_id,
-                        )
-                    ),
-                    timeout=5,
-                )
-            await session.rollback()
-            return raised.value
+            result = await asyncio.wait_for(
+                _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_id,
+                        request_id=acquired.request_id,
+                    )
+                ),
+                timeout=5,
+            )
+            await session.commit()
+            return result
 
     try:
         held_reservation = await QuotaReservationsRepository(held_session).get_reservation_by_id_for_update(
@@ -704,11 +703,13 @@ async def test_resolve_waits_on_reservation_before_locking_key(
             await session.execute(text("SET LOCAL lock_timeout = '1000ms'"))
             key = await GatewayKeysRepository(session).get_gateway_key_for_update(key_id)
             assert key is not None, "resolve must not hold the key while waiting"
-            await session.rollback()
+            key.external_tool_fence_state = "held"
+            await session.commit()
 
         await held_session.rollback()
-        error = await asyncio.wait_for(resolver_task, timeout=5)
-        assert error.error_code == "external_tool_fence_reservation_not_terminal"
+        result = await asyncio.wait_for(resolver_task, timeout=5)
+        assert result.fence_state == "held"
+        assert result.resolved is False
     finally:
         await held_session.close()
         await held_engine.dispose()
@@ -716,6 +717,95 @@ async def test_resolve_waits_on_reservation_before_locking_key(
         await key_engine.dispose()
 
     key = await _load_key(dsn, key_id)
-    assert key.external_tool_fence_state == "active"
+    assert key.external_tool_fence_state == "held"
     assert key.external_tool_fence_reservation_id == acquired.reservation_id
     assert await _count_reservations(dsn, key_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_and_resolve_race_uses_reservation_first_lock_order(
+    migrated_postgres_url: str,
+) -> None:
+    """Real release/resolve races terminate without clearing the fence."""
+    dsn = migrated_postgres_url
+    key_id = await _create_key(dsn)
+    route_id = await _create_model_route(dsn)
+
+    setup_engine = create_async_engine(dsn, future=True)
+    setup_factory = async_sessionmaker(setup_engine, expire_on_commit=False)
+    async with setup_factory() as session:
+        acquired = await _fence_service(session).acquire(
+            _acquire_input(key_id, f"req-release-resolve-{uuid.uuid4()}", route_id)
+        )
+        await session.commit()
+    await setup_engine.dispose()
+
+    release_engine = create_async_engine(dsn, future=True)
+    release_factory = async_sessionmaker(release_engine, expire_on_commit=False)
+    resolve_engine = create_async_engine(dsn, future=True)
+    resolve_factory = async_sessionmaker(resolve_engine, expire_on_commit=False)
+
+    async def release_worker():
+        async with release_factory() as session:
+            result = await _quota_service(session).release_reservation(
+                acquired.reservation_id,
+                reason="bounded objective-014 race test",
+            )
+            await session.commit()
+            return result
+
+    async def resolve_worker():
+        async with resolve_factory() as session:
+            try:
+                result = await _fence_service(session).resolve(
+                    ExternalToolFenceResolveInput(
+                        gateway_key_id=key_id,
+                        request_id=acquired.request_id,
+                    )
+                )
+            except ExternalToolFenceInvariantError as error:
+                await session.rollback()
+                return error
+            await session.commit()
+            return result
+
+    try:
+        release_result, resolve_result = await asyncio.wait_for(
+            asyncio.gather(release_worker(), resolve_worker()),
+            timeout=5,
+        )
+    finally:
+        await release_engine.dispose()
+        await resolve_engine.dispose()
+
+    assert release_result.status == "released"
+    assert isinstance(resolve_result, (ExternalToolFenceInvariantError,))
+    assert resolve_result.error_code in {
+        "external_tool_fence_reservation_not_terminal",
+        "external_tool_fence_ledger_count",
+    }
+    key = await _load_key(dsn, key_id)
+    reservation = await _load_reservation(dsn, acquired.reservation_id)
+    assert key.external_tool_fence_state == "active"
+    assert key.cost_reserved_eur == Decimal("0")
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert reservation.status == "released"
+    assert await _count_reservations(dsn, key_id) == 1
+
+    audit_engine = create_async_engine(dsn, future=True)
+    try:
+        async with audit_engine.connect() as conn:
+            counts = (
+                await conn.execute(
+                    text(
+                        "SELECT action, count(*) FROM audit_log "
+                        "WHERE entity_type = 'gateway_key' AND entity_id = :key_id "
+                        "GROUP BY action"
+                    ),
+                    {"key_id": key_id},
+                )
+            ).all()
+    finally:
+        await audit_engine.dispose()
+    assert dict(counts) == {"external_tool_fence_acquired": 1}

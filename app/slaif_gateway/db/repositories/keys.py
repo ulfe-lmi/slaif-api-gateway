@@ -100,7 +100,12 @@ class GatewayKeysRepository:
 
     async def get_gateway_key_for_update(self, gateway_key_id: uuid.UUID) -> GatewayKey | None:
         """Return a gateway key row locked for administrative mutation."""
-        statement = select(GatewayKey).where(GatewayKey.id == gateway_key_id).with_for_update()
+        statement = (
+            select(GatewayKey)
+            .where(GatewayKey.id == gateway_key_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 

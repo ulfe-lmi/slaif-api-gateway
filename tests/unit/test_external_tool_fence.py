@@ -619,7 +619,7 @@ async def test_acquire_rejects_incomplete_positive_fenced_decision(mutate, code)
     [
         lambda: types.SimpleNamespace(**_decision_fields()),
         lambda: dict(_decision_fields()),
-        lambda: object(),
+        object,
     ],
 )
 async def test_acquire_rejects_wrong_decision_object_type(wrong_decision) -> None:
