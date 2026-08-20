@@ -479,6 +479,17 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
     )
     import slaif_gateway.services.responses_gateway as main_module
     _wire_successful_route_pricing_quota(monkeypatch)
+    pricing_lookup_calls: list[object] = []
+    fx_lookup_calls: list[object] = []
+    estimate_facts: list[tuple[object, object]] = []
+    pricing_row = SimpleNamespace(
+        external_tool_pricing=ExternalToolPricing(
+            currency="USD",
+            unit_price_native=Decimal("0.01"),
+            source="openai_published_per_call",
+        )
+    )
+    fx_fact = SimpleNamespace(rate=Decimal("1"))
 
     async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
         _ = (self, authenticated_key)
@@ -488,8 +499,9 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
     async def _fake_estimate_chat_completion_cost(
         self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
     ):
-        _ = (self, route, policy, at, pricing, fx)
+        _ = (self, route, policy, at)
         assert endpoint == "/v1/responses"
+        estimate_facts.append((pricing, fx))
         return _estimate()
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
@@ -500,13 +512,8 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
     )
     async def _fake_find_active_pricing_rule(self, *, provider, model, endpoint, at=None):
         _ = (self, provider, model, endpoint, at)
-        return SimpleNamespace(
-            external_tool_pricing=ExternalToolPricing(
-                currency="USD",
-                unit_price_native=Decimal("0.01"),
-                source="openai_published_per_call",
-            )
-        )
+        pricing_lookup_calls.append(model)
+        return pricing_row
 
     async def _fake_acquire(self, acquire_input):
         assert acquire_input.route.provider == "openai"
@@ -527,7 +534,8 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
     )
     async def _fake_convert_to_eur(self, amount, native_currency, at=None):
         _ = (self, native_currency, at)
-        return amount, SimpleNamespace(rate=Decimal("1"))
+        fx_lookup_calls.append(amount)
+        return amount, fx_fact
 
     monkeypatch.setattr(main_module.PricingService, "convert_to_eur", _fake_convert_to_eur)
     monkeypatch.setattr(main_module.ExternalToolFenceService, "acquire", _fake_acquire)
@@ -574,6 +582,94 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
 
     assert response.status_code == 200, response.text
     assert response.json()["id"] == "resp_test"
+    assert len(pricing_lookup_calls) == 1
+    assert len(fx_lookup_calls) == 1
+    assert len(estimate_facts) == 1
+    assert estimate_facts[0] == (pricing_row, fx_fact)
+
+
+@pytest.mark.parametrize("case", ["max_tool_calls_without_web_search", "missing_pricing", "malformed_pricing"])
+def test_hosted_pricing_and_max_tool_calls_fail_before_redis_fence_provider(
+    monkeypatch,
+    case: str,
+) -> None:
+    import slaif_gateway.services.responses_gateway as main_module
+
+    key_policy = {
+        "version": 1,
+        "mode": "external_tool_fenced",
+        "allowed_capabilities": ["provider_web_search"],
+        "allowed_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "single_request_overrun_acknowledged": True,
+    }
+    route_policy = {
+        "version": 1,
+        "supported_capabilities": ["provider_web_search"],
+        "approved_destination_ids": [],
+        "max_provider_tool_calls_per_request": 1,
+        "call_limit_enforced": True,
+        "final_usage_required": True,
+        "final_cost_required": True,
+    }
+    app = create_app()
+    _wire_auth_and_db(
+        monkeypatch,
+        app,
+        _fake_authenticated_gateway_key(external_tool_policy=key_policy),
+    )
+    redis_calls: list[str] = []
+    fence_calls: list[str] = []
+    adapter_calls: list[str] = []
+
+    async def _reserve_redis(**kwargs):
+        redis_calls.append(kwargs["request_id"])
+        raise AssertionError("Redis reservation must not occur")
+
+    async def _acquire_fence(*args, **kwargs):
+        _ = (args, kwargs)
+        fence_calls.append("fence")
+        raise AssertionError("fence acquisition must not occur")
+
+    def _build_adapter(*args, **kwargs):
+        _ = (args, kwargs)
+        adapter_calls.append("adapter")
+        raise AssertionError("adapter construction must not occur")
+
+    async def _resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
+        _ = (self, authenticated_key)
+        assert endpoint == "/v1/responses"
+        return _route_result(requested_model, external_tool_policy=route_policy)
+
+    async def _find_active(self, **kwargs):
+        _ = kwargs
+        if case == "missing_pricing":
+            return SimpleNamespace(external_tool_pricing=None)
+        return SimpleNamespace(external_tool_pricing=SimpleNamespace())
+
+    monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _reserve_redis)
+    monkeypatch.setattr(main_module.ExternalToolFenceService, "acquire", _acquire_fence)
+    monkeypatch.setattr(main_module, "get_provider_adapter", _build_adapter)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _resolve_model)
+    monkeypatch.setattr(main_module.PricingService, "find_active_pricing_rule", _find_active)
+
+    body = _responses_request()
+    if case == "max_tool_calls_without_web_search":
+        body["max_tool_calls"] = 1
+    else:
+        body.update(
+            {
+                "tools": [{"type": "web_search"}],
+                "tool_choice": "auto",
+                "max_tool_calls": 1,
+            }
+        )
+    response = TestClient(app).post("/v1/responses", json=body)
+    assert response.status_code >= 400
+    assert "canary" not in response.text.lower()
+    assert redis_calls == []
+    assert fence_calls == []
+    assert adapter_calls == []
 
 
 @pytest.mark.parametrize("key_policy", [None, {

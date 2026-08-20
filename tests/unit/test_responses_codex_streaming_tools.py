@@ -597,6 +597,62 @@ def test_web_search_stream_validates_all_official_actions_content_free(action) -
     assert PRIVATE_CANARY not in repr(validator.__dict__)
 
 
+@pytest.mark.parametrize(
+    "field_overrides",
+    [
+        {"sequence_number": -1},
+        {"output_index": -1},
+        {"item": {"type": "web_search_call", "status": "completed"}},
+        {
+            "item": {
+                "type": "web_search_call",
+                "id": "ws_bad_action",
+                "status": "completed",
+                "action": {"type": "unsupported", "query": PRIVATE_CANARY},
+            }
+        },
+    ],
+)
+def test_web_search_stream_rejects_bounds_and_malformed_actions_without_canaries(
+    field_overrides,
+) -> None:
+    validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(web_search=True, web_search_max_tool_calls=1)
+    )
+    event = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "web_search_call",
+            "id": "ws_valid",
+            "status": "completed",
+            "action": {"type": "search", "query": "safe"},
+        },
+    }
+    event.update(field_overrides)
+    assert not validator.validate(event)
+    assert PRIVATE_CANARY not in repr(validator.safe_evidence())
+
+    valid = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "sequence_number": 2,
+        "item": {
+            "type": "web_search_call",
+            "id": "ws_first",
+            "status": "completed",
+            "action": {"type": "search", "query": "safe"},
+        },
+    }
+    assert validator.validate(valid)
+    for sequence in range(3, 17):
+        assert validator.validate({**valid, "sequence_number": sequence})
+    overflow = {**valid, "sequence_number": 17}
+    assert not validator.validate(overflow)
+    assert PRIVATE_CANARY not in repr(validator.safe_evidence())
+
+
 def test_orphan_delta_duplicate_ids_and_mismatched_done_fail_closed() -> None:
     validator = ResponsesStreamEventValidator(_profile())
     added = _added_tool(
