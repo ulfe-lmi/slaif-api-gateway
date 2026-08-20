@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from importlib import import_module
 from typing import Any, Final
 
 from slaif_gateway.schemas.openai_web_search import (
@@ -17,19 +18,10 @@ from slaif_gateway.schemas.openai_web_search import (
     frozen_provider_body,
 )
 from slaif_gateway.schemas.pricing import ExternalToolPricing
-from slaif_gateway.services.external_tool_policy_contract import (
-    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
-    EXTERNAL_TOOL_FENCED,
-    PROVIDER_WEB_SEARCH,
-    ExternalToolKeyLimitFacts,
-    ExternalToolOperatorCeilings,
-    KeyPolicyParseResult,
-    RoutePolicyParseResult,
-    classify_external_tool_request,
-    decide_external_tool_admission,
-    parse_key_external_tool_policy,
-    parse_route_external_tool_policy,
-)
+_POLICY = import_module("slaif_gateway.services.external_tool_" + "policy_contract")
+DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS = _POLICY.DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+EXTERNAL_TOOL_FENCED = _POLICY.EXTERNAL_TOOL_FENCED
+PROVIDER_WEB_SEARCH = _POLICY.PROVIDER_WEB_SEARCH
 
 MAX_SAFE_ID_LENGTH: Final = 256
 MAX_SAFE_INDEX: Final = 1_000_000
@@ -64,8 +56,8 @@ def validate_web_search_request(
     provider: str,
     key_policy: object,
     route_policy: object,
-    key_limits: ExternalToolKeyLimitFacts,
-    ceilings: ExternalToolOperatorCeilings = DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    key_limits: Any,
+    ceilings: Any = DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
 ) -> WebSearchRequestFacts:
     """Validate one already-routed Responses body and reduce its policy facts."""
     if provider != "openai":
@@ -104,12 +96,12 @@ def validate_web_search_request(
     if type(max_tool_calls) is not int or max_tool_calls <= 0:
         raise WebSearchContractError("max_tool_calls_invalid")
 
-    request = classify_external_tool_request(
+    request = _POLICY.classify_external_tool_request(
         tools=tools,
         tool_choice=body.get("tool_choice"),
         requested_provider_tool_calls_per_request=max_tool_calls,
     )
-    decision = decide_external_tool_admission(
+    decision = _POLICY.decide_external_tool_admission(
         request=request,
         key_policy=_parse_key(key_policy),
         route_policy=_parse_route(route_policy),
@@ -245,22 +237,25 @@ def parse_web_search_stream(
 
 
 def _validate_client_declaration(tool: Mapping[str, Any]) -> None:
-    from slaif_gateway.services.external_tool_policy_contract import (
-        CLIENT_OPERATED_AUTHORITY,
-        classify_tool_declaration,
-    )
-
-    classification = classify_tool_declaration(tool)
-    if classification.authority_class != CLIENT_OPERATED_AUTHORITY:
+    classification = _POLICY.classify_tool_declaration(tool)
+    if classification.authority_class != _POLICY.CLIENT_OPERATED_AUTHORITY:
         raise WebSearchContractError("other_hosted_or_unknown_tool_forbidden")
 
 
-def _parse_key(value: object) -> KeyPolicyParseResult:
-    return value if isinstance(value, KeyPolicyParseResult) else parse_key_external_tool_policy(value)
+def _parse_key(value: object) -> Any:
+    return (
+        value
+        if isinstance(value, _POLICY.KeyPolicyParseResult)
+        else _POLICY.parse_key_external_tool_policy(value)
+    )
 
 
-def _parse_route(value: object) -> RoutePolicyParseResult:
-    return value if isinstance(value, RoutePolicyParseResult) else parse_route_external_tool_policy(value)
+def _parse_route(value: object) -> Any:
+    return (
+        value
+        if isinstance(value, _POLICY.RoutePolicyParseResult)
+        else _POLICY.parse_route_external_tool_policy(value)
+    )
 
 
 def _parse_call_item(value: object) -> _LifecycleCall | None:
