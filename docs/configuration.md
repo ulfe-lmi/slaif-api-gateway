@@ -1107,6 +1107,8 @@ operator reconciliation workflows:
   is enabled.
 - `RECONCILIATION_EXPIRED_RESERVATION_LIMIT` and
   `RECONCILIATION_PROVIDER_COMPLETED_LIMIT` cap batch size.
+- `RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT=100` caps the scheduled external-tool
+  hold inspection batch. Inspection never auto-executes or repairs holds.
 - `RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS` and
   `RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS` can ignore very recent
   candidates.
@@ -1124,6 +1126,8 @@ operator reconciliation workflows:
 - `RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS=1` and
   `RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED=1` set the backlog thresholds for
   sending an alert.
+- `RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS=1` sets the minimum external-tool
+  hold count for an alert.
 - `RECONCILIATION_ALERT_INCLUDE_IDS=false` keeps alert payloads counts-only by
   default. When enabled, payloads include only safe reservation/usage-ledger IDs,
   never keys, provider secrets, prompts, completions, encrypted payloads, nonces,

@@ -785,3 +785,8 @@ Provider-completed finalization failures are not treated as zero-cost provider f
 - Raw provider response bodies are not returned to clients or stored.
 - Provider diagnostics are bounded and sanitized.
 - Normal tests mock upstream OpenAI/OpenRouter with RESPX and do not require real provider keys.
+# External-tool accounting boundary
+
+The external-tool accounting hold/reconciliation foundation is implemented, but
+provider forwarding is not enabled by this capability. Unknown or ambiguous
+provider cost remains held and reserved; it is never silently forgiven.

@@ -1260,3 +1260,11 @@ never recover or send old plaintext keys.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.
+# External-tool accounting hold safety
+
+Held external-tool accounting state is PostgreSQL truth. It retains the full
+reservation and blocks authentication/quota admission until an audited manual
+operator reconciliation completes. Hold metadata contains only versioned
+low-cardinality reason/evidence facts and timestamps; no provider/tool content,
+credentials, URLs, prompts, responses, arguments, results, or diagnostics are
+accepted. Scheduled inspection and webhook alerts are read-only for holds.

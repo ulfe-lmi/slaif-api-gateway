@@ -14,6 +14,7 @@ from slaif_gateway.cli.common import (
     echo_kv,
     emit_json,
     handle_cli_error,
+    parse_decimal,
     parse_uuid,
     require_positive_limit,
     run_async,
@@ -23,6 +24,11 @@ from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.schemas.external_tool_fence import ExternalToolFenceProjection
+from slaif_gateway.schemas.external_tool_hold import (
+    ExternalToolAccountingHoldProjection,
+    ExternalToolHoldAction,
+    ExternalToolHoldReconciliationInput,
+)
 from slaif_gateway.schemas.reconciliation import (
     ProviderCompletedReconciliationCandidate,
     ProviderCompletedReconciliationResult,
@@ -32,6 +38,10 @@ from slaif_gateway.schemas.reconciliation import (
     StaleReservationCandidate,
 )
 from slaif_gateway.services.external_tool_fence import ExternalToolFenceService
+from slaif_gateway.services.external_tool_hold import (
+    ExternalToolAccountingHoldService,
+    validate_reconciliation_input,
+)
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 
 app = typer.Typer(help="Inspect and repair quota reservations")
@@ -39,6 +49,15 @@ app = typer.Typer(help="Inspect and repair quota reservations")
 
 def _service(session) -> ReservationReconciliationService:
     return ReservationReconciliationService(
+        gateway_keys_repository=GatewayKeysRepository(session),
+        quota_reservations_repository=QuotaReservationsRepository(session),
+        usage_ledger_repository=UsageLedgerRepository(session),
+        audit_repository=AuditRepository(session),
+    )
+
+
+def _hold_service(session) -> ExternalToolAccountingHoldService:
+    return ExternalToolAccountingHoldService(
         gateway_keys_repository=GatewayKeysRepository(session),
         quota_reservations_repository=QuotaReservationsRepository(session),
         usage_ledger_repository=UsageLedgerRepository(session),
@@ -60,6 +79,20 @@ async def _list_external_tool_fences(*, limit: int) -> list[ExternalToolFencePro
 async def _list_expired_reservations(*, limit: int) -> list[StaleReservationCandidate]:
     async with cli_db_session() as (_, session):
         return await _service(session).list_expired_pending_reservations(limit=limit)
+
+
+async def _list_external_tool_holds(
+    *, limit: int
+) -> list[ExternalToolAccountingHoldProjection]:
+    async with cli_db_session() as (_, session):
+        return await _hold_service(session).list_holds(limit=limit)
+
+
+async def _reconcile_external_tool_hold(
+    request: ExternalToolHoldReconciliationInput,
+) -> object:
+    async with cli_db_session() as (_, session):
+        return await _hold_service(session).reconcile(request)
 
 
 async def _list_provider_completed_recovery(
@@ -188,6 +221,83 @@ def list_expired_reservations(
         typer.echo("No expired pending reservations found.")
         return
     _emit_candidates(rows)
+
+
+@app.command("list-external-tool-holds")
+def list_external_tool_holds(
+    limit: Annotated[int, typer.Option("--limit", help="Maximum unresolved holds to list")] = 100,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """List exact held accounting shapes without mutating state."""
+    try:
+        require_positive_limit(limit)
+        rows = run_async(_list_external_tool_holds(limit=limit))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+    payload = {"external_tool_holds": [_row_dict(row) for row in rows]}
+    if json_output:
+        emit_json(payload)
+        return
+    if not rows:
+        typer.echo("No external-tool accounting holds found.")
+        return
+    typer.echo("reservation_id\tusage_ledger_id\trequest_id\tstate\treason_code\tevidence_quality\texpires_at")
+    for row in rows:
+        typer.echo(
+            "\t".join(
+                (
+                    str(row.reservation_id),
+                    str(row.usage_ledger_id),
+                    row.request_id,
+                    row.fence_state,
+                    row.reason_code,
+                    row.evidence_quality,
+                    row.expires_at.isoformat(),
+                )
+            )
+        )
+
+
+@app.command("reconcile-external-tool-hold")
+def reconcile_external_tool_hold(
+    reservation_id: Annotated[str, typer.Option("--reservation-id", help="Quota reservation UUID")],
+    action: Annotated[str, typer.Option("--action", help="finalize-actual or release-no-charge")],
+    dry_run: Annotated[bool, typer.Option("--dry-run/--execute", help="Preview or execute reconciliation")] = True,
+    actor_admin_id: Annotated[str | None, typer.Option("--actor-admin-id", help="Admin actor UUID")] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Bounded audit reason")] = None,
+    actual_cost_eur: Annotated[str | None, typer.Option("--actual-cost-eur", help="Authoritative actual EUR cost")] = None,
+    actual_total_tokens: Annotated[int | None, typer.Option("--actual-total-tokens", help="Authoritative actual tokens")] = None,
+    success: Annotated[bool | None, typer.Option("--success/--failure", help="Explicit provider outcome")] = None,
+    confirm_no_charge: Annotated[bool, typer.Option("--confirm-no-charge", help="Explicitly confirm no charge")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Dry-run by default; explicitly reconcile one held external-tool request."""
+    try:
+        parsed_action = ExternalToolHoldAction(action)
+        request = ExternalToolHoldReconciliationInput(
+            reservation_id=parse_uuid(reservation_id, field_name="reservation_id"),
+            action=parsed_action,
+            execute=not dry_run,
+            actor_admin_id=parse_uuid(actor_admin_id, field_name="actor_admin_id")
+            if actor_admin_id
+            else None,
+            reason=reason,
+            actual_cost_eur=parse_decimal(actual_cost_eur, field_name="actual_cost_eur"),
+            actual_total_tokens=actual_total_tokens,
+            success=success,
+            confirm_no_charge=confirm_no_charge,
+        )
+        validate_reconciliation_input(request)
+        result = run_async(_reconcile_external_tool_hold(request))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+    payload = _row_dict(result)
+    if json_output:
+        emit_json(payload)
+        return
+    echo_kv(payload)
 
 
 @app.command("list-provider-completed-recovery")

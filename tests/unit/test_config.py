@@ -101,6 +101,7 @@ def _clear_env(monkeypatch) -> None:
         "RECONCILIATION_INTERVAL_SECONDS",
         "RECONCILIATION_EXPIRED_RESERVATION_LIMIT",
         "RECONCILIATION_PROVIDER_COMPLETED_LIMIT",
+        "RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT",
         "RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS",
         "RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS",
         "RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS",
@@ -110,6 +111,7 @@ def _clear_env(monkeypatch) -> None:
         "RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS",
         "RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS",
         "RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED",
+        "RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS",
         "RECONCILIATION_ALERT_INCLUDE_IDS",
         "PRICING_IMPORT_MAX_BYTES",
         "PRICING_IMPORT_MAX_ROWS",
@@ -256,6 +258,7 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.RECONCILIATION_INTERVAL_SECONDS == 300
     assert settings.RECONCILIATION_EXPIRED_RESERVATION_LIMIT == 100
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_LIMIT == 100
+    assert settings.RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT == 100
     assert settings.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS == 0
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 0
     assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is False
@@ -265,6 +268,7 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS == 10
     assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 1
     assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 1
+    assert settings.RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS == 1
     assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is False
     assert settings.PRICING_IMPORT_MAX_BYTES == 1048576
     assert settings.PRICING_IMPORT_MAX_ROWS == 1000
@@ -598,6 +602,7 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("RECONCILIATION_INTERVAL_SECONDS", "600")
     monkeypatch.setenv("RECONCILIATION_EXPIRED_RESERVATION_LIMIT", "20")
     monkeypatch.setenv("RECONCILIATION_PROVIDER_COMPLETED_LIMIT", "30")
+    monkeypatch.setenv("RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT", "40")
     monkeypatch.setenv("RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS", "60")
     monkeypatch.setenv("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "120")
     monkeypatch.setenv("RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS", "true")
@@ -607,6 +612,7 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS", "3.5")
     monkeypatch.setenv("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "2")
     monkeypatch.setenv("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "4")
+    monkeypatch.setenv("RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS", "5")
     monkeypatch.setenv("RECONCILIATION_ALERT_INCLUDE_IDS", "true")
     monkeypatch.setenv("PRICING_IMPORT_MAX_BYTES", "2048")
     monkeypatch.setenv("PRICING_IMPORT_MAX_ROWS", "25")
@@ -625,6 +631,7 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     assert settings.RECONCILIATION_INTERVAL_SECONDS == 600
     assert settings.RECONCILIATION_EXPIRED_RESERVATION_LIMIT == 20
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_LIMIT == 30
+    assert settings.RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT == 40
     assert settings.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS == 60
     assert settings.RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS == 120
     assert settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS is True
@@ -634,6 +641,7 @@ def test_reconciliation_settings_load_from_environment(monkeypatch) -> None:
     assert settings.RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS == 3.5
     assert settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS == 2
     assert settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED == 4
+    assert settings.RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS == 5
     assert settings.RECONCILIATION_ALERT_INCLUDE_IDS is True
     assert settings.PRICING_IMPORT_MAX_BYTES == 2048
     assert settings.PRICING_IMPORT_MAX_ROWS == 25
@@ -650,11 +658,13 @@ def test_reconciliation_settings_validate_safe_numbers(monkeypatch) -> None:
         ("RECONCILIATION_INTERVAL_SECONDS", "0", "positive"),
         ("RECONCILIATION_EXPIRED_RESERVATION_LIMIT", "0", "positive"),
         ("RECONCILIATION_PROVIDER_COMPLETED_LIMIT", "-1", "positive"),
+        ("RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT", "0", "positive"),
         ("RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
         ("RECONCILIATION_PROVIDER_COMPLETED_OLDER_THAN_SECONDS", "-1", "greater than or equal to 0"),
         ("RECONCILIATION_ALERT_WEBHOOK_TIMEOUT_SECONDS", "0", "positive"),
         ("RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS", "-1", "greater than or equal to 0"),
         ("RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED", "-1", "greater than or equal to 0"),
+        ("RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS", "-1", "greater than or equal to 0"),
         ("PRICING_IMPORT_MAX_BYTES", "0", "positive"),
         ("PRICING_IMPORT_MAX_ROWS", "-1", "positive"),
         ("ROUTE_IMPORT_MAX_BYTES", "0", "positive"),

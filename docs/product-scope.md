@@ -271,3 +271,8 @@ boundaries, not positive marketing claims.
   evidence.
 
 Nothing in this product contract changes runtime behavior or release status.
+# Objective 015 boundary
+
+External-tool accounting hold placement and manual reconciliation are bounded
+foundation capabilities. Provider forwarding remains disabled in this scope;
+the feature does not claim unrestricted hosted-tool or provider compatibility.

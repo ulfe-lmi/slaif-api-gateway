@@ -884,3 +884,8 @@ green:
   <https://openrouter.ai/docs/api-reference/responses-api/overview>
 - OpenRouter Responses create endpoint:
   <https://openrouter.ai/docs/api/api-reference/responses/create-responses>
+# External-tool accounting hold boundary
+
+Responses provider-hosted external-tool forwarding is not enabled by the
+accounting hold foundation. Missing or ambiguous final cost remains held and
+reserved for explicit operator reconciliation.

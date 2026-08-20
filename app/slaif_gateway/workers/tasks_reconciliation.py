@@ -30,6 +30,7 @@ from slaif_gateway.schemas.reconciliation import (
 )
 from slaif_gateway.services.alert_errors import AlertDeliveryError
 from slaif_gateway.services.alert_service import AlertService
+from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 from slaif_gateway.workers.celery_app import celery_app
 
@@ -37,6 +38,7 @@ logger = structlog.get_logger(__name__)
 
 _TYPE_EXPIRED = "expired_reservation"
 _TYPE_PROVIDER_COMPLETED = "provider_completed_finalization_failed"
+_TYPE_EXTERNAL_TOOL_HOLD = "external_tool_accounting_hold"
 
 
 @celery_app.task(name="slaif_gateway.reconciliation.inspect_backlog")
@@ -101,11 +103,15 @@ async def _inspect_reconciliation_backlog(*, settings: Settings) -> dict[str, ob
                 limit=settings.RECONCILIATION_PROVIDER_COMPLETED_LIMIT,
                 older_than=provider_cutoff,
             )
+            external_tool_holds = await _hold_service(session).list_holds(
+                limit=settings.RECONCILIATION_EXTERNAL_TOOL_HOLD_LIMIT
+            )
             payload = {
                 "status": "success",
                 "dry_run": True,
                 "expired_reservations": _expired_backlog_payload(expired),
                 "provider_completed": _provider_completed_backlog_payload(provider_completed),
+                "external_tool_holds": _external_tool_hold_backlog_payload(external_tool_holds),
             }
             observe_reconciliation_backlog(
                 reconciliation_type=_TYPE_EXPIRED,
@@ -114,6 +120,10 @@ async def _inspect_reconciliation_backlog(*, settings: Settings) -> dict[str, ob
             observe_reconciliation_backlog(
                 reconciliation_type=_TYPE_PROVIDER_COMPLETED,
                 count=len(provider_completed),
+            )
+            observe_reconciliation_backlog(
+                reconciliation_type=_TYPE_EXTERNAL_TOOL_HOLD,
+                count=len(external_tool_holds),
             )
             increment_reconciliation_run(
                 reconciliation_type="inspect",
@@ -129,6 +139,7 @@ async def _inspect_reconciliation_backlog(*, settings: Settings) -> dict[str, ob
                 "Reconciliation backlog inspected.",
                 expired_reservations=len(expired),
                 provider_completed=len(provider_completed),
+                external_tool_holds=len(external_tool_holds),
                 dry_run=True,
                 alert_status=alert_result["status"],
             )
@@ -277,6 +288,15 @@ def _service(session) -> ReservationReconciliationService:
     )
 
 
+def _hold_service(session) -> ExternalToolAccountingHoldService:
+    return ExternalToolAccountingHoldService(
+        gateway_keys_repository=GatewayKeysRepository(session),
+        quota_reservations_repository=QuotaReservationsRepository(session),
+        usage_ledger_repository=UsageLedgerRepository(session),
+        audit_repository=AuditRepository(session),
+    )
+
+
 def _expired_reservation_cutoff(settings: Settings) -> datetime:
     return datetime.now(UTC) - timedelta(
         seconds=settings.RECONCILIATION_EXPIRED_RESERVATION_OLDER_THAN_SECONDS
@@ -345,6 +365,14 @@ def _provider_completed_backlog_payload(
         "candidate_count": len(rows),
         "usage_ledger_ids": [str(row.usage_ledger_id) for row in rows],
         "reservation_ids": [str(row.reservation_id) for row in rows],
+    }
+
+
+def _external_tool_hold_backlog_payload(rows) -> dict[str, object]:
+    return {
+        "candidate_count": len(rows),
+        "reservation_ids": [str(row.reservation_id) for row in rows],
+        "usage_ledger_ids": [str(row.usage_ledger_id) for row in rows],
     }
 
 
