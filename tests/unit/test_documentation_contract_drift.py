@@ -293,6 +293,7 @@ def test_external_tool_contract_is_wired_only_to_policy_surfaces_not_runtime_or_
         REPO_ROOT / "app/slaif_gateway/services/key_template_service.py",
         REPO_ROOT / "app/slaif_gateway/services/model_route_service.py",
         REPO_ROOT / "app/slaif_gateway/services/route_import.py",
+        REPO_ROOT / "app/slaif_gateway/services/openai_web_search_contract.py",
     }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
         if path == module_path or path in allowed_consumers:

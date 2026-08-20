@@ -524,8 +524,16 @@ Rules:
   remains in the caller's application instead of inside the provider.
 - Custom tools are also caller-side intent; SLAIF forwards definitions and
   preserves provider-returned custom-tool call items but never executes a tool.
-- Web search may be supported only with explicit `max_tool_calls`, model/tool
-  allowlists, provider allowlists, and cost-bound calculations.
+- OpenAI's canonical Responses `web_search` shape is provider-contract-qualified
+  only by Objective 016. It permits only `search_context_size` (`low`,
+  `medium`, or `high`) and a positive top-level `max_tool_calls`, requires
+  `store=false`, no background/previous-response/conversation/approval
+  continuation, neutral absent/`auto` tool choice, and the exact fenced
+  `provider_web_search` key/route decision. Preview aliases, filters, location,
+  external-web controls, returned-token controls, arbitrary instructions,
+  other hosted tools, MCP, and connectors remain rejected. Runtime forwarding
+  remains denied pending Objective 017; if activated, published per-call fee
+  and provider token usage use the full-balance fence and unknown-evidence hold.
 - File search and code interpreter/container tools require explicit policy,
   pricing, data ownership, and audit treatment before implementation.
 - MCP/connectors are excluded from RC2.
@@ -537,6 +545,11 @@ OpenAI documents hosted tools including web search, file search, function
 calling, remote MCP, code interpreter/container, computer use, image generation,
 shell, tool search, and patch-style tools. RC2 must treat those as separate
 security and cost surfaces, not as generic JSON passthrough.
+
+The qualified web-search contract is content-free: no prompt, query, URL,
+source, result, citation, tool content, OAuth token, or provider secret is
+persisted, logged, returned in safe evidence, or reconstructed into a provider
+body beyond the approved declaration and `max_tool_calls`.
 
 Current Chat Completions policy already applies the same fail-closed boundary
 for implemented `/v1/chat/completions`: local function tools are allowed as
@@ -642,11 +655,12 @@ client responsibility; SLAIF cannot claim to observe or block undeclared client
 action. Provider background execution, stored/previous-response state, and
 provider authentication remain distinct unsupported surfaces and are not
 implicitly enabled. Objective 014 implements the fence and
-full-remaining-balance reservation foundation on the locked key row, but
-external forwarding and the unknown-cost hold are still not implemented;
-objectives 015–17 own the hold, reconciliation, selected-provider contracts,
-and runtime integration, and the exact overrun and one-winner concurrency
-promise remains conditional on that later activation. Current Responses
+full-remaining-balance reservation foundation on the locked key row. Objective
+015 implements the manual accounting hold/reconciliation path; external
+forwarding remains disabled. Objective 016 qualifies the selected OpenAI
+web-search provider contract, and Objective 017 owns runtime integration. The
+exact overrun and one-winner concurrency promise remains conditional on that
+later activation. Current Responses
 runtime remains deny-only for every provider-hosted/external tool.
 
 ## Key Policy

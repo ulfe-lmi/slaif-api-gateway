@@ -1691,6 +1691,14 @@ Rules:
   row before the request can reserve quota. This metadata value is a decimal
   price per one million provider-reported audio output tokens; it is not derived
   from audio bytes, transcript length, duration, format, or voice.
+- Objective 016 may use the existing `pricing_metadata` JSONB without a
+  migration for the provider-contract-qualified OpenAI Responses web-search
+  fee. Its exact optional shape is
+  `{"external_tool_pricing":{"openai_web_search_call_price_native":"0.010000000","source":"openai_published_per_call"}}`.
+  The value is a finite non-negative Decimal in the pricing row's currency;
+  missing, malformed, unknown, or negative selected-tool pricing fails closed.
+  It is a per-call fee, separate from provider-reported model token usage, and
+  does not activate runtime forwarding or add a hosted-tool ledger column.
 - Codex cache-write and long-context accounting uses an exact nested object;
   it is never inferred from a model name:
 
