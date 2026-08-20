@@ -23,6 +23,10 @@ from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceAcquireInput,
     ExternalToolFenceRouteFacts,
 )
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.schemas.external_tool_hold import (
     ExternalToolAccountingHoldInput,
     ExternalToolHoldAction,
@@ -39,6 +43,14 @@ from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceConflictError,
     ExternalToolFenceExhaustedError,
 )
+from slaif_gateway.services import auth_service
+from slaif_gateway.services.auth_service import GatewayKeyExternalToolFenceActiveError
+from slaif_gateway.services.quota_errors import (
+    ExternalToolFenceActiveError as QuotaFenceActiveError,
+    QuotaLimitExceededError,
+)
+from slaif_gateway.services.quota_service import QuotaService
+from slaif_gateway.config import Settings
 from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 from slaif_gateway.services.external_tool_policy_contract import ExternalToolAdmissionDecision
 from slaif_gateway.utils.crypto import hmac_sha256_token
@@ -52,6 +64,85 @@ SECRET = "h" * 48
 ROUTE_MODEL = "hold-test-model"
 PROVIDER = "openai"
 ENDPOINT = "/v1/chat/completions"
+
+
+def _ordinary_key(row) -> AuthenticatedGatewayKey:
+    return AuthenticatedGatewayKey(
+        gateway_key_id=row.id,
+        owner_id=row.owner_id,
+        cohort_id=row.cohort_id,
+        public_key_id=row.public_key_id,
+        status=row.status,
+        valid_from=row.valid_from,
+        valid_until=row.valid_until,
+        allow_all_models=row.allow_all_models,
+        allowed_models=tuple(row.allowed_models),
+        allow_all_endpoints=row.allow_all_endpoints,
+        allowed_endpoints=tuple(row.allowed_endpoints),
+        allowed_providers=None,
+        cost_limit_eur=row.cost_limit_eur,
+        token_limit_total=row.token_limit_total,
+        request_limit_total=row.request_limit_total,
+        rate_limit_policy={},
+    )
+
+
+def _ordinary_route(route_id: uuid.UUID) -> RouteResolutionResult:
+    return RouteResolutionResult(
+        requested_model=ROUTE_MODEL,
+        resolved_model="gpt-test",
+        provider=PROVIDER,
+        route_id=route_id,
+        route_match_type="exact",
+        route_pattern=ROUTE_MODEL,
+        priority=100,
+    )
+
+
+def _ordinary_policy() -> ChatCompletionPolicyResult:
+    return ChatCompletionPolicyResult(
+        effective_body={
+            "model": ROUTE_MODEL,
+            "messages": [],
+            "max_completion_tokens": 5,
+        },
+        requested_output_tokens=5,
+        effective_output_tokens=5,
+        estimated_input_tokens=5,
+        injected_default_output_tokens=False,
+    )
+
+
+def _ordinary_cost() -> ChatCostEstimate:
+    return ChatCostEstimate(
+        provider=PROVIDER,
+        requested_model=ROUTE_MODEL,
+        resolved_model="gpt-test",
+        native_currency="EUR",
+        estimated_input_tokens=5,
+        estimated_output_tokens=5,
+        estimated_input_cost_native=Decimal("0.01"),
+        estimated_output_cost_native=Decimal("0.01"),
+        estimated_total_cost_native=Decimal("0.02"),
+        estimated_total_cost_eur=Decimal("0.02"),
+        pricing_rule_id=None,
+        fx_rate_id=None,
+    )
+
+
+async def _reserve_ordinary(session, key_id: uuid.UUID, route_id: uuid.UUID):
+    row = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+    assert row is not None
+    return await QuotaService(
+        gateway_keys_repository=GatewayKeysRepository(session),
+        quota_reservations_repository=QuotaReservationsRepository(session),
+    ).reserve_for_chat_completion(
+        request_id=f"ordinary-{uuid.uuid4().hex}",
+        authenticated_key=_ordinary_key(row),
+        route=_ordinary_route(route_id),
+        policy=_ordinary_policy(),
+        cost_estimate=_ordinary_cost(),
+    )
 
 
 def _decision() -> ExternalToolAdmissionDecision:
@@ -187,6 +278,55 @@ async def test_hold_placement_is_durable_and_keeps_full_reservation():
             assert len(ledgers) == 1 and ledgers[0].accounting_status == "interrupted"
             assert len(candidates) == 1
             await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_held_hold_blocks_bearer_auth_and_ordinary_quota_admission():
+    engine, sessions, key_id, reservation_id, request_id, _ = await _fixture()
+    token = None
+    try:
+        async with sessions() as session:
+            key = await GatewayKeysRepository(session).get_gateway_key_for_update(key_id)
+            assert key is not None
+            token = f"sk-slaif-{key.public_key_id}.{SECRET}"
+            key.token_hash = hmac_sha256_token(token, SECRET)
+            await session.commit()
+        async with sessions() as session:
+            await ExternalToolAccountingHoldService(
+                gateway_keys_repository=GatewayKeysRepository(session),
+                quota_reservations_repository=QuotaReservationsRepository(session),
+                usage_ledger_repository=UsageLedgerRepository(session),
+                audit_repository=AuditRepository(session),
+            ).place(
+                ExternalToolAccountingHoldInput(
+                    gateway_key_id=key_id,
+                    reservation_id=reservation_id,
+                    request_id=request_id,
+                    reason_code=ExternalToolHoldReasonCode.MISSING_FINAL_USAGE,
+                    evidence_quality=ExternalToolHoldEvidenceQuality.MISSING,
+                    streaming=True,
+                    now=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+        async with sessions() as session:
+            with pytest.raises(GatewayKeyExternalToolFenceActiveError):
+                await auth_service.GatewayAuthService(
+                    settings=Settings(
+                        TOKEN_HMAC_SECRET_V1=SECRET,
+                        GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-",
+                    ),
+                    gateway_keys_repository=GatewayKeysRepository(session),
+                ).authenticate_authorization_header(f"Bearer {token}")
+            reservation = await QuotaReservationsRepository(session).get_reservation_by_id(reservation_id)
+            assert reservation is not None and reservation.external_tool_route_id is not None
+            with pytest.raises(QuotaFenceActiveError):
+                await _reserve_ordinary(
+                    session, key_id, uuid.UUID(str(reservation.external_tool_route_id))
+                )
+            await session.rollback()
     finally:
         await engine.dispose()
 
@@ -700,6 +840,16 @@ async def test_dry_run_finalize_and_release_are_non_mutating_and_execute_audited
             assert matching[0].note == "operator confirmed no charge"
             reservation = await QuotaReservationsRepository(session).get_reservation_by_id(reservation_id)
             assert reservation is not None and reservation.external_tool_route_id is not None
+            reservation_endpoint = reservation.endpoint
+            reservation_model = reservation.requested_model or ROUTE_MODEL
+            reservation_provider = reservation.external_tool_provider or PROVIDER
+            reservation_route_id = uuid.UUID(str(reservation.external_tool_route_id))
+            ordinary = await _reserve_ordinary(
+                session, key_id, reservation_route_id
+            )
+            assert ordinary.status == "pending"
+            await session.flush()
+            await session.rollback()
             acquired = await ExternalToolFenceService(
                 gateway_keys_repository=GatewayKeysRepository(session),
                 quota_reservations_repository=QuotaReservationsRepository(session),
@@ -710,10 +860,10 @@ async def test_dry_run_finalize_and_release_are_non_mutating_and_execute_audited
                     gateway_key_id=key_id,
                     request_id=f"post-release-{uuid.uuid4().hex}",
                     route=ExternalToolFenceRouteFacts(
-                        endpoint=reservation.endpoint,
-                        requested_model=reservation.requested_model or ROUTE_MODEL,
-                        provider=reservation.external_tool_provider or PROVIDER,
-                        route_id=uuid.UUID(str(reservation.external_tool_route_id)),
+                        endpoint=reservation_endpoint,
+                        requested_model=reservation_model,
+                        provider=reservation_provider,
+                        route_id=reservation_route_id,
                     ),
                     capabilities=("provider_connector",),
                     destination_ids=("connector:demo",),
@@ -754,6 +904,10 @@ async def test_finalize_within_limit_or_overrun_moves_counters_once_and_controls
         async with sessions() as session:
             reservation = await QuotaReservationsRepository(session).get_reservation_by_id(reservation_id)
             assert reservation is not None and reservation.external_tool_route_id is not None
+            reservation_endpoint = reservation.endpoint
+            reservation_model = reservation.requested_model or ROUTE_MODEL
+            reservation_provider = reservation.external_tool_provider or PROVIDER
+            reservation_route_id = uuid.UUID(str(reservation.external_tool_route_id))
             request = ExternalToolHoldReconciliationInput(
                 reservation_id=reservation_id,
                 action=ExternalToolHoldAction.FINALIZE_ACTUAL,
@@ -779,14 +933,35 @@ async def test_finalize_within_limit_or_overrun_moves_counters_once_and_controls
             assert key.tokens_reserved_total == 0
             assert key.cost_used_eur == (Decimal("11") if overrun else Decimal("1"))
             assert key.tokens_used_total == (1001 if overrun else 10)
+            pending_before = await QuotaReservationsRepository(session).list_reservations_for_key(
+                key_id, status="pending"
+            )
+            route_id = reservation_route_id
+            if overrun:
+                with pytest.raises(QuotaLimitExceededError):
+                    await _reserve_ordinary(session, key_id, route_id)
+                await session.rollback()
+                pending_after = await QuotaReservationsRepository(session).list_reservations_for_key(
+                    key_id, status="pending"
+                )
+                assert len(pending_after) == len(pending_before)
+                unchanged = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+                assert unchanged is not None
+                assert unchanged.cost_reserved_eur == Decimal("0")
+                assert unchanged.tokens_reserved_total == 0
+            else:
+                ordinary = await _reserve_ordinary(session, key_id, route_id)
+                assert ordinary.status == "pending"
+                await session.flush()
+                await session.rollback()
             acquire_input = ExternalToolFenceAcquireInput(
                 gateway_key_id=key_id,
                 request_id=f"post-finalize-{uuid.uuid4().hex}",
                 route=ExternalToolFenceRouteFacts(
-                    endpoint=reservation.endpoint,
-                    requested_model=reservation.requested_model or ROUTE_MODEL,
-                    provider=reservation.external_tool_provider or PROVIDER,
-                    route_id=uuid.UUID(str(reservation.external_tool_route_id)),
+                    endpoint=reservation_endpoint,
+                    requested_model=reservation_model,
+                    provider=reservation_provider,
+                    route_id=reservation_route_id,
                 ),
                 capabilities=("provider_connector",),
                 destination_ids=("connector:demo",),

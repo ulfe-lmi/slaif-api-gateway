@@ -210,5 +210,40 @@ async def test_two_workers_with_changed_input_have_one_winner_and_one_conflict()
         conflicts = [result for result in results if isinstance(result, ExternalToolFenceConflictError)]
         assert len(conflicts) == 1
         assert conflicts[0].error_code == "external_tool_accounting_reconciliation_conflict"
+        winner_index = next(
+            index for index, result in enumerate(results) if not isinstance(result, Exception)
+        )
+        winner_request = requests[winner_index]
+        async with sessions() as session:
+            key = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+            reservation = await QuotaReservationsRepository(session).get_reservation_by_id(
+                reservation_id
+            )
+            ledgers = await UsageLedgerRepository(session).get_usage_records_by_reservation_id(
+                reservation_id
+            )
+            audits = await AuditRepository(session).list_audit_logs(
+                action="external_tool_accounting_hold_reconciled"
+            )
+            matching = [audit for audit in audits if audit.request_id == request_id]
+            assert key is not None and key.external_tool_fence_state == "none"
+            assert key.cost_used_eur == winner_request.actual_cost_eur
+            assert key.tokens_used_total == winner_request.actual_total_tokens
+            assert key.cost_reserved_eur == Decimal("0")
+            assert key.tokens_reserved_total == 0
+            assert key.requests_reserved_total == 0
+            assert reservation is not None and reservation.status == "finalized"
+            assert len(ledgers) == 1
+            assert ledgers[0].accounting_status == "finalized"
+            assert ledgers[0].actual_cost_eur == winner_request.actual_cost_eur
+            assert ledgers[0].total_tokens == winner_request.actual_total_tokens
+            assert ledgers[0].success is True
+            assert len(matching) == 1
+            assert matching[0].admin_user_id == actor
+            assert matching[0].note == winner_request.reason
+            assert matching[0].new_values["actual_cost_eur"] == str(winner_request.actual_cost_eur)
+            assert matching[0].new_values["actual_total_tokens"] == winner_request.actual_total_tokens
+            assert matching[0].new_values["success"] is True
+            await session.commit()
     finally:
         await engine.dispose()
