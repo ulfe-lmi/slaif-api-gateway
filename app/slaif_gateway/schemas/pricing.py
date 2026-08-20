@@ -9,6 +9,15 @@ from decimal import Decimal
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalToolPricing:
+    """Safe per-call pricing for a reviewed provider-hosted tool."""
+
+    currency: str
+    unit_price_native: Decimal
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
 class PricingLookupResult:
     """Enabled pricing rule selected for a provider/model/endpoint."""
 
@@ -30,6 +39,7 @@ class PricingLookupResult:
     pricing_rule_id: uuid.UUID | None
     valid_from: datetime
     valid_until: datetime | None
+    external_tool_pricing: ExternalToolPricing | None = None
 
 
 @dataclass(frozen=True, slots=True)

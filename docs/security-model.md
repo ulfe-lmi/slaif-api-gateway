@@ -259,6 +259,14 @@ The rejection path returns OpenAI-shaped errors and does not log raw request
 bodies, prompts, completions, tool schemas, provider keys, gateway keys,
 cookies, sessions, CSRF tokens, encrypted payloads, or nonces.
 
+Objective 016's provider-contract-qualified OpenAI Responses `web_search`
+shape remains runtime-denied pending Objective 017. Its safe evidence is
+limited to provider/capability, admitted cap, completed-call count, pricing
+source and fee, authoritative status, and a bounded reason code. Queries,
+URLs, sources, results, citations, search content, tool arguments/results,
+OAuth tokens, provider secrets, and raw response/SSE payloads are never
+persisted, logged, returned in errors, or included in safe evidence.
+
 Objective 012 defines the version-1 external-tool policy contract. Objective
 013 persists only canonical safe IDs, caps, booleans, mode, and version in
 existing key/template/route JSON and adds audited admin/CLI controls.
@@ -282,8 +290,9 @@ pointed reservations fail closed. Resolution locks the reservation before the
 gateway key and revalidates the fence pointer and evidence after both locks.
 policy is not consumed by
 provider forwarding, authentication and ordinary quota admission fail closed
-against a committed fence, and provider-hosted forwarding and the
-unknown-cost hold remain denied pending objectives 015 and 016. Raw URLs,
+against a committed fence. Objective 015 provides the accounting hold and
+reconciliation foundation; provider-hosted forwarding remains denied pending
+the later runtime activation. Raw URLs,
 credentials, labels,
 request content, and provider secrets are never stored in this policy.
 

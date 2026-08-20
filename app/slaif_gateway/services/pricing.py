@@ -15,6 +15,7 @@ from slaif_gateway.schemas.embeddings import EmbeddingsPolicyResult
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult, ResponsesPolicyResult
 from slaif_gateway.schemas.pricing import (
     ChatCostEstimate,
+    ExternalToolPricing,
     FxConversionResult,
     PricingLookupResult,
 )
@@ -44,6 +45,9 @@ _CODEX_ACCOUNTING_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(
 _CODEX_ACCOUNTING_CACHE_FIELDS: Final[frozenset[str]] = frozenset(
     {"cache_write_input_price_per_1m", "cache_write_input_multiplier"}
 )
+_EXTERNAL_TOOL_PRICING_KEY: Final[str] = "external_tool_pricing"
+_EXTERNAL_TOOL_PRICE_KEY: Final[str] = "openai_web_search_call_price_native"
+_EXTERNAL_TOOL_SOURCE: Final[str] = "openai_published_per_call"
 
 
 class PricingService:
@@ -422,7 +426,57 @@ def _pricing_lookup_result(row: PricingRule) -> PricingLookupResult:
         pricing_rule_id=row.id,
         valid_from=row.valid_from,
         valid_until=row.valid_until,
+        external_tool_pricing=_optional_external_tool_pricing(
+            row.pricing_metadata,
+            currency=currency,
+        ),
     )
+
+
+def parse_external_tool_pricing(
+    metadata: Mapping[str, Any] | None,
+    *,
+    currency: str,
+) -> ExternalToolPricing | None:
+    """Parse the exact selected hosted-tool metadata, failing closed when present."""
+    if not isinstance(metadata, Mapping) or _EXTERNAL_TOOL_PRICING_KEY not in metadata:
+        return None
+    raw = metadata.get(_EXTERNAL_TOOL_PRICING_KEY)
+    if not isinstance(raw, Mapping) or set(raw) != {_EXTERNAL_TOOL_PRICE_KEY, "source"}:
+        raise InvalidPricingDataError("External-tool pricing metadata is malformed.")
+    source = raw.get("source")
+    price = raw.get(_EXTERNAL_TOOL_PRICE_KEY)
+    if source != _EXTERNAL_TOOL_SOURCE:
+        raise InvalidPricingDataError("External-tool pricing source is not approved.")
+    try:
+        amount = Decimal(str(price))
+    except Exception as exc:
+        raise InvalidPricingDataError("External-tool pricing amount is invalid.") from exc
+    if not amount.is_finite() or amount < 0:
+        raise InvalidPricingDataError("External-tool pricing amount is invalid.")
+    return ExternalToolPricing(currency=currency, unit_price_native=amount, source=source)
+
+
+def _optional_external_tool_pricing(
+    metadata: Mapping[str, Any] | None,
+    *,
+    currency: str,
+) -> ExternalToolPricing | None:
+    """Keep ordinary pricing lookup compatible; selected contracts parse strictly."""
+    if not isinstance(metadata, Mapping) or _EXTERNAL_TOOL_PRICING_KEY not in metadata:
+        return None
+    raw = metadata.get(_EXTERNAL_TOOL_PRICING_KEY)
+    if not isinstance(raw, Mapping) or set(raw) != {_EXTERNAL_TOOL_PRICE_KEY, "source"}:
+        return None
+    if raw.get("source") != _EXTERNAL_TOOL_SOURCE:
+        return None
+    try:
+        amount = Decimal(str(raw.get(_EXTERNAL_TOOL_PRICE_KEY)))
+    except Exception:
+        return None
+    if not amount.is_finite() or amount < 0:
+        return None
+    return ExternalToolPricing(currency=currency, unit_price_native=amount, source=_EXTERNAL_TOOL_SOURCE)
 
 
 def _codex_accounting_metadata(

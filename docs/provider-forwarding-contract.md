@@ -454,6 +454,26 @@ those differences until the policy, pricing, ownership, and accounting contracts
 are implemented and tested. OpenRouter Responses is available only through
 explicit `/v1/responses` route metadata; model allowlists alone do not enable it.
 
+### Provider-contract-qualified web search
+
+Objective 016 qualifies one pure OpenAI Responses provider contract for the
+canonical `web_search` declaration. The first shape permits only
+`search_context_size` (`low`, `medium`, or `high`) and a positive top-level
+`max_tool_calls` bounded by the exact fenced key/route policy decision. It is
+stateless (`store=false`), accepts only neutral absent/`auto` tool choice, and
+may coexist only with already-approved client-operated declarations. Preview
+aliases, filters, locations, external-web controls, returned-token controls,
+arbitrary instructions, other hosted tools, MCP, connectors, and approval or
+provider-state continuation remain rejected.
+
+This is provider-contract qualification only: runtime forwarding remains
+deny-only pending Objective 017. If later activated, accounting combines the
+published per-call web-search fee with provider-reported model token usage,
+uses full-balance fenced admission, permits only the bounded acknowledged
+single-request overrun, and holds on unknown or ambiguous final evidence.
+The pure contract stores or exposes no query, URL, source, result, citation,
+tool content, OAuth token, provider secret, or raw provider event.
+
 ## Capability Policy Boundary
 
 SLAIF treats endpoint, model, provider, and capability permissions as separate
@@ -495,6 +515,10 @@ become reviewed destinations; a future selected provider contract must resolve
 an opaque server-side `remote_mcp:` or `connector:` destination ID. Request
 `require_approval` can never lower the operator/route approval floor.
 
+The canonical OpenAI Responses `web_search` contract is qualified separately
+from this deny-only runtime taxonomy. It does not qualify preview aliases,
+remote MCP/connectors, or any other hosted family.
+
 The taxonomy scans only authority-bearing declaration/control positions. It
 does not recursively reinterpret field names inside local
 function parameters/JSON Schema, descriptions, or custom format/grammar
@@ -516,11 +540,12 @@ full-remaining-balance reservation foundation on the locked key row (the
 key-row lock is the single concurrency authority, Redis is not, and fence
 expiry never means safe release), binding the reservation to the exact
 provider name and route UUID of the admitted route so the later provider
-execution inherits one unambiguous route identity; external forwarding and
-the unknown-cost hold are still not implemented; objectives 015–17 own the hold,
-reconciliation, selected provider contracts, and runtime integration, and the
-exact overrun and one-winner concurrency promise remains conditional on that
-later activation. No new tool is enabled or
+execution inherits one unambiguous route identity. Objective 015 implements
+the manual accounting hold/reconciliation path; external forwarding remains
+disabled. Objective 016 qualifies the selected OpenAI web-search provider
+contract, and Objective 017 owns runtime integration. The exact overrun and
+one-winner concurrency promise remains conditional on that later activation.
+No new tool is enabled or
 forwarded by objectives 013 or 014, and trusted-calibration
 observation is not standard-key authorization.
 Authority classification never substitutes for existing endpoint-specific

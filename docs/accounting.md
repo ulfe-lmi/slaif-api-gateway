@@ -205,10 +205,10 @@ active retry is read-only after the key lock and requires the pointed
 reservation to be pending and owned by that same key; resolution locks the
 reservation first and then the key, matching the ordinary quota lifecycle
 order, so it never waits on an existing reservation while holding the key.
-foundation is implemented, but
-external forwarding and the unknown-cost hold are still not implemented and
-provider-hosted tools remain denied; objectives 015 and 016 own the
-hold/reconciliation and selected provider execution transitions. Fence expiry
+foundation is implemented, and Objective 015 adds the manual hold/reconciliation
+path, but external forwarding remains disabled and provider-hosted tools remain
+denied. Objective 016 qualifies only the exact OpenAI Responses `web_search`
+provider contract; Objective 017 owns any later execution transition. Fence expiry
 is an inspection threshold and never means safe release; a committed fence
 survives process restart and keeps blocking admission. Emergency suspend or
 revoke stops admission but does not settle accounting, and the exact overrun
