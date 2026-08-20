@@ -36,7 +36,6 @@ MAX_SAFE_INDEX: Final = 1_000_000
 MAX_SAFE_SEQUENCE: Final = 10_000_000
 MAX_SAFE_CONTENT_LENGTH: Final = 4_096
 MAX_SAFE_ACTION_LIST: Final = 64
-_SEARCH_ACTIONS: Final = frozenset({"search", "open_page", "find_in_page"})
 _ALLOWED_SEARCH_DECLARATION_FIELDS: Final = frozenset({"type", "search_context_size"})
 _STATeless_REJECT_FIELDS: Final = frozenset(
     {"previous_response_id", "conversation", "background", "approval", "require_approval"}
