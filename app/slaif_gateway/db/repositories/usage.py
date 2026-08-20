@@ -251,6 +251,54 @@ class UsageLedgerRepository:
     async def get_usage_record_by_id(self, usage_id: uuid.UUID) -> UsageLedger | None:
         return await self._session.get(UsageLedger, usage_id)
 
+    async def get_usage_record_by_id_for_update(self, usage_id: uuid.UUID) -> UsageLedger | None:
+        """Return one usage row locked for accounting reconciliation."""
+        result = await self._session.execute(
+            select(UsageLedger).where(UsageLedger.id == usage_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def list_external_tool_accounting_hold_records(
+        self, *, limit: int = 100
+    ) -> list[UsageLedger]:
+        """List only content-free ledger rows that advertise an unresolved hold."""
+        statement: Select[tuple[UsageLedger]] = (
+            select(UsageLedger)
+            .where(
+                UsageLedger.accounting_status.in_(["estimated", "interrupted"]),
+                UsageLedger.response_metadata["external_tool_accounting_hold"][
+                    "needs_reconciliation"
+                ].as_boolean().is_(True),
+            )
+            .order_by(UsageLedger.created_at.asc())
+            .limit(max(1, min(int(limit), 1000)))
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def update_external_tool_hold_ledger(
+        self,
+        ledger: UsageLedger,
+        *,
+        accounting_status: str,
+        success: bool,
+        actual_cost_eur: Decimal,
+        total_tokens: int,
+        response_metadata: dict[str, object],
+        finished_at: datetime,
+    ) -> UsageLedger:
+        """Update an already locked hold ledger with safe terminal evidence."""
+        ledger.accounting_status = accounting_status
+        ledger.success = success
+        ledger.actual_cost_eur = actual_cost_eur
+        ledger.total_tokens = total_tokens
+        ledger.response_metadata = sanitize_metadata_mapping(
+            response_metadata, drop_content_keys=True
+        )
+        ledger.finished_at = finished_at
+        await self._session.flush()
+        return ledger
+
     async def get_usage_record_by_request_id(self, request_id: str) -> UsageLedger | None:
         result = await self._session.execute(select(UsageLedger).where(UsageLedger.request_id == request_id))
         return result.scalar_one_or_none()

@@ -295,6 +295,8 @@ class ExternalToolFenceService:
     async def resolve(
         self,
         resolve_input: ExternalToolFenceResolveInput,
+        *,
+        permit_held: bool = False,
     ) -> ExternalToolFenceResolveResult:
         gateway_key = await self._gateway_keys_repository.get_gateway_key_by_id(
             resolve_input.gateway_key_id
@@ -312,7 +314,7 @@ class ExternalToolFenceService:
                 fence_state=FENCE_NONE,
                 resolved=False,
             )
-        if state == FENCE_HELD:
+        if state == FENCE_HELD and not permit_held:
             # ``held`` transitions are owned by a later objective; resolution
             # here is a no-op and the fence keeps blocking.
             return ExternalToolFenceResolveResult(
@@ -346,8 +348,14 @@ class ExternalToolFenceService:
                 "Gateway key could not be locked for fence resolution",
                 code="external_tool_fence_key_missing",
             )
+        if state == FENCE_ACTIVE and gateway_key.external_tool_fence_state == FENCE_HELD and not permit_held:
+            return ExternalToolFenceResolveResult(
+                gateway_key_id=resolve_input.gateway_key_id,
+                fence_state=FENCE_HELD,
+                resolved=False,
+            )
         if (
-            gateway_key.external_tool_fence_state != FENCE_ACTIVE
+            gateway_key.external_tool_fence_state not in (FENCE_ACTIVE, FENCE_HELD)
             or gateway_key.external_tool_fence_reservation_id != reservation_id
             or gateway_key.external_tool_fence_request_id != resolve_input.request_id
         ):
@@ -357,7 +365,10 @@ class ExternalToolFenceService:
                     fence_state=FENCE_NONE,
                     resolved=False,
                 )
-            if gateway_key.external_tool_fence_state == FENCE_HELD:
+            if (
+                gateway_key.external_tool_fence_state == FENCE_HELD
+                and (not permit_held or state != FENCE_HELD)
+            ):
                 return ExternalToolFenceResolveResult(
                     gateway_key_id=resolve_input.gateway_key_id,
                     fence_state=FENCE_HELD,
@@ -413,9 +424,9 @@ class ExternalToolFenceService:
                 code="external_tool_fence_ledger_facts_mismatch",
             )
         if reservation.status == "finalized":
-            if ledger.accounting_status != "finalized" or ledger.success is not True:
+            if ledger.accounting_status != "finalized" or not isinstance(ledger.success, bool):
                 raise ExternalToolFenceInvariantError(
-                    "Finalized reservation requires a finalized success usage ledger",
+                    "Finalized reservation requires a finalized boolean-outcome usage ledger",
                     code="external_tool_fence_ledger_mismatch",
                 )
         else:  # released

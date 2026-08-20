@@ -100,3 +100,9 @@ verification-clean for this implemented scope, not feature-full RC2.
 | Pricing catalog / price refresh | Planned | OpenAI, OpenRouter | Local pricing remains runtime source of truth. OpenRouter model metadata may seed previewed pricing proposals; OpenAI pricing remains curated/manual or confirmed import unless a stable official pricing API exists. No silent production replacement | Future pricing import/refresh, audit, and accounting tests required |
 | Bounded-overrun calculator | Planned | Not provider-specific | Tool-enabled Responses policies may allow only bounded, admin-visible single-request overrun. PostgreSQL accounting must block future requests after actual overrun until limits are restored or reset | Future accounting, dashboard preview, and integration tests required |
 | Real upstream calls in normal tests | Not used | None | Upstream HTTP is mocked with RESPX | Test suite configuration |
+# External-tool accounting status
+
+External-tool accounting holds are an operator/accounting foundation only.
+They do not add provider forwarding or claim hosted-tool compatibility. Holds
+remain reserved until explicit audited reconciliation; scheduled inspection is
+non-mutating.

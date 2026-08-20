@@ -117,3 +117,9 @@ appropriate.
   ```
 
 - Review `/admin/audit` for the reconciliation action.
+# External-tool holds
+
+Ordinary stale reservation reconciliation must skip `external_tool_fenced`
+holds. A held fence is inspection-age information only; it may be cleared only
+after explicit audited manual reconciliation has made ledger, reservation, and
+counters authoritative.

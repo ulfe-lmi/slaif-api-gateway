@@ -281,3 +281,16 @@ must not store or render streamed chunks, prompts, completions, tool arguments,
 media payloads, raw request bodies, raw response bodies, secrets, or raw
 metadata JSON for the live-burn section. Prometheus live-burn counters remain
 future work.
+# External-tool accounting holds
+
+External-tool requests with unknown or ambiguous final accounting use a durable
+hold: the key fence is `held`, the full pending reservation remains reserved,
+and one safe ledger records the bounded reason and evidence quality. Expiry is
+not release authority. Only explicit audited manual reconciliation may provide
+actual usage/cost or confirm no charge; missing cost never becomes a zero-cost
+success. Operator actuals are reconciliation evidence, not invoice truth.
+
+Actual overruns are charged into used counters and later admission is rejected
+normally when the key is over limit. Scheduled reconciliation inspects and
+alerts on holds but never mutates them. See
+`docs/runbooks/external-tool-hold-reconciliation.md`.

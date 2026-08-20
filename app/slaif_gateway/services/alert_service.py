@@ -138,6 +138,7 @@ def build_reconciliation_alert_payload(
     """Build a safe webhook payload from reconciliation backlog summary."""
     expired = _mapping(summary.get("expired_reservations"))
     provider_completed = _mapping(summary.get("provider_completed"))
+    external_tool_holds = _mapping(summary.get("external_tool_holds"))
     payload: dict[str, object] = {
         "event_type": "reconciliation_backlog",
         "timestamp": datetime.now(UTC).isoformat(),
@@ -146,11 +147,13 @@ def build_reconciliation_alert_payload(
         "provider_completed_recovery_count": _int_value(
             provider_completed.get("candidate_count")
         ),
+        "external_tool_hold_count": _int_value(external_tool_holds.get("candidate_count")),
         "dry_run": bool(summary.get("dry_run", True)),
         "reconciliation": {
             "dry_run_default": settings.RECONCILIATION_DRY_RUN,
             "auto_execute_expired_reservations": settings.RECONCILIATION_AUTO_EXECUTE_EXPIRED_RESERVATIONS,
             "auto_execute_provider_completed": settings.RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED,
+            "auto_execute_external_tool_holds": False,
         },
     }
 
@@ -162,6 +165,12 @@ def build_reconciliation_alert_payload(
         payload["provider_completed_reservation_ids"] = _safe_id_list(
             provider_completed.get("reservation_ids")
         )
+        payload["external_tool_hold_reservation_ids"] = _safe_id_list(
+            external_tool_holds.get("reservation_ids")
+        )
+        payload["external_tool_hold_usage_ledger_ids"] = _safe_id_list(
+            external_tool_holds.get("usage_ledger_ids")
+        )
 
     return redact_mapping(payload, accepted_gateway_key_prefixes=settings.get_gateway_key_accepted_prefixes())
 
@@ -169,11 +178,14 @@ def build_reconciliation_alert_payload(
 def _threshold_met(summary: dict[str, object], *, settings: Settings) -> bool:
     expired = _mapping(summary.get("expired_reservations"))
     provider_completed = _mapping(summary.get("provider_completed"))
+    external_tool_holds = _mapping(summary.get("external_tool_holds"))
     expired_count = _int_value(expired.get("candidate_count"))
     provider_completed_count = _int_value(provider_completed.get("candidate_count"))
     return (
         expired_count >= settings.RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS
         or provider_completed_count >= settings.RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED
+        or _int_value(external_tool_holds.get("candidate_count"))
+        >= settings.RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS
     )
 
 

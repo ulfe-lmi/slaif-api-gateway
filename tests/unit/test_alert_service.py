@@ -80,6 +80,50 @@ def test_alert_payload_includes_safe_ids_only_when_enabled() -> None:
     assert "sensitive prompt" not in serialized
 
 
+def test_alert_payload_includes_external_tool_hold_count_and_safe_ids() -> None:
+    summary = _summary()
+    summary["external_tool_holds"] = {
+        "candidate_count": 2,
+        "reservation_ids": ["55555555-5555-5555-5555-555555555555"],
+        "usage_ledger_ids": ["66666666-6666-6666-6666-666666666666"],
+    }
+    payload = build_reconciliation_alert_payload(
+        summary, settings=_settings(), include_ids=True
+    )
+
+    assert payload["external_tool_hold_count"] == 2
+    assert payload["external_tool_hold_reservation_ids"] == [
+        "55555555-5555-5555-5555-555555555555"
+    ]
+    assert payload["external_tool_hold_usage_ledger_ids"] == [
+        "66666666-6666-6666-6666-666666666666"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_alert_threshold_can_be_met_by_external_tool_holds(respx_mock) -> None:
+    route = respx_mock.post("https://alerts.example/reconciliation").mock(
+        return_value=httpx.Response(202, json={"ok": True})
+    )
+    summary = {
+        "external_tool_holds": {"candidate_count": 1},
+        "expired_reservations": {"candidate_count": 0},
+        "provider_completed": {"candidate_count": 0},
+    }
+
+    result = await AlertService().send_reconciliation_backlog_alert(
+        summary,
+        settings=_settings(
+            RECONCILIATION_ALERT_MIN_EXPIRED_RESERVATIONS=2,
+            RECONCILIATION_ALERT_MIN_PROVIDER_COMPLETED=2,
+            RECONCILIATION_ALERT_MIN_EXTERNAL_TOOL_HOLDS=1,
+        ),
+    )
+
+    assert route.called
+    assert result.status == "sent"
+
+
 @pytest.mark.asyncio
 async def test_alert_service_sends_mocked_webhook(respx_mock) -> None:
     route = respx_mock.post("https://alerts.example/reconciliation").mock(

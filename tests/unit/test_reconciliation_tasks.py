@@ -144,10 +144,16 @@ class _FakeReconciliationService:
         )
 
 
+class _FakeHoldService:
+    async def list_holds(self, **kwargs):
+        return []
+
+
 @pytest.fixture
 def fake_task_dependencies(monkeypatch):
     engine = _FakeEngine()
     service = _FakeReconciliationService()
+    hold_service = _FakeHoldService()
     monkeypatch.setattr(tasks_reconciliation, "create_engine_from_settings", lambda settings: engine)
     monkeypatch.setattr(
         tasks_reconciliation,
@@ -155,6 +161,7 @@ def fake_task_dependencies(monkeypatch):
         lambda engine: _FakeSessionFactory(),
     )
     monkeypatch.setattr(tasks_reconciliation, "_service", lambda session: service)
+    monkeypatch.setattr(tasks_reconciliation, "_hold_service", lambda session: hold_service)
     return engine, service
 
 
