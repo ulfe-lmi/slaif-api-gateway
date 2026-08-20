@@ -341,18 +341,16 @@ Docker and Nginx troubleshooting guidance is in
 - This deployment packaging is not a formal production certification,
   compliance attestation, or penetration test.
 - No CI/CD system is required or added by this repository packaging.
-- Native Anthropic API, Responses hosted tools beyond owned retrieve/delete,
-  owned input-item listing, owned previous-response chaining, and the first
-  ownership-checked conversation reference foundation,
-  embeddings, files, image generation endpoints, and audio endpoints remain
-  unsupported unless separately implemented and documented. Current Responses
-  support is text-output `POST /v1/responses` with URL/data URL image input,
-  URL/data URL file input, local function/custom tools, non-streaming stored
-  create, owned previous-response chaining, owned retrieve/delete, and owned
-  input-item listing plus conversation create/retrieve/delete and non-streaming
-  Responses create with an owned conversation reference only.
-  `/v1/files`, file IDs, file
-  search/retrieval tools, and audio input/output remain unsupported.
+- Native Anthropic API, `/v1/files`, image-generation endpoints, Responses audio,
+  and Responses hosted tools other than the exact bounded OpenAI canonical
+  `web_search` contract remain unsupported. Current implemented endpoint
+  families include bounded standalone Audio speech/transcription/translation,
+  Embeddings, Realtime client-secret admission, Responses create/input-token/
+  compact operations, owned response lifecycle, owned Conversations and
+  Conversation items, and the separately fenced OpenAI Responses web-search
+  runtime. OpenRouter hosted tools, remote MCP/connectors, file search, file
+  IDs, and every other hosted family remain denied. See the compatibility
+  matrix for the exact capability, provider, accounting, and storage gates.
 - Admin bulk/import/upload workflows are application features documented in
   README.md, `docs/security-model.md`, and `docs/compatibility-matrix.md`; the
   deployment packaging does not add separate asynchronous import/export job

@@ -121,12 +121,12 @@
 
     <section class="action-panel" aria-labelledby="create-external-tools-heading">
       <h2 id="create-external-tools-heading">External-tool Policy</h2>
-      <p class="warning-text">Configuration only: runtime still denies provider-hosted tools, remote MCP, connectors, URL authority, and unknown external authority until objectives 014–016 implement and qualify the required fence, hold, accounting, and provider contracts.</p>
+      <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match. Remote MCP/connectors, provider URL authority, unknown authority, and every other hosted family remain denied.</p>
       <label>
         Mode
         <select name="external_tool_mode">
           <option value="strict_bounded" {% if form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
-          <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (future opt-in)</option>
+          <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
         </select>
       </label>
       <fieldset>
@@ -148,13 +148,13 @@
       </label>
       <label class="checkbox-row">
         <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %}>
-        I acknowledge that one admitted future external-tool request may overrun its remaining quota.
+        I acknowledge that one admitted fenced web-search request may overrun its remaining quota.
       </label>
       <label class="checkbox-row">
         <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %}>
-        I separately confirm fenced future external-tool policy for this standard key.
+        I separately confirm fenced external-tool policy for this standard key.
       </label>
-      <p class="warning-text">Future behavior, once implemented: concurrent requests will be fenced, later exhausted requests blocked, and missing or ambiguous final cost held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
+      <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
       <p class="muted small">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities }} capabilities, {{ external_tool_ceilings.max_approved_destinations }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists.</p>
     </section>
 

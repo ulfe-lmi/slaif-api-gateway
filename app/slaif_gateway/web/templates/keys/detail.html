@@ -186,7 +186,7 @@
 
   <section class="action-panel" aria-labelledby="key-external-tool-policy-heading">
     <h2 id="key-external-tool-policy-heading">External-tool Policy</h2>
-    <p class="warning-text">Configured policy is not runtime authority. Provider-hosted tools, remote MCP, connectors, URL authority, and unknown external authority remain denied pending objectives 014–016.</p>
+    <p class="warning-text">Configured policy is only one part of runtime authority. Exact OpenAI Responses <code>web_search</code> additionally requires matching route/provider/pricing facts; remote MCP/connectors, URL authority, unknown authority, and every other hosted family remain denied.</p>
     <dl class="compact-dl">
       <dt>Mode</dt><dd>{{ key.external_tool_policy.mode }}</dd>
       <dt>Capabilities</dt><dd>{{ key.external_tool_policy.allowed_capabilities|join(', ') or 'None' }}</dd>
@@ -200,7 +200,7 @@
         Mode
         <select name="external_tool_mode">
           <option value="strict_bounded" {% if external_policy_form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
-          <option value="external_tool_fenced" {% if external_policy_form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (future opt-in)</option>
+          <option value="external_tool_fenced" {% if external_policy_form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
         </select>
       </label>
       <fieldset>
@@ -222,14 +222,14 @@
       </label>
       <label class="checkbox-row">
         <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if external_policy_form.external_tool_overrun_acknowledged %}checked{% endif %}>
-        I acknowledge the future single-request overrun and final-cost hold behavior.
+        I acknowledge the single-request overrun and final-cost hold behavior.
       </label>
       <label class="checkbox-row">
         <input type="checkbox" name="confirm_external_tool_fenced" value="true">
-        I separately confirm fenced future external-tool policy.
+        I separately confirm fenced external-tool policy.
       </label>
       <label>Audit reason <input name="reason" value="{{ external_policy_form.reason }}" required autocomplete="off"></label>
-      <p class="warning-text">One admitted future request may overrun; concurrent requests will be fenced, following exhausted requests blocked, and missing or ambiguous final cost held. Fenced mode requires positive finite hard quotas. Strict reset still requires an audit reason.</p>
+      <p class="warning-text">One admitted web-search request may overrun; concurrent requests are fenced, following exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite hard quotas. Strict reset still requires an audit reason.</p>
       <button type="submit">Update external-tool policy</button>
     </form>
   </section>

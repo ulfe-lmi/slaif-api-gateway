@@ -246,8 +246,10 @@ Existing routes without a `chat_completions` block use a documented
 compatibility fallback for the previously supported surface; malformed or
 unknown Chat Completions capability flags fail closed.
 
-Hosted/provider-side tools are denied by default because no persisted per-key
-hosted-tool policy exists. Chat Completions requests with `web_search_options`,
+Hosted/provider-side tools are denied by default. Persisted external-tool policy
+is consumed only by the exact bounded OpenAI Responses `web_search` contract;
+it grants no generic hosted authority. Chat Completions requests with
+`web_search_options`,
 `web_search`, `web_search_preview`, `file_search`, `code_interpreter`,
 `computer` / `computer_use`, `image_generation`, `tool_search`, MCP/connectors,
 provider-side `server_url`, `connector_id`, `authorization`, or
@@ -290,11 +292,10 @@ Active retries require the exact active fence, a pending same-key reservation,
 and matching identity facts; held, terminal, missing, cross-key, and conflicting
 pointed reservations fail closed. Resolution locks the reservation before the
 gateway key and revalidates the fence pointer and evidence after both locks.
-policy is not consumed by
-provider forwarding, authentication and ordinary quota admission fail closed
-against a committed fence. Objective 015 provides the accounting hold and
-reconciliation foundation used when the web-search provider outcome is
-unknown. Raw URLs,
+The selected web-search runtime consumes this policy after exact key/route
+validation. Authentication and ordinary quota admission fail closed against a
+committed fence. The accounting hold and reconciliation path is used when the
+web-search provider outcome is unknown. Raw URLs,
 credentials, labels,
 request content, and provider secrets are never stored in this policy.
 
@@ -317,17 +318,19 @@ and are never retained in its DTOs. Bounded namespace traversal inspects every c
 denies provider-hosted, raw MCP/connector, unknown, malformed, cyclic,
 excessively nested, or excessive-count children. Existing endpoint validators
 continue to enforce their own schema, content, depth, size, and secret rules;
-this narrower authority answer grants no acceptance, execution, or forwarding,
-and current runtime remains deny-only.
+this narrower authority answer grants no acceptance, execution, or forwarding
+by itself. Only the separately validated OpenAI Responses `web_search` contract
+may proceed; every other hosted family remains deny-only.
 
-The future fenced promise requires an exclusive per-key fence while the request
-is unresolved, accepts that one admitted request can overrun remaining token or
-cost quota before control returns, blocks following requests after exhaustion,
-and retains a blocking hold for missing, ambiguous, interrupted, or unreconciled
-final cost. Provider final usage/cost remains authoritative when available.
-This is not provider-invoice truth, zero-overrun assurance, a compliance claim,
-or current functionality. Trusted-calibration discovery remains observation,
-not standard-key provider/external permission.
+The implemented web-search fenced promise requires an exclusive per-key fence
+while the request is unresolved, accepts that one admitted request can overrun
+remaining token or cost quota before control returns, blocks following requests
+after exhaustion, and retains a blocking hold for missing, ambiguous,
+interrupted, or unreconciled final cost. Provider final usage/cost remains
+authoritative when available. This is not provider-invoice truth, zero-overrun
+assurance, a compliance claim, or authorization for another hosted family.
+Trusted-calibration discovery remains observation, not standard-key
+provider/external permission.
 
 Standalone embeddings requests follow the same no-storage boundary. The gateway
 does not persist embedding input strings, token arrays, embedding vectors, raw
@@ -1256,7 +1259,8 @@ never recover or send old plaintext keys.
   bounded non-streaming text-focused compact and the first ownership-checked
   conversation reference foundation, and ownership-checked Conversation item
   proxying, and ownership-checked Conversation metadata update;
-  hosted Responses tools, background mode,
+  hosted Responses tools other than the exact bounded OpenAI `web_search`
+  contract, background mode,
   cancel/list routes, file IDs, `/v1/files`, file
   search/retrieval tools, audio input/output, image generation, and multimodal
   Responses output remain future work under `docs/responses-compatibility.md`.

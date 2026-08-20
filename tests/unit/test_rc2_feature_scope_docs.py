@@ -108,3 +108,14 @@ def test_rc_beta_docs_no_longer_read_as_feature_full_rc2() -> None:
 
     beta_readiness = Path("docs/beta-readiness.md").read_text(encoding="utf-8")
     assert "Feature-full RC2: no" in beta_readiness
+
+
+def test_rc2_scope_preserves_classification_but_reports_current_web_search_runtime() -> None:
+    content = Path("docs/rc2-feature-scope.md").read_text(encoding="utf-8")
+    web_search_row = next(
+        line for line in content.splitlines() if line.startswith("| Web search |")
+    )
+
+    assert "Implemented only for bounded OpenAI Responses canonical `web_search`" in web_search_row
+    assert "`RC2_EXPLICITLY_DEFERRED`" in web_search_row
+    assert "implemented after/outside the locked rc2 target" in web_search_row.casefold()

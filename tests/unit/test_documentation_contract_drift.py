@@ -186,32 +186,66 @@ def test_live_burn_staged_acceptance_sections_are_explicitly_historical() -> Non
 def test_beta_readiness_separates_historical_status_from_current_future_work() -> None:
     beta_readiness = _read("docs/beta-readiness.md")
     remaining_pre_ga = beta_readiness.split("## Remaining Pre-GA Items", maxsplit=1)[1]
+    normalized_remaining_pre_ga = re.sub(r"\s+", " ", remaining_pre_ga)
 
     assert "Historical status (2026-05-01):" in beta_readiness
     assert "for the current implemented scope" not in beta_readiness
-    assert "beyond the current implemented RC2 boundary" in remaining_pre_ga
+    assert "beyond the exact bounded OpenAI `web_search` exception" in normalized_remaining_pre_ga
     assert "separately scoped work" in remaining_pre_ga
     assert "Continue Responses API as scoped RC2 work" not in remaining_pre_ga
     assert "historical first RC-beta tag" in beta_readiness
 
 
-def test_external_tool_contract_docs_use_both_modes_and_preserve_future_status() -> None:
+def test_external_tool_contract_docs_state_selected_runtime_and_remaining_denial() -> None:
+    stale_current_status = (
+        "runtime remains deny-only",
+        "runtime denied pending objective 017",
+        "external forwarding remains disabled",
+        "objective 017 owns runtime",
+        "objectives 013–017 remain",
+        "objectives 015–017 own",
+    )
     for relative_path in EXTERNAL_TOOL_CONTRACT_DOCS:
         content = _read(relative_path)
         assert STRICT_BOUNDED in content, relative_path
         assert EXTERNAL_TOOL_FENCED in content, relative_path
+        assert "OpenAI Responses" in content, relative_path
+        assert "web_search" in content, relative_path
         assert re.search(r"deny-only|denies provider-hosted|denied", content, re.IGNORECASE), (
             relative_path
         )
 
         folded = content.casefold()
-        for contradiction in (
-            "external_tool_fenced is implemented",
-            "external_tool_fenced is active",
+        for contradiction in stale_current_status + (
             "hard quota means no request can overrun",
             "hard quota guarantees no request can overrun",
         ):
             assert contradiction not in folded, (relative_path, contradiction)
+
+
+def test_operator_surfaces_do_not_describe_external_tool_runtime_as_future() -> None:
+    stale_fragments = (
+        "runtime remains deny-only",
+        "runtime remains denied pending objectives",
+        "runtime still denies provider-hosted tools",
+        "runtime denied pending objectives",
+        "future external-tool policy",
+        "external-tool fenced (future opt-in)",
+        "future single-request overrun",
+        "one admitted future external-tool request",
+        "future behavior, once implemented",
+        "future support evidence only",
+    )
+    operator_files = tuple((REPO_ROOT / "app" / "slaif_gateway").rglob("*.py")) + tuple(
+        (REPO_ROOT / "app" / "slaif_gateway" / "web" / "templates").rglob("*.html")
+    )
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in operator_files)
+    folded = combined.casefold()
+    for stale in stale_fragments:
+        assert stale not in folded, stale
+
+    assert "exact OpenAI Responses web_search" in combined
 
 
 def test_external_tool_schema_and_taxonomy_match_the_pure_contract() -> None:
@@ -275,7 +309,7 @@ def test_external_tool_fenced_promise_and_official_evidence_are_explicit() -> No
     assert "require_approval` can never lower" in forwarding
 
 
-def test_external_tool_contract_is_wired_only_to_policy_surfaces_not_runtime_or_migrations() -> (
+def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
     None
 ):
     module_path = REPO_ROOT / "app/slaif_gateway/services/external_tool_policy_contract.py"

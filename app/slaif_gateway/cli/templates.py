@@ -268,7 +268,7 @@ def _emit_human_result(result: KeyTemplateCreationResult) -> None:
             ceilings=external_tool_ceilings,
         )
     )
-    typer.echo("external_tool_runtime: denied pending objectives 014-016")
+    typer.echo("external_tool_runtime: exact OpenAI Responses web_search only; all others denied")
     if revision.hosted_capabilities_requiring_review:
         typer.echo(
             "hosted_capabilities_requiring_review: "

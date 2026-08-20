@@ -146,7 +146,9 @@ def test_create_from_calibration_accepts_only_explicit_confirmed_fenced_policy(
     assert result.exit_code == 0
     output = json.loads(result.stdout)
     assert output["revision"]["external_tool_policy"] == policy
-    assert "runtime denied" in output["revision"]["external_tool_policy_summary"]
+    assert "exact OpenAI Responses web_search only" in (
+        output["revision"]["external_tool_policy_summary"]
+    )
 
 
 def test_create_from_calibration_rejects_missing_confirmation(monkeypatch) -> None:

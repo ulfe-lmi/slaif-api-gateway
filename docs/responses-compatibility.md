@@ -524,16 +524,17 @@ Rules:
   remains in the caller's application instead of inside the provider.
 - Custom tools are also caller-side intent; SLAIF forwards definitions and
   preserves provider-returned custom-tool call items but never executes a tool.
-- OpenAI's canonical Responses `web_search` shape is provider-contract-qualified
-  only by Objective 016. It permits only `search_context_size` (`low`,
+- OpenAI's canonical Responses `web_search` shape is the sole implemented
+  provider-hosted runtime. It permits only `search_context_size` (`low`,
   `medium`, or `high`) and a positive top-level `max_tool_calls`, requires
   `store=false`, no background/previous-response/conversation/approval
   continuation, neutral absent/`auto` tool choice, and the exact fenced
   `provider_web_search` key/route decision. Preview aliases, filters, location,
   external-web controls, returned-token controls, arbitrary instructions,
-  other hosted tools, MCP, and connectors remain rejected. Runtime forwarding
-  remains denied pending Objective 017; if activated, published per-call fee
-  and provider token usage use the full-balance fence and unknown-evidence hold.
+  other hosted tools, MCP, and connectors remain rejected. Published per-call
+  fee and provider token usage use the PostgreSQL full-balance fence and
+  unknown-evidence hold. Both non-streaming and bounded typed-SSE execution are
+  implemented with mocked providers; no real-provider qualification is claimed.
 - File search and code interpreter/container tools require explicit policy,
   pricing, data ownership, and audit treatment before implementation.
 - MCP/connectors are excluded from RC2.
@@ -630,15 +631,16 @@ Responses input item text and item wrappers are included in the normal
 admission-time input estimate. They do not create a new billing category; final
 accounting still uses provider-reported usage/cost once.
 
-Objective 012 defines two external-tool quota modes. Objective 013 stores their
-canonical key/template/route policy and audited operator configuration without
-enabling forwarding. `strict_bounded` is current/default and denies
+The versioned external-tool contract defines two quota modes and stores their
+canonical key/template/route policy plus audited operator configuration.
+`strict_bounded` is current/default and denies
 provider-hosted/external authority. Existing client-operated `function`,
 `custom`, gated `namespace`, `local_shell`, and client-side `apply_patch`
-workflows remain under their independent policies. `external_tool_fenced` is a
-future standard-key opt-in requiring exact key/route capability and reviewed-
-destination intersections, operator ceilings, finite positive request/token/EUR
-limits, final-usage/final-cost evidence, and literal overrun acknowledgement.
+workflows remain under their independent policies. `external_tool_fenced` is an
+implemented standard-key opt-in only for the exact OpenAI Responses
+`provider_web_search` key/route intersection. It requires operator ceilings,
+finite positive request/token/EUR limits, final-usage/final-cost evidence, and
+literal overrun acknowledgement.
 
 The fenced promise is exact: one admitted provider-hosted external-tool request
 may exceed the key's remaining token or cost quota before SLAIF regains control.
@@ -647,21 +649,18 @@ unresolved, finalize authoritative provider usage/cost when available, reject
 following requests after exhaustion, and retain a blocking accounting hold
 when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
 
-Provider web/file search, code interpreter, hosted shell, image generation,
+Provider file search, code interpreter, hosted shell, image generation,
 computer use, tool search, skills, remote MCP, connectors, and provider URL
 fetch have separate canonical capability IDs. Unknown/malformed/mixed authority
 fails closed. Client MCP/network behavior outside provider wire authority is a
 client responsibility; SLAIF cannot claim to observe or block undeclared client
 action. Provider background execution, stored/previous-response state, and
 provider authentication remain distinct unsupported surfaces and are not
-implicitly enabled. Objective 014 implements the fence and
-full-remaining-balance reservation foundation on the locked key row. Objective
-015 implements the manual accounting hold/reconciliation path; external
-forwarding remains disabled. Objective 016 qualifies the selected OpenAI
-web-search provider contract, and Objective 017 owns runtime integration. The
-exact overrun and one-winner concurrency promise remains conditional on that
-later activation. Current Responses
-runtime remains deny-only for every provider-hosted/external tool.
+implicitly enabled. The bounded OpenAI web-search runtime uses the locked key
+row as its concurrency authority, reserves the full remaining balance, and uses
+the manual accounting hold/reconciliation path for unknown outcomes. Its exact
+overrun and one-winner concurrency promise is implemented and PostgreSQL-backed.
+Every other provider-hosted/external family remains deny-only.
 
 ## Key Policy
 
@@ -844,7 +843,7 @@ Planned pricing behavior:
 See `docs/pricing-catalog.md` for the planned pricing and bounded-overrun
 contract.
 
-## Objective 017 hosted web-search boundary
+## Bounded hosted web-search boundary
 
 The gateway supports one bounded hosted family: OpenAI Responses `web_search`
 with the exact canonical declaration, `max_tool_calls`, `store=false`,

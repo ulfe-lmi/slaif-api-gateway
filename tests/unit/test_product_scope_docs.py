@@ -55,8 +55,11 @@ def test_scope_preserves_quota_tool_and_readiness_boundaries() -> None:
 
     assert "PostgreSQL is authoritative for hard per-key quota/accounting state." in product_scope
     assert "Following requests are blocked once finalized counters exceed key limits." in normalized_scope
-    assert "hosted/provider-side tools and external MCP/connectors are unsupported" in product_scope
-    assert "Approved target: every key must be able to prohibit external tools." in product_scope
+    assert "sole implemented opt-in is OpenAI Responses canonical `web_search`" in product_scope
+    assert "Every key can prohibit external tools through the default `strict_bounded`" in (
+        normalized_scope
+    )
+    assert "every other hosted family remain denied" in lowered
 
     for forbidden_positive_claim in (
         "slaif is enterprise-ready",

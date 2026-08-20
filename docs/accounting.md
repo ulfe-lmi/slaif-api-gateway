@@ -163,19 +163,20 @@ Core invariants:
   raw session config, audio payloads, transcripts, raw SDP, raw events, and
   raw provider bodies are never stored.
 
-## External-tool quota modes (persisted policy, runtime deny-only)
+## External-tool quota modes and bounded runtime
 
-Objective 012 defines two mechanically testable policy modes. Objective 013
-persists their canonical policy in existing JSON and audits operator changes,
-without changing runtime quota/accounting state:
+The versioned contract defines two mechanically testable policy modes. Their
+canonical policy is persisted in existing JSON and operator changes are
+audited:
 
 - `strict_bounded` is the default. Provider-hosted/external authority is denied;
   existing client-operated tools retain their independent policy and ordinary
   per-model-request accounting.
-- `external_tool_fenced` is a future explicit standard-key/route opt-in. It
-  requires positive finite request, token, and EUR limits, exact capability and
-  reviewed-destination intersections, bounded declarations/calls, final usage
-  and cost evidence, and literal overrun acknowledgement.
+- `external_tool_fenced` is consumed only for the exact OpenAI Responses
+  `provider_web_search` standard-key/route intersection. It requires positive
+  finite request, token, and EUR limits, bounded declarations/calls, final
+  usage and cost evidence, and literal overrun acknowledgement. Every other
+  hosted/external capability remains denied.
 
 The fenced promise is exact: one admitted provider-hosted external-tool request
 may exceed the key's remaining token or cost quota before SLAIF regains control.
@@ -185,8 +186,8 @@ following requests after exhaustion, and retain a blocking accounting hold
 when final cost is missing, ambiguous, interrupted, or awaiting reconciliation.
 This is not an invoice guarantee or zero-overrun promise.
 
-Objective 014 implements the exclusive-key fence and full-remaining-balance
-reservation foundation only: fence state, reservation pointer, and timestamps
+The exclusive-key fence and full-remaining-balance reservation foundation uses
+fence state, a reservation pointer, and timestamps
 live on the locked `gateway_keys` row, the locked PostgreSQL key row is the
 single concurrency authority (Redis is not), and acquisition atomically
 reserves the complete remaining cost, token, and one request of balance in
@@ -204,16 +205,14 @@ clears; any mismatch or unreconciled counter leaves the fence in place. The
 active retry is read-only after the key lock and requires the pointed
 reservation to be pending and owned by that same key; resolution locks the
 reservation first and then the key, matching the ordinary quota lifecycle
-order, so it never waits on an existing reservation while holding the key.
-foundation is implemented, and Objective 015 adds the manual hold/reconciliation
-path, but external forwarding remains disabled and provider-hosted tools remain
-denied. Objective 016 qualifies only the exact OpenAI Responses `web_search`
-provider contract; Objective 017 owns any later execution transition. Fence expiry
+order, so it never waits on an existing reservation while holding the key. The
+foundation is implemented, and the manual hold/reconciliation path is active
+for the bounded OpenAI Responses `web_search` runtime. Fence expiry
 is an inspection threshold and never means safe release; a committed fence
 survives process restart and keeps blocking admission. Emergency suspend or
 revoke stops admission but does not settle accounting, and the exact overrun
-and one-winner concurrency promise above remains conditional on the later
-provider activation. Ordinary stale-reservation reconciliation identifies
+and one-winner concurrency promise above is implemented for this selected
+runtime. Ordinary stale-reservation reconciliation identifies
 external-mode pending reservations as requiring external-tool review and never
 auto-releases them; see the
 [`stale-reservation-reconciliation`](runbooks/stale-reservation-reconciliation.md)

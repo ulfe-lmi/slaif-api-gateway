@@ -688,10 +688,11 @@ Rules:
   `/v1/realtime/calls`, transcription/translation sessions, SIP, or hard
   actual-session usage accounting.
 
-### 4.1.1 Responses API / RC2 implemented boundary
+### 4.1.1 Responses API implemented boundary
 
-The current RC2 Responses surface is implemented for a bounded
-non-hosted/non-MCP subset. Preserve SLAIF's core promise: gateway keys,
+The current Responses surface is implemented for a bounded local/stateful/Codex
+subset plus one selected hosted exception: OpenAI Responses canonical
+`web_search`. Preserve SLAIF's core promise: gateway keys,
 provider-secret isolation, PostgreSQL hard quota/accounting, auditability, and
 no prohibited plaintext/content leakage.
 
@@ -785,6 +786,16 @@ Current behavior:
   reasoning summary/text deltas without persisting their content. It is a
   provisional gateway brake, not invoice-grade truth; final provider
   usage/cost remains authoritative when available.
+- OpenAI Responses canonical `web_search` is the sole implemented hosted-tool
+  runtime. It requires a standard key in `external_tool_fenced` mode, an exact
+  OpenAI route with matching `provider_web_search` policy, stateless
+  `store=false`, positive bounded `max_tool_calls`, finite request/token/EUR
+  limits, configured per-call pricing, and explicit single-request-overrun
+  acknowledgement. PostgreSQL acquires an exclusive full-balance fence; one
+  admitted request may overrun; concurrent requests are blocked; later requests
+  fail after exhaustion; and unknown outcomes remain held until audited
+  reconciliation. Both non-streaming and bounded typed-SSE execution have
+  mocked-provider evidence. This is not real-provider qualification.
 - `store=true` is supported only for the documented non-streaming stored-create
   path and only with explicit route capability.
 - `previous_response_id`, response retrieve/delete/input-item listing,
@@ -799,7 +810,8 @@ Current behavior:
 Explicit exclusions:
 
 - `background=true`, response listing, response cancel, stateful streaming,
-  Responses audio, hosted/provider-side tools, file/web search, code
+  Responses audio, hosted/provider-side tools other than exact OpenAI
+  `web_search`, file search, code
   interpreter, computer use, image generation, shell/patch tool execution,
   tool search, MCP/connectors, and provider-side authorization remain
   unsupported/fail-closed unless a future approved contract changes them.
@@ -828,26 +840,21 @@ Chat tool/request policy remains fail-closed by registry:
   audio output, custom audio voices, previous-audio references, and unapproved
   media shapes remain denied before forwarding.
 
-Any future hosted-tool or provider-state expansion must define an explicit
+Any additional hosted-tool or provider-state expansion must define an explicit
 bounded-overrun policy, pricing/accounting contract, admin-visible maximum
 exposure, privacy/storage policy, capability gates, negative tests, and
 documentation before it can be enabled. PostgreSQL must block subsequent
 admission after a finalized overrun.
 
-Objective 012 defines the version-1 pure contract for that future expansion.
-Objective 013 persists its canonical policy in existing key, immutable
-template-snapshot, and route-capability JSON and adds bounded settings plus
-audited admin/CLI controls, but does not activate runtime forwarding. It
-separates client-operated authority from
-provider-hosted/external authority and unknown authority, with two quota modes:
-`strict_bounded` (the default) and `external_tool_fenced` (future explicit
-opt-in). Current runtime behavior remains deny-only for provider-hosted tools,
-remote MCP/connectors, provider URL fetch, and unknown authority. No objective-
-stored policy is consumed by Chat/Responses admission, quota, accounting, or
-provider code. Missing historical metadata is strict, and direct bulk key
-import is strict-only.
+The version-1 contract separates client-operated, provider-hosted/external, and
+unknown authority. `strict_bounded` is the default deny mode.
+`external_tool_fenced` is consumed only for the selected OpenAI Responses
+`provider_web_search` key/route intersection; remote MCP/connectors, provider
+URL fetch, unknown authority, and every other hosted family remain denied.
+Missing historical metadata is strict, and direct bulk key import is
+strict-only.
 
-The future fenced mode carries this exact product promise: one admitted
+The selected fenced runtime carries this exact product promise: one admitted
 provider-hosted external-tool request may exceed the key's remaining token or
 cost quota before SLAIF regains control. SLAIF will reject concurrent requests
 for that key while the request is unresolved, finalize authoritative provider
@@ -864,21 +871,20 @@ by it, and remain subject to existing endpoint-specific shape, size, depth,
 content, and secret validation. Namespace child declarations are traversed with
 strict depth/count bounds and cannot hide provider-hosted, MCP/connector,
 unknown, malformed, or mixed authority. This position-aware classification
-changes no current runtime denial and grants no forwarding or execution.
+grants no forwarding or execution by itself; the selected web-search contract
+performs separate exact validation.
 
-Objective 014 implements the fence and reservation foundation for that
-promise on the serialized key row: an exclusive fence state, reservation
+The fence and reservation foundation for that promise uses the serialized key
+row: an exclusive fence state, reservation
 pointer, and timestamps on the locked `gateway_keys` row plus one
 `external_tool_fenced` quota reservation holding the key's complete remaining
-cost, token, and one request of balance. The foundation is implemented, but
-external forwarding and the unknown-cost hold are still not implemented and
-provider-hosted tools remain denied; objectives 015 and 016 own the
-hold/reconciliation and selected provider execution transitions. The locked
+cost, token, and one request of balance. The selected web-search runtime uses
+that fence plus the unknown-cost hold/reconciliation path. The locked
 PostgreSQL key row is the single concurrency authority; Redis is not. Fence
 expiry is an inspection threshold and never means safe release. Emergency
 suspend or revoke stops admission but does not settle accounting, and the
-exact overrun and one-winner concurrency promise above remains conditional on
-the later provider activation.
+exact overrun and one-winner concurrency promise above is implemented for this
+one hosted contract.
 
 Key templates are versioned snapshots for the currently implemented safe
 policy vocabulary. A reviewed template revision can create one normal gateway
@@ -940,9 +946,11 @@ Rules:
   custom values.
 - Recommended templates should include request limits, input/output/reasoning
   token limits, tool-call limits, per-request caps, and allowed
-  endpoints/models/providers. Safe Responses template metadata covers only the
-  implemented local/stored/previous-response summary vocabulary; bulk template workflows and
-  hosted/stateful tool policies remain future work.
+  endpoints/models/providers. Safe Responses policy metadata covers the
+  implemented local/stored/previous-response vocabulary. A separately reviewed
+  external-tool snapshot may carry the bounded fenced policy, but calibration
+  observations never grant it automatically. Bulk template workflows and
+  stateful hosted-tool expansion remain future work.
 - Admins must see assumptions and may edit recommended values before creating a
   template or keys.
 - Calibration-derived templates should record source key, source time window,
@@ -2787,7 +2795,8 @@ described as the next step.
 Treat these as future scoped projects or maintainer decisions, not hidden
 requirements for the implemented RC2 boundary:
 
-- hosted/provider-side tools, MCP/connectors, web/file search, code
+- hosted/provider-side tools other than exact bounded OpenAI Responses
+  `web_search`, MCP/connectors, file search, code
   interpreter, computer use, image generation, shell/patch/tool-search
   execution, and provider-side authorization;
 - Responses background mode, cancel/list, Responses audio, multimodal output,

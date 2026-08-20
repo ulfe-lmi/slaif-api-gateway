@@ -80,7 +80,7 @@ from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 app = typer.Typer(help="Manage gateway keys")
 policy_app = typer.Typer(help="Show or update gateway-key request policy")
-external_tools_app = typer.Typer(help="Show or update future external-tool policy")
+external_tools_app = typer.Typer(help="Show or update deny-by-default external-tool policy")
 app.add_typer(policy_app, name="policy")
 app.add_typer(external_tools_app, name="external-tools")
 
@@ -1302,7 +1302,10 @@ def create(
         str,
         typer.Option(
             "--external-tool-mode",
-            help="strict_bounded or external_tool_fenced (runtime remains deny-only)",
+            help=(
+                "strict_bounded or external_tool_fenced; runtime supports only exact "
+                "OpenAI Responses web_search with matching key/route policy"
+            ),
         ),
     ] = STRICT_BOUNDED,
     external_tool_capabilities: Annotated[
@@ -1330,7 +1333,7 @@ def create(
         bool,
         typer.Option(
             "--acknowledge-single-request-overrun",
-            help="Acknowledge future single-request overrun and hold behavior",
+            help="Acknowledge the fenced single-request overrun and hold behavior",
         ),
     ] = False,
     confirm_external_tool_fenced: Annotated[
@@ -1803,7 +1806,7 @@ def external_tools_show(
     gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Show canonical safe external-tool policy; runtime remains deny-only."""
+    """Show canonical safe external-tool policy and its bounded runtime scope."""
     try:
         gateway_key = _run_async(
             _show_gateway_key(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
@@ -1860,7 +1863,7 @@ def external_tools_update(
     reason: Annotated[str, typer.Option("--reason", help="Required audit reason")] = "",
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Replace audited future external-tool policy without enabling runtime forwarding."""
+    """Replace audited external-tool policy; only exact fenced web search can run."""
     try:
         result = _run_async(
             _update_external_tool_policy(

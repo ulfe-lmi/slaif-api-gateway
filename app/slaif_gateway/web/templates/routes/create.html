@@ -99,7 +99,7 @@
         Capabilities JSON
         <textarea name="capabilities" placeholder='{"vision": false}'>{{ form.capabilities }}</textarea>
       </label>
-      <p class="warning-text">Optional <code>external_tools</code> metadata must use the exact canonical route schema and reviewed opaque destination IDs. It records future support only; runtime remains denied pending objectives 014–016.</p>
+      <p class="warning-text">Optional <code>external_tools</code> metadata must use the exact canonical route schema. Runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code>; all other hosted capabilities remain denied.</p>
       <label>
         Notes
         <textarea name="notes">{{ form.notes }}</textarea>

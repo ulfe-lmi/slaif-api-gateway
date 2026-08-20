@@ -1,8 +1,9 @@
 # Pricing Catalog And Bounded Overrun
 
-Status: planned RC2-beta direction; current runtime pricing remains the local
-pricing/FX implementation described in `docs/database-schema.md`,
-`docs/configuration.md`, and `docs/compatibility-matrix.md`.
+Status: mixed current contract and future catalog direction. Local pricing/FX
+is runtime truth, and the bounded OpenAI Responses `web_search` path uses
+configured per-call pricing plus provider token usage. Previewed refresh,
+broader tool pricing, and bounded-overrun UI remain future work.
 
 ## Local Catalog Remains Source Of Truth
 
@@ -515,7 +516,8 @@ conversation create/retrieve/delete, and Conversation item
 create/list/retrieve/delete are ownership-checked control-plane proxy calls and
 do not reserve output quota or create normal generation usage ledger rows.
 
-Responses hosted tools, background mode, response cancel/list, streaming
+Responses hosted tools other than exact bounded OpenAI Responses `web_search`,
+background mode, response cancel/list, streaming
 conversation state, streaming previous-response state, compact
 `previous_response_id`, `input_image.file_id`, `input_file.file_id`,
 `/v1/files`, file search/retrieval tools, audio inputs, audio output, image
