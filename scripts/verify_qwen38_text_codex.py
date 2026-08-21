@@ -24,6 +24,7 @@ from types import MappingProxyType
 from urllib.parse import urlsplit
 
 import slaif_gateway.services.codex_profile_registry as registry
+import slaif_gateway.services.codex_qualification as qualification
 
 BASE_URL_ENV = "SLAIF_QWEN38_TEXT_BASE_URL"
 API_KEY_ENV = "SLAIF_QWEN38_TEXT_API_KEY"
@@ -312,8 +313,6 @@ def _candidate_runtime_modules():
         import verify_codex_gateway_e2e as gateway
     except ModuleNotFoundError:
         from scripts import verify_codex_gateway_e2e as gateway
-    import slaif_gateway.services.codex_qualification as qualification
-
     return gateway, registry, qualification
 
 
@@ -355,7 +354,8 @@ def _candidate_runtime_registry():
 
 
 async def _seed_candidate_gateway(
-    *, gateway, database_url: str, provider_base_url: str, provider_env: str, settings, runtime
+    *, gateway, database_url: str, provider_base_url: str, provider_env: str,
+    settings, runtime, zero_pricing: bool = False
 ):
     from datetime import UTC, datetime, timedelta
     from decimal import Decimal
@@ -425,11 +425,15 @@ async def _seed_candidate_gateway(
             )
             await routes.update_model_route_metadata(route.id, capabilities=route_caps)
             pricing = PricingRulesRepository(session)
+            input_price = Decimal("0") if zero_pricing else Decimal("1")
+            cached_input_price = Decimal("0")
+            output_price = Decimal("0") if zero_pricing else Decimal("2")
+            reasoning_price = Decimal("0") if zero_pricing else Decimal("2")
             await pricing.create_pricing_rule(
                 provider=provider_name, upstream_model=runtime.upstream_model, endpoint="/v1/responses",
                 valid_from=now - timedelta(minutes=5), currency="EUR",
-                input_price_per_1m=Decimal("1"), cached_input_price_per_1m=Decimal("0"),
-                output_price_per_1m=Decimal("2"), reasoning_price_per_1m=Decimal("2"),
+                input_price_per_1m=input_price, cached_input_price_per_1m=cached_input_price,
+                output_price_per_1m=output_price, reasoning_price_per_1m=reasoning_price,
                 request_price=Decimal("0"), pricing_metadata={
                     "codex_accounting": {
                         "long_context_threshold_tokens": 272_000,
@@ -472,13 +476,11 @@ async def _inspect_candidate_route(*, database_url: str, runtime, provider: str)
     from slaif_gateway.db.repositories.pricing import PricingRulesRepository
     from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
     from slaif_gateway.db.repositories.routing import ModelRoutesRepository
-    from slaif_gateway.services.codex_qualification import CodexQualificationService
-
     engine = create_async_engine(database_url, future=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessions() as session:
-            result = await CodexQualificationService(
+            result = await qualification.CodexQualificationService(
                 provider_configs_repository=ProviderConfigsRepository(session),
                 model_routes_repository=ModelRoutesRepository(session),
                 pricing_rules_repository=PricingRulesRepository(session),
@@ -488,6 +490,49 @@ async def _inspect_candidate_route(*, database_url: str, runtime, provider: str)
             return result
     finally:
         await engine.dispose()
+
+
+def _accounting_proved(accounting, *, pending: int, exact_hermetic: bool) -> bool:
+    """Check fixed hermetic facts or bounded zero-price live facts."""
+
+    common = (
+        pending == 0,
+        accounting.requests_used == 2,
+        accounting.requests_reserved == 0,
+        accounting.tokens_reserved == 0,
+        accounting.cost_reserved_eur == Decimal("0"),
+        accounting.reservation_statuses == ("finalized", "finalized"),
+        accounting.ledger_statuses == ("finalized", "finalized"),
+        accounting.ledger_successes == (True, True),
+        accounting.ledger_error_types == (None, None),
+        accounting.ledger_http_statuses == (200, 200),
+        accounting.ledger_native_currencies == ("EUR", "EUR"),
+        len(accounting.usage) == 2,
+        len(accounting.ledger_actual_costs_eur) == 2,
+        sum(accounting.ledger_actual_costs_eur, Decimal("0")) == accounting.cost_used_eur,
+    )
+    if not all(common):
+        return False
+    if exact_hermetic:
+        return (
+            accounting.tokens_used == 4
+            and accounting.cost_used_eur == Decimal("0.000006000")
+            and accounting.usage == ((1, 0, 1, 0, 2), (1, 0, 1, 0, 2))
+            and accounting.ledger_actual_costs_eur == (Decimal("0.000003000"), Decimal("0.000003000"))
+        )
+    if accounting.cost_used_eur != Decimal("0") or accounting.tokens_used <= 0:
+        return False
+    if any(cost != Decimal("0") for cost in accounting.ledger_actual_costs_eur):
+        return False
+    if any(
+        input_tokens <= 0
+        or output_tokens <= 0
+        or total_tokens <= 0
+        or total_tokens < input_tokens + output_tokens + reasoning_tokens
+        for input_tokens, _cached_tokens, output_tokens, reasoning_tokens, total_tokens in accounting.usage
+    ):
+        return False
+    return accounting.tokens_used == sum(row[-1] for row in accounting.usage)
 
 
 def _candidate_actions(gateway, *, workspace: Path, upstream_model: str):
@@ -549,10 +594,13 @@ def _run_real_hermetic_for_target(
         version = verify_candidate_codex_version()
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             gateway.migrate_database(target)
-        mock = provider_mock or gateway.ScriptedOpenAIMock()
+        if provider_base_url is None:
+            mock = provider_mock or gateway.ScriptedOpenAIMock()
+        else:
+            mock = provider_mock
         loopback_provider = provider_base_url is None or provider_mock is not None
         owns_mock = provider_mock is None
-        if owns_mock:
+        if owns_mock and mock is not None:
             mock.start()
         provider_url = (
             f"http://127.0.0.1:{mock.port}/v1" if loopback_provider else provider_base_url
@@ -577,7 +625,8 @@ def _run_real_hermetic_for_target(
                     database_url=target.url,
                     provider_base_url=provider_url,
                     provider_env=provider_env,
-                    settings=settings, runtime=runtime
+                    settings=settings, runtime=runtime,
+                    zero_pricing=provider_base_url is not None,
                 ))
                 ready_route = __import__("asyncio").run(
                     _inspect_candidate_route(
@@ -593,7 +642,7 @@ def _run_real_hermetic_for_target(
                         work = root / "workspace"
                         home.mkdir(mode=0o700)
                         work.mkdir(mode=0o700)
-                        artifacts = __import__("slaif_gateway.services.codex_qualification", fromlist=["render_codex_profile_artifacts"]).render_codex_profile_artifacts(
+                        artifacts = qualification.render_codex_profile_artifacts(
                             f"http://127.0.0.1:{gateway_port}/v1", runtime, legacy_default=False
                         )
                         (home / "config.toml").write_text(artifacts.base_config_toml, encoding="utf-8")
@@ -634,22 +683,8 @@ def _run_real_hermetic_for_target(
                             raise VerificationError("boundary_proof_failed")
                         accounting = __import__("asyncio").run(gateway.load_accounting(target.url, key.gateway_key_id))
                         pending = __import__("asyncio").run(gateway.outstanding_reservations(target.url))
-                        if (
-                            pending != 0
-                            or accounting.requests_used != 2
-                            or accounting.tokens_used != 4
-                            or accounting.requests_reserved != 0
-                            or accounting.tokens_reserved != 0
-                            or accounting.cost_used_eur != Decimal("0.000006000")
-                            or accounting.cost_reserved_eur != Decimal("0")
-                            or accounting.reservation_statuses != ("finalized", "finalized")
-                            or accounting.ledger_statuses != ("finalized", "finalized")
-                            or accounting.ledger_successes != (True, True)
-                            or accounting.ledger_error_types != (None, None)
-                            or accounting.ledger_http_statuses != (200, 200)
-                            or accounting.ledger_native_currencies != ("EUR", "EUR")
-                            or accounting.usage != ((1, 0, 1, 0, 2), (1, 0, 1, 0, 2))
-                            or sum(accounting.ledger_actual_costs_eur, Decimal("0")) != accounting.cost_used_eur
+                        if not _accounting_proved(
+                            accounting, pending=pending, exact_hermetic=provider_base_url is None
                         ):
                             raise VerificationError("accounting_proof_failed")
                         sentinels = [
@@ -658,10 +693,11 @@ def _run_real_hermetic_for_target(
                         ]
                         if __import__("asyncio").run(gateway.sentinels_persisted(target.url, sentinels)):
                             raise VerificationError("privacy_proof_failed")
-                        if not loopback_provider:
+                        if provider_base_url is not None:
                             return {
                                 "codex_version": version, "request_count": accounting.requests_used,
-                                "event_count": 0, "accounting_proved": True, "privacy_proved": True,
+                                "event_count": sum(len(action.payload) for action in actions),
+                                "accounting_proved": True, "privacy_proved": True,
                                 "real_provider_called": provider_base_url is not None,
                                 "loopback_only": gateway_peers.loopback_only,
                             }
@@ -680,7 +716,7 @@ def _run_real_hermetic_for_target(
                         import shutil
                         shutil.rmtree(root, ignore_errors=True)
         finally:
-            if owns_mock:
+            if owns_mock and mock is not None:
                 mock.stop()
             if old_key is None:
                 os.environ.pop(provider_env, None)

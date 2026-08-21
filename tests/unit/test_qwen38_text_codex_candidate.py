@@ -2,22 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import verify_qwen38_text_codex as verifier
-from slaif_gateway.services.codex_profile_registry import (
-    QWEN38_TEXT_CODEX_CANDIDATE,
-    QWEN38_TEXT_PROFILE_FIXTURE_SHA256,
-    QWEN38_TEXT_PROFILE_ID,
-    get_codex_profile,
-)
 import slaif_gateway.services.codex_profile_registry as registry
 
 
 def test_candidate_is_exact_and_unregistered() -> None:
-    profile = QWEN38_TEXT_CODEX_CANDIDATE
-    assert profile.profile_id == QWEN38_TEXT_PROFILE_ID
+    profile = registry.QWEN38_TEXT_CODEX_CANDIDATE
+    assert profile.profile_id == registry.QWEN38_TEXT_PROFILE_ID
     assert profile.cli_version == "0.148.0"
     assert profile.public_model == "qwen3.8-27b-text"
     assert profile.upstream_model == "qwen3.8-27b"
@@ -29,7 +25,7 @@ def test_candidate_is_exact_and_unregistered() -> None:
     assert profile.catalog_source == "replacement"
     assert profile.mocked_qualification
     assert not profile.live_qualification
-    assert get_codex_profile(profile.profile_id) is None
+    assert registry.get_codex_profile(profile.profile_id) is None
 
 
 def test_captured_fixture_is_structural_deterministic_and_canary_free() -> None:
@@ -42,7 +38,7 @@ def test_captured_fixture_is_structural_deterministic_and_canary_free() -> None:
     assert fixture["catalog_facts"]["field_type"] == "catalog"
     assert fixture["catalog_facts"]["taxonomy_id"] == "codex_0_148"
     assert fixture["accounting_facts"]["count"] == 2
-    assert hashlib.sha256(verifier.FIXTURE_PATH.read_bytes()).hexdigest() == QWEN38_TEXT_PROFILE_FIXTURE_SHA256
+    assert hashlib.sha256(verifier.FIXTURE_PATH.read_bytes()).hexdigest() == registry.QWEN38_TEXT_PROFILE_FIXTURE_SHA256
     forbidden = ("prompt", "response body", "authorization", "https://", "workspace", "QWEN38_TOOL_OK")
     assert not any(marker in verifier.FIXTURE_PATH.read_text(encoding="utf-8") for marker in forbidden)
 
@@ -58,16 +54,16 @@ def test_captured_fixture_is_structural_deterministic_and_canary_free() -> None:
     ],
 )
 def test_catalog_rejects_unsafe_nested_strings_and_drift(field: str, value: object) -> None:
-    artifact = json.loads(QWEN38_TEXT_CODEX_CANDIDATE.model_catalog_artifact)
+    artifact = json.loads(registry.QWEN38_TEXT_CODEX_CANDIDATE.model_catalog_artifact)
     model = artifact["models"][0]
     model[field] = value
     with pytest.raises(ValueError):
         registry._validate_catalog_artifact(
             artifact,
-            public_model=QWEN38_TEXT_CODEX_CANDIDATE.public_model,
-            context_window_tokens=QWEN38_TEXT_CODEX_CANDIDATE.context_window_tokens,
-            auto_compaction_token_threshold=QWEN38_TEXT_CODEX_CANDIDATE.auto_compaction_token_threshold,
-            input_modalities=QWEN38_TEXT_CODEX_CANDIDATE.input_modalities,
+            public_model=registry.QWEN38_TEXT_CODEX_CANDIDATE.public_model,
+            context_window_tokens=registry.QWEN38_TEXT_CODEX_CANDIDATE.context_window_tokens,
+            auto_compaction_token_threshold=registry.QWEN38_TEXT_CODEX_CANDIDATE.auto_compaction_token_threshold,
+            input_modalities=registry.QWEN38_TEXT_CODEX_CANDIDATE.input_modalities,
         )
 
 
@@ -137,12 +133,37 @@ def test_present_target_runs_hermetic_then_distinct_live_runner() -> None:
     assert calls == ["hermetic", "http://127.0.0.1:8080/v1", "private-test-key", "live"]
 
 
+@pytest.mark.skipif(
+    not verifier.CODEX_BINARY.is_file(), reason="Codex 0.148 CLI unavailable in this environment"
+)
 def test_live_branch_uses_codex_slaif_and_numeric_loopback_plumbing() -> None:
     result = verifier.run_local_live_plumbing_phase()
     assert result["real_provider_called"] is True
     assert result["accounting_proved"] is True
     assert result["privacy_proved"] is True
     assert result["loopback_only"] is True
+
+
+def test_accounting_proof_separates_fixed_hermetic_and_dynamic_live_rules() -> None:
+    base = SimpleNamespace(
+        requests_used=2, tokens_used=10, requests_reserved=0, tokens_reserved=0,
+        cost_reserved_eur=Decimal("0"), reservation_statuses=("finalized", "finalized"),
+        ledger_statuses=("finalized", "finalized"), ledger_successes=(True, True),
+        ledger_error_types=(None, None), ledger_http_statuses=(200, 200),
+        ledger_native_currencies=("EUR", "EUR"), usage=((3, 1, 2, 0, 5), (2, 0, 3, 0, 5)),
+        ledger_actual_costs_eur=(Decimal("0"), Decimal("0")), cost_used_eur=Decimal("0"),
+    )
+    assert verifier._accounting_proved(base, pending=0, exact_hermetic=False)
+    assert not verifier._accounting_proved(base, pending=0, exact_hermetic=True)
+    for field, value in (
+        ("usage", ()),
+        ("tokens_used", 0),
+        ("cost_used_eur", Decimal("0.000001")),
+        ("ledger_statuses", ("pending", "finalized")),
+    ):
+        broken = SimpleNamespace(**vars(base))
+        setattr(broken, field, value)
+        assert not verifier._accounting_proved(broken, pending=0, exact_hermetic=False)
 
 
 def test_target_url_rejects_percent_backslash_and_bad_port() -> None:
