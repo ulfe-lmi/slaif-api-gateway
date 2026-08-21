@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import func, inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from slaif_gateway.db.models import GatewayKey, QuotaReservation, UsageLedger
+from slaif_gateway.db.models import AuditLog, GatewayKey, QuotaReservation, UsageLedger
 from slaif_gateway.db.models import PricingRule
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
@@ -415,5 +415,79 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
         PricingRule.provider == provider, PricingRule.upstream_model == "qwen/zero"
     ))).scalar_one()
     assert pricing_row.pricing_metadata["pricing_basis"] == "operator_confirmed_local_zero"
+    refreshed_key = await async_test_session.get(GatewayKey, key_id)
+    assert refreshed_key is not None
+    assert refreshed_key.cost_reserved_eur == Decimal("0E-9")
+    assert refreshed_key.tokens_reserved_total == 0
+    assert refreshed_key.requests_reserved_total == 0
+
+    charged_rows = [
+        row for row in rows if row.accounting_status in {"finalized", "interrupted", "interrupted_estimated", "estimated"}
+    ]
+    ledger_cost_eur = sum(
+        (row.actual_cost_eur if row.actual_cost_eur is not None else row.estimated_cost_eur or Decimal("0"))
+        for row in charged_rows
+    )
+    assert refreshed_key.cost_used_eur == ledger_cost_eur
+    assert refreshed_key.tokens_used_total == sum(row.total_tokens for row in charged_rows)
+    assert refreshed_key.requests_used_total == len(charged_rows)
+    assert zero_ledger.actual_cost_eur == Decimal("0E-9")
+
+    canaries = (
+        "CHAT_CANARY", "RESPONSES_CANARY", "LOCAL_ZERO_CANARY", "https://remote.test/canary",
+        "QUOTA_CANARY", "PROVIDER_FAILURE_CANARY", "MISSING_USAGE_CANARY", "MISSING_USAGE_CANARY",
+        "data:image/png;base64", "BASE64_CANARY", "tool-schema-canary", "tool-arguments-canary",
+        "tool-results-canary", "gateway-test", "GENERIC_UPSTREAM_KEY", "Authorization",
+        "cookie", "x-slaif-internal", "raw_request", "raw_response",
+    )
+    safe_ledger_rows = [
+        {
+            "request_id": row.request_id,
+            "endpoint": row.endpoint,
+            "provider": row.provider,
+            "requested_model": row.requested_model,
+            "resolved_model": row.resolved_model,
+            "streaming": row.streaming,
+            "success": row.success,
+            "accounting_status": row.accounting_status,
+            "http_status": row.http_status,
+            "error_type": row.error_type,
+            "error_message": row.error_message,
+            "prompt_tokens": row.prompt_tokens,
+            "completion_tokens": row.completion_tokens,
+            "total_tokens": row.total_tokens,
+            "estimated_cost_eur": row.estimated_cost_eur,
+            "actual_cost_eur": row.actual_cost_eur,
+            "actual_cost_native": row.actual_cost_native,
+            "native_currency": row.native_currency,
+            "usage_raw": row.usage_raw,
+            "response_metadata": row.response_metadata,
+        }
+        for row in rows
+    ]
+    audit_rows = (
+        await async_test_session.execute(
+            select(AuditLog).where(AuditLog.request_id.in_([row.request_id for row in rows]))
+        )
+    ).scalars().all()
+    safe_audit_rows = [
+        {
+            "action": row.action,
+            "entity_type": row.entity_type,
+            "entity_id": row.entity_id,
+            "old_values": row.old_values,
+            "new_values": row.new_values,
+            "request_id": row.request_id,
+            "note": row.note,
+        }
+        for row in audit_rows
+    ]
+    durable_projection = json.dumps([safe_ledger_rows, safe_audit_rows], default=str, sort_keys=True)
+    assert all(canary not in durable_projection for canary in canaries)
+    assert len([row for row in rows if row.streaming and row.requested_model == responses_model]) == 1
+    assert missing_row.accounting_status in {"interrupted", "interrupted_estimated", "estimated"}
+    assert missing_row.actual_cost_eur is not None or missing_row.estimated_cost_eur is not None
+    assert missing_row.success is not True
+    assert "completed" not in json.dumps(missing_row.response_metadata, sort_keys=True).lower()
     assert await async_test_session.scalar(select(func.count()).select_from(QuotaReservation).where(
         QuotaReservation.gateway_key_id == key_id, QuotaReservation.status == "pending")) == 0
