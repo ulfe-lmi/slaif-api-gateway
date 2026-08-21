@@ -17,6 +17,9 @@ from slaif_gateway.cli.common import (
 from slaif_gateway.db.models import ProviderConfig
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+from slaif_gateway.services.openai_compatible_discovery import (
+    OpenAICompatibleDiscoveryService,
+)
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 
 app = typer.Typer(help="Manage provider metadata")
@@ -88,6 +91,14 @@ async def _show_provider(provider_or_id: str) -> ProviderConfig:
 async def _set_provider_enabled(provider_or_id: str, *, enabled: bool) -> ProviderConfig:
     async with cli_db_session() as (_, session):
         return await _service(session).set_provider_enabled(provider_or_id, enabled=enabled)
+
+
+async def _discover_models(provider_or_id: str) -> dict[str, object]:
+    async with cli_db_session() as (_, session):
+        result = await OpenAICompatibleDiscoveryService(
+            provider_configs_repository=ProviderConfigsRepository(session),
+        ).discover(provider_or_id)
+    return {"provider": result.provider, "models": list(result.models)}
 
 
 @app.callback()
@@ -184,6 +195,26 @@ def show(
         emit_json(payload)
         return
     echo_kv(payload)
+
+
+@app.command("discover-models")
+def discover_models(
+    provider_or_id: Annotated[str, typer.Argument(help="Generic provider name or UUID")],
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")]=False,
+) -> None:
+    """Preview a bounded upstream /models response without mutating catalog state."""
+    try:
+        payload = run_async(_discover_models(provider_or_id))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+    if json_output:
+        emit_json(payload)
+        return
+    typer.echo(f"provider: {payload['provider']}")
+    typer.echo("models:")
+    for model in payload["models"]:
+        typer.echo(f"- {model}")
 
 
 @app.command("enable")

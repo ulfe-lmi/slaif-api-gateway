@@ -19,6 +19,13 @@ Alembic migrations
 
 The schema is designed for an open-source, Dockerized API gateway that exposes an OpenAI-compatible `/v1` API, authenticates gateway-issued API keys, enforces hard per-key quotas, routes requests to OpenAI/OpenRouter, accounts for token/cost usage, supports email delivery of keys, and provides an admin dashboard plus CLI.
 
+The generic OpenAI-compatible setup workflow uses the existing
+`provider_configs`, `model_routes`, `pricing_rules`, and `audit_log` tables.
+Discovery previews are read-only and persist no upstream response state. A
+confirmed setup creates selected route, pricing, and audit rows in the
+caller-owned transaction; no migration or additional discovery table is
+required.
+
 ---
 
 ## 1. Design goals

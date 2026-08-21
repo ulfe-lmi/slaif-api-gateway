@@ -114,3 +114,5 @@ canonical provider identity, server-side bearer environment-name isolation,
 no-redirect behavior, and PostgreSQL accounting gates. They are not a claim
 of Qwen/vLLM model qualification, OpenAI hosted-tool authority, or OpenRouter
 provider-cost semantics.
+
+| Generic backend discovery/setup wizard | Implemented as explicit operator workflow | Existing generic `openai_compatible` providers | CLI `providers discover-models` and CSRF-protected admin preview issue one bounded authenticated `/v1/models` request with no redirects/retries and retain only safe model IDs. Confirmation re-probes and atomically creates conservative Chat/Responses routes and local EUR pricing; routes default disabled. This is not automatic discovery, health checking, provider invoice truth, or Objective 020 qualification | Focused discovery/setup unit tests, CLI/admin/template coverage, PostgreSQL setup test, and CI browser smoke |

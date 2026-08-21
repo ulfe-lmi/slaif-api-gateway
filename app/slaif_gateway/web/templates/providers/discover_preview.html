@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Provider Model Preview{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="preview-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Fresh discovery preview</p>
+      <h1 id="preview-heading">{{ provider.display_name }} models</h1>
+      <p class="muted">Execution distrusts this preview, re-runs discovery, and commits all selected route/pricing rows atomically.</p>
+    </div>
+    <a class="button-link secondary" href="/admin/providers/{{ provider.id }}/discover">Run preview again</a>
+  </header>
+  {% if error %}<p class="warning-text" role="alert">{{ error }}</p>{% endif %}
+  {% if models %}
+  <form class="create-form" method="post" action="/admin/providers/{{ provider.id }}/discover/execute">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <fieldset>
+      <legend>Select models (maximum 100)</legend>
+      {% for model in models %}
+      <label class="checkbox-row"><input type="checkbox" name="model_choice" value="{{ model }}"><code>{{ model }}</code></label>
+      {% endfor %}
+    </fieldset>
+    <input type="hidden" id="selected-models" name="selected_models" value="">
+    <label>Preset
+      <select name="preset">
+        <option value="chat_text_v1">chat_text_v1</option>
+        <option value="responses_text_v1">responses_text_v1</option>
+        <option value="chat_and_responses_text_v1">chat_and_responses_text_v1</option>
+      </select>
+    </label>
+    <label>Pricing
+      <select name="pricing_mode">
+        <option value="local_zero">local_zero (operator-confirmed zero)</option>
+        <option value="explicit">explicit EUR per 1M tokens</option>
+      </select>
+    </label>
+    <label>Input EUR / 1M <input name="input_price_per_1m" inputmode="decimal"></label>
+    <label>Output EUR / 1M <input name="output_price_per_1m" inputmode="decimal"></label>
+    <label>Priority <input name="priority" value="100" inputmode="numeric"></label>
+    <label class="checkbox-row"><input type="checkbox" name="visible_in_models" value="true" checked><span>Show in /v1/models</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="streaming" value="true"><span>Enable typed streaming</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="local_function_tools" value="true"><span>Enable local function tools only</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_enable_unqualified" value="true"><span>Enable routes before Objective 020 qualification (explicitly audited)</span></label>
+    <label>Audit reason <input name="reason" required autocomplete="off"></label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_execute" value="true" required><span>I understand this is configuration, not endpoint/model qualification.</span></label>
+    <button type="submit">Re-probe and create setup</button>
+  </form>
+  <script>
+    const selected = document.getElementById("selected-models");
+    const choices = document.querySelectorAll('input[name="model_choice"]');
+    const sync = () => { selected.value = Array.from(choices).filter((item) => item.checked).map((item) => item.value).join(","); };
+    choices.forEach((item) => item.addEventListener("change", sync));
+  </script>
+  {% else %}
+  <p class="empty-state">No models were returned by the bounded preview.</p>
+  {% endif %}
+</section>
+{% endblock %}

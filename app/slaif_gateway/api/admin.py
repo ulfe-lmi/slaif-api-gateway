@@ -142,6 +142,16 @@ from slaif_gateway.services.key_policy_validation import (
     validate_gateway_key_policy_values,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.openai_compatible_discovery import (
+    DiscoveryError,
+    OpenAICompatibleDiscoveryService,
+)
+from slaif_gateway.services.openai_compatible_setup import (
+    LOCAL_ZERO_PRICING,
+    SetupError,
+    SetupRequest,
+    OpenAICompatibleSetupService,
+)
 from slaif_gateway.services.openai_assisted_catalog import (
     DEFAULT_OPENAI_ASSISTED_MODEL,
     DEFAULT_OPENAI_MODELS_SOURCE_URL,
@@ -371,6 +381,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "provider_config_reason_required": (
         "error",
         "Enter an audit reason before changing provider config metadata.",
+    ),
+    "openai_compatible_setup_executed": (
+        "success",
+        "Generic provider setup created; qualification remains a separate review.",
     ),
     "invalid_provider_config": ("error", "Enter valid provider config metadata."),
     "model_route_created": ("success", "Model route created."),
@@ -3703,6 +3717,177 @@ async def admin_provider_detail(request: Request, provider_config_id: str) -> Re
             "provider": provider_row,
         },
     )
+
+
+@router.get("/providers/{provider_config_id}/discover", response_class=HTMLResponse)
+async def admin_provider_discover_form(request: Request, provider_config_id: str) -> Response:
+    """Render the explicit, read-only generic provider discovery form."""
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+    try:
+        parsed_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
+    if provider is None:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    return templates.TemplateResponse(
+        request,
+        "providers/discover.html",
+        {
+            "admin": context.admin_user,
+            "csrf_token": csrf_token,
+            "provider": provider,
+            "error": None,
+        },
+    )
+
+
+@router.post("/providers/{provider_config_id}/discover/preview", response_class=HTMLResponse)
+async def admin_provider_discover_preview(
+    request: Request,
+    provider_config_id: str,
+    csrf_token: str = Form(""),
+    confirm_discovery: str = Form(""),
+) -> Response:
+    """Perform exactly one bounded discovery call and render safe model IDs."""
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+    try:
+        parsed_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
+        if provider is None:
+            return HTMLResponse("Provider config not found.", status_code=404)
+        if not _is_checked(confirm_discovery):
+            return _render_discovery_form(
+                request,
+                provider=provider,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                error="Confirm the explicit discovery call before continuing.",
+            )
+        try:
+            result = await OpenAICompatibleDiscoveryService(
+                provider_configs_repository=ProviderConfigsRepository(session),
+            ).discover(str(provider.id))
+        except DiscoveryError:
+            return _render_discovery_form(
+                request,
+                provider=provider,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                error="Provider discovery failed closed; no upstream content was retained.",
+                status_code=400,
+            )
+    return _render_discovery_preview(
+        request,
+        provider=provider,
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        models=result.models,
+    )
+
+
+@router.post("/providers/{provider_config_id}/discover/execute", response_class=HTMLResponse)
+async def admin_provider_discover_execute(
+    request: Request,
+    provider_config_id: str,
+    csrf_token: str = Form(""),
+    selected_models: str = Form(""),
+    preset: str = Form("chat_text_v1"),
+    pricing_mode: str = Form(LOCAL_ZERO_PRICING),
+    input_price_per_1m: str = Form(""),
+    output_price_per_1m: str = Form(""),
+    priority: str = Form("100"),
+    visible_in_models: str = Form(""),
+    streaming: str = Form(""),
+    local_function_tools: str = Form(""),
+    confirm_enable_unqualified: str = Form(""),
+    confirm_execute: str = Form(""),
+    reason: str = Form(""),
+    model_choice: list[str] = Form([]),
+) -> Response:
+    """Re-probe and atomically execute the reviewed setup choices."""
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+    try:
+        parsed_id = uuid.UUID(provider_config_id)
+    except ValueError:
+        return HTMLResponse("Provider config not found.", status_code=404)
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
+        if provider is None:
+            return HTMLResponse("Provider config not found.", status_code=404)
+        if not _is_checked(confirm_execute):
+            return _render_discovery_form(
+                request, provider=provider, admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                error="Confirm setup execution before continuing.", status_code=400,
+            )
+        try:
+            parsed_priority = int(priority)
+        except ValueError:
+            parsed_priority = -1
+        selected_model_values = tuple(model_choice) or tuple(
+            part.strip() for part in selected_models.split(",") if part.strip()
+        )
+        request_model = SetupRequest(
+            provider=provider.provider,
+            selected_models=selected_model_values,
+            preset=preset,
+            priority=parsed_priority,
+            visible_in_models=_is_checked(visible_in_models),
+            streaming=_is_checked(streaming),
+            local_function_tools=_is_checked(local_function_tools),
+            confirm_enable_unqualified=_is_checked(confirm_enable_unqualified),
+            pricing_mode=pricing_mode,
+            input_price_per_1m=input_price_per_1m or None,
+            output_price_per_1m=output_price_per_1m or None,
+            reason=reason,
+            actor_admin_id=action_context.admin_user.id,
+        )
+        await session.rollback()
+        try:
+            async with session.begin():
+                service = OpenAICompatibleSetupService(
+                    session=session,
+                    provider_configs_repository=ProviderConfigsRepository(session),
+                    model_routes_repository=ModelRoutesRepository(session),
+                    pricing_rules_repository=PricingRulesRepository(session),
+                    audit_repository=AuditRepository(session),
+                    discovery_service=OpenAICompatibleDiscoveryService(
+                        provider_configs_repository=ProviderConfigsRepository(session),
+                    ),
+                )
+                await service.execute(request_model)
+        except (SetupError, DiscoveryError, ValueError):
+            return _render_discovery_form(
+                request, provider=provider, admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                error="Setup was rejected; no partial route or pricing state was committed.",
+                status_code=400,
+            )
+    return _redirect_to_admin_provider(provider.id, message="openai_compatible_setup_executed")
 
 
 @router.get("/routes", response_class=HTMLResponse)
@@ -7747,6 +7932,52 @@ def _render_provider_config_form(
             "csrf_token": csrf_token,
             "provider_config_id": provider_config_id,
             "form": form,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _render_discovery_form(
+    request: Request,
+    *,
+    provider: object,
+    admin: object,
+    csrf_token: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "providers/discover.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "provider": provider,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+def _render_discovery_preview(
+    request: Request,
+    *,
+    provider: object,
+    admin: object,
+    csrf_token: str,
+    models: Sequence[str],
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "providers/discover_preview.html",
+        {
+            "admin": admin,
+            "csrf_token": csrf_token,
+            "provider": provider,
+            "models": tuple(models),
             "error": error,
         },
         status_code=status_code,

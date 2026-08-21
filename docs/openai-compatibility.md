@@ -688,8 +688,11 @@ credentials and request content traverse that network unencrypted; firewall
 and reverse-proxy ownership remains an operator responsibility.
 
 This is runtime plumbing, not a qualification or compatibility claim for any
-specific Qwen, vLLM, or other model. Discovery, health checks, load balancing,
-provider-specific translation, and model qualification remain future work.
+specific Qwen, vLLM, or other model. The explicit bounded discovery/setup
+wizard may preview `/v1/models` and create conservative route/pricing metadata,
+but it never performs automatic mutation, health checks, load balancing,
+provider-specific translation, or model qualification. Objective 020 owns
+qualification.
 
 - Responses cancel/list endpoints,
   Responses hosted tools other than exact bounded OpenAI Responses

@@ -1340,6 +1340,25 @@ Docker Compose smoke jobs without real provider keys. CI database jobs use
 The Docker smoke job copies `.env.example` to `.env` and uses only development
 placeholders. It does not call providers or send real external email.
 
+## Generic OpenAI-Compatible Backend Setup
+
+An operator can explicitly preview and configure an existing generic
+`openai_compatible` provider with `slaif-gateway providers discover-models
+<provider> --json` or the provider detail page's discovery wizard. The preview
+performs one bounded `GET <base_url>/models` request with the server-side
+bearer environment variable, follows no redirects, and does not mutate
+catalog state. Admin confirmation re-probes the provider and creates selected
+conservative Chat/Responses route and pricing rows in one PostgreSQL
+transaction.
+
+The wizard supports `chat_text_v1`, `responses_text_v1`, and
+`chat_and_responses_text_v1`, plus operator-confirmed local-zero or explicit
+EUR pricing. Routes are disabled unless the operator separately confirms
+enabling an unqualified configuration. This is setup metadata, not model or
+endpoint qualification; Objective 020 owns conformance. Generic HTTP LAN use
+still requires explicit audited acknowledgement and operator-owned
+firewall/reverse-proxy controls.
+
 Operator-defined `openai_compatible` provider configs store only the name of
 the environment variable containing the backend bearer secret. The generic
 runtime requires an exact `http(s)://host[:port]/v1` base URL, does not follow

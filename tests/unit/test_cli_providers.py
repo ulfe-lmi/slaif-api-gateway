@@ -34,7 +34,7 @@ def test_providers_help_registers_commands() -> None:
     result = runner.invoke(app, ["providers", "--help"])
 
     assert result.exit_code == 0
-    for command in ("add", "list", "show", "enable", "disable"):
+    for command in ("add", "list", "show", "enable", "disable", "discover-models"):
         assert command in result.stdout
 
 
@@ -101,6 +101,17 @@ def test_providers_add_does_not_accept_secret_value_option() -> None:
 
     assert result.exit_code != 0
     assert "sk-real-secret" not in result.stdout
+
+
+def test_providers_discover_models_json_is_safe_preview(monkeypatch) -> None:
+    async def fake_discover(provider_or_id: str) -> dict[str, object]:
+        assert provider_or_id == "lan-qwen"
+        return {"provider": "lan-qwen", "models": ["qwen/a"]}
+
+    monkeypatch.setattr(providers_cli, "_discover_models", fake_discover)
+    result = runner.invoke(app, ["providers", "discover-models", "lan-qwen", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"provider": "lan-qwen", "models": ["qwen/a"]}
 
 
 def test_providers_list_show_and_toggle_output_safe(monkeypatch) -> None:

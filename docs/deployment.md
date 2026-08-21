@@ -361,5 +361,7 @@ Docker and Nginx troubleshooting guidance is in
 Operator-defined `openai_compatible` backends may target an operator-owned LAN
 service, but generic HTTP sends bearer credentials and request content without
 encryption. Require the explicit audited HTTP acknowledgement, firewall or
-reverse-proxy controls, and an exact `/v1` URL. The runtime does not discover,
-qualify, load-balance, or follow redirects to these services.
+reverse-proxy controls, and an exact `/v1` URL. The runtime does not perform
+automatic discovery, qualify, load-balance, or follow redirects to these
+services. Operators may run the explicit bounded discovery/setup wizard after
+provider configuration; it is not a health check or qualification system.

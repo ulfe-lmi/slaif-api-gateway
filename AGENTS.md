@@ -2905,9 +2905,12 @@ without changing application code.
 8. Documentation clearly explains deployment, security, accounting, provider routing, database schema, and compatibility.
 
 The generic `openai_compatible` provider kind is a bounded runtime foundation
-for operator-defined backends, not a qualification, discovery, or hosted-tool
-compatibility claim. It stores only a server-side bearer-secret environment
-variable name, requires exact `/v1` URL metadata, never follows redirects,
-and requires explicit audited acknowledgement for generic HTTP LAN traffic.
-Generic adapters retain their canonical provider slug and do not inherit
-OpenAI hosted-tool or OpenRouter provider-cost authority.
+for operator-defined backends, not a qualification or hosted-tool
+compatibility claim. Its explicit discovery/setup wizard may preview one
+bounded `/v1/models` response and create conservative route/pricing metadata,
+but never performs automatic mutation or qualification; Objective 020 owns
+conformance. It stores only a server-side bearer-secret environment variable
+name, requires exact `/v1` URL metadata, never follows redirects, and requires
+explicit audited acknowledgement for generic HTTP LAN traffic. Generic
+adapters retain their canonical provider slug and do not inherit OpenAI
+hosted-tool or OpenRouter provider-cost authority.

@@ -633,3 +633,7 @@ under environment-variable names; generic HTTP requires explicit operator
 acknowledgement and an audit reason because bearer credentials and request
 content traverse the LAN unencrypted. Generic backends do not inherit hosted
 OpenAI tools or OpenRouter cost authority, and redirects are not followed.
+Operators may explicitly preview `/v1/models` with
+`slaif-gateway providers discover-models <provider> --json` and use the admin
+wizard to create conservative route/local-pricing metadata. This is not model
+qualification; Objective 020 owns conformance.
