@@ -18,6 +18,8 @@ from typing import Mapping
 PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
+QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
+QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "9bd5f49ca90c3448cc6ad6559ef87868295a45da54676463eed301a9fb6b2959"
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -599,3 +601,53 @@ def _validate_catalog_size(node: object, *, depth: int = 0, budget: list[int] | 
         raise ValueError("Codex model catalog contains a non-finite number.")
     elif node is not None and not isinstance(node, (bool, int, float)):
         raise ValueError("Codex model catalog contains unsupported data.")
+
+
+# Candidate metadata is intentionally not placed in CODEX_PROFILE_REGISTRY.
+# It can be rendered and verified in isolation, but cannot be selected by a
+# route or CLI until the separately required live phase succeeds.
+QWEN38_TEXT_CODEX_CANDIDATE = _profile(
+    profile_id=QWEN38_TEXT_PROFILE_ID,
+    metadata_version=PROFILE_METADATA_VERSION,
+    cli_version="0.148.0",
+    public_model="qwen3.8-27b-text",
+    upstream_model="qwen3.8-27b",
+    wire_api="responses",
+    provider_kind="openai_compatible",
+    provider_slug=None,
+    required_endpoints=("/v1/responses",),
+    required_route_gates=(
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+    ),
+    context_window_tokens=150_000,
+    default_max_output_tokens=32_768,
+    max_output_tokens=128_000,
+    compaction_mode="client_local",
+    reasoning_replay=False,
+    streaming_tool_events=True,
+    local_tools=("function",),
+    input_modalities=("text",),
+    auto_compaction_token_threshold=125_000,
+    credential_free_provider_fields={
+        "name": "OpenAICompatible",
+        "wire_api": "responses",
+        "requires_openai_auth": False,
+        "supports_websockets": False,
+    },
+    model_catalog_artifact=(
+        '{"models":[{"auto_compact_token_limit":125000,"context_window":150000,'
+        '"input_modalities":["text"],"slug":"qwen3.8-27b-text",'
+        '"supported_in_api":true,"supports_parallel_tool_calls":false,'
+        '"use_responses_lite":true}]}'
+    ),
+    model_catalog_target="qwen3.8-27b-text.json",
+    fixture_sha256=QWEN38_TEXT_PROFILE_FIXTURE_SHA256,
+    evidence_date="2026-08-21",
+    mocked_qualification=False,
+    live_qualification=False,
+    profile_name="qwen3_8_text",
+    provider_display_name="Qwen3.8 text OpenAI-compatible",
+    catalog_source="replacement",
+)
