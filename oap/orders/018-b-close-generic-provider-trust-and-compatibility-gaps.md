@@ -1,4 +1,4 @@
-# OAP 018-b — Close generic-provider trust and compatibility gaps
+# OAP Work Order — 018-b
 
 ## Objective and reason
 
