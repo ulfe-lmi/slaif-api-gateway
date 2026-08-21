@@ -281,8 +281,8 @@ def _normalize_request(request: SetupRequest) -> SetupRequest:
 def _public_ids(provider: str, request: SetupRequest) -> dict[str, str]:
     supplied = request.public_model_ids or {}
     selected = set(request.selected_models)
-    if supplied and not selected.issubset(set(supplied)):
-        raise SetupError("Every selected model requires one public model mapping")
+    if request.public_model_ids is not None and set(supplied) != selected:
+        raise SetupError("Public model mappings must exactly match selected models")
     result: dict[str, str] = {}
     for upstream in request.selected_models:
         public = supplied.get(upstream, f"{provider}/{upstream}")

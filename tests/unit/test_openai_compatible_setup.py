@@ -107,5 +107,26 @@ def test_public_mapping_is_bounded_scalar_and_complete() -> None:
         reason="reason",
     )
     assert _normalize_request(request).public_model_ids == request.public_model_ids
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {"qwen/a": "public-a"},
+        {"qwen/a": "public-a", "qwen/b": "public-b", "qwen/c": "public-c"},
+        {"qwen/a": "public-a", "qwen/b": "public-b", "unknown": "public-c"},
+        {"qwen/a": "public-a", "qwen/b": "public-a"},
+    ],
+)
+def test_public_mapping_rejects_non_exact_or_duplicate_sets(mapping: dict[str, str]) -> None:
+    request = SetupRequest(
+        provider="lan-qwen",
+        selected_models=("qwen/a", "qwen/b"),
+        preset=CHAT_TEXT_PRESET,
+        pricing_mode=LOCAL_ZERO_PRICING,
+        confirm_local_zero=True,
+        public_model_ids=mapping,
+        reason="reason",
+    )
     with pytest.raises(SetupError):
-        _normalize_request(replace(request, public_model_ids={"qwen/a": "public-a"}))
+        _normalize_request(request)
