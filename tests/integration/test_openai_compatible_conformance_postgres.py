@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from slaif_gateway.db.models import QuotaReservation, UsageLedger
+from slaif_gateway.db.models import GatewayKey, QuotaReservation, UsageLedger
 from slaif_gateway.db.models import PricingRule
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
@@ -205,6 +206,7 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
     from slaif_gateway.config import get_settings
     from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
     from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+    from slaif_gateway.providers.errors import ProviderError
     from slaif_gateway.schemas.providers import ProviderStreamChunk
     from slaif_gateway.services import chat_completion_gateway, responses_gateway
     from slaif_gateway.services.responses_route_capabilities import default_responses_capabilities
@@ -246,13 +248,13 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
     key.token_limit_total = 1_000_000
     key.request_limit_total = 10
     await async_test_session.flush()
-    auth = _auth(key)
+    auth_holder = {"value": _auth(key)}
 
     connection = await async_test_session.connection()
     factory = async_sessionmaker(bind=connection, expire_on_commit=False)
     app = create_app(get_settings())
     app.state.oap_test_session_factory = factory
-    app.dependency_overrides[dependencies.get_authenticated_gateway_key] = lambda: auth
+    app.dependency_overrides[dependencies.get_authenticated_gateway_key] = lambda: auth_holder["value"]
 
     async def session_iterator(request=None, *_args, **_kwargs):
         _ = request
@@ -262,10 +264,13 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
     monkeypatch.setattr(chat_completion_gateway, "_get_db_session_after_auth_header_check", session_iterator)
     monkeypatch.setattr(responses_gateway, "_get_db_session_after_auth_header_check", session_iterator)
     calls: list[str] = []
+    failure_mode = {"value": "success"}
 
     class Adapter:
         async def forward_chat_completion(self, request):
             calls.append(request.endpoint)
+            if failure_mode["value"] == "provider":
+                raise ProviderError("provider failure canary", provider=provider, error_code="provider_request_error")
             return ProviderResponse(
                 provider=provider, upstream_model="qwen/chat", status_code=200,
                 json_body={"id": "chat-gateway", "object": "chat.completion", "model": "qwen/chat",
@@ -321,14 +326,35 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
         remote_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
             "model": chat_model, "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://remote.test/canary"}}]}],
         })
+        await async_test_session.execute(
+            update(GatewayKey).where(GatewayKey.id == key_id).values(request_limit_total=2)
+        )
+        await async_test_session.flush()
+        auth_holder["value"] = replace(auth_holder["value"], request_limit_total=2)
+        exhausted_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
+            "model": chat_model, "messages": [{"role": "user", "content": "QUOTA_CANARY"}],
+        })
+        await async_test_session.execute(
+            update(GatewayKey).where(GatewayKey.id == key_id).values(request_limit_total=10)
+        )
+        await async_test_session.flush()
+        auth_holder["value"] = replace(auth_holder["value"], request_limit_total=10)
+        failure_mode["value"] = "provider"
+        provider_failure_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
+            "model": chat_model, "messages": [{"role": "user", "content": "PROVIDER_FAILURE_CANARY"}],
+        })
     assert chat_response.status_code == 200, chat_response.text
     assert responses_response.status_code == 200, responses_response.text
     assert remote_response.status_code == 400
-    assert calls == ["chat.completions", "responses"]
+    assert exhausted_response.status_code == 429
+    assert provider_failure_response.status_code >= 400
+    assert calls == ["chat.completions", "responses", "chat.completions"]
     async_test_session.expire_all()
     rows = (await async_test_session.execute(select(UsageLedger).where(UsageLedger.gateway_key_id == key_id))).scalars().all()
-    assert len(rows) == 2
+    assert len(rows) == 3
+    assert sum(row.accounting_status == "finalized" for row in rows) == 2
+    assert sum(row.accounting_status != "finalized" for row in rows) == 1
     assert {row.provider for row in rows} == {provider}
-    assert {row.accounting_status for row in rows} == {"finalized"}
+    assert {row.accounting_status for row in rows} == {"finalized", "failed"}
     assert await async_test_session.scalar(select(func.count()).select_from(QuotaReservation).where(
         QuotaReservation.gateway_key_id == key_id, QuotaReservation.status == "pending")) == 0
