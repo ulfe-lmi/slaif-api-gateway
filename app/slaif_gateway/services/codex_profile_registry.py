@@ -20,6 +20,8 @@ PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
 QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
+QWEN38_VISION_PROFILE_ID = "qwen3.8-27b-vision-codex-0.148-v1"
+QWEN38_VISION_PROFILE_FIXTURE_SHA256 = "f1f7d744af4cbae0f2e3556e793258a6be5144006ef20f3b3d36ddba6f91f461"
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -779,5 +781,65 @@ QWEN38_TEXT_CODEX_CANDIDATE = _profile(
     live_qualification=False,
     profile_name="qwen3_8_text",
     provider_display_name="Qwen3.8 text OpenAI-compatible",
+    catalog_source="replacement",
+)
+
+# Vision candidate remains isolated from selectable registry state until the
+# separately required live qualification phase succeeds.
+QWEN38_VISION_CODEX_CANDIDATE = _profile(
+    profile_id=QWEN38_VISION_PROFILE_ID,
+    metadata_version=PROFILE_METADATA_VERSION,
+    cli_version="0.148.0",
+    public_model="qwen3.8-27b-vision",
+    upstream_model="qwen3.8-27b",
+    wire_api="responses",
+    provider_kind="openai_compatible",
+    provider_slug=None,
+    required_endpoints=("/v1/responses",),
+    required_route_gates=(
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+        "image_input",
+    ),
+    context_window_tokens=100_000,
+    default_max_output_tokens=8_192,
+    max_output_tokens=24_576,
+    compaction_mode="client_local",
+    reasoning_replay=False,
+    streaming_tool_events=True,
+    local_tools=("function",),
+    input_modalities=("text", "image"),
+    auto_compaction_token_threshold=75_000,
+    credential_free_provider_fields={
+        "name": "OpenAICompatible",
+        "wire_api": "responses",
+        "requires_openai_auth": False,
+        "supports_websockets": False,
+    },
+    model_catalog_artifact=(
+        '{"models":[{"additional_speed_tiers":[],"auto_compact_token_limit":75000,'
+        '"availability_nux":null,"base_instructions":"","context_window":100000,'
+        '"default_reasoning_level":"none","default_reasoning_summary":"none",'
+        '"default_service_tier":null,"default_verbosity":null,'
+        '"description":"Qwen3.8 vision model","display_name":"Qwen3.8 27B Vision",'
+        '"effective_context_window_percent":83,"experimental_supported_tools":[],'
+        '"input_modalities":["text","image"],"max_context_window":100000,'
+        '"model_messages":null,"priority":0,"service_tiers":[],'
+        '"shell_type":"shell_command","slug":"qwen3.8-27b-vision",'
+        '"support_verbosity":false,"supported_in_api":true,'
+        '"supported_reasoning_levels":[{"description":"No reasoning","effort":"none"}],'
+        '"supports_image_detail_original":false,"supports_parallel_tool_calls":false,'
+        '"supports_reasoning_summaries":false,"supports_search_tool":false,'
+        '"truncation_policy":{"limit":100000,"mode":"tokens"},"upgrade":null,'
+        '"use_responses_lite":true,"visibility":"list","web_search_tool_type":"text"}]}'
+    ),
+    model_catalog_target="qwen3.8-27b-vision.json",
+    fixture_sha256=QWEN38_VISION_PROFILE_FIXTURE_SHA256,
+    evidence_date="2026-08-21",
+    mocked_qualification=True,
+    live_qualification=False,
+    profile_name="qwen3_8_vision",
+    provider_display_name="Qwen3.8 vision OpenAI-compatible",
     catalog_source="replacement",
 )
