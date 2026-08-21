@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from slaif_gateway.services.openai_compatible_setup import (
+    CHAT_AND_RESPONSES_VISION_INLINE_PRESET,
     CHAT_AND_RESPONSES_TEXT_PRESET,
     CHAT_TEXT_PRESET,
     EXPLICIT_PRICING,
@@ -26,6 +27,10 @@ def test_presets_have_only_the_bounded_endpoint_families() -> None:
         "/v1/chat/completions",
         "/v1/responses",
     )
+    assert _preset_endpoints(CHAT_AND_RESPONSES_VISION_INLINE_PRESET) == (
+        "/v1/chat/completions",
+        "/v1/responses",
+    )
 
 
 def test_capabilities_are_conservative_and_function_tools_are_explicit() -> None:
@@ -39,6 +44,30 @@ def test_capabilities_are_conservative_and_function_tools_are_explicit() -> None
     assert responses["text"] is True
     assert responses["stateless"] is True
     assert responses["function_tools"] is True
+    assert responses["storage"] is False
+    assert responses["codex_request_envelope"] is False
+
+
+def test_vision_inline_preset_only_adds_image_capabilities() -> None:
+    chat = _capabilities(
+        "/v1/chat/completions",
+        streaming=False,
+        local_function_tools=False,
+        vision_inline=True,
+    )["chat_completions"]
+    responses = _capabilities(
+        "/v1/responses",
+        streaming=False,
+        local_function_tools=False,
+        vision_inline=True,
+    )["responses"]
+    assert chat["chat_image_inputs"] is True
+    assert chat["chat_multimodal"] is False
+    assert chat["chat_audio_inputs"] is False
+    assert chat["chat_file_inputs"] is False
+    assert responses["image_input"] is True
+    assert responses["multimodal"] is False
+    assert responses["file_input"] is False
     assert responses["storage"] is False
     assert responses["codex_request_envelope"] is False
 

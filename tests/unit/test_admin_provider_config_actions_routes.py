@@ -166,6 +166,7 @@ def test_generic_discovery_preview_and_execute_are_confirmed_and_safe(monkeypatc
     assert preview.status_code == 200
     assert "Qwen/Qwen2.5" in preview.text
     assert "lan-qwen/Qwen/Qwen2.5" in preview.text
+    assert "chat_and_responses_vision_inline_v1" in preview.text
 
     seen: dict[str, object] = {}
 

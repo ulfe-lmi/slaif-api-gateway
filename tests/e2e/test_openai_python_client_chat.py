@@ -27,6 +27,7 @@ PROMPT_TEXT = "Hello from SLAIF test"
 COMPLETION_TEXT = "Hello from mocked upstream"
 FAKE_OPENAI_UPSTREAM_KEY = "fake-openai-upstream-key"
 FAKE_OPENROUTER_UPSTREAM_KEY = "fake-openrouter-upstream-key"
+FAKE_GENERIC_UPSTREAM_KEY = "fake-generic-upstream-key"
 TEST_HMAC_SECRET = "test-hmac-secret-for-openai-client-e2e-123456"
 TEST_ADMIN_SECRET = "test-admin-secret-for-openai-client-e2e-123456"
 TEST_ONE_TIME_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
@@ -67,6 +68,7 @@ def _configure_runtime_environment(monkeypatch: pytest.MonkeyPatch, database_url
     monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", TEST_ONE_TIME_SECRET_KEY)
     monkeypatch.setenv("OPENAI_UPSTREAM_API_KEY", FAKE_OPENAI_UPSTREAM_KEY)
     monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_OPENROUTER_UPSTREAM_KEY)
+    monkeypatch.setenv("GENERIC_UPSTREAM_KEY", FAKE_GENERIC_UPSTREAM_KEY)
 
     from slaif_gateway.config import get_settings
 
@@ -78,6 +80,7 @@ async def _create_test_data(
     *,
     provider: str = "openai",
     model: str = TEST_MODEL,
+    upstream_model: str | None = None,
     allowed_models: list[str] | None = None,
     allowed_endpoints: list[str] | None = None,
     base_url: str = "https://api.openai.com/v1",
@@ -181,7 +184,7 @@ async def _create_test_data(
             await routes.create_model_route(
                 requested_model=model,
                 provider=provider,
-                upstream_model=model,
+                upstream_model=upstream_model or model,
                 match_type="exact",
                 endpoint=CHAT_COMPLETIONS_ENDPOINT,
                 priority=1,
@@ -222,7 +225,7 @@ async def _create_test_data(
             )
             await pricing.create_pricing_rule(
                 provider=provider,
-                upstream_model=model,
+                upstream_model=upstream_model or model,
                 endpoint=CHAT_COMPLETIONS_ENDPOINT,
                 valid_from=now - timedelta(days=1),
                 currency="EUR",
@@ -1410,3 +1413,143 @@ def test_chat_completions_rejects_oversized_response_schema_before_upstream(
     )
     assert reservation_count == 0
     assert usage_ledger_count == 0
+
+
+@pytest.mark.e2e
+def test_openai_python_client_generic_chat_images_and_function_tool_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    model = "generic-chat-vision-e2e"
+    created = asyncio.run(
+        _create_test_data(
+            database_url,
+            provider="lan-qwen",
+            model=model,
+            upstream_model="qwen/a",
+            base_url="https://lan-qwen.example.test/v1",
+            api_key_env_var="GENERIC_UPSTREAM_KEY",
+            owner_label="Generic Chat",
+            image_inputs=True,
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    app = create_app(get_settings())
+    image_one = "data:image/png;base64,QU5JTUdfQ0FOT1JfMQ=="
+    image_two = "data:image/jpeg;base64,QU5JTUdfQ0FOT1JfMg=="
+    payload = {
+        "id": "generic-chat-image",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "qwen/a",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "generic answer"},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 25, "completion_tokens": 7, "total_tokens": 32},
+    }
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream = router.post("https://lan-qwen.example.test/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=payload, headers={"x-request-id": "generic-chat"})
+            )
+            response = OpenAI().chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": "image prompt canary"},
+                    {"type": "image_url", "image_url": {"url": image_one}},
+                    {"type": "image_url", "image_url": {"url": image_two}},
+                ]}],
+                tools=[{
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_local",
+                        "description": "local function canary",
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    },
+                }],
+                tool_choice="auto",
+            )
+    assert response.choices[0].message.content == "generic answer"
+    assert len(upstream.calls) == 1
+    request = upstream.calls[0].request
+    assert request.headers["authorization"] == f"Bearer {FAKE_GENERIC_UPSTREAM_KEY}"
+    assert request.headers["authorization"] != f"Bearer {created.plaintext_gateway_key}"
+    assert "cookie" not in request.headers
+    assert "x-slaif-internal" not in request.headers
+    body = json.loads(request.content)
+    assert body["model"] == "qwen/a"
+    assert body["messages"][0]["content"][1]["image_url"]["url"] == image_one
+    assert body["messages"][0]["content"][2]["image_url"]["url"] == image_two
+    assert body["tools"][0]["function"]["name"] == "lookup_local"
+
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id, provider="lan-qwen"))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.tokens_used_total == 32
+    assert state.usage_ledger.provider == "lan-qwen"
+    assert state.usage_ledger.requested_model == model
+    assert state.usage_ledger.resolved_model == "qwen/a"
+    assert state.usage_ledger.endpoint == CHAT_COMPLETIONS_ENDPOINT
+    durable = json.dumps({"usage": state.usage_ledger.usage_raw, "metadata": state.usage_ledger.response_metadata})
+    for canary in ("image prompt canary", image_one, image_two, "lookup_local", FAKE_GENERIC_UPSTREAM_KEY):
+        assert canary not in durable
+
+
+@pytest.mark.e2e
+def test_openai_python_client_generic_chat_streaming_final_usage_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    model = "generic-chat-stream-e2e"
+    created = asyncio.run(_create_test_data(
+        database_url,
+        provider="lan-qwen",
+        model=model,
+        upstream_model="qwen/stream",
+        base_url="https://lan-qwen-stream.example.test/v1",
+        api_key_env_var="GENERIC_UPSTREAM_KEY",
+        owner_label="Generic Chat Stream",
+    ))
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_gateway_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    app = create_app(get_settings())
+    sse = (
+        'data: {"id":"generic-stream","object":"chat.completion.chunk","created":123,"model":"qwen/stream","choices":[{"index":0,"delta":{"content":"streamed"},"finish_reason":"stop"}]}\n\n'
+        'data: {"id":"generic-stream","object":"chat.completion.chunk","created":123,"model":"qwen/stream","choices":[],"usage":{"prompt_tokens":6,"completion_tokens":4,"total_tokens":10}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream = router.post("https://lan-qwen-stream.example.test/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+            )
+            chunks = OpenAI().chat.completions.create(
+                model=model, messages=[{"role": "user", "content": "stream canary"}], stream=True
+            )
+            text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert text == "streamed"
+    assert len(upstream.calls) == 1
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id, provider="lan-qwen"))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 10
+    assert state.usage_ledger.streaming is True

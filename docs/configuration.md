@@ -1351,13 +1351,18 @@ catalog state. Admin confirmation re-probes the provider and creates selected
 conservative Chat/Responses route and pricing rows in one PostgreSQL
 transaction.
 
-The wizard supports `chat_text_v1`, `responses_text_v1`, and
-`chat_and_responses_text_v1`, plus operator-confirmed local-zero or explicit
-EUR pricing. Routes are disabled unless the operator separately confirms
+The wizard supports `chat_text_v1`, `responses_text_v1`,
+`chat_and_responses_text_v1`, and
+`chat_and_responses_vision_inline_v1`, plus operator-confirmed local-zero or
+explicit EUR pricing. The vision-inline preset adds only the existing Chat
+`chat_image_inputs` and Responses `image_input` capabilities; the reserved
+broad multimodal flags remain false. It does not enable remote URL fetches, files, audio, hosted tools, or Codex
+capabilities. Routes are disabled unless the operator separately confirms
 enabling an unqualified configuration. This is setup metadata, not model or
-endpoint qualification; Objective 020 owns conformance. Generic HTTP LAN use
-still requires explicit audited acknowledgement and operator-owned
-firewall/reverse-proxy controls.
+endpoint qualification; Objective 020 records `mocked_conformance` only, and
+Objectives 022–023 own named live targets. Generic HTTP LAN use still requires
+explicit audited acknowledgement and operator-owned firewall/reverse-proxy
+controls.
 
 Operator-defined `openai_compatible` provider configs store only the name of
 the environment variable containing the backend bearer secret. The generic

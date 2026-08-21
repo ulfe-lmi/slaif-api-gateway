@@ -88,6 +88,10 @@ from slaif_gateway.services.rate_limit_errors import RateLimitError
 from slaif_gateway.services.rate_limit_errors import RedisRateLimitUnavailableError
 from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
+from slaif_gateway.services.openai_compatible_request_boundary import (
+    OpenAICompatibleRequestBoundaryError,
+    enforce_openai_compatible_request_boundary,
+)
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
@@ -193,6 +197,20 @@ async def handle_chat_completion(
         policy_result=policy_result,
         request=request,
     )
+    try:
+        enforce_openai_compatible_request_boundary(
+            policy_result.effective_body,
+            route=route,
+            endpoint="chat.completions",
+        )
+    except OpenAICompatibleRequestBoundaryError as exc:
+        raise OpenAICompatibleError(
+            "Remote image URLs are not enabled for generic OpenAI-compatible providers.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="openai_compatible_remote_image_not_allowed",
+            param=exc.param,
+        ) from exc
     upstream_body = _build_safe_chat_completion_upstream_body(
         policy_result=policy_result,
         upstream_model=route.resolved_model,

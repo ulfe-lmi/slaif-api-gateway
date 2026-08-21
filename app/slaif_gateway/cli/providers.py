@@ -296,7 +296,13 @@ def setup_models(
     ],
     preset: Annotated[
         str,
-        typer.Option("--preset", help="chat_text_v1, responses_text_v1, or chat_and_responses_text_v1"),
+        typer.Option(
+            "--preset",
+            help=(
+                "chat_text_v1, responses_text_v1, chat_and_responses_text_v1, "
+                "or chat_and_responses_vision_inline_v1"
+            ),
+        ),
     ],
     pricing_mode: Annotated[
         str,

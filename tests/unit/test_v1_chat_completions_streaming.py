@@ -50,15 +50,16 @@ def _auth() -> AuthenticatedGatewayKey:
     )
 
 
-def _route() -> RouteResolutionResult:
+def _route(*, provider: str = "openai", provider_kind: str | None = None) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
         resolved_model="gpt-4.1-mini",
-        provider="openai",
+        provider=provider,
         route_id=uuid.uuid4(),
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        provider_kind=provider_kind,
     )
 
 
@@ -96,7 +97,16 @@ def _cost_estimate() -> ChatCostEstimate:
     )
 
 
-def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=None, auth=None):
+def _wire_streaming_pipeline(
+    monkeypatch,
+    app,
+    *,
+    chunks=None,
+    provider_error=None,
+    auth=None,
+    provider: str = "openai",
+    provider_kind: str | None = None,
+):
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as gateway_module
 
@@ -126,7 +136,7 @@ def _wire_streaming_pipeline(monkeypatch, app, *, chunks=None, provider_error=No
     async def _fake_resolve_model(self, requested_model, authenticated_key):
         _ = (self, authenticated_key)
         state["route_calls"].append(requested_model)
-        return _route()
+        return _route(provider=provider, provider_kind=provider_kind)
 
     async def _fake_estimate(self, *, route, policy, endpoint="chat.completions", at=None):
         _ = (self, route, policy, endpoint, at)
@@ -253,7 +263,13 @@ def test_streaming_chat_completion_forwards_chunks_and_finalizes_after_usage(mon
         ),
     ]
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
-    state = _wire_streaming_pipeline(monkeypatch, app, chunks=chunks)
+    state = _wire_streaming_pipeline(
+        monkeypatch,
+        app,
+        chunks=chunks,
+        provider="lan-qwen",
+        provider_kind="openai_compatible",
+    )
 
     with TestClient(app).stream("POST", "/v1/chat/completions", json=_chat_request()) as response:
         body = "".join(response.iter_text())

@@ -17,6 +17,7 @@ from tests.e2e.test_openai_python_client_chat import (
     _configure_runtime_environment,
     _free_port,
     _load_accounting_state,
+    _load_accounting_side_effect_counts,
     _run_uvicorn_server,
     _test_database_url,
 )
@@ -45,6 +46,11 @@ def _sse(payload: dict[str, object]) -> str:
 async def _create_responses_test_data(
     database_url: str,
     *,
+    provider: str = "openai",
+    model: str = TEST_RESPONSES_MODEL,
+    upstream_model: str | None = None,
+    base_url: str = "https://api.openai.com/v1",
+    api_key_env_var: str = "OPENAI_UPSTREAM_API_KEY",
     streaming: bool = False,
     structured_outputs: bool = False,
     json_mode: bool = False,
@@ -85,8 +91,8 @@ async def _create_responses_test_data(
     try:
         async with session_factory() as session:
             route_ids = select(ModelRoute.id).where(
-                ModelRoute.requested_model == TEST_RESPONSES_MODEL,
-                ModelRoute.provider == "openai",
+                ModelRoute.requested_model == model,
+                ModelRoute.provider == provider,
             )
             reservation_ids = select(QuotaReservation.id).where(
                 QuotaReservation.external_tool_route_id.in_(route_ids)
@@ -112,14 +118,14 @@ async def _create_responses_test_data(
             )
             await session.execute(
                 delete(ModelRoute).where(
-                    ModelRoute.requested_model == TEST_RESPONSES_MODEL,
-                    ModelRoute.provider == "openai",
+                    ModelRoute.requested_model == model,
+                    ModelRoute.provider == provider,
                 )
             )
             await session.execute(
                 delete(PricingRule).where(
-                    PricingRule.provider == "openai",
-                    PricingRule.upstream_model == TEST_RESPONSES_MODEL,
+                    PricingRule.provider == provider,
+                    PricingRule.upstream_model == model,
                     PricingRule.endpoint == endpoint,
                 )
             )
@@ -150,21 +156,21 @@ async def _create_responses_test_data(
                 ends_at=now + timedelta(days=1),
             )
 
-            provider_config = await providers.get_provider_config_by_provider("openai")
+            provider_config = await providers.get_provider_config_by_provider(provider)
             if provider_config is None:
                 await providers.create_provider_config(
-                    provider="openai",
-                    display_name="OpenAI Responses E2E",
-                    base_url="https://api.openai.com/v1",
-                    api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                    provider=provider,
+                    display_name=f"{provider} Responses E2E",
+                    base_url=base_url,
+                    api_key_env_var=api_key_env_var,
                     notes="E2E test provider config without secrets",
                 )
             else:
                 await providers.update_provider_metadata(
                     provider_config.id,
-                    display_name="OpenAI Responses E2E",
-                    base_url="https://api.openai.com/v1",
-                    api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                    display_name=f"{provider} Responses E2E",
+                    base_url=base_url,
+                    api_key_env_var=api_key_env_var,
                     notes="E2E test provider config without secrets",
                 )
                 await providers.set_provider_enabled(provider_config.id, enabled=True)
@@ -194,9 +200,9 @@ async def _create_responses_test_data(
             }
 
             await routes.create_model_route(
-                requested_model=TEST_RESPONSES_MODEL,
-                provider="openai",
-                upstream_model=TEST_RESPONSES_MODEL,
+                requested_model=model,
+                provider=provider,
+                upstream_model=upstream_model or model,
                 match_type="exact",
                 endpoint=endpoint,
                 priority=1,
@@ -213,8 +219,8 @@ async def _create_responses_test_data(
                 notes="Responses E2E route",
             )
             await pricing.create_pricing_rule(
-                provider="openai",
-                upstream_model=TEST_RESPONSES_MODEL,
+                provider=provider,
+                upstream_model=upstream_model or model,
                 endpoint=endpoint,
                 valid_from=now - timedelta(days=1),
                 currency="EUR",
@@ -249,7 +255,7 @@ async def _create_responses_test_data(
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
                     request_limit_total=100,
-                    allowed_models=[TEST_RESPONSES_MODEL],
+                    allowed_models=[model],
                     allowed_endpoints=allowed_endpoints or [endpoint],
                     external_tool_policy=(
                         {
@@ -2239,3 +2245,116 @@ def test_openai_python_client_responses_compact_e2e(
 
     state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id))
     assert state.usage_ledger.endpoint == "responses.compact"
+
+
+@pytest.mark.e2e
+def test_openai_python_client_generic_responses_conformance_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    provider = "lan-qwen-responses"
+    model = "generic-responses-e2e"
+    created = asyncio.run(_create_responses_test_data(
+        database_url, provider=provider, model=model,
+        upstream_model="qwen/responses",
+        base_url="https://lan-qwen-responses.example.test/v1",
+        api_key_env_var="GENERIC_UPSTREAM_KEY", function_tools=True, image_input=True,
+    ))
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    app = create_app(get_settings())
+    images = ["data:image/png;base64,UkVTX0NBTkFSXzE=", "data:image/webp;base64,UkVTX0NBTkFSXzI="]
+    input_items = [{"role": "user", "content": [
+        {"type": "input_text", "text": "responses image canary"},
+        {"type": "input_image", "image_url": images[0]},
+        {"type": "input_image", "image_url": images[1]},
+    ]}]
+    tools = [{"type": "function", "name": "lookup_local", "description": "local canary",
+              "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}, "strict": True}]
+    payload = {"id": "generic-responses", "object": "response", "created_at": 123,
+               "status": "completed", "model": "qwen/responses", "output": [{
+                   "id": "call", "type": "function_call", "call_id": "call", "name": "lookup_local",
+                   "arguments": '{"q":"safe"}', "status": "completed"}],
+               "usage": {"input_tokens": 29, "output_tokens": 11, "total_tokens": 40}, "store": False}
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream = router.post("https://lan-qwen-responses.example.test/v1/responses").mock(
+                return_value=httpx.Response(200, json=payload, headers={"x-request-id": "generic-responses"}))
+            response = OpenAI().responses.create(model=model, input=input_items, max_output_tokens=32,
+                                                  tools=tools, tool_choice={"type": "function", "name": "lookup_local"})
+    assert response.output[0].type == "function_call"
+    assert len(upstream.calls) == 1
+    request = upstream.calls[0].request
+    assert request.headers["authorization"] == "Bearer fake-generic-upstream-key"
+    assert "cookie" not in request.headers
+    body = json.loads(request.content)
+    assert body["model"] == "qwen/responses"
+    assert body["input"] == input_items
+    assert body["tools"] == tools
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id, provider=provider))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.provider == provider
+    assert state.usage_ledger.total_tokens == 40
+    durable = json.dumps({"usage": state.usage_ledger.usage_raw, "metadata": state.usage_ledger.response_metadata})
+    for canary in ("responses image canary", images[0], images[1], "lookup_local", '{"q":"safe"}'):
+        assert canary not in durable
+
+
+@pytest.mark.e2e
+def test_openai_python_client_generic_responses_stream_and_remote_rejection_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    provider = "lan-qwen-responses-stream"
+    model = "generic-responses-stream-e2e"
+    created = asyncio.run(_create_responses_test_data(
+        database_url, provider=provider, model=model,
+        upstream_model="qwen/stream",
+        base_url="https://lan-qwen-responses-stream.example.test/v1",
+        api_key_env_var="GENERIC_UPSTREAM_KEY", streaming=True,
+    ))
+    from openai import BadRequestError, OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+    port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    app = create_app(get_settings())
+    sse = (_sse({"type": "response.created", "sequence_number": 0,
+                 "response": {"id": "generic-stream", "object": "response", "created_at": 123,
+                               "status": "in_progress", "model": "qwen/stream"}})
+           + _sse({"type": "response.output_text.delta", "sequence_number": 1,
+                   "item_id": "msg", "output_index": 0, "content_index": 0, "delta": "streamed"})
+           + _sse({"type": "response.completed", "sequence_number": 2,
+                   "response": {"id": "generic-stream", "object": "response", "created_at": 123,
+                                 "status": "completed", "model": "qwen/stream", "output": [],
+                                 "usage": {"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+                                 "store": False}}))
+    with _run_uvicorn_server(app, port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            router.route(host="127.0.0.1").pass_through()
+            upstream = router.post("https://lan-qwen-responses-stream.example.test/v1/responses").mock(
+                return_value=httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"}))
+            client = OpenAI()
+            with pytest.raises(BadRequestError):
+                client.responses.create(model=model, input=[{"role": "user", "content": [
+                    {"type": "input_image", "image_url": "https://remote.example.test/no-fetch"}]}])
+            assert len(upstream.calls) == 0
+            assert asyncio.run(_load_accounting_side_effect_counts(database_url, created.gateway_key_id)) == (0, 0)
+            events = list(client.responses.create(model=model, input="stream canary", stream=True))
+    assert [event.type for event in events] == ["response.created", "response.output_text.delta", "response.completed"]
+    assert events[-1].response.usage.total_tokens == 12
+    assert len(upstream.calls) == 1
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id, provider=provider))
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.streaming is True
+    assert state.usage_ledger.total_tokens == 12

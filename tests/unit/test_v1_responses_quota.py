@@ -63,6 +63,8 @@ def _fake_authenticated_gateway_key(
 def _route_result(
     requested_model: str = "classroom-responses",
     *,
+    provider: str = "openai",
+    provider_kind: str | None = None,
     responses_streaming: bool = False,
     route_supports_streaming: bool = False,
     responses_json_mode: bool = False,
@@ -99,11 +101,12 @@ def _route_result(
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model="gpt-5.2",
-        provider="openai",
+        provider=provider,
         route_id=uuid.uuid4(),
         route_match_type="exact",
         route_pattern=requested_model,
         priority=100,
+        provider_kind=provider_kind,
         capabilities=route_capabilities,
         supports_streaming=route_supports_streaming,
     )
@@ -131,6 +134,22 @@ def _responses_request(model: str = "classroom-responses") -> dict[str, object]:
         "model": model,
         "input": "hello",
         "max_output_tokens": 20,
+    }
+
+
+def _inline_responses_image_request(model: str = "classroom-responses") -> dict[str, object]:
+    return {
+        **_responses_request(model),
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+                    {"type": "input_image", "image_url": "data:image/jpeg;base64,BBBB"},
+                ],
+            }
+        ],
     }
 
 
@@ -259,7 +278,12 @@ def _wire_auth_and_db(monkeypatch, app, authenticated_key: AuthenticatedGatewayK
     monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
 
 
-def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tuple[list[str], list[str]]:
+def _wire_successful_route_pricing_quota(
+    monkeypatch,
+    *,
+    quota_error=None,
+    route_kwargs: dict[str, object] | None = None,
+) -> tuple[list[str], list[str]]:
     import slaif_gateway.services.responses_gateway as main_module
 
     reserve_calls: list[str] = []
@@ -268,7 +292,7 @@ def _wire_successful_route_pricing_quota(monkeypatch, *, quota_error=None) -> tu
     async def _fake_resolve_model(self, requested_model, authenticated_key, *, endpoint="/v1/chat/completions"):
         _ = (self, authenticated_key)
         assert endpoint == "/v1/responses"
-        return _route_result(requested_model)
+        return _route_result(requested_model, **(route_kwargs or {}))
 
     async def _fake_estimate_chat_completion_cost(
         self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
@@ -446,6 +470,72 @@ def test_valid_responses_path_reserves_finalizes_then_returns_provider_response(
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
     assert finalize_calls == ["classroom-responses"]
+
+
+def test_generic_responses_remote_image_is_rejected_before_quota(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, _ = _wire_successful_route_pricing_quota(
+        monkeypatch,
+        route_kwargs={
+            "provider": "lan-qwen",
+            "provider_kind": "openai_compatible",
+            "responses_image_input": True,
+        },
+    )
+    _wire_successful_forwarding(monkeypatch)
+
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_responses_image_input_request(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "openai_compatible_remote_image_not_allowed"
+    assert response.json()["error"]["param"] == "input[0].content[1].image_url"
+    assert reserve_calls == []
+
+
+def test_generic_responses_forwards_two_inline_images(monkeypatch) -> None:
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    reserve_calls, _ = _wire_successful_route_pricing_quota(
+        monkeypatch,
+        route_kwargs={
+            "provider": "lan-qwen",
+            "provider_kind": "openai_compatible",
+            "responses_image_input": True,
+        },
+    )
+    observed: list[dict[str, object]] = []
+    import slaif_gateway.services.responses_gateway as main_module
+
+    _wire_successful_forwarding(monkeypatch)
+
+    class _ImageAdapter:
+        async def forward_response(self, request):
+            observed.append(request.body)
+            return ProviderResponse(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                status_code=200,
+                json_body={"id": "resp_generic", "object": "response"},
+                usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+    monkeypatch.setattr(main_module, "get_provider_adapter", lambda provider, settings: _ImageAdapter())
+    response = TestClient(app).post(
+        "/v1/responses",
+        json=_inline_responses_image_request(),
+    )
+
+    assert response.status_code == 200
+    assert reserve_calls == ["classroom-responses"]
+    assert [
+        part["image_url"]
+        for part in observed[0]["input"][0]["content"]
+        if part["type"] == "input_image"
+    ] == ["data:image/png;base64,AAAA", "data:image/jpeg;base64,BBBB"]
 
 
 def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -> None:
@@ -3602,6 +3692,8 @@ def test_streaming_responses_path_finalizes_from_completed_usage(monkeypatch) ->
         _ = (self, authenticated_key, endpoint)
         return _route_result(
             requested_model,
+            provider="lan-qwen",
+            provider_kind="openai_compatible",
             responses_streaming=True,
             route_supports_streaming=True,
         )

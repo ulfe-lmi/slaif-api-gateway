@@ -136,7 +136,7 @@ def test_providers_setup_models_uses_explicit_confirmation_and_safe_json(monkeyp
         app,
         [
             "providers", "setup-models", "lan-qwen", "--model", "qwen/a",
-            "--public-model-id", "qwen/a=public-a", "--preset", "chat_text_v1",
+            "--public-model-id", "qwen/a=public-a", "--preset", "chat_and_responses_vision_inline_v1",
             "--pricing-mode", "local_zero", "--confirm-local-zero",
             "--confirm-execute", "--reason", "operator confirmed", "--json",
         ],
