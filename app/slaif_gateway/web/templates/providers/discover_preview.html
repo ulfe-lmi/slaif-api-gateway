@@ -33,6 +33,7 @@
         <option value="chat_text_v1">chat_text_v1</option>
         <option value="responses_text_v1">responses_text_v1</option>
         <option value="chat_and_responses_text_v1">chat_and_responses_text_v1</option>
+        <option value="chat_and_responses_vision_inline_v1">chat_and_responses_vision_inline_v1</option>
       </select>
     </label>
     <label>Pricing
@@ -51,7 +52,7 @@
     <label class="checkbox-row"><input type="checkbox" name="local_function_tools" value="true"><span>Enable local function tools only</span></label>
     <label class="checkbox-row"><input type="checkbox" name="confirm_enable_unqualified" value="true"><span>Enable routes before Objective 020 qualification (explicitly audited)</span></label>
     <label>Audit reason <input name="reason" required autocomplete="off"></label>
-    <label class="checkbox-row"><input type="checkbox" name="confirm_execute" value="true" required><span>I understand this is configuration, not endpoint/model qualification.</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_execute" value="true" required><span>I understand this is configuration, not endpoint/model qualification; Objective 020 is mocked conformance only and Objectives 022–023 own named live targets.</span></label>
     <button type="submit">Re-probe and create setup</button>
   </form>
   <script>

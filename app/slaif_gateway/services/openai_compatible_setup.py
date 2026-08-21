@@ -26,8 +26,14 @@ from slaif_gateway.services.pricing_rule_service import PricingRuleService
 CHAT_TEXT_PRESET = "chat_text_v1"
 RESPONSES_TEXT_PRESET = "responses_text_v1"
 CHAT_AND_RESPONSES_TEXT_PRESET = "chat_and_responses_text_v1"
+CHAT_AND_RESPONSES_VISION_INLINE_PRESET = "chat_and_responses_vision_inline_v1"
 SETUP_PRESETS = frozenset(
-    {CHAT_TEXT_PRESET, RESPONSES_TEXT_PRESET, CHAT_AND_RESPONSES_TEXT_PRESET}
+    {
+        CHAT_TEXT_PRESET,
+        RESPONSES_TEXT_PRESET,
+        CHAT_AND_RESPONSES_TEXT_PRESET,
+        CHAT_AND_RESPONSES_VISION_INLINE_PRESET,
+    }
 )
 LOCAL_ZERO_PRICING = "local_zero"
 EXPLICIT_PRICING = "explicit"
@@ -133,6 +139,9 @@ class OpenAICompatibleSetupService:
                     endpoint,
                     streaming=normalized.streaming,
                     local_function_tools=normalized.local_function_tools,
+                    vision_inline=(
+                        normalized.preset == CHAT_AND_RESPONSES_VISION_INLINE_PRESET
+                    ),
                 )
                 route = await route_service.create_model_route(
                     requested_model=public_ids[upstream_model],
@@ -347,7 +356,13 @@ def _preset_endpoints(preset: str) -> tuple[str, ...]:
     return ("/v1/chat/completions", "/v1/responses")
 
 
-def _capabilities(endpoint: str, *, streaming: bool, local_function_tools: bool) -> dict[str, object]:
+def _capabilities(
+    endpoint: str,
+    *,
+    streaming: bool,
+    local_function_tools: bool,
+    vision_inline: bool = False,
+) -> dict[str, object]:
     if endpoint == "/v1/chat/completions":
         return {
             "chat_completions": {
@@ -368,8 +383,8 @@ def _capabilities(endpoint: str, *, streaming: bool, local_function_tools: bool)
                 "hosted_image_generation": False,
                 "hosted_tool_search": False,
                 "external_mcp_connectors": False,
-                "chat_image_inputs": False,
-                "chat_multimodal": False,
+                "chat_image_inputs": vision_inline,
+                "chat_multimodal": vision_inline,
                 "chat_audio": False,
                 "chat_file_inputs": False,
                 "chat_audio_inputs": False,
@@ -386,7 +401,7 @@ def _capabilities(endpoint: str, *, streaming: bool, local_function_tools: bool)
             "tools": False,
             "function_tools": local_function_tools,
             "custom_tools": False,
-            "image_input": False,
+            "image_input": vision_inline,
             "file_input": False,
             "input_token_count": False,
             "stored_responses": False,
@@ -395,7 +410,7 @@ def _capabilities(endpoint: str, *, streaming: bool, local_function_tools: bool)
             "compact": False,
             "conversations": False,
             "conversation_items": False,
-            "multimodal": False,
+            "multimodal": vision_inline,
             "storage": False,
             "background": False,
             "json_mode": False,

@@ -637,3 +637,8 @@ Operators may explicitly preview `/v1/models` with
 `slaif-gateway providers discover-models <provider> --json` and use the admin
 wizard to create conservative route/local-pricing metadata. This is not model
 qualification; Objective 020 owns conformance.
+
+Objective 020's conformance result is `mocked_conformance`: it proves the
+gateway/provider-category contract with mocked generic upstreams and does not
+qualify a live vLLM, Qwen, or Codex target. Named live targets belong to
+Objectives 022–023.

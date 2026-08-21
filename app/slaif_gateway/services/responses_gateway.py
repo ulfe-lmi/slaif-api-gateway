@@ -112,6 +112,10 @@ from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.rate_limit_errors import RateLimitError, RedisRateLimitUnavailableError
 from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
+from slaif_gateway.services.openai_compatible_request_boundary import (
+    OpenAICompatibleRequestBoundaryError,
+    enforce_openai_compatible_request_boundary,
+)
 from slaif_gateway.services.responses_streaming_live_burn import (
     RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
     RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
@@ -891,6 +895,20 @@ async def handle_response_create(
         codex_compaction_requested=codex_compaction_replay_requested,
         request=request,
     )
+    try:
+        enforce_openai_compatible_request_boundary(
+            policy_result.effective_body,
+            route=route,
+            endpoint="responses",
+        )
+    except OpenAICompatibleRequestBoundaryError as exc:
+        raise OpenAICompatibleError(
+            "Remote image URLs are not enabled for generic OpenAI-compatible providers.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="openai_compatible_remote_image_not_allowed",
+            param=exc.param,
+        ) from exc
     if codex_extended_limits_requested:
         try:
             policy_result = apply_codex_route_limits(

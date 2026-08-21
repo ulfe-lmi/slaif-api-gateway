@@ -65,6 +65,7 @@ def _route(
     provider: str = "openai",
     resolved_model: str = "gpt-4.1-mini",
     *,
+    provider_kind: str | None = None,
     provider_base_url: str | None = None,
     provider_api_key_env_var: str | None = None,
     capabilities: dict[str, object] | None = None,
@@ -77,6 +78,7 @@ def _route(
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        provider_kind=provider_kind,
         provider_base_url=provider_base_url,
         provider_api_key_env_var=provider_api_key_env_var,
         capabilities=capabilities,
@@ -193,6 +195,7 @@ def _wire_pipeline(
     resolved_model: str = "gpt-4.1-mini",
     provider_base_url: str | None = None,
     provider_api_key_env_var: str | None = None,
+    provider_kind: str | None = None,
     authenticated_key: AuthenticatedGatewayKey | None = None,
     expected_requested_model: str = "classroom-cheap",
     route_capabilities: dict[str, object] | None = None,
@@ -212,6 +215,7 @@ def _wire_pipeline(
         resolved_model=resolved_model,
         provider_base_url=provider_base_url,
         provider_api_key_env_var=provider_api_key_env_var,
+        provider_kind=provider_kind,
         capabilities=route_capabilities,
     )
     estimate = _estimate(provider=provider, resolved_model=resolved_model)
@@ -345,6 +349,98 @@ def test_openai_nonstreaming_happy_path_uses_adapter_and_finalizes(
     assert state["session"].commit_calls == 2
     metrics = prometheus_response_body().decode()
     assert 'gateway_cost_eur_total{model="gpt-4.1-mini",provider="openai"}' in metrics
+
+
+def test_generic_provider_remote_image_is_rejected_before_side_effects(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("GENERIC_UPSTREAM_KEY", "generic-upstream-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="lan-qwen",
+        resolved_model="qwen/a",
+        provider_kind="openai_compatible",
+        provider_base_url="http://lan-qwen.example/v1",
+        provider_api_key_env_var="GENERIC_UPSTREAM_KEY",
+        route_capabilities=_chat_capabilities(chat_image_inputs=True, chat_multimodal=True),
+    )
+    upstream = respx_mock.post("http://lan-qwen.example/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=_image_chat_request(),
+        headers={"Authorization": "Bearer client-gateway-key", "Cookie": "secret-cookie"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "openai_compatible_remote_image_not_allowed"
+    assert response.json()["error"]["param"] == "messages[0].content[1].image_url.url"
+    assert "example.test" not in response.text
+    assert state["reserve_calls"] == []
+    assert state["finalize_calls"] == []
+    assert not upstream.called
+
+
+def test_generic_provider_forwards_two_inline_images_with_substitution_and_secret_isolation(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("GENERIC_UPSTREAM_KEY", "generic-upstream-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="lan-qwen",
+        resolved_model="qwen/a-internal",
+        provider_kind="openai_compatible",
+        provider_base_url="http://lan-qwen.example/v1",
+        provider_api_key_env_var="GENERIC_UPSTREAM_KEY",
+        route_capabilities=_chat_capabilities(chat_image_inputs=True, chat_multimodal=True),
+    )
+    upstream = respx_mock.post("http://lan-qwen.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_generic",
+                "object": "chat.completion",
+                "model": "qwen/a-internal",
+                "choices": [],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            },
+        )
+    )
+    body = _image_chat_request("data:image/png;base64,AAAA")
+    body["messages"][0]["content"].append(
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}}
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json=body,
+        headers={
+            "Authorization": "Bearer client-gateway-key",
+            "Cookie": "client-cookie",
+            "X-SLAIF-Internal": "must-not-forward",
+        },
+    )
+
+    assert response.status_code == 200
+    assert state["reserve_calls"]
+    request = upstream.calls[0].request
+    assert request.headers["authorization"] == "Bearer generic-upstream-key"
+    assert request.headers.get("cookie") is None
+    assert request.headers.get("x-slaif-internal") is None
+    forwarded = json.loads(request.content)
+    assert forwarded["model"] == "qwen/a-internal"
+    assert [part["image_url"]["url"] for part in forwarded["messages"][0]["content"] if part["type"] == "image_url"] == [
+        "data:image/png;base64,AAAA",
+        "data:image/jpeg;base64,BBBB",
+    ]
 
 
 def test_nonstreaming_request_preserves_openai_sdk_fields_to_upstream(

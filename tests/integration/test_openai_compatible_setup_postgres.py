@@ -12,6 +12,7 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.openai_compatible_discovery import DiscoveredModels
 from slaif_gateway.services.openai_compatible_setup import (
+    CHAT_AND_RESPONSES_VISION_INLINE_PRESET,
     CHAT_AND_RESPONSES_TEXT_PRESET,
     OpenAICompatibleSetupService,
     SetupError,
@@ -102,6 +103,57 @@ async def test_generic_setup_creates_exact_routes_pricing_and_audits_atomically(
         select(func.count()).select_from(ModelRoute).where(ModelRoute.provider == provider.provider)
     )
     assert route_count_after == 4
+
+
+@pytest.mark.asyncio
+async def test_vision_inline_setup_adds_only_chat_and_responses_image_capabilities(
+    async_test_session,
+) -> None:
+    suffix = id(async_test_session)
+    providers = ProviderConfigsRepository(async_test_session)
+    provider = await providers.create_provider_config(
+        provider=f"pg-vision-{suffix}",
+        display_name="PostgreSQL vision preset",
+        base_url="https://vision.example.test/v1",
+        api_key_env_var="PG_VISION_KEY",
+        kind="openai_compatible",
+        enabled=True,
+        timeout_seconds=30,
+        max_retries=0,
+    )
+    service = OpenAICompatibleSetupService(
+        session=async_test_session,
+        provider_configs_repository=providers,
+        model_routes_repository=ModelRoutesRepository(async_test_session),
+        pricing_rules_repository=PricingRulesRepository(async_test_session),
+        audit_repository=AuditRepository(async_test_session),
+        discovery_service=_FreshDiscovery(),
+    )
+
+    result = await service.execute(
+        SetupRequest(
+            provider=provider.provider,
+            selected_models=("qwen/a",),
+            preset=CHAT_AND_RESPONSES_VISION_INLINE_PRESET,
+            pricing_mode="local_zero",
+            confirm_local_zero=True,
+            reason="bounded vision preset test",
+        )
+    )
+
+    chat = next(route for route in result.routes if route.endpoint == "/v1/chat/completions")
+    responses = next(route for route in result.routes if route.endpoint == "/v1/responses")
+    chat_capabilities = chat.capabilities["chat_completions"]
+    responses_capabilities = responses.capabilities["responses"]
+    assert chat_capabilities["chat_image_inputs"] is True
+    assert chat_capabilities["chat_multimodal"] is True
+    assert chat_capabilities["chat_audio_inputs"] is False
+    assert chat_capabilities["chat_file_inputs"] is False
+    assert responses_capabilities["image_input"] is True
+    assert responses_capabilities["multimodal"] is True
+    assert responses_capabilities["file_input"] is False
+    assert responses_capabilities["storage"] is False
+    assert responses_capabilities["codex_request_envelope"] is False
 
 
 @pytest.mark.asyncio

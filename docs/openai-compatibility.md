@@ -2,6 +2,14 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
+### Generic backend conformance status
+
+Objective 020 records generic `openai_compatible` Chat Completions and
+stateless Responses coverage as `mocked_conformance`. The evidence uses
+mocked upstreams and proves the gateway's routing, secret isolation, request
+boundary, forwarding, and accounting contract; it is not a live vLLM, Qwen,
+or Codex qualification. Named live targets are owned by Objectives 022–023.
+
 For the maintainer-locked RC2 target, including the bounded Realtime
 client-secret slice that is now implemented and the remaining deferred
 Realtime sub-surfaces, see [`rc2-feature-scope.md`](rc2-feature-scope.md). A
@@ -691,8 +699,8 @@ This is runtime plumbing, not a qualification or compatibility claim for any
 specific Qwen, vLLM, or other model. The explicit bounded discovery/setup
 wizard may preview `/v1/models` and create conservative route/pricing metadata,
 but it never performs automatic mutation, health checks, load balancing,
-provider-specific translation, or model qualification. Objective 020 owns
-qualification.
+provider-specific translation, or live model qualification. Objective 020 owns
+`mocked_conformance`; named live targets belong to Objectives 022–023.
 
 - Responses cancel/list endpoints,
   Responses hosted tools other than exact bounded OpenAI Responses
