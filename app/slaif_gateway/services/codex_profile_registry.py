@@ -11,6 +11,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import Mapping
 
@@ -19,26 +20,15 @@ PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
-_REQUIRED_FIELDS = {
-    "profile_id",
-    "metadata_version",
-    "cli_version",
-    "public_model",
-    "upstream_model",
-    "wire_api",
-    "provider_kind",
-    "required_endpoints",
-    "required_route_gates",
-    "context_window_tokens",
-    "default_max_output_tokens",
-    "max_output_tokens",
-    "compaction_mode",
-    "credential_free_provider_fields",
-    "fixture_sha256",
-    "evidence_date",
-    "mocked_qualification",
-    "live_qualification",
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_DISPLAY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$")
+_SAFE_ENDPOINT = re.compile(r"^/v1/[A-Za-z0-9._{}-]+(?:/[A-Za-z0-9._{}-]+)*$")
+_SAFE_GATE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_FORBIDDEN_CATALOG_KEYS = {
+    "prompt", "output", "tool", "tools", "reasoning", "encrypted", "request", "response",
+    "url", "headers", "authorization", "cookie", "secret", "token", "environment", "workspace",
 }
+_SECRET_MARKERS = ("sk-", "api_key", "authorization", "bearer ", "password", "secret", "token")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,22 +59,57 @@ class CodexQualificationProfile:
     live_qualification: bool
     profile_name: str
     provider_display_name: str
+    catalog_source: str = "bundled"
 
     def __post_init__(self) -> None:
         if not _SAFE_ID.fullmatch(self.profile_id):
             raise ValueError("Codex profile ID is not safely bounded.")
+        for name, value in {
+            "cli_version": self.cli_version,
+            "public_model": self.public_model,
+            "upstream_model": self.upstream_model,
+            "profile_name": self.profile_name,
+            "catalog_source": self.catalog_source,
+        }.items():
+            if type(value) is not str or not _SAFE_TOKEN.fullmatch(value):
+                raise ValueError(f"Codex profile {name} is unsafe.")
+        if type(self.provider_display_name) is not str or not _SAFE_DISPLAY.fullmatch(
+            self.provider_display_name
+        ):
+            raise ValueError("Codex profile provider display name is unsafe.")
         if self.metadata_version != PROFILE_METADATA_VERSION:
             raise ValueError("Unsupported Codex profile metadata version.")
-        if not self.required_endpoints or len(set(self.required_endpoints)) != len(
-            self.required_endpoints
-        ):
+        if self.wire_api not in {"responses", "chat"}:
+            raise ValueError("Codex profile wire API is unsupported.")
+        if self.provider_kind not in {"openai", "openai_compatible"}:
+            raise ValueError("Codex profile provider kind is unsupported.")
+        if self.provider_slug is not None and not _SAFE_ID.fullmatch(self.provider_slug):
+            raise ValueError("Codex profile provider slug is unsafe.")
+        if not self.required_endpoints or any(
+            not isinstance(endpoint, str) or not _SAFE_ENDPOINT.fullmatch(endpoint)
+            for endpoint in self.required_endpoints
+        ) or len(set(self.required_endpoints)) != len(self.required_endpoints):
             raise ValueError("Codex profile endpoint set must be non-empty and unique.")
-        if self.default_max_output_tokens <= 0 or self.max_output_tokens < self.default_max_output_tokens:
+        if any(not isinstance(gate, str) or not _SAFE_GATE.fullmatch(gate) for gate in self.required_route_gates):
+            raise ValueError("Codex profile gate names are unsafe.")
+        if len(set(self.required_route_gates)) != len(self.required_route_gates):
+            raise ValueError("Codex profile gate names must be unique.")
+        if any(not isinstance(tool, str) or not _SAFE_TOKEN.fullmatch(tool) for tool in self.local_tools):
+            raise ValueError("Codex profile local tool names are unsafe.")
+        if len(set(self.local_tools)) != len(self.local_tools):
+            raise ValueError("Codex profile local tool names must be unique.")
+        for value in (self.context_window_tokens, self.default_max_output_tokens, self.max_output_tokens):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError("Codex profile numeric limits are invalid.")
+        if self.default_max_output_tokens > self.max_output_tokens:
             raise ValueError("Codex profile output limits are invalid.")
         if self.context_window_tokens <= self.max_output_tokens:
             raise ValueError("Codex profile context limit must exceed output limit.")
         if self.compaction_mode not in {"remote_v1", "client_local", "none"}:
             raise ValueError("Codex profile compaction mode is invalid.")
+        for field in ("reasoning_replay", "streaming_tool_events", "mocked_qualification", "live_qualification"):
+            if type(getattr(self, field)) is not bool:
+                raise ValueError(f"Codex profile {field} must be a strict boolean.")
         if len(self.fixture_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.fixture_sha256
         ):
@@ -98,6 +123,23 @@ class CodexQualificationProfile:
             "supports_websockets",
         }:
             raise ValueError("Codex provider fields contain an unsupported value.")
+        provider_fields = self.credential_free_provider_fields
+        if set(provider_fields) != {"name", "wire_api", "requires_openai_auth", "supports_websockets"}:
+            raise ValueError("Codex provider fields are incomplete.")
+        if (
+            type(provider_fields["name"]) is not str
+            or not _SAFE_TOKEN.fullmatch(provider_fields["name"])
+            or provider_fields["wire_api"] != self.wire_api
+            or type(provider_fields["requires_openai_auth"]) is not bool
+            or type(provider_fields["supports_websockets"]) is not bool
+        ):
+            raise ValueError("Codex provider fields are malformed.")
+        if self.provider_kind != "openai" and provider_fields["requires_openai_auth"]:
+            raise ValueError("Generic profile provider fields cannot require upstream auth.")
+        try:
+            date.fromisoformat(self.evidence_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Codex profile evidence date is invalid.") from exc
         if self.model_catalog_artifact is not None:
             try:
                 parsed = json.loads(self.model_catalog_artifact)
@@ -106,8 +148,11 @@ class CodexQualificationProfile:
             canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             if canonical != self.model_catalog_artifact:
                 raise ValueError("Codex model catalog artifact is not deterministic.")
-            if not self.model_catalog_target or self.model_catalog_target.startswith("/") or ".." in self.model_catalog_target:
+            if not self.model_catalog_target or not _SAFE_TOKEN.fullmatch(self.model_catalog_target) or not self.model_catalog_target.endswith(".json"):
                 raise ValueError("Codex model catalog target is unsafe.")
+            _validate_catalog_node(parsed)
+        elif self.model_catalog_target is not None:
+            raise ValueError("Codex model catalog target requires an artifact.")
 
 
 def _profile(**values: object) -> CodexQualificationProfile:
@@ -160,13 +205,15 @@ OPENAI_CODEX_PROFILE = _profile(
 
 
 def _validate_registry(registry: Mapping[str, CodexQualificationProfile]) -> None:
+    if not isinstance(registry, MappingProxyType):
+        raise ValueError("Codex profile registry must be immutable.")
     seen: set[str] = set()
     for key, profile in registry.items():
-        if key in seen or key != profile.profile_id:
-            raise ValueError("Codex profile registry contains a duplicate or mismatched ID.")
-        seen.add(key)
         if not isinstance(profile, CodexQualificationProfile):
             raise ValueError("Codex profile registry contains an invalid definition.")
+        if not isinstance(key, str) or key in seen or key != profile.profile_id:
+            raise ValueError("Codex profile registry contains a duplicate or mismatched ID.")
+        seen.add(key)
 
 
 def validate_codex_profile_registry(
@@ -233,7 +280,14 @@ _FORBIDDEN_FIXTURE_KEYS = {
 def sanitize_codex_fixture(value: object) -> dict[str, object]:
     """Return a bounded structural fixture projection or reject unsafe input."""
 
+    nodes = 0
+    identifiers: dict[str, str] = {}
+
     def walk(node: object, *, depth: int = 0) -> object:
+        nonlocal nodes
+        nodes += 1
+        if nodes > 512:
+            raise ValueError("Codex fixture node count is too large.")
         if depth > 8:
             raise ValueError("Codex fixture nesting is too deep.")
         if isinstance(node, Mapping):
@@ -243,8 +297,18 @@ def sanitize_codex_fixture(value: object) -> dict[str, object]:
                     raise ValueError("Codex fixture contains prohibited content.")
                 if raw_key not in {"event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest"}:
                     raise ValueError("Codex fixture contains arbitrary metadata.")
+                if raw_key == "digest":
+                    raise ValueError("Codex fixture input digest is not accepted.")
                 if raw_key == "id":
-                    output[raw_key] = "ID_1"
+                    if not isinstance(raw_value, str) or len(raw_value) > 128:
+                        raise ValueError("Codex fixture ID is invalid.")
+                    if any(marker in raw_value.lower() for marker in _SECRET_MARKERS):
+                        raise ValueError("Codex fixture contains secret-looking content.")
+                    if raw_value not in identifiers and len(identifiers) >= 64:
+                        raise ValueError("Codex fixture ID count is too large.")
+                    output[raw_key] = identifiers.setdefault(
+                        raw_value, f"ID_{len(identifiers) + 1}"
+                    )
                 else:
                     output[raw_key] = walk(raw_value, depth=depth + 1)
             return output
@@ -257,6 +321,11 @@ def sanitize_codex_fixture(value: object) -> dict[str, object]:
         if isinstance(node, (bool, int, float)) or node is None:
             return node
         if isinstance(node, str) and len(node) <= 64 and " " not in node and "/" not in node and "://" not in node:
+            lowered = node.lower()
+            if any(marker in lowered for marker in _SECRET_MARKERS) or lowered in {
+                "prompt", "output", "schema", "arguments", "results", "reasoning"
+            }:
+                raise ValueError("Codex fixture contains secret-looking content.")
             return node
         raise ValueError("Codex fixture contains prohibited content.")
 
@@ -266,3 +335,32 @@ def sanitize_codex_fixture(value: object) -> dict[str, object]:
     canonical = json.dumps(sanitized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     sanitized["digest"] = hashlib.sha256(canonical.encode()).hexdigest()
     return sanitized
+
+
+def _validate_catalog_node(node: object, *, depth: int = 0) -> None:
+    if depth > 8:
+        raise ValueError("Codex model catalog artifact is too deeply nested.")
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            lowered_key = key.lower() if isinstance(key, str) else ""
+            if not isinstance(key, str) or lowered_key in _FORBIDDEN_CATALOG_KEYS or any(
+                term in lowered_key for term in ("prompt", "output", "tool", "reason", "schema", "argument", "result")
+            ):
+                raise ValueError("Codex model catalog contains prohibited fields.")
+            _validate_catalog_node(value, depth=depth + 1)
+        return
+    if isinstance(node, list):
+        if len(node) > 128:
+            raise ValueError("Codex model catalog is too large.")
+        for value in node:
+            _validate_catalog_node(value, depth=depth + 1)
+        return
+    if isinstance(node, str):
+        lowered = node.lower()
+        if any(marker in lowered for marker in _SECRET_MARKERS) or "://" in node or "/" in node:
+            raise ValueError("Codex model catalog contains unsafe string data.")
+        return
+    if isinstance(node, float) and not math.isfinite(node):
+        raise ValueError("Codex model catalog contains a non-finite number.")
+    if node is not None and not isinstance(node, (bool, int, float)):
+        raise ValueError("Codex model catalog contains unsupported data.")

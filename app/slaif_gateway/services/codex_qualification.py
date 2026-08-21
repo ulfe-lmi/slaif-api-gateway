@@ -20,11 +20,12 @@ from slaif_gateway.services.responses_route_capabilities import (
     parse_codex_route_limits,
 )
 from slaif_gateway.services.codex_profile_registry import (
+    CODEX_PROFILE_REGISTRY,
     OPENAI_CODEX_PROFILE,
     PROFILE_ID,
     PROFILE_METADATA_VERSION,
     CodexQualificationProfile,
-    get_codex_profile,
+    validate_codex_profile_registry,
     validate_codex_profile_declaration,
 )
 from slaif_gateway.utils.redaction import redact_text
@@ -141,6 +142,8 @@ class CodexQualificationResult:
     real_provider_e2e: bool | None = None
     profile_id: str | None = None
     metadata_version: int | None = None
+    provider_kind: str | None = None
+    provider_display_name: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -164,6 +167,12 @@ class CodexQualificationResult:
         )
         payload["reason_codes"] = list(self.reason_codes)
         payload["ready"] = self.ready
+        if self.metadata_version != CODEX_PROFILE_VERSION:
+            payload["provider_kind"] = self.provider_kind
+            payload["provider_display_name"] = self.provider_display_name
+        else:
+            payload.pop("provider_kind", None)
+            payload.pop("provider_display_name", None)
         return payload
 
 
@@ -211,11 +220,14 @@ class CodexQualificationService:
         model_routes_repository: _RoutesRepository,
         pricing_rules_repository: _PricingRepository,
         fx_rates_repository: _FxRepository,
+        profile_registry: Mapping[str, CodexQualificationProfile] | None = None,
     ) -> None:
         self._providers = provider_configs_repository
         self._routes = model_routes_repository
         self._pricing = pricing_rules_repository
         self._fx = fx_rates_repository
+        self._profiles = profile_registry or CODEX_PROFILE_REGISTRY
+        validate_codex_profile_registry(self._profiles)
 
     async def inspect(self, *, now: datetime | None = None) -> list[CodexQualificationResult]:
         timestamp = _aware_time(now)
@@ -256,11 +268,11 @@ class CodexQualificationService:
         qualification_profile: str | None = None,
         now: datetime | None = None,
     ) -> CodexQualificationResult:
-        selected_profile = _selected_profile(qualification_profile)
+        selected_profile = _selected_profile(qualification_profile, registry=self._profiles)
         candidates = [
             result
             for result in await self.inspect(now=now)
-            if result.endpoint == CODEX_RESPONSES_ENDPOINT
+            if result.endpoint == selected_profile.required_endpoints[0]
             and result.requested_model == selected_profile.public_model
             and result.ready
             and result.profile_id == selected_profile.profile_id
@@ -284,7 +296,9 @@ class CodexQualificationService:
         provider = str(getattr(route, "provider", "") or "")
         endpoint = str(getattr(route, "endpoint", "") or "")
         metadata_state, declaration_profile_id, declaration_version = (
-            parse_codex_profile_metadata(getattr(route, "capabilities", None))
+            parse_codex_profile_metadata(
+                getattr(route, "capabilities", None), profile_registry=self._profiles
+            )
         )
         if metadata_state == "not_declared":
             return _result(
@@ -313,7 +327,7 @@ class CodexQualificationService:
                 include_profile=True,
             )
 
-        profile = get_codex_profile(declaration_profile_id or CODEX_PROFILE_ID)
+        profile = self._profiles.get(declaration_profile_id or CODEX_PROFILE_ID)
         if profile is None:
             return _result(
                 route_id=route_id,
@@ -340,7 +354,7 @@ class CodexQualificationService:
             reasons.append("provider_mismatch")
         if str(getattr(route, "upstream_model", "") or "") != profile.upstream_model:
             reasons.append("upstream_model_invalid")
-        if not _is_runtime_selected_route(route, all_routes=all_routes):
+        if not _is_runtime_selected_route(route, all_routes=all_routes, profile=profile):
             reasons.append("route_not_selected")
         capabilities = getattr(route, "capabilities", None)
         reasons.extend(_route_capability_reasons(route, capabilities=capabilities, profile=profile))
@@ -353,11 +367,9 @@ class CodexQualificationService:
         paired_route: object | None = None
         paired_route_id: uuid.UUID | None = None
         requires_pair = len(profile.required_endpoints) > 1
-        if not requires_pair and endpoint == profile.required_endpoints[0]:
-            compatible_ids = frozenset()
-        elif len(compatible_ids) != 1:
+        if requires_pair and len(compatible_ids) != 1:
             reasons.append("paired_route_not_exact")
-        else:
+        elif requires_pair:
             paired_route_id = next(iter(compatible_ids))
             paired_route = route_by_id.get(paired_route_id)
             if paired_route is None:
@@ -367,16 +379,17 @@ class CodexQualificationService:
                     _paired_route_reasons(
                         route,
                         paired_route,
-                        expected_endpoint=(
-                            CODEX_COMPACT_ENDPOINT
-                            if endpoint == CODEX_RESPONSES_ENDPOINT
-                            else CODEX_RESPONSES_ENDPOINT
+                        expected_endpoint=next(
+                            required_endpoint
+                            for required_endpoint in profile.required_endpoints
+                            if required_endpoint != endpoint
                         ),
                         profile=profile,
                         declaration_version=declaration_version,
+                        profile_registry=self._profiles,
                     )
                 )
-                if not _is_runtime_selected_route(paired_route, all_routes=all_routes):
+                if not _is_runtime_selected_route(paired_route, all_routes=all_routes, profile=profile):
                     reasons.append("paired_route_not_selected")
 
         provider_row = provider_by_name.get(provider)
@@ -384,6 +397,9 @@ class CodexQualificationService:
             reasons.append("provider_missing")
         elif not bool(getattr(provider_row, "enabled", False)):
             reasons.append("provider_disabled")
+        elif declaration_version == CODEX_PROFILE_METADATA_VERSION:
+            if str(getattr(provider_row, "kind", "") or "") != profile.provider_kind:
+                reasons.append("provider_kind_mismatch")
 
         pricing_routes = [route]
         if paired_route is not None:
@@ -427,6 +443,7 @@ class CodexQualificationService:
             include_profile=True,
             profile_id=profile.profile_id,
             metadata_version=declaration_version,
+            profile=profile,
         )
 
 
@@ -447,7 +464,11 @@ def parse_codex_qualification_metadata(capabilities: object) -> str:
     return "protocol_qualified"
 
 
-def parse_codex_profile_metadata(capabilities: object) -> tuple[str, str | None, int | None]:
+def parse_codex_profile_metadata(
+    capabilities: object,
+    *,
+    profile_registry: Mapping[str, CodexQualificationProfile] | None = None,
+) -> tuple[str, str | None, int | None]:
     """Parse v1 legacy metadata or the minimal server-owned v2 declaration."""
 
     if not isinstance(capabilities, Mapping):
@@ -455,9 +476,8 @@ def parse_codex_profile_metadata(capabilities: object) -> tuple[str, str | None,
     if CODEX_PROFILE_DECLARATION_KEY in capabilities:
         if CODEX_QUALIFICATION_KEY in capabilities:
             return "invalid", "codex_profile_declaration_mixed", CODEX_PROFILE_METADATA_VERSION
-        state, reason = validate_codex_profile_declaration(
-            capabilities.get(CODEX_PROFILE_DECLARATION_KEY)
-        )
+        declaration = capabilities.get(CODEX_PROFILE_DECLARATION_KEY)
+        state, reason = _validate_profile_declaration(declaration, profile_registry=profile_registry)
         if state != "ready":
             return state, reason, CODEX_PROFILE_METADATA_VERSION
         declaration = capabilities[CODEX_PROFILE_DECLARATION_KEY]
@@ -467,6 +487,26 @@ def parse_codex_profile_metadata(capabilities: object) -> tuple[str, str | None,
         state = parse_codex_qualification_metadata(capabilities)
         return state, CODEX_PROFILE_ID if state == "protocol_qualified" else None, CODEX_PROFILE_VERSION
     return "not_declared", None, None
+
+
+def _validate_profile_declaration(
+    value: object,
+    *,
+    profile_registry: Mapping[str, CodexQualificationProfile] | None,
+) -> tuple[str, str | None]:
+    if profile_registry is None:
+        return validate_codex_profile_declaration(value)
+    if not isinstance(value, Mapping) or set(value) != {"version", "profile_id", "fixture_sha256"}:
+        return "invalid", "codex_profile_declaration_invalid"
+    if value.get("version") != CODEX_PROFILE_METADATA_VERSION:
+        return "invalid", "codex_profile_version_invalid"
+    profile_id = value.get("profile_id")
+    if not isinstance(profile_id, str) or profile_id not in profile_registry:
+        return "not_ready", "codex_profile_unknown"
+    profile = profile_registry[profile_id]
+    if value.get("fixture_sha256") != profile.fixture_sha256:
+        return "invalid", "codex_profile_fixture_mismatch"
+    return "ready", None
 
 
 def validate_codex_pilot_key_input(payload: object, *, confirmed: bool) -> None:
@@ -507,12 +547,24 @@ def render_codex_profile(
 ) -> CodexProfileArtifacts:
     """Render two independent profile-v2 TOML documents without credentials."""
 
-    canonical_url = validate_codex_gateway_base_url(base_url)
     profile = _selected_profile(qualification_profile)
+    return render_codex_profile_artifacts(base_url, profile, legacy_default=qualification_profile is None)
+
+
+def render_codex_profile_artifacts(
+    base_url: str,
+    profile: CodexQualificationProfile,
+    *,
+    legacy_default: bool = False,
+) -> CodexProfileArtifacts:
+    """Render a validated definition for pure tests and server-owned callers."""
+
+    canonical_url = validate_codex_gateway_base_url(base_url)
     encoded_url = json.dumps(canonical_url, ensure_ascii=True)
     provider_fields = profile.credential_free_provider_fields
+    provider_alias = profile.profile_name
     base_config = (
-        "[model_providers.slaif]\n"
+        f"[model_providers.{provider_alias}]\n"
         f'name = {json.dumps(str(provider_fields["name"]), ensure_ascii=True)}\n'
         f"base_url = {encoded_url}\n"
         'env_key = "OPENAI_API_KEY"\n'
@@ -522,19 +574,20 @@ def render_codex_profile(
     )
     profile_config = (
         f"model = {json.dumps(profile.public_model, ensure_ascii=True)}\n"
-        'model_provider = "slaif"\n'
+        f'model_provider = {json.dumps(provider_alias, ensure_ascii=True)}\n'
         "\n[features]\n"
         f"remote_compaction_v2 = {str(profile.compaction_mode != 'remote_v1').lower()}\n"
     )
     return CodexProfileArtifacts(
         base_config_toml=base_config,
         profile_config_toml=profile_config,
-        profile=profile.profile_name if qualification_profile is not None else CODEX_PROFILE_NAME,
+        profile=profile.profile_name if not legacy_default else CODEX_PROFILE_NAME,
         model=profile.public_model,
+        provider=provider_alias,
         qualification_profile_id=profile.profile_id,
         invocation=(
             f"codex --profile {profile.profile_name}"
-            if qualification_profile is not None
+            if not legacy_default
             else "codex --profile slaif"
         ),
         model_catalog_json=profile.model_catalog_artifact,
@@ -663,7 +716,11 @@ def _enforce_codex_runtime_operation(
             codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
             codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
             codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
-            codex_extended_limits_requested=True,
+            codex_extended_limits_requested={
+                "codex_client_tools",
+                "codex_streaming_tool_events",
+                "codex_encrypted_reasoning_replay",
+            }.issubset(profile.required_route_gates),
             codex_compaction_requested="codex_compaction" in profile.required_route_gates,
         )
     elif endpoint == CODEX_COMPACT_ENDPOINT:
@@ -674,7 +731,11 @@ def _enforce_codex_runtime_operation(
             codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
             codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
             codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
-            codex_extended_limits_requested=True,
+            codex_extended_limits_requested={
+                "codex_client_tools",
+                "codex_streaming_tool_events",
+                "codex_encrypted_reasoning_replay",
+            }.issubset(profile.required_route_gates),
             codex_compaction_requested="codex_compaction" in profile.required_route_gates,
         )
 
@@ -683,6 +744,7 @@ def _is_runtime_selected_route(
     route: object,
     *,
     all_routes: Sequence[object],
+    profile: CodexQualificationProfile = OPENAI_CODEX_PROFILE,
 ) -> bool:
     """Mirror provider-constrained route ranking for the pinned exact model."""
 
@@ -694,7 +756,7 @@ def _is_runtime_selected_route(
         if bool(getattr(candidate, "enabled", False))
         and str(getattr(candidate, "provider", "") or "") == provider
         and str(getattr(candidate, "endpoint", "") or "") == endpoint
-        and _route_matches_codex_model(candidate)
+        and _route_matches_profile_model(candidate, profile.public_model)
         and _route_uuid(candidate) is not None
     ]
     if not candidates:
@@ -703,15 +765,15 @@ def _is_runtime_selected_route(
     return _route_uuid(selected) == _route_uuid(route)
 
 
-def _route_matches_codex_model(route: object) -> bool:
+def _route_matches_profile_model(route: object, public_model: str) -> bool:
     pattern = str(getattr(route, "requested_model", "") or "")
     match_type = str(getattr(route, "match_type", "") or "")
     if match_type == "exact":
-        return pattern == CODEX_MODEL
+        return pattern == public_model
     if match_type == "prefix":
-        return CODEX_MODEL.startswith(pattern)
+        return public_model.startswith(pattern)
     if match_type == "glob":
-        return fnmatchcase(CODEX_MODEL, pattern)
+        return fnmatchcase(public_model, pattern)
     return False
 
 
@@ -732,6 +794,7 @@ def _paired_route_reasons(
     expected_endpoint: str,
     profile: CodexQualificationProfile = OPENAI_CODEX_PROFILE,
     declaration_version: int | None = CODEX_PROFILE_VERSION,
+    profile_registry: Mapping[str, CodexQualificationProfile] | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if str(getattr(paired, "endpoint", "") or "") != expected_endpoint:
@@ -744,7 +807,7 @@ def _paired_route_reasons(
     if str(getattr(paired, "match_type", "") or "") != "exact":
         reasons.append("paired_match_type_invalid")
     paired_state, paired_profile_id, paired_version = parse_codex_profile_metadata(
-        getattr(paired, "capabilities", None)
+        getattr(paired, "capabilities", None), profile_registry=profile_registry
     )
     if paired_state != "protocol_qualified" or paired_profile_id != profile.profile_id:
         reasons.append("paired_qualification_invalid")
@@ -850,7 +913,10 @@ def _result(
     include_profile: bool = False,
     profile_id: str | None = None,
     metadata_version: int | None = None,
+    profile: CodexQualificationProfile | None = None,
 ) -> CodexQualificationResult:
+    resolved_profile = profile if include_profile else None
+    legacy = resolved_profile is not None and metadata_version == CODEX_PROFILE_VERSION
     return CodexQualificationResult(
         state=state,
         requested_model=requested_model,
@@ -859,28 +925,37 @@ def _result(
         route_id=route_id,
         paired_route_id=paired_route_id,
         reason_codes=reasons,
-        profile_version=CODEX_PROFILE_VERSION if include_profile else None,
-        cli_version=CODEX_CLI_VERSION if include_profile else None,
-        profile=CODEX_EVIDENCE_PROFILE if include_profile else None,
-        catalog_source="bundled" if include_profile else None,
-        wire_api="responses" if include_profile else None,
-        real_provider_e2e=False if include_profile else None,
+        profile_version=metadata_version if resolved_profile else None,
+        cli_version=(CODEX_CLI_VERSION if legacy else resolved_profile.cli_version) if resolved_profile else None,
+        profile=(CODEX_EVIDENCE_PROFILE if legacy else resolved_profile.profile_name) if resolved_profile else None,
+        catalog_source=resolved_profile.catalog_source if resolved_profile else None,
+        wire_api=resolved_profile.wire_api if resolved_profile else None,
+        real_provider_e2e=resolved_profile.live_qualification if resolved_profile else None,
         profile_id=profile_id if profile_id is not None else (CODEX_PROFILE_ID if include_profile else None),
         metadata_version=(
             metadata_version if metadata_version is not None else (CODEX_PROFILE_VERSION if include_profile else None)
         ),
+        provider_kind=resolved_profile.provider_kind if resolved_profile else None,
+        provider_display_name=resolved_profile.provider_display_name if resolved_profile else None,
     )
 
 
 def _selected_profile(
     qualification_profile: str | CodexQualificationProfile | None,
+    *,
+    registry: Mapping[str, CodexQualificationProfile] | None = None,
 ) -> CodexQualificationProfile:
+    selected_registry = registry or CODEX_PROFILE_REGISTRY
     if qualification_profile is None:
-        return OPENAI_CODEX_PROFILE
-    if isinstance(qualification_profile, CodexQualificationProfile):
-        profile = qualification_profile
+        profile = selected_registry.get(CODEX_PROFILE_ID)
+        if profile is None:
+            raise ValueError("Default Codex qualification profile is not registered.")
+    elif isinstance(qualification_profile, CodexQualificationProfile):
+        profile = selected_registry.get(qualification_profile.profile_id)
+        if profile is not qualification_profile:
+            raise ValueError("Codex qualification profile is not registry-owned.")
     else:
-        profile = get_codex_profile(qualification_profile)
+        profile = selected_registry.get(qualification_profile)
     if profile is None:
         raise ValueError("Unknown Codex qualification profile.")
     if not profile.mocked_qualification and not profile.live_qualification:

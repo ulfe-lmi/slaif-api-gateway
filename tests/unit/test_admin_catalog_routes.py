@@ -21,6 +21,7 @@ from slaif_gateway.schemas.admin_catalog import (
 )
 from slaif_gateway.services.admin_catalog_dashboard import AdminCatalogNotFoundError
 from slaif_gateway.services.admin_session_service import AdminSessionContext
+from slaif_gateway.services.codex_qualification import CODEX_PROFILE_ID
 
 
 class _FakeSession:
@@ -323,6 +324,49 @@ def test_admin_route_views_label_protocol_qualification_without_e2e_claim(monkey
     assert "real provider-through-gateway E2E not yet run" in response.text
     assert "Real provider-through-gateway E2E has not yet run" in detail.text
     assert f'/admin/routes/{paired_route_id}' in detail.text
+
+
+def test_admin_v2_ready_route_shows_profile_facts_and_artifact_links(monkeypatch) -> None:
+    route = replace(
+        _route(),
+        codex_qualification_state="protocol_qualified",
+        codex_qualification_badge=f"Protocol-qualified: profile {CODEX_PROFILE_ID} / metadata v2",
+        codex_qualification_reason_codes=(),
+        codex_protocol_ready=True,
+        codex_profile_id=CODEX_PROFILE_ID,
+        codex_metadata_version=2,
+        codex_cli_version="0.147.0",
+        codex_profile_name="slaif",
+        codex_provider_kind="openai",
+        codex_provider_display_name="OpenAI",
+        codex_wire_api="responses",
+    )
+
+    async def get_route_detail(self, route_id):
+        return route
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_route_detail,
+    )
+    client = TestClient(_app(_settings(PUBLIC_BASE_URL="http://127.0.0.1:8000/v1")))
+    _login(monkeypatch, client)
+    response = client.get(f"/admin/routes/{route.id}")
+    assert response.status_code == 200
+    assert CODEX_PROFILE_ID in response.text
+    assert "Download base fragment" in response.text
+    artifact = client.get(f"/admin/routes/{route.id}/codex-profile/base")
+    assert artifact.status_code == 200
+    assert "api.openai.example" not in artifact.text
+
+    async def get_not_ready(self, route_id):
+        return replace(route, codex_protocol_ready=False)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_not_ready,
+    )
+    assert client.get(f"/admin/routes/{route.id}/codex-profile/base").status_code == 404
 
 
 def test_admin_pricing_and_fx_routes_return_html_and_accept_filters(monkeypatch) -> None:

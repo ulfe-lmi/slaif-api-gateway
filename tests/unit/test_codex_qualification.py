@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from types import MappingProxyType
 
 import pytest
 
@@ -25,6 +26,7 @@ from slaif_gateway.services.codex_qualification import (
     parse_codex_qualification_metadata,
     parse_codex_profile_metadata,
     render_codex_profile,
+    render_codex_profile_artifacts,
     render_codex_profile_text,
     validate_codex_gateway_base_url,
     validate_codex_pilot_key_input,
@@ -32,6 +34,7 @@ from slaif_gateway.services.codex_qualification import (
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
 )
+from slaif_gateway.services.codex_profile_registry import CodexQualificationProfile
 
 NOW = datetime(2026, 8, 18, tzinfo=UTC)
 
@@ -70,6 +73,44 @@ def _v2_capabilities(companion: uuid.UUID) -> dict[str, object]:
     return capabilities
 
 
+def _synthetic_profile() -> CodexQualificationProfile:
+    return CodexQualificationProfile(
+        profile_id="synthetic-generic-profile-v2",
+        metadata_version=CODEX_PROFILE_METADATA_VERSION,
+        cli_version="1.0.0",
+        public_model="synthetic-model",
+        upstream_model="synthetic-upstream",
+        wire_api="responses",
+        provider_kind="openai_compatible",
+        provider_slug="synthetic",
+        required_endpoints=(CODEX_RESPONSES_ENDPOINT,),
+        required_route_gates=("codex_request_envelope",),
+        context_window_tokens=4096,
+        default_max_output_tokens=128,
+        max_output_tokens=512,
+        compaction_mode="client_local",
+        reasoning_replay=False,
+        streaming_tool_events=False,
+        local_tools=("function",),
+        credential_free_provider_fields=MappingProxyType(
+            {
+                "name": "Synthetic",
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                "supports_websockets": False,
+            }
+        ),
+        model_catalog_artifact='{"models":[{"id":"synthetic-model"}]}',
+        model_catalog_target="synthetic-models.json",
+        fixture_sha256="a" * 64,
+        evidence_date="2026-08-21",
+        mocked_qualification=True,
+        live_qualification=False,
+        profile_name="synthetic",
+        provider_display_name="Synthetic Backend",
+    )
+
+
 def _pair(**responses_overrides: object) -> tuple[SimpleNamespace, SimpleNamespace]:
     responses_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
     compact_id = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -101,6 +142,90 @@ def _pair(**responses_overrides: object) -> tuple[SimpleNamespace, SimpleNamespa
     }
     compact = SimpleNamespace(**compact_values)
     return responses, compact
+
+
+@pytest.mark.asyncio
+async def test_unregistered_synthetic_profile_uses_own_model_kind_and_single_endpoint() -> None:
+    profile = _synthetic_profile()
+    route = SimpleNamespace(
+        id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        requested_model=profile.public_model,
+        match_type="exact",
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+        endpoint=CODEX_RESPONSES_ENDPOINT,
+        priority=10,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={
+            "responses": {
+                "text": True,
+                "stateless": True,
+                "streaming": True,
+                "codex_request_envelope": True,
+            },
+            "codex_limits": {
+                "context_window_tokens": profile.context_window_tokens,
+                "default_max_output_tokens": profile.default_max_output_tokens,
+                "max_output_tokens": profile.max_output_tokens,
+            },
+            "codex_profile": {
+                "version": profile.metadata_version,
+                "profile_id": profile.profile_id,
+                "fixture_sha256": profile.fixture_sha256,
+            },
+        },
+    )
+    pricing = _Pricing(
+        {CODEX_RESPONSES_ENDPOINT: _pricing(
+            CODEX_RESPONSES_ENDPOINT,
+            provider="synthetic",
+            upstream_model=profile.upstream_model,
+        )},
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+    )
+    decoy = copy.copy(route)
+    decoy.id = uuid.UUID("44444444-4444-4444-8444-444444444444")
+    decoy.requested_model = "synthetic"
+    decoy.match_type = "prefix"
+    decoy.priority = 20
+    decoy.capabilities = {}
+    results = await _service(
+        [route, decoy],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    ).inspect(now=NOW)
+    result = next(item for item in results if item.route_id == route.id)
+    assert result.state == "protocol_qualified"
+    assert result.paired_route_id is None
+    assert result.profile_id == profile.profile_id
+    assert result.cli_version == profile.cli_version
+    assert result.profile == profile.profile_name
+    assert result.provider_kind == profile.provider_kind
+    assert result.provider_display_name == profile.provider_display_name
+    assert result.metadata_version == profile.metadata_version
+    wrong_kind_results = await _service(
+        [route],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai",
+        upstream_model=profile.upstream_model,
+    ).inspect(now=NOW)
+    assert wrong_kind_results[0].state == "not_ready"
+    assert "provider_kind_mismatch" in wrong_kind_results[0].reason_codes
+
+    artifacts = render_codex_profile_artifacts("https://gateway.example.org/v1", profile)
+    assert artifacts.model_catalog_json == profile.model_catalog_artifact
+    assert artifacts.model_catalog_target == profile.model_catalog_target
+    assert "synthetic-upstream" not in artifacts.base_config_toml
+    with pytest.raises(ValueError, match="registry-owned"):
+        render_codex_profile("https://gateway.example.org/v1", profile)
 
 
 def _pricing(endpoint: str, *, currency: str = "EUR", **overrides: object) -> SimpleNamespace:
@@ -136,24 +261,28 @@ class _Routes:
 
 
 class _Providers:
-    def __init__(self, *, enabled: bool = True) -> None:
+    def __init__(self, *, enabled: bool = True, provider: str = "openai", kind: str = "openai") -> None:
         self.enabled = enabled
+        self.provider = provider
+        self.kind = kind
 
     async def list_provider_configs(self, **kwargs: object) -> list[object]:
         assert kwargs == {"limit": 1000, "offset": 0}
-        return [SimpleNamespace(provider="openai", enabled=self.enabled)]
+        return [SimpleNamespace(provider=self.provider, kind=self.kind, enabled=self.enabled)]
 
 
 class _Pricing:
-    def __init__(self, rows: dict[str, object | None] | None = None) -> None:
+    def __init__(self, rows: dict[str, object | None] | None = None, *, provider: str = "openai", upstream_model: str = CODEX_MODEL) -> None:
+        self.provider = provider
+        self.upstream_model = upstream_model
         self.rows = rows or {
             CODEX_RESPONSES_ENDPOINT: _pricing(CODEX_RESPONSES_ENDPOINT),
             CODEX_COMPACT_ENDPOINT: _pricing(CODEX_COMPACT_ENDPOINT),
         }
 
     async def find_active_pricing_rule(self, **kwargs: object) -> object | None:
-        assert kwargs["provider"] == "openai"
-        assert kwargs["upstream_model"] == CODEX_MODEL
+        assert kwargs["provider"] == self.provider
+        assert kwargs["upstream_model"] == self.upstream_model
         assert kwargs["at_time"] == NOW
         return self.rows.get(str(kwargs["endpoint"]))
 
@@ -174,12 +303,17 @@ def _service(
     provider_enabled: bool = True,
     pricing: _Pricing | None = None,
     fx: _Fx | None = None,
+    profile_registry: MappingProxyType | None = None,
+    provider: str = "openai",
+    provider_kind: str = "openai",
+    upstream_model: str = CODEX_MODEL,
 ) -> CodexQualificationService:
     return CodexQualificationService(
-        provider_configs_repository=_Providers(enabled=provider_enabled),
+        provider_configs_repository=_Providers(enabled=provider_enabled, provider=provider, kind=provider_kind),
         model_routes_repository=_Routes(rows),
-        pricing_rules_repository=pricing or _Pricing(),
+        pricing_rules_repository=pricing or _Pricing(provider=provider, upstream_model=upstream_model),
         fx_rates_repository=fx or _Fx(),
+        profile_registry=profile_registry,
     )
 
 

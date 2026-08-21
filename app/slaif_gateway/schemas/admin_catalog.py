@@ -7,12 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from slaif_gateway.services.codex_profile_registry import (
-    PROFILE_METADATA_VERSION,
-    get_codex_profile,
-    validate_codex_profile_declaration,
-)
-from slaif_gateway.services.codex_qualification import CODEX_QUALIFICATION_METADATA, CODEX_PROFILE_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,28 +92,11 @@ class AdminRouteListRow:
     codex_protocol_ready: bool = False
     codex_profile_id: str | None = None
     codex_metadata_version: int | None = None
-
-    def __post_init__(self) -> None:
-        """Expose only a validated server-registered v2 identity."""
-
-        declaration = self.capabilities.get("codex_profile")
-        if declaration is not None:
-            state, _ = validate_codex_profile_declaration(declaration)
-            if state != "ready" or not isinstance(declaration, dict):
-                return
-            profile_id = declaration.get("profile_id")
-            if get_codex_profile(profile_id) is None:
-                return
-            if self.codex_profile_id is None:
-                object.__setattr__(self, "codex_profile_id", profile_id)
-            if self.codex_metadata_version is None:
-                object.__setattr__(self, "codex_metadata_version", PROFILE_METADATA_VERSION)
-
-        # Legacy v1 remains readable, but its identity is still server-owned.
-        legacy = self.capabilities.get("codex_qualification")
-        if legacy == CODEX_QUALIFICATION_METADATA and self.codex_profile_id is None:
-            object.__setattr__(self, "codex_profile_id", CODEX_PROFILE_ID)
-            object.__setattr__(self, "codex_metadata_version", 1)
+    codex_cli_version: str | None = None
+    codex_profile_name: str | None = None
+    codex_provider_kind: str | None = None
+    codex_provider_display_name: str | None = None
+    codex_wire_api: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

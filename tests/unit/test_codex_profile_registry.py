@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 
@@ -63,7 +65,7 @@ def test_profile_declaration_fails_closed(value: object, expected: tuple[str, st
 
 
 def test_registry_validation_rejects_duplicate_key() -> None:
-    duplicate = {PROFILE_ID: OPENAI_CODEX_PROFILE, "other": OPENAI_CODEX_PROFILE}
+    duplicate = MappingProxyType({PROFILE_ID: OPENAI_CODEX_PROFILE, "other": OPENAI_CODEX_PROFILE})
     with pytest.raises(ValueError, match="duplicate"):
         validate_codex_profile_registry(duplicate)
 
@@ -83,10 +85,44 @@ def test_fixture_sanitizer_rejects_content_and_sensitive_fields(unsafe: object) 
 
 
 def test_fixture_sanitizer_keeps_only_structural_fields_and_deterministic_digest() -> None:
-    fixture = {"event_type": "response.output_item.done", "id": "opaque", "count": 1}
+    fixture = {
+        "event_type": "response.output_item.done",
+        "id": "opaque",
+        "count": 1,
+        "field_type": "linked",
+    }
     first = sanitize_codex_fixture(copy.deepcopy(fixture))
     second = sanitize_codex_fixture(copy.deepcopy(fixture))
     assert first == second
     assert first["id"] == "ID_1"
     assert len(str(first["digest"])) == 64
-    assert set(first) == {"event_type", "id", "count", "digest"}
+    assert set(first) == {"event_type", "id", "count", "field_type", "digest"}
+
+
+def test_fixture_sanitizer_preserves_id_relationship_order_without_raw_ids() -> None:
+    fixture = {"event_type": "sequence", "field_type": [{"id": "a"}, {"id": "b"}, {"id": "a"}]}
+    result = sanitize_codex_fixture(fixture)
+    assert result["field_type"] == [{"id": "ID_1"}, {"id": "ID_2"}, {"id": "ID_1"}]
+    assert "'id': 'a'" not in str(result) and "'id': 'b'" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model_catalog_artifact": '{"models": ["x"]}', "model_catalog_target": "../unsafe.json"},
+        {"model_catalog_artifact": '{ "models": [] }', "model_catalog_target": "models.json"},
+        {"model_catalog_artifact": '{"models": ["https://upstream.example"]}', "model_catalog_target": "models.json"},
+    ],
+)
+def test_profile_catalog_artifacts_reject_unsafe_or_noncanonical_values(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        replace(OPENAI_CODEX_PROFILE, **changes)
+
+
+def test_registry_owned_selection_rejects_caller_mutation() -> None:
+    mutated = replace(OPENAI_CODEX_PROFILE, profile_name="mutated")
+    assert mutated is not OPENAI_CODEX_PROFILE
+    with pytest.raises(ValueError, match="registry-owned"):
+        from slaif_gateway.services.codex_qualification import render_codex_profile
+
+        render_codex_profile("https://gateway.example.org/v1", mutated)

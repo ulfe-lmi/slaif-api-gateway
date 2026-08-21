@@ -64,6 +64,16 @@ local mocked/provider-boundary evidence; `real_provider_e2e` and live
 qualification remain false. No later model or provider is registered as
 qualified by this framework objective.
 
+The registry and qualification service are profile-scoped: model ranking,
+provider kind/slug, endpoint requirements, gates, limits, and safe result facts
+come from the resolved definition. Focused tests exercise an unregistered
+synthetic non-OpenAI profile with one Responses endpoint and client-local
+compaction; that definition is available only to the pure test renderer and
+cannot be selected by the CLI or admin path. Admin route pages display and
+offer downloads only for an actually ready registry-owned profile, using the
+validated configured SLAIF gateway `/v1` URL. Provider base URLs, upstream
+credentials, and non-ready route declarations never become Codex artifacts.
+
 Codex custom-provider selection belongs in the user's Codex configuration, not
 in a repository checkout. The official configuration reference states that
 project-local config cannot safely override provider/authentication settings,
