@@ -232,6 +232,9 @@ _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS = frozenset(
         )
     }
 )
+_CODEX_EXEC_COMMAND_ALLOWED_AUTHORITY_KEY_PATHS = frozenset(
+    {("parameters", "properties", "shell")}
+)
 _CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES = 262_144
 _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES = 1_048_576
 _CODEX_MAX_REASONING_SUMMARY_BYTES = 65_536
@@ -304,9 +307,8 @@ def _codex_client_tool_taxonomy_for(value: object) -> tuple[tuple[str, tuple[tup
         for item in value
         if isinstance(item, Mapping) and isinstance(item.get("name"), str)
     )
-    for taxonomy in (_CODEX_CLIENT_TOOL_TAXONOMY, _CODEX_CLIENT_TOOL_TAXONOMY_0148):
-        if names == frozenset(namespace for namespace, _tools in taxonomy):
-            return taxonomy
+    if names == frozenset(namespace for namespace, _tools in _CODEX_CLIENT_TOOL_TAXONOMY):
+        return _CODEX_CLIENT_TOOL_TAXONOMY
     return None
 
 
@@ -1469,14 +1471,13 @@ class ResponsesRequestPolicy:
                         "responses_codex_client_tools_invalid",
                         "This Codex client tool has an invalid declaration type.",
                     )
-                allowed_authority_key_paths = (
-                    _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS
-                    if namespace_name == "functions"
-                    and tool_name == "request_user_input"
-                    and tool.get("type") == "function"
-                    else frozenset()
-                )
-                if codex_client_tool_taxonomy != "codex_0_148" and _contains_recursive_codex_authority_marker(
+                if namespace_name == "functions" and tool_name == "request_user_input":
+                    allowed_authority_key_paths = _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS
+                elif namespace_name == "functions" and tool_name == "exec_command":
+                    allowed_authority_key_paths = _CODEX_EXEC_COMMAND_ALLOWED_AUTHORITY_KEY_PATHS
+                else:
+                    allowed_authority_key_paths = frozenset()
+                if _contains_recursive_codex_authority_marker(
                     tool, allowed_key_paths=allowed_authority_key_paths
                 ):
                     _raise(

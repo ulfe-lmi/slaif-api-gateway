@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from scripts import verify_qwen38_text_codex as verifier
 from slaif_gateway.services.codex_profile_registry import (
     QWEN38_TEXT_CODEX_CANDIDATE,
@@ -10,6 +12,7 @@ from slaif_gateway.services.codex_profile_registry import (
     QWEN38_TEXT_PROFILE_ID,
     get_codex_profile,
 )
+import slaif_gateway.services.codex_profile_registry as registry
 
 
 def test_candidate_is_exact_and_unregistered() -> None:
@@ -24,7 +27,7 @@ def test_candidate_is_exact_and_unregistered() -> None:
     assert profile.auto_compaction_token_threshold == 125_000
     assert profile.input_modalities == ("text",)
     assert profile.catalog_source == "replacement"
-    assert not profile.mocked_qualification
+    assert profile.mocked_qualification
     assert not profile.live_qualification
     assert get_codex_profile(profile.profile_id) is None
 
@@ -36,10 +39,36 @@ def test_captured_fixture_is_structural_deterministic_and_canary_free() -> None:
     assert verifier.sanitize_captured_fixture(projection) == fixture
     assert fixture["event_sequence"]
     assert fixture["request_facts"]["count"] == 2
-    assert fixture["catalog_facts"]["field_type"] == "replacement"
+    assert fixture["catalog_facts"]["field_type"] == "catalog"
+    assert fixture["catalog_facts"]["taxonomy_id"] == "codex_0_148"
+    assert fixture["accounting_facts"]["count"] == 2
     assert hashlib.sha256(verifier.FIXTURE_PATH.read_bytes()).hexdigest() == QWEN38_TEXT_PROFILE_FIXTURE_SHA256
     forbidden = ("prompt", "response body", "authorization", "https://", "workspace", "QWEN38_TOOL_OK")
     assert not any(marker in verifier.FIXTURE_PATH.read_text(encoding="utf-8") for marker in forbidden)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("display_name", "https://private.invalid"),
+        ("description", "unsafe\nlabel"),
+        ("availability_nux", "instructions"),
+        ("supports_search_tool", True),
+        ("supports_parallel_tool_calls", True),
+    ],
+)
+def test_catalog_rejects_unsafe_nested_strings_and_drift(field: str, value: object) -> None:
+    artifact = json.loads(QWEN38_TEXT_CODEX_CANDIDATE.model_catalog_artifact)
+    model = artifact["models"][0]
+    model[field] = value
+    with pytest.raises(ValueError):
+        registry._validate_catalog_artifact(
+            artifact,
+            public_model=QWEN38_TEXT_CODEX_CANDIDATE.public_model,
+            context_window_tokens=QWEN38_TEXT_CODEX_CANDIDATE.context_window_tokens,
+            auto_compaction_token_threshold=QWEN38_TEXT_CODEX_CANDIDATE.auto_compaction_token_threshold,
+            input_modalities=QWEN38_TEXT_CODEX_CANDIDATE.input_modalities,
+        )
 
 
 def test_absent_target_is_safe_and_non_live() -> None:
@@ -106,6 +135,14 @@ def test_present_target_runs_hermetic_then_distinct_live_runner() -> None:
     assert phase["request_count"] == 2
     assert result["real_provider_called"] is True
     assert calls == ["hermetic", "http://127.0.0.1:8080/v1", "private-test-key", "live"]
+
+
+def test_live_branch_uses_codex_slaif_and_numeric_loopback_plumbing() -> None:
+    result = verifier.run_local_live_plumbing_phase()
+    assert result["real_provider_called"] is True
+    assert result["accounting_proved"] is True
+    assert result["privacy_proved"] is True
+    assert result["loopback_only"] is True
 
 
 def test_target_url_rejects_percent_backslash_and_bad_port() -> None:

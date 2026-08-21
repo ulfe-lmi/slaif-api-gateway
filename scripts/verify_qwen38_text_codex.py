@@ -18,16 +18,12 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
-import httpx
-
-from slaif_gateway.services.codex_profile_registry import (
-    QWEN38_TEXT_CODEX_CANDIDATE,
-    sanitize_codex_fixture,
-)
+import slaif_gateway.services.codex_profile_registry as registry
 
 BASE_URL_ENV = "SLAIF_QWEN38_TEXT_BASE_URL"
 API_KEY_ENV = "SLAIF_QWEN38_TEXT_API_KEY"
@@ -35,10 +31,16 @@ FIXTURE_PATH = Path(__file__).resolve().parents[1] / "tests/fixtures/codex/0.148
 ALLOWED_FIXTURE_TYPES = frozenset(
     {
         "phase", "request", "response.created", "response.output_item.added",
+        "response.function_call_arguments.delta",
         "response.custom_tool_call_input.delta", "response.output_item.done",
         "response.completed", "response.output_text.delta", "tool", "function",
         "stream", "sse", "catalog", "replacement", "route", "provider", "gateway",
         "upstream", "credential_boundary", "substituted", "final", "completed",
+        "accounting", "ledger", "reservation", "responses", "codex_0_148", "initial",
+        "continuation", "item", "call", "call_id", "function_call", "message",
+        "auth_substitution", "header_sanitization", "model_rewrite", "loopback",
+        "codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events",
+        "text_only", "no_search", "no_parallel", "finalized", "success", "EUR",
     }
 )
 MAX_KEY_BYTES = 512
@@ -201,26 +203,93 @@ def verify_candidate_codex_version(binary: Path = CODEX_BINARY) -> str:
     return CODEX_VERSION
 
 
-def build_structural_fixture(*, request_count: int, event_count: int) -> dict[str, object]:
-    """Build only structural facts from a completed bounded capture."""
+def build_observed_fixture(*, facts, actions, runtime, accounting) -> dict[str, object]:
+    """Project observed request/SSE/accounting facts into structural evidence only."""
 
+    event_sequence: list[dict[str, object]] = []
+    request_phases: list[dict[str, object]] = []
+    relationships: list[dict[str, object]] = []
+    event_index = 0
+    for request_index, (fact, action) in enumerate(zip(facts, actions, strict=True)):
+        phase = "initial" if request_index == 0 else "continuation"
+        request_phases.append({
+            "field_type": "request", "phase": phase, "index": request_index,
+            "event_count": len(action.payload), "taxonomy_id": "codex_0_148", "enabled": True,
+        })
+        for event in action.payload:
+            item = event.get("item") if isinstance(event, Mapping) else None
+            item_type = item.get("type") if isinstance(item, Mapping) else None
+            event_record: dict[str, object] = {
+                "event_type": str(event["type"]), "index": event_index,
+                "phase": phase, "field_type": "sse",
+            }
+            if isinstance(item_type, str):
+                event_record["tool_type"] = item_type
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                event_record["id"] = item["id"]
+                if item_type == "function_call":
+                    relationships.extend(
+                        (
+                            {"field_type": "function_call", "id": item["id"], "relation": "item"},
+                            {"field_type": "function_call", "id": item.get("call_id", "call"), "relation": "call_id"},
+                        )
+                    )
+            event_sequence.append(event_record)
+            event_index += 1
+    usage_rows = []
+    for row, cost in zip(accounting.usage, accounting.ledger_actual_costs_eur, strict=True):
+        input_tokens, cached_tokens, output_tokens, reasoning_tokens, total_tokens = row
+        usage_rows.append({
+            "field_type": "ledger", "status": "finalized", "enabled": True,
+            "input_tokens": input_tokens, "cached_tokens": cached_tokens,
+            "output_tokens": output_tokens, "reasoning_tokens": reasoning_tokens,
+            "total_tokens": total_tokens,
+            "cost_nano_eur": int(cost * 1_000_000_000) if cost is not None else 0,
+        })
     return {
-        "event_type": "phase", "count": request_count, "enabled": True,
-        "event_sequence": [
-            {"event_type": "request", "index": 0, "field_type": "gateway"},
-            {"event_type": "tool", "index": 1, "tool_type": "function"},
-            {"event_type": "stream", "count": event_count, "field_type": "sse"},
-            {"event_type": "final", "index": 2, "field_type": "completed"},
-        ],
-        "request_facts": {"field_type": "request", "count": request_count, "enabled": True},
-        "catalog_facts": {"field_type": "replacement", "count": 1, "enabled": True},
-        "route_facts": {"field_type": "route", "count": 3, "enabled": True},
-        "credential_facts": {"field_type": "credential_boundary", "count": 2, "enabled": True},
+        "event_type": "phase", "count": len(facts), "enabled": True,
+        "event_sequence": event_sequence,
+        "request_facts": {
+            "field_type": "request", "count": len(facts), "enabled": True,
+            "phases": request_phases, "relationships": relationships,
+        },
+        "catalog_facts": {
+            "field_type": "catalog", "count": 1, "enabled": True,
+            "catalog_source": "replacement", "taxonomy_id": "codex_0_148",
+            "text_only": {"field_type": "text_only", "enabled": True},
+            "no_search": {"field_type": "no_search", "enabled": True},
+            "no_parallel": {"field_type": "no_parallel", "enabled": True},
+        },
+        "route_facts": {
+            "field_type": "route", "count": 3, "enabled": True, "endpoint": "responses",
+            "provider_kind": "openai_compatible", "model_rewrite": "public_to_upstream",
+            "gates": [
+                {"field_type": "route", "gate": gate, "enabled": True}
+                for gate in runtime.required_route_gates
+            ],
+        },
+        "credential_facts": {
+            "field_type": "credential_boundary", "count": 2, "enabled": True,
+            "facts": [
+                {"field_type": "auth_substitution", "enabled": all(f.authorization_replaced for f in facts)},
+                {"field_type": "header_sanitization", "enabled": all(f.headers_sanitized for f in facts)},
+            ],
+        },
+        "accounting_facts": {
+            "field_type": "accounting", "count": len(usage_rows), "enabled": True,
+            "requests_used": accounting.requests_used, "tokens_used": accounting.tokens_used,
+            "cost_nano_eur": int(accounting.cost_used_eur * 1_000_000_000),
+            "reservations": [
+                {"field_type": "reservation", "status": status, "enabled": True}
+                for status in accounting.reservation_statuses
+            ],
+            "ledgers": usage_rows,
+        },
     }
 
 
 def sanitize_captured_fixture(value: object) -> dict[str, object]:
-    return sanitize_codex_fixture(value, allowed_types=ALLOWED_FIXTURE_TYPES)
+    return registry.sanitize_codex_fixture(value, allowed_types=ALLOWED_FIXTURE_TYPES)
 
 
 def fixture_digest(value: Mapping[str, object]) -> str:
@@ -243,7 +312,6 @@ def _candidate_runtime_modules():
         import verify_codex_gateway_e2e as gateway
     except ModuleNotFoundError:
         from scripts import verify_codex_gateway_e2e as gateway
-    import slaif_gateway.services.codex_profile_registry as registry
     import slaif_gateway.services.codex_qualification as qualification
 
     return gateway, registry, qualification
@@ -252,7 +320,7 @@ def _candidate_runtime_modules():
 @contextmanager
 def _candidate_runtime_registry():
     gateway, registry, qualification = _candidate_runtime_modules()
-    runtime = replace(QWEN38_TEXT_CODEX_CANDIDATE, mocked_qualification=True)
+    runtime = replace(registry.QWEN38_TEXT_CODEX_CANDIDATE, mocked_qualification=True)
     profiles = MappingProxyType(
         {registry.OPENAI_CODEX_PROFILE.profile_id: registry.OPENAI_CODEX_PROFILE, runtime.profile_id: runtime}
     )
@@ -286,7 +354,9 @@ def _candidate_runtime_registry():
         ) = old
 
 
-async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int, settings, runtime):
+async def _seed_candidate_gateway(
+    *, gateway, database_url: str, provider_base_url: str, provider_env: str, settings, runtime
+):
     from datetime import UTC, datetime, timedelta
     from decimal import Decimal
     from slaif_gateway.db.repositories.audit import AuditRepository
@@ -323,8 +393,8 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
             provider_name = "openai_compatible"
             await ProviderConfigsRepository(session).create_provider_config(
                 provider=provider_name, display_name="Qwen numeric loopback verifier",
-                base_url=f"http://127.0.0.1:{mock_port}/v1", api_key_env_var="SLAIF_QWEN38_UPSTREAM_KEY",
-                enabled=True, timeout_seconds=10, max_retries=0, notes="Disposable loopback only"
+                base_url=provider_base_url, api_key_env_var=provider_env,
+                enabled=True, timeout_seconds=30, max_retries=0, notes="Bounded candidate verifier provider"
             )
             responses = default_responses_capabilities()
             responses.update({
@@ -360,7 +430,14 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
                 valid_from=now - timedelta(minutes=5), currency="EUR",
                 input_price_per_1m=Decimal("1"), cached_input_price_per_1m=Decimal("0"),
                 output_price_per_1m=Decimal("2"), reasoning_price_per_1m=Decimal("2"),
-                request_price=Decimal("0"), pricing_metadata={}, notes="Disposable local pricing"
+                request_price=Decimal("0"), pricing_metadata={
+                    "codex_accounting": {
+                        "long_context_threshold_tokens": 272_000,
+                        "long_context_input_multiplier": "2",
+                        "long_context_output_multiplier": "1.5",
+                        "cache_write_input_multiplier": "1.25",
+                    }
+                }, notes="Disposable local pricing"
             )
             service = KeyService(
                 settings=settings, gateway_keys_repository=GatewayKeysRepository(session),
@@ -377,7 +454,7 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
                     "version": 1,
                     "codex_client_tool_taxonomy": "codex_0_148",
                     "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"],
-                    "allowed_local_tool_types": ["function", "custom"],
+                    "allowed_local_tool_types": list(runtime.local_tools),
                 },
                 rate_limit_policy={"requests_per_minute": 100, "tokens_per_minute": 100_000,
                                    "max_concurrent_requests": 1, "window_seconds": 60},
@@ -385,6 +462,30 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
             ))
             await session.commit()
             return key
+    finally:
+        await engine.dispose()
+
+
+async def _inspect_candidate_route(*, database_url: str, runtime, provider: str):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+    from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+    from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+    from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+    from slaif_gateway.services.codex_qualification import CodexQualificationService
+
+    engine = create_async_engine(database_url, future=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as session:
+            result = await CodexQualificationService(
+                provider_configs_repository=ProviderConfigsRepository(session),
+                model_routes_repository=ModelRoutesRepository(session),
+                pricing_rules_repository=PricingRulesRepository(session),
+                fx_rates_repository=FxRatesRepository(session),
+                profile_registry=MappingProxyType({runtime.profile_id: runtime}),
+            ).ready_responses_profile(provider=provider, qualification_profile=runtime.profile_id)
+            return result
     finally:
         await engine.dispose()
 
@@ -435,24 +536,56 @@ def _run_real_hermetic_phase() -> Mapping[str, object]:
         return _run_real_hermetic_for_target(target)
 
 
-def _run_real_hermetic_for_target(target) -> Mapping[str, object]:
-    """Run one Codex -> real gateway -> numeric-loopback provider phase."""
+def _run_real_hermetic_for_target(
+    target,
+    *,
+    provider_base_url: str | None = None,
+    provider_key: str | None = None,
+    provider_mock=None,
+) -> Mapping[str, object]:
+    """Run Codex through SLAIF, using either the bounded loopback or configured provider."""
 
     with _candidate_runtime_registry() as (gateway, runtime):
         version = verify_candidate_codex_version()
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             gateway.migrate_database(target)
-        mock = gateway.ScriptedOpenAIMock()
-        mock.start()
-        old_key = os.environ.get("SLAIF_QWEN38_UPSTREAM_KEY")
-        os.environ["SLAIF_QWEN38_UPSTREAM_KEY"] = gateway.DUMMY_UPSTREAM_KEY
+        mock = provider_mock or gateway.ScriptedOpenAIMock()
+        loopback_provider = provider_base_url is None or provider_mock is not None
+        owns_mock = provider_mock is None
+        if owns_mock:
+            mock.start()
+        provider_url = (
+            f"http://127.0.0.1:{mock.port}/v1" if loopback_provider else provider_base_url
+        )
+        provider_env = (
+            "SLAIF_QWEN38_UPSTREAM_KEY"
+            if provider_base_url is None
+            else "SLAIF_QWEN38_LIVE_PROVIDER_KEY"
+        )
+        configured_provider_key = (
+            gateway.DUMMY_UPSTREAM_KEY if provider_base_url is None else provider_key
+        )
+        if not isinstance(provider_url, str) or not isinstance(configured_provider_key, str):
+            raise VerificationError("provider_configuration_failed")
+        old_key = os.environ.get(provider_env)
+        os.environ[provider_env] = configured_provider_key
         try:
             with gateway.private_redis() as (redis_url, _redis_process):
                 settings = gateway._gateway_settings(target.url, redis_url)
                 key = __import__("asyncio").run(_seed_candidate_gateway(
-                    gateway=gateway, database_url=target.url, mock_port=mock.port,
+                    gateway=gateway,
+                    database_url=target.url,
+                    provider_base_url=provider_url,
+                    provider_env=provider_env,
                     settings=settings, runtime=runtime
                 ))
+                ready_route = __import__("asyncio").run(
+                    _inspect_candidate_route(
+                        database_url=target.url, runtime=runtime, provider="openai_compatible"
+                    )
+                )
+                if not ready_route.ready or tuple(runtime.local_tools) != ("function",):
+                    raise VerificationError("qualification_inspection_failed")
                 with gateway.gateway_server(settings) as (gateway_port, gateway_peers):
                     root = Path(tempfile.mkdtemp(prefix="slaif-qwen38-codex-"))
                     try:
@@ -468,7 +601,11 @@ def _run_real_hermetic_for_target(target) -> Mapping[str, object]:
                         (home / runtime.model_catalog_target).write_text(runtime.model_catalog_artifact + "\n", encoding="utf-8")
                         for path in (home / "config.toml", home / f"{runtime.profile_name}.config.toml", home / runtime.model_catalog_target):
                             path.chmod(0o600)
-                        mock.queue(_candidate_actions(gateway, workspace=work, upstream_model=runtime.upstream_model))
+                        actions = _candidate_actions(
+                            gateway, workspace=work, upstream_model=runtime.upstream_model
+                        )
+                        if loopback_provider:
+                            mock.queue(actions)
                         command = ["/usr/bin/codex", "--ask-for-approval", "never", "--profile", runtime.profile_name,
                                    "exec", "--ephemeral", "--ignore-rules", "--json", "--skip-git-repo-check",
                                    "--sandbox", "workspace-write", "--cd", str(work), "-c", "check_for_update_on_startup=false",
@@ -477,10 +614,10 @@ def _run_real_hermetic_for_target(target) -> Mapping[str, object]:
                                    "-c", "model_providers.qwen3_8_text.stream_max_retries=0",
                                    "Satisfy the bounded local function tool turn and return the final marker."]
                         environment = gateway._profile_environment(home, key.plaintext_key)
-                        environment.update({"CODEX_HOME": str(home), "HOME": str(home), "OPENAI_API_KEY": key.plaintext_key,
+                        environment.update({"CODEX_HOME": str(home), "OPENAI_API_KEY": key.plaintext_key,
                                             "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
                         result = subprocess.run(command, check=False, capture_output=True, env=environment, timeout=120)
-                        facts = mock.facts_since(0, 2)
+                        facts = mock.facts_since(0, 2) if loopback_provider else ()
                         marker = work / "qwen38-marker.txt"
                         if (
                             result.returncode != 0
@@ -490,35 +627,65 @@ def _run_real_hermetic_for_target(target) -> Mapping[str, object]:
                             or marker.read_text(encoding="utf-8") != "SLAIF_QWEN38_FILE_OK\n"
                         ):
                             raise VerificationError("codex_phase_failed")
-                        if not all(fact.authorization_replaced and fact.headers_sanitized and fact.model_matched for fact in facts):
+                        if loopback_provider and not all(
+                            fact.authorization_replaced and fact.headers_sanitized and fact.model_matched
+                            for fact in facts
+                        ):
                             raise VerificationError("boundary_proof_failed")
                         accounting = __import__("asyncio").run(gateway.load_accounting(target.url, key.gateway_key_id))
                         pending = __import__("asyncio").run(gateway.outstanding_reservations(target.url))
-                        if pending != 0 or accounting.requests_used != 2:
+                        if (
+                            pending != 0
+                            or accounting.requests_used != 2
+                            or accounting.tokens_used != 4
+                            or accounting.requests_reserved != 0
+                            or accounting.tokens_reserved != 0
+                            or accounting.cost_used_eur != Decimal("0.000006000")
+                            or accounting.cost_reserved_eur != Decimal("0")
+                            or accounting.reservation_statuses != ("finalized", "finalized")
+                            or accounting.ledger_statuses != ("finalized", "finalized")
+                            or accounting.ledger_successes != (True, True)
+                            or accounting.ledger_error_types != (None, None)
+                            or accounting.ledger_http_statuses != (200, 200)
+                            or accounting.ledger_native_currencies != ("EUR", "EUR")
+                            or accounting.usage != ((1, 0, 1, 0, 2), (1, 0, 1, 0, 2))
+                            or sum(accounting.ledger_actual_costs_eur, Decimal("0")) != accounting.cost_used_eur
+                        ):
                             raise VerificationError("accounting_proof_failed")
-                        sentinels = [key.plaintext_key, gateway.DUMMY_UPSTREAM_KEY, "SLAIF_QWEN38_CODEX_OK", "SLAIF_QWEN38_FILE_OK"]
+                        sentinels = [
+                            key.plaintext_key, configured_provider_key,
+                            "SLAIF_QWEN38_CODEX_OK", "SLAIF_QWEN38_FILE_OK",
+                        ]
                         if __import__("asyncio").run(gateway.sentinels_persisted(target.url, sentinels)):
                             raise VerificationError("privacy_proof_failed")
-                        observed_actions = _candidate_actions(
-                            gateway, workspace=work, upstream_model=runtime.upstream_model
-                        )
-                        event_count = sum(len(action.payload) for action in observed_actions)
-                        fixture = build_structural_fixture(
-                            request_count=len(facts), event_count=event_count
+                        if not loopback_provider:
+                            return {
+                                "codex_version": version, "request_count": accounting.requests_used,
+                                "event_count": 0, "accounting_proved": True, "privacy_proved": True,
+                                "real_provider_called": provider_base_url is not None,
+                                "loopback_only": gateway_peers.loopback_only,
+                            }
+                        event_count = sum(len(action.payload) for action in actions)
+                        fixture = build_observed_fixture(
+                            facts=facts, actions=actions, runtime=runtime, accounting=accounting
                         )
                         digest = write_captured_fixture(fixture)
-                        return {"codex_version": version, "request_count": len(facts), "event_count": event_count,
-                                "fixture_digest": digest, "accounting_proved": True, "privacy_proved": True,
-                                "loopback_only": gateway_peers.loopback_only and mock.loopback_only}
+                        return {
+                            "codex_version": version, "request_count": len(facts), "event_count": event_count,
+                            "fixture_digest": digest, "accounting_proved": True, "privacy_proved": True,
+                            "real_provider_called": provider_base_url is not None,
+                            "loopback_only": gateway_peers.loopback_only and mock.loopback_only,
+                        }
                     finally:
                         import shutil
                         shutil.rmtree(root, ignore_errors=True)
         finally:
-            mock.stop()
+            if owns_mock:
+                mock.stop()
             if old_key is None:
-                os.environ.pop("SLAIF_QWEN38_UPSTREAM_KEY", None)
+                os.environ.pop(provider_env, None)
             else:
-                os.environ["SLAIF_QWEN38_UPSTREAM_KEY"] = old_key
+                os.environ[provider_env] = old_key
 
 
 def run_hermetic_phase(*, runner: Callable[[], Mapping[str, object]] | None = None) -> Mapping[str, object]:
@@ -551,26 +718,31 @@ def run_live_phase(
     return result
 
 
-def _run_live_target(base_url: str, api_key: str) -> Mapping[str, object]:
-    """Make one explicitly authorized bounded target call without retaining its body."""
+def run_local_live_plumbing_phase() -> Mapping[str, object]:
+    """Exercise the live branch against a separately configured numeric-loopback target."""
 
+    gateway, _, _ = _candidate_runtime_modules()
+    mock = gateway.ScriptedOpenAIMock()
+    mock.start()
     try:
-        response = httpx.post(
-            f"{base_url}/responses",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": QWEN38_TEXT_CODEX_CANDIDATE.public_model,
-                "input": [{"role": "user", "content": "Return the word READY."}],
-                "max_output_tokens": 8,
-                "stream": False,
-            },
-            timeout=30,
+        with private_postgres(database_url=os.environ.get("TEST_DATABASE_URL")) as target:
+            return _run_real_hermetic_for_target(
+                target,
+                provider_base_url=f"http://127.0.0.1:{mock.port}/v1",
+                provider_key=gateway.DUMMY_UPSTREAM_KEY,
+                provider_mock=mock,
+            )
+    finally:
+        mock.stop()
+
+
+def _run_live_target(base_url: str, api_key: str) -> Mapping[str, object]:
+    """Run Codex -> disposable SLAIF -> configured private provider target."""
+
+    with private_postgres(database_url=os.environ.get("TEST_DATABASE_URL")) as target:
+        return _run_real_hermetic_for_target(
+            target, provider_base_url=base_url, provider_key=api_key
         )
-    except (httpx.HTTPError, OSError) as exc:
-        raise VerificationError("Live target call failed.") from exc
-    if response.status_code != 200 or not isinstance(response.json(), dict):
-        raise VerificationError("Live target call was not successful.")
-    return {"real_provider_called": True, "target_status": response.status_code}
 
 
 def _safe_summary(
@@ -610,7 +782,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 "RESULT=LIVE_TARGET_ABSENT\nLIVE_TARGET_PRESENT=false\n"
                 "REAL_PROVIDER_CALLED=false\nHERMETIC_PHASE=true\n"
                 f"ACCOUNTING_PROVED={str(phase.get('accounting_proved') is True).lower()}\n"
-                f"PRIVACY_PROVED={str(phase.get('privacy_proved') is True).lower()}"
+                f"PRIVACY_PROVED={str(phase.get('privacy_proved') is True).lower()}\n"
+                "LIVE_QUALIFIED=false"
             )
             return 0
         phase = run_hermetic_phase()
@@ -622,13 +795,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
             phase=phase,
             real_provider_called=live_phase["real_provider_called"] is True,
         )
-        lines = (*lines, "LIVE_QUALIFIED=true")
+        lines = (*lines, "LIVE_EVIDENCE_PASSED=true")
     except Exception:
         present = bool(os.environ.get(BASE_URL_ENV) or os.environ.get(API_KEY_ENV))
         print(
             "RESULT=FAIL\nLIVE_TARGET_PRESENT="
             + str(present).lower()
-            + "\nREAL_PROVIDER_CALLED=false"
+            + "\nREAL_PROVIDER_CALLED=false\nLIVE_QUALIFIED=false"
         )
         return 1
     for line in lines:

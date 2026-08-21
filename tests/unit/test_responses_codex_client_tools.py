@@ -52,6 +52,15 @@ TAXONOMY = {
     },
 }
 
+TAXONOMY_0148 = {
+    "functions": (
+        "exec_command", "write_stdin", "update_plan", "request_user_input", "view_image",
+    ),
+    "multi_agent_v1": (
+        "close_agent", "resume_agent", "send_input", "spawn_agent", "wait_agent",
+    ),
+}
+
 
 def _function_tool(name: str) -> dict[str, object]:
     return {
@@ -166,6 +175,46 @@ def _apply(body: dict[str, object] | None = None, *, settings: Settings | None =
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
         allow_codex_streaming_tool_events=True,
+    )
+
+
+def _additional_tools_item_0148() -> dict[str, object]:
+    return {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "bounded local namespace",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": name,
+                        "description": "bounded local function",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "additionalProperties": False,
+                        },
+                    }
+                    for name in names
+                ],
+            }
+            for namespace, names in TAXONOMY_0148.items()
+        ],
+    }
+
+
+def _apply_0148(item: dict[str, object]):
+    body = _body()
+    body["input"][0] = item
+    return ResponsesRequestPolicy(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        codex_client_tool_taxonomy="codex_0_148",
     )
 
 
@@ -504,6 +553,45 @@ def test_recursive_provider_authority_and_hosted_shapes_are_denied(
         == "responses_codex_client_tools_provider_authority_not_supported"
     )
     assert "private" not in exc_info.value.safe_message
+
+
+@pytest.mark.parametrize(
+    "namespace,tool_name",
+    [(namespace, name) for namespace, names in TAXONOMY_0148.items() for name in names],
+)
+@pytest.mark.parametrize("authority_key", ["server_url", "authorization", "headers", "approval"])
+def test_codex_0148_authority_shapes_are_denied_for_every_local_tool(
+    namespace: str, tool_name: str, authority_key: str
+) -> None:
+    item = _additional_tools_item_0148()
+    namespaces = item["tools"]
+    assert isinstance(namespaces, list)
+    selected = next(value for value in namespaces if value["name"] == namespace)
+    tools = selected["tools"]
+    assert isinstance(tools, list)
+    tool = next(value for value in tools if value["name"] == tool_name)
+    parameters = tool["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    properties[authority_key] = {"type": "string"}
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_0148(item)
+
+    assert exc_info.value.error_code == "responses_codex_client_tools_provider_authority_not_supported"
+
+
+def test_codex_0148_exec_shell_property_is_the_only_reviewed_authority_path() -> None:
+    item = _additional_tools_item_0148()
+    namespace = next(value for value in item["tools"] if value["name"] == "functions")
+    tool = next(value for value in namespace["tools"] if value["name"] == "exec_command")
+    parameters = tool["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    properties["shell"] = {"type": "string"}
+    assert _apply_0148(item).effective_body["input"][0]["type"] == "additional_tools"
 
 
 def test_exec_requires_allowlisted_bounded_grammar_but_description_may_describe_local_work() -> None:
