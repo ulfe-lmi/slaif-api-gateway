@@ -67,6 +67,32 @@ def test_providers_add_stores_env_var_name_only(monkeypatch) -> None:
     assert "sk-" not in result.stdout
 
 
+def test_providers_add_generic_http_requires_explicit_safe_ack(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_add_provider(**kwargs: object) -> FakeProvider:
+        seen.update(kwargs)
+        return FakeProvider(provider="lan-qwen-text", base_url="http://qwen.lan/v1")
+
+    monkeypatch.setattr(providers_cli, "_add_provider", fake_add_provider)
+
+    result = runner.invoke(
+        app,
+        [
+            "providers", "add", "--provider", "lan-qwen-text",
+            "--base-url", "http://qwen.lan/v1",
+            "--api-key-env-var", "LAN_QWEN_KEY",
+            "--reason", "operator-owned LAN reverse proxy",
+            "--confirm-insecure-http", "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["confirm_insecure_http"] is True
+    assert seen["reason"] == "operator-owned LAN reverse proxy"
+    assert "sk-" not in result.stdout
+
+
 def test_providers_add_does_not_accept_secret_value_option() -> None:
     result = runner.invoke(
         app,

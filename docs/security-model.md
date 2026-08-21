@@ -1283,3 +1283,10 @@ operator reconciliation completes. Hold metadata contains only versioned
 low-cardinality reason/evidence facts and timestamps; no provider/tool content,
 credentials, URLs, prompts, responses, arguments, results, or diagnostics are
 accepted. Scheduled inspection and webhook alerts are read-only for holds.
+
+For operator-defined `openai_compatible` backends, only a validated secret
+environment-variable name is stored; the bearer value is read server-side and
+never accepted from client, CLI, admin JSON, HTML, logs, or audit metadata.
+Generic HTTP requires explicit audited acknowledgement because credentials and
+content cross the LAN unencrypted. Redirects are disabled, and the generic
+runtime gains no hosted-tool or OpenRouter cost authority.

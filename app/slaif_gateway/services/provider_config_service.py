@@ -11,6 +11,8 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
 
+_PROVIDER_SLUG_RE = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
+
 
 class ProviderConfigService:
     """Small service layer for provider configuration CLI operations."""
@@ -40,7 +42,7 @@ class ProviderConfigService:
         reason: str | None = None,
         confirm_insecure_http: bool = False,
     ) -> ProviderConfig:
-        normalized_provider = _required_text(provider, "Provider")
+        normalized_provider = _canonical_provider_slug(provider)
         normalized_kind = _validate_kind(kind)
         normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
         _validate_env_var(normalized_env_var)
@@ -71,7 +73,11 @@ class ProviderConfigService:
             entity_type="provider_config",
             admin_user_id=actor_admin_id,
             entity_id=row.id,
-            new_values=_safe_audit_values(row),
+            new_values=_safe_audit_values(
+                row,
+                reason=reason,
+                insecure_http_confirmed=confirm_insecure_http,
+            ),
             note=_clean_optional(reason),
         )
         return row
@@ -117,7 +123,7 @@ class ProviderConfigService:
     ) -> ProviderConfig:
         row = await self.get_provider_config(provider_or_id)
         old_values = _safe_audit_values(row)
-        normalized_provider = _required_text(provider, "Provider")
+        normalized_provider = _canonical_provider_slug(provider)
         normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
         _validate_env_var(normalized_env_var)
         normalized_kind = _validate_kind(kind)
@@ -157,7 +163,11 @@ class ProviderConfigService:
             admin_user_id=actor_admin_id,
             entity_id=refreshed.id,
             old_values=old_values,
-            new_values=_safe_audit_values(refreshed),
+            new_values=_safe_audit_values(
+                refreshed,
+                reason=reason,
+                insecure_http_confirmed=confirm_insecure_http,
+            ),
             note=_clean_optional(reason),
         )
         return refreshed
@@ -192,6 +202,15 @@ def _required_text(value: str, label: str) -> str:
     normalized = value.strip()
     if not normalized:
         raise ValueError(f"{label} cannot be empty")
+    return normalized
+
+
+def _canonical_provider_slug(value: str) -> str:
+    normalized = _required_text(value, "Provider").lower()
+    if not _PROVIDER_SLUG_RE.fullmatch(normalized):
+        raise ValueError("Provider must be a lowercase ASCII slug of at most 64 characters")
+    if normalized.startswith(("sk-", "sk_", "sk-or-")):
+        raise ValueError("Provider must be a provider slug, not a secret-like value")
     return normalized
 
 
@@ -271,8 +290,13 @@ def _validate_base_url(
     return normalized
 
 
-def _safe_audit_values(row: ProviderConfig) -> dict[str, object]:
-    return {
+def _safe_audit_values(
+    row: ProviderConfig,
+    *,
+    reason: str | None = None,
+    insecure_http_confirmed: bool = False,
+) -> dict[str, object]:
+    values = {
         "provider": row.provider,
         "display_name": row.display_name,
         "kind": row.kind,
@@ -283,3 +307,15 @@ def _safe_audit_values(row: ProviderConfig) -> dict[str, object]:
         "max_retries": row.max_retries,
         "notes": row.notes,
     }
+    is_generic_http = (
+        row.kind == "openai_compatible"
+        and row.provider not in {"openai", "openrouter"}
+        and row.base_url.lower().startswith("http://")
+    )
+    values.update(
+        {
+            "insecure_http_confirmed": bool(is_generic_http and insecure_http_confirmed),
+            "insecure_http_audit_reason": _clean_optional(reason) if is_generic_http else None,
+        }
+    )
+    return values

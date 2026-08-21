@@ -2195,3 +2195,9 @@ Any simplification must be documented as a deliberate MVP decision in both:
 docs/database-schema.md
 AGENTS.md
 ```
+
+Provider configuration metadata for operator-defined `openai_compatible`
+backends is runtime configuration, not a provider-secret store: the database
+keeps the canonical provider slug, exact base URL, and secret environment
+variable name, never the bearer value. The runtime foundation has no migration
+or qualification claim and preserves PostgreSQL as the accounting authority.

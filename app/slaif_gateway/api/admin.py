@@ -9103,7 +9103,7 @@ def _parse_provider_config_form(
     if require_base_url and base_url is None:
         raise ValueError("Base URL is required.")
     if base_url is not None:
-        _validate_admin_base_url(base_url)
+        _validate_admin_base_url(base_url, provider=provider)
     api_key_env_var = _parse_provider_api_key_env_var(form.get("api_key_env_var"))
     timeout_seconds = _parse_required_positive_admin_int(
         form.get("timeout_seconds"), field_name="timeout_seconds"
@@ -9512,6 +9512,10 @@ def _parse_provider_slug(value: str | None) -> str:
         raise ValueError("Provider is required.")
     if not all(ch.isalnum() or ch in {"-", "_"} for ch in provider):
         raise ValueError("Provider may contain only letters, numbers, hyphens, and underscores.")
+    if len(provider) > 64 or provider[-1] in {"-", "_"}:
+        raise ValueError("Provider must be a lowercase ASCII slug of at most 64 characters.")
+    if provider.startswith(("sk-", "sk_", "sk-or-")):
+        raise ValueError("Provider must be a provider slug, not a secret-like value.")
     return provider
 
 
@@ -9537,12 +9541,15 @@ def _looks_like_provider_secret_value(value: str) -> bool:
     return lowered.startswith(("sk-", "sk_", "sk-or-")) or any(ch.isspace() for ch in value)
 
 
-def _validate_admin_base_url(value: str) -> None:
+def _validate_admin_base_url(value: str, *, provider: str | None = None) -> None:
     parsed = urlparse(value)
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
-        or parsed.path.rstrip("/") != "/v1"
+        or (
+            provider not in {"openai", "openrouter"}
+            and parsed.path.rstrip("/") != "/v1"
+        )
         or parsed.query
         or parsed.fragment
         or any(char.isspace() or ord(char) < 32 for char in value)
@@ -9550,6 +9557,10 @@ def _validate_admin_base_url(value: str) -> None:
         raise ValueError("Base URL must be an http(s) host URL ending in /v1.")
     if parsed.username or parsed.password:
         raise ValueError("Base URL must not contain credentials.")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("Base URL port is invalid.") from exc
 
 
 def _parse_required_positive_admin_int(value: str | None, *, field_name: str) -> int:

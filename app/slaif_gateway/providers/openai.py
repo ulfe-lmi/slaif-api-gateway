@@ -613,7 +613,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
             try:
                 if self._http_client is not None:
                     return await self._http_client.post(url, json=json, headers=headers, timeout=timeout)
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.post(url, json=json, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -651,7 +651,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         headers=headers,
                         timeout=timeout,
                     )
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.post(url, data=data, files=multipart_files, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -681,7 +681,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         params=params,
                         timeout=timeout,
                     )
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.get(url, headers=headers, params=params)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -705,7 +705,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
             try:
                 if self._http_client is not None:
                     return await self._http_client.delete(url, headers=headers, timeout=timeout)
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.delete(url, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -739,7 +739,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         yield event
                 return
 
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 async with client.stream("POST", url, json=json, headers=headers) as response:
                     async for event in self._stream_response_events(response):
                         yield event

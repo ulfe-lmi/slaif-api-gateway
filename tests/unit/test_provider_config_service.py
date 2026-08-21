@@ -111,7 +111,7 @@ async def test_provider_config_update_writes_safe_actor_audit() -> None:
 
     updated = await service.update_provider_config(
         str(existing.id),
-        provider="openai",
+        provider="OPENAI",
         display_name="OpenAI Updated",
         kind="openai_compatible",
         base_url="https://api.openai.example/v1",
@@ -125,6 +125,7 @@ async def test_provider_config_update_writes_safe_actor_audit() -> None:
     )
 
     assert updated.enabled is False
+    assert updated.provider == "openai"
     assert updated.timeout_seconds == 120
     assert audit.rows[0]["admin_user_id"] == actor_admin_id
     assert audit.rows[0]["action"] == "provider_config_updated"
@@ -172,3 +173,40 @@ async def test_generic_http_requires_confirmation_and_reason() -> None:
         confirm_insecure_http=True,
     )
     assert row.base_url == "http://qwen.lan:8000/v1"
+
+
+@pytest.mark.asyncio
+async def test_provider_slug_is_canonical_and_http_acknowledgement_is_audited() -> None:
+    service, _providers, audit = _service()
+
+    row = await service.create_provider_config(
+        provider="LAN-QWEN-TEXT",
+        display_name="LAN Qwen",
+        base_url="http://qwen.lan:8000/v1",
+        api_key_env_var="LAN_QWEN_KEY",
+        enabled=True,
+        notes=None,
+        reason="operator-owned LAN reverse proxy",
+        confirm_insecure_http=True,
+    )
+
+    assert row.provider == "lan-qwen-text"
+    values = audit.rows[0]["new_values"]
+    assert values["insecure_http_confirmed"] is True
+    assert values["base_url"] == "http://qwen.lan:8000/v1"
+    assert values["insecure_http_audit_reason"] == "operator-owned LAN reverse proxy"
+
+
+@pytest.mark.asyncio
+async def test_provider_slug_rejects_secret_like_or_unsafe_values() -> None:
+    service, _providers, _audit = _service()
+    for value in ("sk-provider-secret", "provider name", "provider/route", "a" * 65):
+        with pytest.raises(ValueError):
+            await service.create_provider_config(
+                provider=value,
+                display_name="Provider",
+                base_url="https://provider.lan/v1",
+                api_key_env_var="PROVIDER_KEY",
+                enabled=True,
+                notes=None,
+            )

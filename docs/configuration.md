@@ -1339,3 +1339,10 @@ Docker Compose smoke jobs without real provider keys. CI database jobs use
 
 The Docker smoke job copies `.env.example` to `.env` and uses only development
 placeholders. It does not call providers or send real external email.
+
+Operator-defined `openai_compatible` provider configs store only the name of
+the environment variable containing the backend bearer secret. The generic
+runtime requires an exact `http(s)://host[:port]/v1` base URL, does not follow
+redirects, and requires explicit confirmation plus a non-empty audit reason
+for generic HTTP LAN use. This foundation does not qualify models or inherit
+OpenAI hosted tools or OpenRouter provider-reported cost authority.

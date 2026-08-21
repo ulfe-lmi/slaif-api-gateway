@@ -133,3 +133,25 @@ def test_factory_rejects_generic_bad_url_and_client_env_name(monkeypatch) -> Non
 
     with pytest.raises(ProviderConfigurationError):
         get_provider_adapter(route, Settings())
+
+
+def test_generic_adapter_never_falls_back_to_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        import asyncio
+
+        asyncio.run(adapter.forward_chat_completion(SimpleNamespace(
+            endpoint="/v1/chat/completions",
+            body={"messages": []},
+            upstream_model="qwen",
+            request_id="request",
+            extra_headers={},
+        )))
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
