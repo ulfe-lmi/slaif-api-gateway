@@ -35,7 +35,7 @@ PRICING_MODES = frozenset({LOCAL_ZERO_PRICING, EXPLICIT_PRICING})
 MAX_SELECTED_MODELS = 100
 MAX_PUBLIC_MODEL_ID_BYTES = 255
 
-_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9._:/-]{0,253}[a-z0-9])?$")
+_SLUG = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:/-]{0,253}[A-Za-z0-9])?$")
 
 
 class SetupError(ValueError):
@@ -55,7 +55,8 @@ class SetupRequest:
     streaming: bool = False
     local_function_tools: bool = False
     confirm_enable_unqualified: bool = False
-    pricing_mode: str = LOCAL_ZERO_PRICING
+    pricing_mode: str = ""
+    confirm_local_zero: bool = False
     input_price_per_1m: str | Decimal | None = None
     output_price_per_1m: str | Decimal | None = None
     reason: str = ""
@@ -71,6 +72,8 @@ class SetupResult:
     routes: tuple[ModelRoute, ...]
     pricing_rules: tuple[PricingRule, ...]
     enabled: bool
+    preset: str
+    pricing_mode: str
 
 
 class OpenAICompatibleSetupService:
@@ -101,6 +104,7 @@ class OpenAICompatibleSetupService:
 
         fresh = await self._discovery.discover(normalized.provider)
         _require_selected_models(fresh, normalized.selected_models)
+        _require_public_mappings_in_fresh_result(fresh, normalized)
         public_ids = _public_ids(provider.provider, normalized)
         endpoints = _preset_endpoints(normalized.preset)
         await self._preflight_conflicts(
@@ -190,6 +194,8 @@ class OpenAICompatibleSetupService:
             routes=tuple(routes),
             pricing_rules=tuple(pricing_rules),
             enabled=enabled,
+            preset=normalized.preset,
+            pricing_mode=normalized.pricing_mode,
         )
 
     async def _preflight_conflicts(
@@ -239,6 +245,10 @@ def _normalize_request(request: SetupRequest) -> SetupRequest:
         raise SetupError("Unknown setup preset")
     if request.pricing_mode not in PRICING_MODES:
         raise SetupError("Unknown pricing mode")
+    if request.pricing_mode == LOCAL_ZERO_PRICING and not request.confirm_local_zero:
+        raise SetupError("Explicitly confirm operator-local zero pricing")
+    if request.pricing_mode == EXPLICIT_PRICING and request.confirm_local_zero:
+        raise SetupError("Local-zero acknowledgement contradicts explicit pricing")
     if request.priority < 0:
         raise SetupError("Priority must be non-negative")
     reason = _required_scalar(request.reason, "Audit reason")
@@ -247,6 +257,8 @@ def _normalize_request(request: SetupRequest) -> SetupRequest:
     if request.pricing_mode == EXPLICIT_PRICING:
         _decimal(request.input_price_per_1m, "Input price")
         _decimal(request.output_price_per_1m, "Output price")
+    if request.public_model_ids is not None:
+        _public_ids(provider, request)
     return SetupRequest(
         provider=provider,
         selected_models=selected,
@@ -258,6 +270,7 @@ def _normalize_request(request: SetupRequest) -> SetupRequest:
         local_function_tools=bool(request.local_function_tools),
         confirm_enable_unqualified=bool(request.confirm_enable_unqualified),
         pricing_mode=request.pricing_mode,
+        confirm_local_zero=bool(request.confirm_local_zero),
         input_price_per_1m=request.input_price_per_1m,
         output_price_per_1m=request.output_price_per_1m,
         reason=reason,
@@ -267,6 +280,9 @@ def _normalize_request(request: SetupRequest) -> SetupRequest:
 
 def _public_ids(provider: str, request: SetupRequest) -> dict[str, str]:
     supplied = request.public_model_ids or {}
+    selected = set(request.selected_models)
+    if supplied and not selected.issubset(set(supplied)):
+        raise SetupError("Every selected model requires one public model mapping")
     result: dict[str, str] = {}
     for upstream in request.selected_models:
         public = supplied.get(upstream, f"{provider}/{upstream}")
@@ -275,6 +291,46 @@ def _public_ids(provider: str, request: SetupRequest) -> dict[str, str]:
     if len(set(result.values())) != len(result):
         raise SetupError("Public model identifiers must be unique")
     return result
+
+
+def _require_public_mappings_in_fresh_result(
+    discovered: DiscoveredModels, request: SetupRequest
+) -> None:
+    supplied = request.public_model_ids
+    if not supplied:
+        return
+    available = set(discovered.models)
+    if any(model not in available for model in supplied):
+        raise SetupError("Public model mapping contains an unknown discovered model")
+    if any(model not in supplied for model in request.selected_models):
+        raise SetupError("Every selected model requires one public model mapping")
+
+
+def parse_public_model_mapping_entries(
+    selected_models: Sequence[str], entries: Sequence[str]
+) -> dict[str, str] | None:
+    """Parse repeated ``upstream=public`` scalar fields without JSON."""
+
+    if not entries:
+        return None
+    selected = set(selected_models)
+    mappings: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, str) or entry.count("=") != 1:
+            raise SetupError("Public model mappings must use one upstream=public value")
+        upstream, public = (part.strip() for part in entry.split("=", 1))
+        if upstream not in selected:
+            raise SetupError("Public model mapping contains an unselected model")
+        if upstream in mappings:
+            raise SetupError("Public model mappings must not repeat an upstream model")
+        _validate_identifier(upstream, "Mapped upstream model")
+        _validate_identifier(public, "Public model")
+        mappings[upstream] = public
+    if set(mappings) != selected:
+        raise SetupError("Every selected model requires one public model mapping")
+    if len(set(mappings.values())) != len(mappings):
+        raise SetupError("Public model identifiers must be unique")
+    return mappings
 
 
 def _require_selected_models(discovered: DiscoveredModels, selected: Sequence[str]) -> None:

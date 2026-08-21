@@ -19,7 +19,12 @@
     <fieldset>
       <legend>Select models (maximum 100)</legend>
       {% for model in models %}
-      <label class="checkbox-row"><input type="checkbox" name="model_choice" value="{{ model }}"><code>{{ model }}</code></label>
+      <div class="checkbox-row">
+        <label><input type="checkbox" name="model_choice" value="{{ model }}"><code>{{ model }}</code></label>
+        <label>Public model ID
+          <input name="public_model_mapping" value="{{ model }}={{ provider.provider }}/{{ model }}" maxlength="255" autocomplete="off">
+        </label>
+      </div>
       {% endfor %}
     </fieldset>
     <input type="hidden" id="selected-models" name="selected_models" value="">
@@ -32,10 +37,12 @@
     </label>
     <label>Pricing
       <select name="pricing_mode">
+        <option value="" selected disabled>Choose pricing mode</option>
         <option value="local_zero">local_zero (operator-confirmed zero)</option>
         <option value="explicit">explicit EUR per 1M tokens</option>
       </select>
     </label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_local_zero" value="true"><span>I explicitly confirm zero is local operator pricing, not provider invoice truth.</span></label>
     <label>Input EUR / 1M <input name="input_price_per_1m" inputmode="decimal"></label>
     <label>Output EUR / 1M <input name="output_price_per_1m" inputmode="decimal"></label>
     <label>Priority <input name="priority" value="100" inputmode="numeric"></label>
@@ -50,8 +57,13 @@
   <script>
     const selected = document.getElementById("selected-models");
     const choices = document.querySelectorAll('input[name="model_choice"]');
-    const sync = () => { selected.value = Array.from(choices).filter((item) => item.checked).map((item) => item.value).join(","); };
+    const mappings = document.querySelectorAll('input[name="public_model_mapping"]');
+    const sync = () => {
+      selected.value = Array.from(choices).filter((item) => item.checked).map((item) => item.value).join(",");
+      mappings.forEach((item, index) => { item.disabled = !choices[index].checked; });
+    };
     choices.forEach((item) => item.addEventListener("change", sync));
+    sync();
   </script>
   {% else %}
   <p class="empty-state">No models were returned by the bounded preview.</p>

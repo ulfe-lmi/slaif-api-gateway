@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 import pytest
 from sqlalchemy import func, select
 
@@ -20,6 +22,18 @@ from slaif_gateway.services.openai_compatible_setup import (
 class _FreshDiscovery:
     async def discover(self, provider_or_id: str) -> DiscoveredModels:
         return DiscoveredModels(provider=provider_or_id, models=("qwen/a", "qwen/b"))
+
+
+class _FailOnSecondAudit:
+    def __init__(self, delegate: AuditRepository) -> None:
+        self._delegate = delegate
+        self._calls = 0
+
+    async def add_audit_log(self, **kwargs: object):
+        self._calls += 1
+        if self._calls == 2:
+            raise RuntimeError("injected setup failure after route and pricing writes")
+        return await self._delegate.add_audit_log(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -50,6 +64,8 @@ async def test_generic_setup_creates_exact_routes_pricing_and_audits_atomically(
             provider=provider.provider,
             selected_models=("qwen/a", "qwen/b"),
             preset=CHAT_AND_RESPONSES_TEXT_PRESET,
+            pricing_mode="local_zero",
+            confirm_local_zero=True,
             reason="bounded PostgreSQL setup test",
         )
     )
@@ -77,6 +93,8 @@ async def test_generic_setup_creates_exact_routes_pricing_and_audits_atomically(
                 provider=provider.provider,
                 selected_models=("qwen/a",),
                 preset="chat_text_v1",
+                pricing_mode="local_zero",
+                confirm_local_zero=True,
                 reason="conflict must roll back",
             )
         )
@@ -84,3 +102,60 @@ async def test_generic_setup_creates_exact_routes_pricing_and_audits_atomically(
         select(func.count()).select_from(ModelRoute).where(ModelRoute.provider == provider.provider)
     )
     assert route_count_after == 4
+
+
+@pytest.mark.asyncio
+async def test_generic_setup_mid_write_failure_rolls_back_all_rows(migrated_postgres_url) -> None:
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = id(engine)
+    async with session_factory() as session:
+        async with session.begin():
+            provider = await ProviderConfigsRepository(session).create_provider_config(
+                provider=f"pg-generic-failure-{suffix}",
+                display_name="PostgreSQL failure setup",
+                base_url="https://provider.example.test/v1",
+                api_key_env_var="PG_GENERIC_FAILURE_KEY",
+                kind="openai_compatible",
+                enabled=True,
+                timeout_seconds=30,
+                max_retries=0,
+            )
+
+    async with session_factory() as session:
+        before_values = []
+        for model in (ModelRoute, PricingRule, AuditLog):
+            before_values.append(int(await session.scalar(select(func.count()).select_from(model))))
+        before = tuple(before_values)
+        await session.rollback()
+        try:
+            async with session.begin():
+                await OpenAICompatibleSetupService(
+                    session=session,
+                    provider_configs_repository=ProviderConfigsRepository(session),
+                    model_routes_repository=ModelRoutesRepository(session),
+                    pricing_rules_repository=PricingRulesRepository(session),
+                    audit_repository=_FailOnSecondAudit(AuditRepository(session)),
+                    discovery_service=_FreshDiscovery(),
+                ).execute(
+                    SetupRequest(
+                        provider=provider.provider,
+                        selected_models=("qwen/a", "qwen/b"),
+                        preset="chat_text_v1",
+                        pricing_mode="local_zero",
+                        confirm_local_zero=True,
+                        reason="injected rollback proof",
+                    )
+                )
+        except RuntimeError as exc:
+            assert str(exc) == "injected setup failure after route and pricing writes"
+        else:
+            raise AssertionError("injected setup failure did not fire")
+
+    async with session_factory() as session:
+        after_values = []
+        for model in (ModelRoute, PricingRule, AuditLog):
+            after_values.append(int(await session.scalar(select(func.count()).select_from(model))))
+        after = tuple(after_values)
+    await engine.dispose()
+    assert after == before

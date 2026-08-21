@@ -24,6 +24,9 @@ class _FakeSession:
     def begin(self):
         return self
 
+    async def rollback(self):
+        return None
+
 
 class _FakeSessionmaker:
     def __call__(self):
@@ -118,6 +121,78 @@ def _provider_detail(**overrides) -> AdminProviderDetail:
     values = asdict(row)
     values.update(overrides)
     return AdminProviderDetail(**values, route_summaries=(), pricing_summaries=())
+
+
+def _generic_provider_row() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="lan-qwen",
+        display_name="LAN Qwen",
+        kind="openai_compatible",
+        base_url="https://qwen.example/v1",
+        api_key_env_var="LAN_QWEN_KEY",
+        enabled=True,
+        timeout_seconds=30,
+        max_retries=0,
+        notes="operator-owned",
+    )
+
+
+def test_generic_discovery_preview_and_execute_are_confirmed_and_safe(monkeypatch) -> None:
+    app = _app(_settings(ENABLE_ADMIN_DASHBOARD=True))
+    client = TestClient(app)
+    admin_user = _login_for_actions(monkeypatch, client)
+    provider = _generic_provider_row()
+
+    async def get_provider(self, provider_id):
+        return provider
+
+    async def discover(self, provider_or_id):
+        assert provider_or_id == str(provider.id)
+        return SimpleNamespace(provider="lan-qwen", models=("Qwen/Qwen2.5",))
+
+    monkeypatch.setattr(admin_module.ProviderConfigsRepository, "get_provider_config_by_id", get_provider)
+    monkeypatch.setattr(admin_module.OpenAICompatibleDiscoveryService, "discover", discover)
+
+    form = client.get(f"/admin/providers/{provider.id}/discover")
+    assert form.status_code == 200
+    assert "confirm_discovery" in form.text
+    assert "LAN_QWEN_KEY" in form.text
+
+    preview = client.post(
+        f"/admin/providers/{provider.id}/discover/preview",
+        data={"csrf_token": "dashboard-csrf", "confirm_discovery": "true"},
+    )
+    assert preview.status_code == 200
+    assert "Qwen/Qwen2.5" in preview.text
+    assert "lan-qwen/Qwen/Qwen2.5" in preview.text
+
+    seen: dict[str, object] = {}
+
+    async def execute(self, request):
+        seen["request"] = request
+        return SimpleNamespace()
+
+    monkeypatch.setattr(admin_module.OpenAICompatibleSetupService, "execute", execute)
+    executed = client.post(
+        f"/admin/providers/{provider.id}/discover/execute",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "model_choice": "Qwen/Qwen2.5",
+            "public_model_mapping": "Qwen/Qwen2.5=public-qwen",
+            "preset": "chat_text_v1",
+            "pricing_mode": "local_zero",
+            "confirm_local_zero": "true",
+            "confirm_execute": "true",
+            "reason": "operator reviewed generic backend",
+        },
+        follow_redirects=False,
+    )
+    assert executed.status_code == 303
+    request = seen["request"]
+    assert request.public_model_ids == {"Qwen/Qwen2.5": "public-qwen"}
+    assert request.confirm_local_zero is True
+    assert request.actor_admin_id == admin_user.id
 
 
 def _valid_form(**overrides) -> dict[str, str]:

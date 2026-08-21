@@ -147,10 +147,10 @@ from slaif_gateway.services.openai_compatible_discovery import (
     OpenAICompatibleDiscoveryService,
 )
 from slaif_gateway.services.openai_compatible_setup import (
-    LOCAL_ZERO_PRICING,
     SetupError,
     SetupRequest,
     OpenAICompatibleSetupService,
+    parse_public_model_mapping_entries,
 )
 from slaif_gateway.services.openai_assisted_catalog import (
     DEFAULT_OPENAI_ASSISTED_MODEL,
@@ -3810,7 +3810,8 @@ async def admin_provider_discover_execute(
     csrf_token: str = Form(""),
     selected_models: str = Form(""),
     preset: str = Form("chat_text_v1"),
-    pricing_mode: str = Form(LOCAL_ZERO_PRICING),
+    pricing_mode: str = Form(""),
+    confirm_local_zero: str = Form(""),
     input_price_per_1m: str = Form(""),
     output_price_per_1m: str = Form(""),
     priority: str = Form("100"),
@@ -3821,6 +3822,7 @@ async def admin_provider_discover_execute(
     confirm_execute: str = Form(""),
     reason: str = Form(""),
     model_choice: list[str] = Form([]),
+    public_model_mapping: list[str] = Form([]),
 ) -> Response:
     """Re-probe and atomically execute the reviewed setup choices."""
     settings = _settings(request)
@@ -3851,21 +3853,34 @@ async def admin_provider_discover_execute(
         selected_model_values = tuple(model_choice) or tuple(
             part.strip() for part in selected_models.split(",") if part.strip()
         )
-        request_model = SetupRequest(
-            provider=provider.provider,
-            selected_models=selected_model_values,
-            preset=preset,
-            priority=parsed_priority,
-            visible_in_models=_is_checked(visible_in_models),
-            streaming=_is_checked(streaming),
-            local_function_tools=_is_checked(local_function_tools),
-            confirm_enable_unqualified=_is_checked(confirm_enable_unqualified),
-            pricing_mode=pricing_mode,
-            input_price_per_1m=input_price_per_1m or None,
-            output_price_per_1m=output_price_per_1m or None,
-            reason=reason,
-            actor_admin_id=action_context.admin_user.id,
-        )
+        try:
+            public_model_ids = parse_public_model_mapping_entries(
+                selected_model_values,
+                public_model_mapping,
+            )
+            request_model = SetupRequest(
+                provider=provider.provider,
+                selected_models=selected_model_values,
+                public_model_ids=public_model_ids,
+                preset=preset,
+                priority=parsed_priority,
+                visible_in_models=_is_checked(visible_in_models),
+                streaming=_is_checked(streaming),
+                local_function_tools=_is_checked(local_function_tools),
+                confirm_enable_unqualified=_is_checked(confirm_enable_unqualified),
+                pricing_mode=pricing_mode,
+                confirm_local_zero=_is_checked(confirm_local_zero),
+                input_price_per_1m=input_price_per_1m or None,
+                output_price_per_1m=output_price_per_1m or None,
+                reason=reason,
+                actor_admin_id=action_context.admin_user.id,
+            )
+        except SetupError:
+            return _render_discovery_form(
+                request, provider=provider, admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                error="Public model mappings or setup choices are invalid.", status_code=400,
+            )
         await session.rollback()
         try:
             async with session.begin():

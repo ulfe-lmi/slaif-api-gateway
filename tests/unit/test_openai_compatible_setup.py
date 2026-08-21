@@ -49,6 +49,7 @@ def test_local_zero_and_explicit_pricing_are_exact_and_labeled() -> None:
         selected_models=("qwen/a",),
         preset=CHAT_TEXT_PRESET,
         pricing_mode=LOCAL_ZERO_PRICING,
+        confirm_local_zero=True,
         reason="operator confirmed local test backend",
     )
     assert _pricing_values(request) == (
@@ -72,8 +73,39 @@ def test_local_zero_and_explicit_pricing_are_exact_and_labeled() -> None:
         SetupRequest(provider="lan-qwen", selected_models=("qwen/a", "qwen/a"), preset=CHAT_TEXT_PRESET, reason="reason"),
         SetupRequest(provider="lan-qwen", selected_models=("sk-secret",), preset=CHAT_TEXT_PRESET, reason="reason"),
         SetupRequest(provider="lan-qwen", selected_models=("qwen/a",), preset=CHAT_TEXT_PRESET, reason=""),
+        SetupRequest(provider="lan-qwen", selected_models=("qwen/a",), preset=CHAT_TEXT_PRESET, reason="reason"),
     ],
 )
 def test_setup_rejects_unsafe_or_incomplete_confirmation(candidate: SetupRequest) -> None:
     with pytest.raises(SetupError):
         _normalize_request(candidate)
+
+
+def test_local_zero_requires_literal_acknowledgement_and_explicit_rejects_it() -> None:
+    missing = SetupRequest(
+        provider="lan-qwen",
+        selected_models=("qwen/a",),
+        preset=CHAT_TEXT_PRESET,
+        pricing_mode=LOCAL_ZERO_PRICING,
+        reason="reason",
+    )
+    with pytest.raises(SetupError, match="zero pricing"):
+        _normalize_request(missing)
+    contradictory = replace(missing, pricing_mode=EXPLICIT_PRICING, confirm_local_zero=True)
+    with pytest.raises(SetupError, match="contradicts"):
+        _normalize_request(contradictory)
+
+
+def test_public_mapping_is_bounded_scalar_and_complete() -> None:
+    request = SetupRequest(
+        provider="lan-qwen",
+        selected_models=("qwen/a", "qwen/b"),
+        preset=CHAT_TEXT_PRESET,
+        pricing_mode=LOCAL_ZERO_PRICING,
+        confirm_local_zero=True,
+        public_model_ids={"qwen/a": "public-a", "qwen/b": "public-b"},
+        reason="reason",
+    )
+    assert _normalize_request(request).public_model_ids == request.public_model_ids
+    with pytest.raises(SetupError):
+        _normalize_request(replace(request, public_model_ids={"qwen/a": "public-a"}))
