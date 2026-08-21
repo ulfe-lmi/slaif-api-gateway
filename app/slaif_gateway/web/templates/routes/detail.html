@@ -57,7 +57,7 @@
       {% if route.codex_metadata_version != 2 %}
       <p class="muted small">Exact protocol/profile locally qualified for Codex 0.147.0 and gpt-5.6-sol. Real provider-through-gateway E2E has not yet run.</p>
       {% else %}
-      <p class="muted small">Exact registered profile {{ route.codex_profile_id }} (metadata v{{ route.codex_metadata_version }}) is locally qualified; live provider E2E has not been claimed.</p>
+      <p class="muted small">Exact registered profile {{ route.codex_profile_id }} (metadata v{{ route.codex_metadata_version }}) is locally qualified; live provider E2E is {% if route.codex_real_provider_e2e %}qualified{% else %}not claimed{% endif %}.</p>
       {% endif %}
       {% if codex_profile_artifacts %}
       <section class="action-panel" aria-labelledby="codex-artifacts-heading">

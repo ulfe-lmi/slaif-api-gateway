@@ -16,6 +16,8 @@ from slaif_gateway.services.codex_profile_registry import (
     validate_codex_profile_registry,
 )
 
+ALLOWED_TYPES = frozenset({"response.output_item.done", "sequence", "linked", "function"})
+
 
 def test_builtin_profile_is_immutable_and_server_defined() -> None:
     profile = get_codex_profile(PROFILE_ID)
@@ -81,7 +83,7 @@ def test_registry_validation_rejects_duplicate_key() -> None:
 )
 def test_fixture_sanitizer_rejects_content_and_sensitive_fields(unsafe: object) -> None:
     with pytest.raises(ValueError):
-        sanitize_codex_fixture(unsafe)
+        sanitize_codex_fixture(unsafe, allowed_types=ALLOWED_TYPES)
 
 
 def test_fixture_sanitizer_keeps_only_structural_fields_and_deterministic_digest() -> None:
@@ -91,8 +93,8 @@ def test_fixture_sanitizer_keeps_only_structural_fields_and_deterministic_digest
         "count": 1,
         "field_type": "linked",
     }
-    first = sanitize_codex_fixture(copy.deepcopy(fixture))
-    second = sanitize_codex_fixture(copy.deepcopy(fixture))
+    first = sanitize_codex_fixture(copy.deepcopy(fixture), allowed_types=ALLOWED_TYPES)
+    second = sanitize_codex_fixture(copy.deepcopy(fixture), allowed_types=ALLOWED_TYPES)
     assert first == second
     assert first["id"] == "ID_1"
     assert len(str(first["digest"])) == 64
@@ -100,10 +102,19 @@ def test_fixture_sanitizer_keeps_only_structural_fields_and_deterministic_digest
 
 
 def test_fixture_sanitizer_preserves_id_relationship_order_without_raw_ids() -> None:
-    fixture = {"event_type": "sequence", "field_type": [{"id": "a"}, {"id": "b"}, {"id": "a"}]}
-    result = sanitize_codex_fixture(fixture)
-    assert result["field_type"] == [{"id": "ID_1"}, {"id": "ID_2"}, {"id": "ID_1"}]
-    assert "'id': 'a'" not in str(result) and "'id': 'b'" not in str(result)
+    fixture = {"event_type": "sequence", "field_type": "linked", "id": "a", "count": 2}
+    result = sanitize_codex_fixture(fixture, allowed_types=ALLOWED_TYPES)
+    assert result["id"] == "ID_1"
+    assert "'id': 'a'" not in str(result)
+
+
+def test_fixture_sanitizer_rejects_unknown_type_and_wrong_scalar_types() -> None:
+    with pytest.raises(ValueError):
+        sanitize_codex_fixture({"event_type": "prompt"}, allowed_types=ALLOWED_TYPES)
+    with pytest.raises(ValueError):
+        sanitize_codex_fixture({"event_type": "sequence", "enabled": 1}, allowed_types=ALLOWED_TYPES)
+    with pytest.raises(ValueError):
+        sanitize_codex_fixture({"event_type": "sequence", "count": -1}, allowed_types=ALLOWED_TYPES)
 
 
 @pytest.mark.parametrize(

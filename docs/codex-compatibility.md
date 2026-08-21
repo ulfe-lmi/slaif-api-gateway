@@ -64,6 +64,17 @@ local mocked/provider-boundary evidence; `real_provider_e2e` and live
 qualification remain false. No later model or provider is registered as
 qualified by this framework objective.
 
+Each profile declares the finite `text`/`image` input modalities and one of
+`none`, client-local compaction, or the exact Responses/compact `remote_v1`
+pair. Client-local profiles carry a bounded auto-compaction threshold and all
+profiles render `remote_compaction_v2 = false` until a separately represented
+remote-V2 contract exists. A replacement catalog is a bounded canonical JSON
+artifact with one exact model entry and matching context, compaction, and
+modality facts; its safe vocabulary admits structural shell/apply-patch/tool
+mode fields but rejects unknown keys, URLs, credentials, prompts, outputs,
+schemas, and tool arguments/results. Bundled profiles carry no replacement
+artifact.
+
 The registry and qualification service are profile-scoped: model ranking,
 provider kind/slug, endpoint requirements, gates, limits, and safe result facts
 come from the resolved definition. Focused tests exercise an unregistered
@@ -120,10 +131,12 @@ model_provider = "slaif"
 remote_compaction_v2 = false
 ```
 
-Do not add `profile = "slaif"`, `[profiles.slaif]`,
-`[profiles.slaif.features]`, or `model_catalog_json`. Those are not the
-reviewed profile-v2 contract. Exact bundled slug `gpt-5.6-sol` supplies the
-pinned model catalog and instructions.
+Do not add `profile = "slaif"`, `[profiles.slaif]`, or
+`[profiles.slaif.features]`. A registered replacement profile uses its own
+safe provider alias and profile filename and references its exact
+`model_catalog_json` target in the complete named profile. The target is also
+returned in CLI JSON/text and admin artifact output. Exact bundled slug
+`gpt-5.6-sol` supplies the pinned model catalog and instructions.
 
 The user would set the normal OpenAI-compatible variable to a gateway-issued
 key:

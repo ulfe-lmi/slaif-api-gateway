@@ -576,12 +576,18 @@ def render_codex_profile_artifacts(
         f"model = {json.dumps(profile.public_model, ensure_ascii=True)}\n"
         f'model_provider = {json.dumps(provider_alias, ensure_ascii=True)}\n'
         "\n[features]\n"
-        f"remote_compaction_v2 = {str(profile.compaction_mode != 'remote_v1').lower()}\n"
+        "remote_compaction_v2 = false\n"
     )
+    if not legacy_default and profile.model_catalog_target is not None:
+        profile_config += (
+            "\n[model_catalog]\n"
+            f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
+        )
     return CodexProfileArtifacts(
         base_config_toml=base_config,
         profile_config_toml=profile_config,
         profile=profile.profile_name if not legacy_default else CODEX_PROFILE_NAME,
+        profile_config_target=f"$CODEX_HOME/{profile.profile_name if not legacy_default else CODEX_PROFILE_NAME}.config.toml",
         model=profile.public_model,
         provider=provider_alias,
         qualification_profile_id=profile.profile_id,
@@ -598,6 +604,11 @@ def render_codex_profile_artifacts(
 def render_codex_profile_text(artifacts: CodexProfileArtifacts) -> str:
     """Render an explicitly non-combined human display of both artifacts."""
 
+    catalog_line = (
+        f"\nModel catalog target: {artifacts.model_catalog_target}\n"
+        if artifacts.model_catalog_target is not None
+        else ""
+    )
     return (
         "Merge this fragment into $CODEX_HOME/config.toml:\n"
         "--- base_config_toml (merge fragment) ---\n"
@@ -605,6 +616,7 @@ def render_codex_profile_text(artifacts: CodexProfileArtifacts) -> str:
         "\nPlace this complete content in $CODEX_HOME/slaif.config.toml:\n"
         "--- profile_config_toml (complete file) ---\n"
         f"{artifacts.profile_config_toml}"
+        f"{catalog_line}"
         "\nSet the gateway-issued key only in OPENAI_API_KEY.\n"
         f"Run: codex --profile {artifacts.profile}\n"
     )
@@ -675,6 +687,11 @@ def _route_capability_reasons(
             reasons.append("responses_runtime_capabilities_invalid")
         if any(responses.get(gate) is not True for gate in profile.required_route_gates):
             reasons.append("codex_gates_incomplete")
+        declared_image_input = responses.get("image_input") is True
+        if "image" in profile.input_modalities and not declared_image_input:
+            reasons.append("codex_image_input_missing")
+        if "image" not in profile.input_modalities and declared_image_input:
+            reasons.append("codex_image_input_not_allowed")
         endpoint = str(getattr(route, "endpoint", "") or "")
         if endpoint == CODEX_RESPONSES_ENDPOINT:
             if responses.get("stateless") is not True or responses.get("streaming") is not True:

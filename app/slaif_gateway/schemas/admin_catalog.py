@@ -97,6 +97,7 @@ class AdminRouteListRow:
     codex_provider_kind: str | None = None
     codex_provider_display_name: str | None = None
     codex_wire_api: str | None = None
+    codex_real_provider_e2e: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

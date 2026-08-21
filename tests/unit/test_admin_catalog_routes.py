@@ -340,6 +340,7 @@ def test_admin_v2_ready_route_shows_profile_facts_and_artifact_links(monkeypatch
         codex_provider_kind="openai",
         codex_provider_display_name="OpenAI",
         codex_wire_api="responses",
+        codex_real_provider_e2e=True,
     )
 
     async def get_route_detail(self, route_id):
@@ -354,6 +355,7 @@ def test_admin_v2_ready_route_shows_profile_facts_and_artifact_links(monkeypatch
     response = client.get(f"/admin/routes/{route.id}")
     assert response.status_code == 200
     assert CODEX_PROFILE_ID in response.text
+    assert "live provider E2E is qualified" in response.text
     assert "Download base fragment" in response.text
     artifact = client.get(f"/admin/routes/{route.id}/codex-profile/base")
     assert artifact.status_code == 200

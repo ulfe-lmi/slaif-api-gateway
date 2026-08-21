@@ -362,6 +362,7 @@ def _to_route_list_row(
         codex_provider_kind=qualification.provider_kind,
         codex_provider_display_name=qualification.provider_display_name,
         codex_wire_api=qualification.wire_api,
+        codex_real_provider_e2e=qualification.real_provider_e2e,
         notes=row.notes,
         created_at=row.created_at,
         updated_at=row.updated_at,
