@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from slaif_gateway.db.models import AuditLog, ModelRoute, PricingRule
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -157,5 +157,10 @@ async def test_generic_setup_mid_write_failure_rolls_back_all_rows(migrated_post
         for model in (ModelRoute, PricingRule, AuditLog):
             after_values.append(int(await session.scalar(select(func.count()).select_from(model))))
         after = tuple(after_values)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM provider_configs WHERE provider = :provider"),
+            {"provider": provider.provider},
+        )
     await engine.dispose()
     assert after == before
