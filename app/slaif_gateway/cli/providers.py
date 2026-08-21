@@ -16,7 +16,20 @@ from slaif_gateway.cli.common import (
 )
 from slaif_gateway.db.models import ProviderConfig
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.services.openai_compatible_discovery import (
+    OpenAICompatibleDiscoveryService,
+)
+from slaif_gateway.services.openai_compatible_setup import (
+    EXPLICIT_PRICING,
+    LOCAL_ZERO_PRICING,
+    OpenAICompatibleSetupService,
+    SetupError,
+    SetupRequest,
+    parse_public_model_mapping_entries,
+)
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 
 app = typer.Typer(help="Manage provider metadata")
@@ -88,6 +101,75 @@ async def _show_provider(provider_or_id: str) -> ProviderConfig:
 async def _set_provider_enabled(provider_or_id: str, *, enabled: bool) -> ProviderConfig:
     async with cli_db_session() as (_, session):
         return await _service(session).set_provider_enabled(provider_or_id, enabled=enabled)
+
+
+async def _discover_models(provider_or_id: str) -> dict[str, object]:
+    async with cli_db_session() as (_, session):
+        result = await OpenAICompatibleDiscoveryService(
+            provider_configs_repository=ProviderConfigsRepository(session),
+        ).discover(provider_or_id)
+    return {"provider": result.provider, "models": list(result.models)}
+
+
+async def _setup_models(
+    *,
+    provider_or_id: str,
+    selected_models: list[str],
+    public_model_entries: list[str],
+    preset: str,
+    priority: int,
+    visible_in_models: bool,
+    streaming: bool,
+    local_function_tools: bool,
+    confirm_enable_unqualified: bool,
+    pricing_mode: str,
+    confirm_local_zero: bool,
+    input_price_per_1m: str | None,
+    output_price_per_1m: str | None,
+    reason: str,
+) -> dict[str, object]:
+    async with cli_db_session() as (_, session):
+        providers = ProviderConfigsRepository(session)
+        provider = await _service(session).get_provider_config(provider_or_id)
+        mappings = parse_public_model_mapping_entries(selected_models, public_model_entries)
+        result = await OpenAICompatibleSetupService(
+            session=session,
+            provider_configs_repository=providers,
+            model_routes_repository=ModelRoutesRepository(session),
+            pricing_rules_repository=PricingRulesRepository(session),
+            audit_repository=AuditRepository(session),
+            discovery_service=OpenAICompatibleDiscoveryService(
+                provider_configs_repository=providers,
+            ),
+        ).execute(
+            SetupRequest(
+                provider=provider.provider,
+                selected_models=tuple(selected_models),
+                public_model_ids=mappings,
+                preset=preset,
+                priority=priority,
+                visible_in_models=visible_in_models,
+                streaming=streaming,
+                local_function_tools=local_function_tools,
+                confirm_enable_unqualified=confirm_enable_unqualified,
+                pricing_mode=pricing_mode,
+                confirm_local_zero=confirm_local_zero,
+                input_price_per_1m=input_price_per_1m,
+                output_price_per_1m=output_price_per_1m,
+                reason=reason,
+            )
+        )
+    return {
+        "provider": result.provider,
+        "models": list(result.models),
+        "route_ids": [row.id for row in result.routes],
+        "pricing_rule_ids": [row.id for row in result.pricing_rules],
+        "route_count": len(result.routes),
+        "pricing_rule_count": len(result.pricing_rules),
+        "preset": result.preset,
+        "enabled": result.enabled,
+        "pricing_mode": result.pricing_mode,
+    }
 
 
 @app.callback()
@@ -180,6 +262,94 @@ def show(
         return
 
     payload = _safe_provider_dict(row)
+    if json_output:
+        emit_json(payload)
+        return
+    echo_kv(payload)
+
+
+@app.command("discover-models")
+def discover_models(
+    provider_or_id: Annotated[str, typer.Argument(help="Generic provider name or UUID")],
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")]=False,
+) -> None:
+    """Preview a bounded upstream /models response without mutating catalog state."""
+    try:
+        payload = run_async(_discover_models(provider_or_id))
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+    if json_output:
+        emit_json(payload)
+        return
+    typer.echo(f"provider: {payload['provider']}")
+    typer.echo("models:")
+    for model in payload["models"]:
+        typer.echo(f"- {model}")
+
+
+@app.command("setup-models")
+def setup_models(
+    provider_or_id: Annotated[str, typer.Argument(help="Generic provider name or UUID")],
+    selected_models: Annotated[
+        list[str], typer.Option("--model", help="Upstream model to select; repeat for multiple models")
+    ],
+    preset: Annotated[
+        str,
+        typer.Option("--preset", help="chat_text_v1, responses_text_v1, or chat_and_responses_text_v1"),
+    ],
+    pricing_mode: Annotated[
+        str,
+        typer.Option("--pricing-mode", help="local_zero or explicit"),
+    ],
+    reason: Annotated[str, typer.Option("--reason", help="Required audit reason")],
+    public_model_entries: Annotated[
+        list[str] | None, typer.Option("--public-model-id", help="Repeated upstream=public mapping")
+    ] = None,
+    priority: Annotated[int, typer.Option("--priority")] = 100,
+    visible_in_models: Annotated[bool, typer.Option("--visible/--hidden")] = True,
+    streaming: Annotated[bool, typer.Option("--streaming/--no-streaming")] = False,
+    local_function_tools: Annotated[bool, typer.Option("--local-function-tools/--no-local-function-tools")] = False,
+    confirm_enable_unqualified: Annotated[
+        bool, typer.Option("--confirm-enable-unqualified", help="Enable before qualification review")
+    ] = False,
+    confirm_local_zero: Annotated[
+        bool, typer.Option("--confirm-local-zero", help="Confirm operator-local zero pricing")
+    ] = False,
+    input_price_per_1m: Annotated[str | None, typer.Option("--input-price-per-1m")] = None,
+    output_price_per_1m: Annotated[str | None, typer.Option("--output-price-per-1m")] = None,
+    confirm_execute: Annotated[
+        bool, typer.Option("--confirm-execute", help="Confirm re-probe and atomic setup")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output safe JSON")] = False,
+) -> None:
+    """Re-probe and atomically create reviewed generic provider setup rows."""
+    if not confirm_execute:
+        raise typer.BadParameter("--confirm-execute is required")
+    if pricing_mode not in {LOCAL_ZERO_PRICING, EXPLICIT_PRICING}:
+        raise typer.BadParameter("--pricing-mode must be local_zero or explicit")
+    try:
+        payload = run_async(
+            _setup_models(
+                provider_or_id=provider_or_id,
+                selected_models=selected_models,
+                public_model_entries=public_model_entries or [],
+                preset=preset,
+                priority=priority,
+                visible_in_models=visible_in_models,
+                streaming=streaming,
+                local_function_tools=local_function_tools,
+                confirm_enable_unqualified=confirm_enable_unqualified,
+                pricing_mode=pricing_mode,
+                confirm_local_zero=confirm_local_zero,
+                input_price_per_1m=input_price_per_1m,
+                output_price_per_1m=output_price_per_1m,
+                reason=reason,
+            )
+        )
+    except (SetupError, ValueError) as exc:
+        handle_cli_error(exc, json_output=json_output)
+        return
     if json_output:
         emit_json(payload)
         return

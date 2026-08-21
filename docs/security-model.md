@@ -332,6 +332,15 @@ assurance, a compliance claim, or authorization for another hosted family.
 Trusted-calibration discovery remains observation, not standard-key
 provider/external permission.
 
+Generic backend discovery is likewise an explicit operator preview, not a
+readiness probe or automatic refresh. Its response bytes, JSON shape, nesting,
+field count, model count, and identifiers are bounded; unsafe identifiers,
+redirects, duplicates, and non-JSON/error responses fail closed. Only safe
+model IDs are rendered. Execution reloads and re-probes the provider before a
+caller-owned PostgreSQL transaction creates route, pricing, and audit rows;
+preview state and raw upstream content are never stored. Local-zero and
+explicit prices are operator-local metadata, not provider invoice truth.
+
 Standalone embeddings requests follow the same no-storage boundary. The gateway
 does not persist embedding input strings, token arrays, embedding vectors, raw
 request bodies, raw provider response bodies, provider keys, or client keys.

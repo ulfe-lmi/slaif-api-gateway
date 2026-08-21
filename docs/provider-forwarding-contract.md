@@ -11,6 +11,13 @@ client-secret slice that is now implemented and the remaining deferred
 Realtime sub-surfaces, see [`rc2-feature-scope.md`](rc2-feature-scope.md).
 This document describes implemented forwarding behavior only.
 
+Operator-defined generic backend discovery is a separate explicit operator
+workflow. It issues one bounded `GET <base_url>/models` using the configured
+server-side bearer secret, with redirects and retries disabled, and retains
+only safe unique model IDs. It does not forward discovery content, persist the
+raw response, infer capabilities, or grant hosted-tool authority. Confirmed
+setup metadata is re-probed and written atomically through PostgreSQL.
+
 ## Provider Adapters
 
 | Provider | Adapter | Upstream API shape | Implemented endpoint |

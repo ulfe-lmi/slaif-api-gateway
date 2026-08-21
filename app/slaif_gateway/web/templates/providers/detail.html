@@ -12,6 +12,9 @@
     </div>
     <div class="header-actions">
       <a class="button-link" href="/admin/providers/{{ provider.id }}/edit">Edit</a>
+      {% if provider.kind == "openai_compatible" and provider.provider not in ["openai", "openrouter"] %}
+      <a class="button-link" href="/admin/providers/{{ provider.id }}/discover">Discover models</a>
+      {% endif %}
       <a class="button-link secondary" href="/admin/providers">Provider configs</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

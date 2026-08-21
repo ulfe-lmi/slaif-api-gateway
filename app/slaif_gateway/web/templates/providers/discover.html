@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Discover Provider Models{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="discover-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Explicit upstream preview</p>
+      <h1 id="discover-heading">Discover {{ provider.display_name }}</h1>
+      <p class="muted">This performs one bounded GET /v1/models call. It never stores the provider key, response body, or upstream metadata.</p>
+    </div>
+    <a class="button-link secondary" href="/admin/providers/{{ provider.id }}">Provider detail</a>
+  </header>
+  {% if error %}<p class="warning-text" role="alert">{{ error }}</p>{% endif %}
+  <dl>
+    <dt>Provider</dt><dd>{{ provider.provider }}</dd>
+    <dt>Base URL</dt><dd>{{ provider.base_url }}</dd>
+    <dt>Secret</dt><dd>Server-side environment variable <code>{{ provider.api_key_env_var }}</code></dd>
+  </dl>
+  <form class="create-form" method="post" action="/admin/providers/{{ provider.id }}/discover/preview">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="checkbox-row">
+      <input type="checkbox" name="confirm_discovery" value="true" required>
+      <span>I understand this is an explicit network preview and not automatic catalog mutation.</span>
+    </label>
+    <button type="submit">Preview available models</button>
+  </form>
+</section>
+{% endblock %}

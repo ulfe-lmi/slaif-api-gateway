@@ -34,7 +34,7 @@ def test_providers_help_registers_commands() -> None:
     result = runner.invoke(app, ["providers", "--help"])
 
     assert result.exit_code == 0
-    for command in ("add", "list", "show", "enable", "disable"):
+    for command in ("add", "list", "show", "enable", "disable", "discover-models", "setup-models"):
         assert command in result.stdout
 
 
@@ -101,6 +101,55 @@ def test_providers_add_does_not_accept_secret_value_option() -> None:
 
     assert result.exit_code != 0
     assert "sk-real-secret" not in result.stdout
+
+
+def test_providers_discover_models_json_is_safe_preview(monkeypatch) -> None:
+    async def fake_discover(provider_or_id: str) -> dict[str, object]:
+        assert provider_or_id == "lan-qwen"
+        return {"provider": "lan-qwen", "models": ["qwen/a"]}
+
+    monkeypatch.setattr(providers_cli, "_discover_models", fake_discover)
+    result = runner.invoke(app, ["providers", "discover-models", "lan-qwen", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"provider": "lan-qwen", "models": ["qwen/a"]}
+
+
+def test_providers_setup_models_uses_explicit_confirmation_and_safe_json(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_setup(**kwargs: object) -> dict[str, object]:
+        seen.update(kwargs)
+        return {
+            "provider": "lan-qwen",
+            "models": ["qwen/a"],
+            "route_ids": ["route-id"],
+            "pricing_rule_ids": ["pricing-id"],
+            "route_count": 1,
+            "pricing_rule_count": 1,
+            "preset": "chat_text_v1",
+            "enabled": False,
+            "pricing_mode": "local_zero",
+        }
+
+    monkeypatch.setattr(providers_cli, "_setup_models", fake_setup)
+    result = runner.invoke(
+        app,
+        [
+            "providers", "setup-models", "lan-qwen", "--model", "qwen/a",
+            "--public-model-id", "qwen/a=public-a", "--preset", "chat_text_v1",
+            "--pricing-mode", "local_zero", "--confirm-local-zero",
+            "--confirm-execute", "--reason", "operator confirmed", "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert seen["public_model_entries"] == ["qwen/a=public-a"]
+    assert seen["confirm_local_zero"] is True
+    payload = json.loads(result.stdout)
+    assert set(payload) == {
+        "provider", "models", "route_ids", "pricing_rule_ids", "route_count",
+        "pricing_rule_count", "preset", "enabled", "pricing_mode",
+    }
+    assert "operator confirmed" not in result.stdout
 
 
 def test_providers_list_show_and_toggle_output_safe(monkeypatch) -> None:
