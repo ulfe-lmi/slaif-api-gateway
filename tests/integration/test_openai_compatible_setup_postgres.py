@@ -146,11 +146,11 @@ async def test_vision_inline_setup_adds_only_chat_and_responses_image_capabiliti
     chat_capabilities = chat.capabilities["chat_completions"]
     responses_capabilities = responses.capabilities["responses"]
     assert chat_capabilities["chat_image_inputs"] is True
-    assert chat_capabilities["chat_multimodal"] is True
+    assert chat_capabilities["chat_multimodal"] is False
     assert chat_capabilities["chat_audio_inputs"] is False
     assert chat_capabilities["chat_file_inputs"] is False
     assert responses_capabilities["image_input"] is True
-    assert responses_capabilities["multimodal"] is True
+    assert responses_capabilities["multimodal"] is False
     assert responses_capabilities["file_input"] is False
     assert responses_capabilities["storage"] is False
     assert responses_capabilities["codex_request_envelope"] is False

@@ -1355,8 +1355,8 @@ The wizard supports `chat_text_v1`, `responses_text_v1`,
 `chat_and_responses_text_v1`, and
 `chat_and_responses_vision_inline_v1`, plus operator-confirmed local-zero or
 explicit EUR pricing. The vision-inline preset adds only the existing Chat
-image-input/multimodal and Responses image-input/multimodal capabilities; it
-does not enable remote URL fetches, files, audio, hosted tools, or Codex
+`chat_image_inputs` and Responses `image_input` capabilities; the reserved
+broad multimodal flags remain false. It does not enable remote URL fetches, files, audio, hosted tools, or Codex
 capabilities. Routes are disabled unless the operator separately confirms
 enabling an unqualified configuration. This is setup metadata, not model or
 endpoint qualification; Objective 020 records `mocked_conformance` only, and

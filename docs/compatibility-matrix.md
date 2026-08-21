@@ -118,6 +118,7 @@ provider-cost semantics.
 | Generic backend discovery/setup wizard | Implemented as explicit operator workflow | Existing generic `openai_compatible` providers | CLI `providers discover-models` and CSRF-protected admin preview issue one bounded authenticated `/v1/models` request with no redirects/retries and retain only safe model IDs. Confirmation re-probes and atomically creates conservative Chat/Responses routes and local EUR pricing; routes default disabled. This is not automatic discovery, health checking, provider invoice truth, or Objective 020 qualification | Focused discovery/setup unit tests, CLI/admin/template coverage, PostgreSQL setup test, and CI browser smoke |
 
 Objective 020 generic Chat/Responses evidence is classified as
-`mocked_conformance` only. It uses mocked generic upstreams and does not claim
-live vLLM, Qwen, or Codex qualification; named live targets belong to
-Objectives 022–023.
+`mocked_conformance` only. It uses mocked generic upstreams, official
+OpenAI-client gateway tests, and a disposable-PostgreSQL gateway accounting
+matrix. It does not claim live vLLM, Qwen, or Codex qualification; named live
+targets belong to Objectives 022–023.

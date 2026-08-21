@@ -6,9 +6,10 @@ This gateway is OpenAI-compatible for the endpoint set implemented in this repos
 
 Objective 020 records generic `openai_compatible` Chat Completions and
 stateless Responses coverage as `mocked_conformance`. The evidence uses
-mocked upstreams and proves the gateway's routing, secret isolation, request
-boundary, forwarding, and accounting contract; it is not a live vLLM, Qwen,
-or Codex qualification. Named live targets are owned by Objectives 022–023.
+mocked upstreams plus official OpenAI-client and disposable-PostgreSQL gateway
+matrix tests. It proves routing, secret isolation, request boundary,
+forwarding, and accounting contract; it is not a live vLLM, Qwen, or Codex
+qualification. Named live targets are owned by Objectives 022–023.
 
 For the maintainer-locked RC2 target, including the bounded Realtime
 client-secret slice that is now implemented and the remaining deferred

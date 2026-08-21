@@ -62,11 +62,11 @@ def test_vision_inline_preset_only_adds_image_capabilities() -> None:
         vision_inline=True,
     )["responses"]
     assert chat["chat_image_inputs"] is True
-    assert chat["chat_multimodal"] is True
+    assert chat["chat_multimodal"] is False
     assert chat["chat_audio_inputs"] is False
     assert chat["chat_file_inputs"] is False
     assert responses["image_input"] is True
-    assert responses["multimodal"] is True
+    assert responses["multimodal"] is False
     assert responses["file_input"] is False
     assert responses["storage"] is False
     assert responses["codex_request_envelope"] is False
