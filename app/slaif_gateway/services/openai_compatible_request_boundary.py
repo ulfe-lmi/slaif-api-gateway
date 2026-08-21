@@ -36,9 +36,9 @@ def enforce_openai_compatible_request_boundary(
     interpreted as provider fetch requests here.
     """
 
-    if route.provider_kind != "openai_compatible":
+    if getattr(route, "provider_kind", None) != "openai_compatible":
         return
-    if route.provider.lower() in _BUILTIN_PROVIDERS:
+    if str(route.provider).lower() in _BUILTIN_PROVIDERS:
         return
 
     if endpoint == "chat.completions":
