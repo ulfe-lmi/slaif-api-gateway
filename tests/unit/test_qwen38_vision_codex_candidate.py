@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import threading
 from types import MappingProxyType, SimpleNamespace
@@ -124,15 +123,6 @@ def test_remote_https_image_is_rejected_by_route_capability_boundary() -> None:
 
     capabilities = default_responses_capabilities()
     capabilities.update({"text": True, "stateless": True, "streaming": True})
-    body = _body(
-        input=[
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}],
-            }
-        ]
-    )
     with pytest.raises(Exception):
         enforce_responses_route_capabilities(
             route_capabilities=capabilities,
