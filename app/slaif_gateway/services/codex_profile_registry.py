@@ -19,7 +19,7 @@ PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
-QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "9bd5f49ca90c3448cc6ad6559ef87868295a45da54676463eed301a9fb6b2959"
+QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "952c6f39532d9b1543cfeb537eabaea4259f6e13b045cf250064897be88342bc"
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -414,6 +414,9 @@ _FORBIDDEN_FIXTURE_KEYS = {
     "reasoning", "encrypted", "body", "request", "response", "url", "headers",
     "key", "cookie", "authorization", "environment", "workspace", "path", "metadata",
 }
+_STRUCTURAL_CONTAINER_KEYS = frozenset(
+    {"event_sequence", "request_facts", "catalog_facts", "route_facts", "credential_facts"}
+)
 
 
 def sanitize_codex_fixture(
@@ -450,7 +453,10 @@ def sanitize_codex_fixture(
                 raw_value = node[raw_key]
                 if not isinstance(raw_key, str) or raw_key.lower() in _FORBIDDEN_FIXTURE_KEYS:
                     raise ValueError("Codex fixture contains prohibited content.")
-                if raw_key not in {"event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest"}:
+                if raw_key not in {
+                    "event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest",
+                    *_STRUCTURAL_CONTAINER_KEYS,
+                }:
                     raise ValueError("Codex fixture contains arbitrary metadata.")
                 if raw_key == "digest":
                     raise ValueError("Codex fixture input digest is not accepted.")
@@ -476,6 +482,8 @@ def sanitize_codex_fixture(
                     if type(raw_value) is not bool:
                         raise ValueError("Codex fixture enabled value is invalid.")
                     output[raw_key] = raw_value
+                elif raw_key in _STRUCTURAL_CONTAINER_KEYS:
+                    output[raw_key] = walk(raw_value, depth=depth + 1)
                 else:
                     output[raw_key] = walk(raw_value, depth=depth + 1)
             return output
@@ -622,8 +630,8 @@ QWEN38_TEXT_CODEX_CANDIDATE = _profile(
         "codex_streaming_tool_events",
     ),
     context_window_tokens=150_000,
-    default_max_output_tokens=32_768,
-    max_output_tokens=128_000,
+    default_max_output_tokens=8_192,
+    max_output_tokens=24_576,
     compaction_mode="client_local",
     reasoning_replay=False,
     streaming_tool_events=True,

@@ -1,6 +1,1 @@
-{
-  "event_type": "response.completed",
-  "count": 1,
-  "enabled": true,
-  "id": "opaque_response"
-}
+{"catalog_facts":{"count":1,"enabled":true,"field_type":"replacement"},"count":2,"credential_facts":{"count":2,"enabled":true,"field_type":"credential_boundary"},"digest":"73246129c81193b1e79727a12520f846682e4913bbf7a6ead8da51b8ee0cffc0","enabled":true,"event_sequence":[{"event_type":"request","field_type":"gateway","index":0},{"event_type":"tool","index":1,"tool_type":"function"},{"count":10,"event_type":"stream","field_type":"sse"},{"event_type":"final","field_type":"completed","index":2}],"event_type":"phase","request_facts":{"count":2,"enabled":true,"field_type":"request"},"route_facts":{"count":3,"enabled":true,"field_type":"route"}}
