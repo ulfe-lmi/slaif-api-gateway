@@ -139,6 +139,55 @@ async def test_generic_redirect_is_safe_failure_without_following_origin(respx_m
 
 
 @pytest.mark.asyncio
+async def test_generic_responses_nonstream_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        await adapter.forward_response(_responses_request({"input": "hello"}))
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_responses_stream_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        async for _chunk in adapter.stream_response(_responses_request({"input": "hello"})):
+            pass
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_lifecycle_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        await adapter.retrieve_response(
+            _responses_lifecycle_request("/v1/responses/{response_id}"),
+            response_id="resp_123",
+        )
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_openai_chat_completion_posts_non_streaming_request(respx_mock) -> None:
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(

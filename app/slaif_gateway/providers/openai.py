@@ -310,7 +310,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses/{response_id}", "responses.delete"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -336,7 +336,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -358,7 +358,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/conversations", "conversations.create"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -384,7 +384,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -410,7 +410,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -440,7 +440,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -466,7 +466,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -496,7 +496,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -527,7 +527,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -558,7 +558,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -582,7 +582,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses", "responses"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 

@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _MIN_PRODUCTION_SECRET_LENGTH = 32
 _MIN_PROVIDER_SECRET_LENGTH = 20
 _ONE_TIME_SECRET_KEY_BYTES = 32
+CLIENT_GATEWAY_KEY_ENV_VAR = "OPENAI_API_KEY"
 _GATEWAY_PREFIX_PATTERN = re.compile(r"^sk-[a-z0-9-]+-$")
 _PLACEHOLDER_SECRET_SUBSTRINGS = (
     "change-me",
@@ -848,7 +849,7 @@ class Settings(BaseSettings):
             )
 
     def _validate_openai_api_key_boundary(self) -> None:
-        client_key = os.getenv("OPENAI_API_KEY")
+        client_key = os.getenv(CLIENT_GATEWAY_KEY_ENV_VAR)
         if not client_key:
             return
         if looks_like_real_upstream_openai_key(
@@ -856,7 +857,7 @@ class Settings(BaseSettings):
             gateway_prefixes=self.get_gateway_key_accepted_prefixes(),
         ):
             raise ValueError(
-                "OPENAI_API_KEY is reserved for clients; use OPENAI_UPSTREAM_API_KEY for "
+                f"{CLIENT_GATEWAY_KEY_ENV_VAR} is reserved for clients; use OPENAI_UPSTREAM_API_KEY for "
                 "the gateway's upstream OpenAI provider key"
             )
 

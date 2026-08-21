@@ -6,7 +6,7 @@ import os
 import re
 from urllib.parse import urlsplit
 
-from slaif_gateway.config import Settings
+from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
 from slaif_gateway.providers.base import ProviderAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
@@ -127,7 +127,7 @@ def _provider_api_key(api_key_env_var: str | None, *, settings: Settings, provid
     if not api_key_env_var:
         raise MissingProviderApiKeyError(provider=provider)
 
-    if api_key_env_var == "OPENAI_" + "API_KEY" or not re.fullmatch(
+    if api_key_env_var == CLIENT_GATEWAY_KEY_ENV_VAR or not re.fullmatch(
         r"[A-Za-z_][A-Za-z0-9_]*", api_key_env_var
     ):
         raise ProviderConfigurationError(

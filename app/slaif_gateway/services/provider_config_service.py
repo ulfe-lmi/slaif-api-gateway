@@ -6,6 +6,7 @@ import uuid
 import re
 from urllib.parse import urlsplit
 
+from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR
 from slaif_gateway.db.models import ProviderConfig
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
@@ -249,7 +250,9 @@ def _non_negative_int(value: int, label: str) -> int:
 
 
 def _validate_env_var(value: str) -> None:
-    if value == "OPENAI_" + "API_KEY" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+    if value == CLIENT_GATEWAY_KEY_ENV_VAR or not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", value
+    ):
         raise ValueError("API key environment variable must be a valid name and cannot be the client key name")
 
 
