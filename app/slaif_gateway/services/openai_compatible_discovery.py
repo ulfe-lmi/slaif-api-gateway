@@ -42,7 +42,8 @@ class DiscoveredModels:
 
 
 class _HttpClient(Protocol):
-    def stream(self, method: str, url: str, **kwargs: Any) -> Any: ...
+    def stream(self, method: str, url: str, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
 
 def _safe_error(message: str) -> DiscoveryError:
