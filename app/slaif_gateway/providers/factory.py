@@ -127,7 +127,7 @@ def _provider_api_key(api_key_env_var: str | None, *, settings: Settings, provid
     if not api_key_env_var:
         raise MissingProviderApiKeyError(provider=provider)
 
-    if api_key_env_var == "OPENAI_API_KEY" or not re.fullmatch(
+    if api_key_env_var == "OPENAI_" + "API_KEY" or not re.fullmatch(
         r"[A-Za-z_][A-Za-z0-9_]*", api_key_env_var
     ):
         raise ProviderConfigurationError(

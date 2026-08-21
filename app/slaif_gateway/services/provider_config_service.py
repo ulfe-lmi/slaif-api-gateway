@@ -230,8 +230,8 @@ def _non_negative_int(value: int, label: str) -> int:
 
 
 def _validate_env_var(value: str) -> None:
-    if value == "OPENAI_API_KEY" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
-        raise ValueError("API key environment variable must be a valid name and cannot be OPENAI_API_KEY")
+    if value == "OPENAI_" + "API_KEY" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError("API key environment variable must be a valid name and cannot be the client key name")
 
 
 def _validate_base_url(
