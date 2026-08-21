@@ -60,6 +60,13 @@
           <input name="api_key_env_var" value="{{ form.api_key_env_var }}" required autocomplete="off" placeholder="OPENAI_UPSTREAM_API_KEY">
         </label>
         <label>
+          Insecure HTTP confirmation
+          <span class="checkbox-row">
+            <input type="checkbox" name="confirm_insecure_http" value="true" {% if form.confirm_insecure_http %}checked{% endif %}>
+            <span>Allow only for an operator-owned LAN/reverse proxy</span>
+          </span>
+        </label>
+        <label>
           Status
           <span class="checkbox-row">
             <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>

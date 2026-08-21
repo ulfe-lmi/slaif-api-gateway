@@ -54,6 +54,9 @@ async def _add_provider(
     api_key_env_var: str,
     enabled: bool,
     notes: str | None,
+    kind: str,
+    reason: str | None,
+    confirm_insecure_http: bool,
 ) -> ProviderConfig:
     async with cli_db_session() as (_, session):
         return await _service(session).create_provider_config(
@@ -63,6 +66,9 @@ async def _add_provider(
             api_key_env_var=api_key_env_var,
             enabled=enabled,
             notes=notes,
+            kind=kind,
+            reason=reason,
+            confirm_insecure_http=confirm_insecure_http,
         )
 
 
@@ -100,6 +106,12 @@ def add(
     base_url: Annotated[str | None, typer.Option("--base-url", help="OpenAI-compatible base URL")] = None,
     enabled: Annotated[bool, typer.Option("--enabled/--disabled", help="Enable provider")] = True,
     notes: Annotated[str | None, typer.Option("--notes", help="Administrative notes")] = None,
+    kind: Annotated[str, typer.Option("--kind", help="Provider kind")] = "openai_compatible",
+    reason: Annotated[str | None, typer.Option("--reason", help="Audit reason")] = None,
+    confirm_insecure_http: Annotated[
+        bool,
+        typer.Option("--confirm-insecure-http", help="Allow an HTTP LAN backend after reviewing the warning"),
+    ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """Create provider metadata without storing provider secrets."""
@@ -112,6 +124,9 @@ def add(
                 api_key_env_var=api_key_env_var,
                 enabled=enabled,
                 notes=notes,
+                kind=kind,
+                reason=reason,
+                confirm_insecure_http=confirm_insecure_http,
             )
         )
     except Exception as exc:  # noqa: BLE001

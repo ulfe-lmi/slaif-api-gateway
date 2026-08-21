@@ -2903,3 +2903,11 @@ without changing application code.
 7. The repository can be cloned and run with Docker Compose.
 
 8. Documentation clearly explains deployment, security, accounting, provider routing, database schema, and compatibility.
+
+The generic `openai_compatible` provider kind is a bounded runtime foundation
+for operator-defined backends, not a qualification, discovery, or hosted-tool
+compatibility claim. It stores only a server-side bearer-secret environment
+variable name, requires exact `/v1` URL metadata, never follows redirects,
+and requires explicit audited acknowledgement for generic HTTP LAN traffic.
+Generic adapters retain their canonical provider slug and do not inherit
+OpenAI hosted-tool or OpenRouter provider-cost authority.

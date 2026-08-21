@@ -357,3 +357,9 @@ Docker and Nginx troubleshooting guidance is in
   infrastructure beyond the implemented app and Celery services.
 - Slack/PagerDuty-specific SDK integrations are not implemented; use the
   optional generic reconciliation webhook with an operator-managed bridge.
+
+Operator-defined `openai_compatible` backends may target an operator-owned LAN
+service, but generic HTTP sends bearer credentials and request content without
+encryption. Require the explicit audited HTTP acknowledgement, firewall or
+reverse-proxy controls, and an exact `/v1` URL. The runtime does not discover,
+qualify, load-balance, or follow redirects to these services.

@@ -623,3 +623,13 @@ janez.pers@fe.uni-lj.si
 We acknowledge the support of the EC/EuroHPC JU and the Slovenian Ministry of HESI via the project SLAIF (grant number 101254461).
 
 Project website: https://www.slaif.si
+
+### Operator-defined OpenAI-compatible backends
+
+SLAIF includes a bounded runtime foundation for operator-defined
+`openai_compatible` backends, including LAN vLLM-style services. This is not a
+model qualification or discovery feature. Provider secrets remain server-side
+under environment-variable names; generic HTTP requires explicit operator
+acknowledgement and an audit reason because bearer credentials and request
+content traverse the LAN unencrypted. Generic backends do not inherit hosted
+OpenAI tools or OpenRouter cost authority, and redirects are not followed.

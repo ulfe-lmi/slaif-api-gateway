@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from slaif_gateway.config import get_settings
+from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, get_settings
 from slaif_gateway.utils.secrets import generate_secret_key
 
 _VALID_OPENAI_PROVIDER_KEY = "sk-live-openai-provider-aaaaaaaaaaaa"
@@ -165,6 +165,10 @@ def _set_required_production_env(monkeypatch) -> None:
     monkeypatch.setenv("ONE_TIME_SECRET_ENCRYPTION_KEY", generate_secret_key())
     monkeypatch.setenv("OPENAI_UPSTREAM_API_KEY", _VALID_OPENAI_PROVIDER_KEY)
     monkeypatch.setenv("OPENROUTER_API_KEY", _VALID_OPENROUTER_PROVIDER_KEY)
+
+
+def test_client_gateway_key_environment_name_is_centralized() -> None:
+    assert CLIENT_GATEWAY_KEY_ENV_VAR == "OPENAI_API_KEY"
 
 
 def test_default_settings_load(monkeypatch) -> None:

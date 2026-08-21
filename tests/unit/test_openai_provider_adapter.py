@@ -9,6 +9,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderHTTPError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
+from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
 from slaif_gateway.schemas.providers import ProviderRequest
 
 
@@ -111,6 +112,79 @@ async def test_missing_openai_api_key_raises() -> None:
 
     with pytest.raises(MissingProviderApiKeyError):
         await adapter.forward_chat_completion(_request({"model": "client-model", "messages": []}))
+
+
+@pytest.mark.asyncio
+async def test_generic_redirect_is_safe_failure_without_following_origin(respx_mock) -> None:
+    first = respx_mock.post("https://qwen.lan/v1/chat/completions").mock(
+        return_value=httpx.Response(302, headers={"location": "https://other-origin.invalid/v1/chat/completions"})
+    )
+    second = respx_mock.post("https://other-origin.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+        api_key="lan-secret",
+    )
+
+    with pytest.raises(ProviderHTTPError) as exc_info:
+        await adapter.forward_chat_completion(_request({"messages": []}))
+
+    assert first.call_count == 1
+    assert second.call_count == 0
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "lan-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_responses_nonstream_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        await adapter.forward_response(_responses_request({"input": "hello"}))
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_responses_stream_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        async for _chunk in adapter.stream_response(_responses_request({"input": "hello"})):
+            pass
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generic_lifecycle_never_uses_openai_secret() -> None:
+    adapter = OpenAICompatibleProviderAdapter(
+        Settings(OPENAI_UPSTREAM_API_KEY="built-in-secret"),
+        provider_name="lan-qwen-text",
+        base_url="https://qwen.lan/v1",
+    )
+
+    with pytest.raises(MissingProviderApiKeyError) as exc_info:
+        await adapter.retrieve_response(
+            _responses_lifecycle_request("/v1/responses/{response_id}"),
+            response_id="resp_123",
+        )
+
+    assert exc_info.value.provider == "lan-qwen-text"
+    assert "built-in-secret" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

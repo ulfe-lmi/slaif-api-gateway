@@ -676,6 +676,21 @@ approved destinations, and local/client tools do not imply provider authority.
 
 ## What Is Not Implemented
 
+### Operator-defined OpenAI-compatible backends
+
+The gateway has a generic runtime foundation for an operator-defined provider
+config with `kind=openai_compatible`, such as a LAN vLLM endpoint. The config
+stores only a server-side environment-variable name for the backend secret;
+the factory reads that secret server-side and never accepts it from a client.
+The base URL must be an exact `http(s)://host[:port]/v1` URL. HTTP LAN use
+requires an explicit confirmation and non-empty audit reason because bearer
+credentials and request content traverse that network unencrypted; firewall
+and reverse-proxy ownership remains an operator responsibility.
+
+This is runtime plumbing, not a qualification or compatibility claim for any
+specific Qwen, vLLM, or other model. Discovery, health checks, load balancing,
+provider-specific translation, and model qualification remain future work.
+
 - Responses cancel/list endpoints,
   Responses hosted tools other than exact bounded OpenAI Responses
   `web_search`, audio

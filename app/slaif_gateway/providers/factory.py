@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import urlsplit
 
-from slaif_gateway.config import Settings
+from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
 from slaif_gateway.providers.base import ProviderAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
+from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
 from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 
 _DEFAULT_OPENAI_API_KEY_ENV_VAR = "OPENAI_UPSTREAM_API_KEY"
@@ -17,7 +20,8 @@ _DEFAULT_OPENROUTER_API_KEY_ENV_VAR = "OPENROUTER_API_KEY"
 def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapter:
     """Return an adapter for a configured provider or resolved route."""
     normalized = _provider_name(provider)
-    if normalized not in {"openai", "openrouter"}:
+    provider_kind = _provider_kind(provider)
+    if normalized not in {"openai", "openrouter"} and provider_kind != "openai_compatible":
         raise ProviderConfigurationError(
             "Unsupported provider configured for route",
             provider=normalized,
@@ -48,7 +52,22 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
         if base_url:
             kwargs["base_url"] = base_url
         return OpenRouterProviderAdapter(settings, **kwargs)
-    raise ProviderConfigurationError("Unsupported provider configured for route")
+    if provider_kind == "openai_compatible":
+        if not base_url:
+            raise ProviderConfigurationError(
+                "Generic OpenAI-compatible provider requires a base URL",
+                provider=normalized,
+                error_code="invalid_provider_configuration",
+            )
+        _validate_generic_base_url(base_url)
+        kwargs = {
+            "api_key": api_key,
+            "timeout_seconds": timeout_seconds,
+            "max_retries": max_retries or 0,
+        }
+        kwargs["base_url"] = base_url
+        return OpenAICompatibleProviderAdapter(settings, provider_name=normalized, **kwargs)
+    raise ProviderConfigurationError("Unsupported provider configured for route", provider=normalized)
 
 
 def _provider_name(provider: object) -> str:
@@ -64,6 +83,11 @@ def _provider_name(provider: object) -> str:
 def _provider_base_url(provider: object) -> str | None:
     base_url = _first_attr(provider, "provider_base_url", "base_url")
     return base_url.strip() if isinstance(base_url, str) and base_url.strip() else None
+
+
+def _provider_kind(provider: object) -> str | None:
+    value = _first_attr(provider, "provider_kind", "kind")
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _provider_api_key_env_var(provider: object) -> str | None:
@@ -103,6 +127,15 @@ def _provider_api_key(api_key_env_var: str | None, *, settings: Settings, provid
     if not api_key_env_var:
         raise MissingProviderApiKeyError(provider=provider)
 
+    if api_key_env_var == CLIENT_GATEWAY_KEY_ENV_VAR or not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", api_key_env_var
+    ):
+        raise ProviderConfigurationError(
+            "Provider API key environment variable name is invalid",
+            provider=provider,
+            error_code="invalid_provider_configuration",
+        )
+
     value = os.getenv(api_key_env_var)
     if value:
         return value
@@ -115,3 +148,28 @@ def _provider_api_key(api_key_env_var: str | None, *, settings: Settings, provid
         f"Provider API key is not configured for environment variable {api_key_env_var}",
         provider=provider,
     )
+
+
+def _validate_generic_base_url(value: str) -> None:
+    parsed = urlsplit(value)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ProviderConfigurationError(
+            "Generic OpenAI-compatible base URL is invalid",
+            error_code="invalid_provider_configuration",
+        ) from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") != "/v1"
+        or any(char.isspace() or ord(char) < 32 for char in value)
+    ):
+        raise ProviderConfigurationError(
+            "Generic OpenAI-compatible base URL is invalid",
+            error_code="invalid_provider_configuration",
+        )

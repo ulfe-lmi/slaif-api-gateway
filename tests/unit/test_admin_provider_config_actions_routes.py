@@ -4,8 +4,10 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.api import admin as admin_module
 from slaif_gateway.db.models import AdminSession, AdminUser
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.admin_catalog import AdminProviderDetail, AdminProviderListRow
@@ -143,6 +145,37 @@ def test_provider_config_create_get_requires_login() -> None:
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/login"
+
+
+def test_admin_provider_parser_preserves_openrouter_and_gates_generic_http() -> None:
+    openrouter = admin_module._parse_provider_config_form(
+        _valid_form(provider="openrouter", base_url="https://openrouter.example/api/v1"),
+        require_reason=True,
+    )
+    assert openrouter["provider"] == "openrouter"
+    assert openrouter["base_url"] == "https://openrouter.example/api/v1"
+
+    with pytest.raises(ValueError, match="confirmation"):
+        admin_module._parse_provider_config_form(
+            _valid_form(
+                provider="lan-qwen-text",
+                base_url="http://qwen.lan:8000/v1",
+                api_key_env_var="LAN_QWEN_KEY",
+            ),
+            require_reason=True,
+        )
+
+    confirmed = admin_module._parse_provider_config_form(
+        _valid_form(
+            provider="lan-qwen-text",
+            base_url="http://qwen.lan:8000/v1",
+            api_key_env_var="LAN_QWEN_KEY",
+            confirm_insecure_http="true",
+        ),
+        require_reason=True,
+    )
+    assert confirmed["confirm_insecure_http"] is True
+    assert confirmed["api_key_env_var"] == "LAN_QWEN_KEY"
 
 
 def test_provider_config_create_get_renders_csrf_form(monkeypatch) -> None:

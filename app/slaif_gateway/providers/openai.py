@@ -57,6 +57,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         timeout_seconds: int | None = None,
         max_retries: int = 0,
         http_client: httpx.AsyncClient | None = None,
+        provider_name: str = "openai",
     ) -> None:
         self._settings = settings
         self._base_url = base_url.rstrip("/")
@@ -64,16 +65,20 @@ class OpenAIProviderAdapter(ProviderAdapter):
         self._timeout_seconds = timeout_seconds
         self._max_retries = max(0, max_retries)
         self._http_client = http_client
+        self._provider_name = provider_name
 
     @property
     def provider_name(self) -> str:
-        return "openai"
+        return self._provider_name
+
+    def _configured_api_key(self) -> str | None:
+        return self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
 
     async def forward_chat_completion(self, request: ProviderRequest) -> ProviderResponse:
         if request.endpoint not in {"/v1/chat/completions", "chat.completions"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -93,7 +98,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/audio/speech", "audio.speech"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -113,7 +118,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/audio/transcriptions", "audio.transcriptions"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -137,7 +142,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/audio/translations", "audio.translations"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -161,7 +166,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/embeddings", "embeddings"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -181,7 +186,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/realtime/client_secrets", "realtime.client_secrets"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -206,7 +211,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/chat/completions", "chat.completions"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -227,7 +232,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses", "responses"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -247,7 +252,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses/input_tokens", "responses.input_tokens"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -267,7 +272,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses/compact", "responses.compact"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -287,7 +292,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses/{response_id}", "responses.retrieve"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -305,7 +310,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses/{response_id}", "responses.delete"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -331,7 +336,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -353,7 +358,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/conversations", "conversations.create"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -379,7 +384,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -405,7 +410,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -435,7 +440,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -461,7 +466,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -491,7 +496,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -522,7 +527,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -553,7 +558,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         }:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -577,7 +582,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
         if request.endpoint not in {"/v1/responses", "responses"}:
             raise UnsupportedProviderEndpointError(provider=self.provider_name)
 
-        provider_api_key = self._api_key or self._settings.OPENAI_UPSTREAM_API_KEY
+        provider_api_key = self._configured_api_key()
         if not provider_api_key:
             raise MissingProviderApiKeyError(provider=self.provider_name)
 
@@ -608,7 +613,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
             try:
                 if self._http_client is not None:
                     return await self._http_client.post(url, json=json, headers=headers, timeout=timeout)
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.post(url, json=json, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -646,7 +651,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         headers=headers,
                         timeout=timeout,
                     )
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.post(url, data=data, files=multipart_files, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -676,7 +681,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         params=params,
                         timeout=timeout,
                     )
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.get(url, headers=headers, params=params)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -700,7 +705,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
             try:
                 if self._http_client is not None:
                     return await self._http_client.delete(url, headers=headers, timeout=timeout)
-                async with httpx.AsyncClient(timeout=timeout) as client:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                     return await client.delete(url, headers=headers)
             except httpx.TimeoutException as exc:
                 if attempt >= self._max_retries:
@@ -734,7 +739,7 @@ class OpenAIProviderAdapter(ProviderAdapter):
                         yield event
                 return
 
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 async with client.stream("POST", url, json=json, headers=headers) as response:
                     async for event in self._stream_response_events(response):
                         yield event

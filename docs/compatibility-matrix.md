@@ -107,3 +107,10 @@ External-tool accounting holds are an operator/accounting foundation only.
 They do not add provider forwarding or claim hosted-tool compatibility. Holds
 remain reserved until explicit audited reconciliation; scheduled inspection is
 non-mutating.
+
+Operator-defined `openai_compatible` backends are a generic runtime foundation
+only. They reuse the OpenAI-compatible wire shape while retaining their
+canonical provider identity, server-side bearer environment-name isolation,
+no-redirect behavior, and PostgreSQL accounting gates. They are not a claim
+of Qwen/vLLM model qualification, OpenAI hosted-tool authority, or OpenRouter
+provider-cost semantics.
