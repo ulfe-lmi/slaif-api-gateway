@@ -1,6 +1,6 @@
 # OAP Work Order — 023-a
 
-PR mode: CREATE_NEW_PR
+PR mode: `CREATE_NEW_PR`
 Branch: oap/023-qwen38-vision-codex-qualification
 Base: main @ 7cb16960f4413ebfa1e63c8a9c079598963c1526
 

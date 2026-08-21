@@ -595,7 +595,7 @@ def _accounting_proved(accounting, *, pending: int, exact_hermetic: bool) -> boo
 
 def _candidate_actions(gateway, *, workspace: Path, upstream_model: str):
     tool_source = json.dumps({
-        "cmd": "python -c \"from pathlib import Path; Path('qwen38-vision-marker.txt').write_text('SLAIF_QWEN38_FILE_OK\\\\n')\"",
+        "cmd": "python -c \"from pathlib import Path; Path('qwen38-vision-marker.txt').write_text('SLAIF_QWEN38_FILE_OK\\n')\"",
         "workdir": str(workspace),
         "yield_time_ms": 1000,
     }, sort_keys=True, separators=(",", ":"))
@@ -605,7 +605,8 @@ def _candidate_actions(gateway, *, workspace: Path, upstream_model: str):
             "output_index": 0,
             "item": {
                 "type": "function_call", "id": "qwen_vision_tool_item", "status": "in_progress",
-                "call_id": "qwen_vision_tool_call", "name": "exec_command", "arguments": "",
+                "call_id": "qwen_vision_tool_call", "name": "exec_command",
+                "arguments": "{\"cmd\":\"\",\"workdir\":\"\",\"yield_time_ms\":1000}",
             },
         },
         {
@@ -653,7 +654,7 @@ def _vision_codex_command(
         "-c", f"model_providers.{profile_name}.stream_max_retries=0",
         "-i", str(image_path),
         "--",
-        "Use the attached image only as the bounded visual context. Satisfy the local function tool turn and return the final marker.",
+        "Use the attached image only as bounded visual context. Satisfy the local function tool turn and return the final marker.",
     ]
 
 def _run_real_hermetic_phase() -> Mapping[str, object]:
@@ -785,7 +786,22 @@ def _run_real_hermetic_for_target(
                         if not _accounting_proved(
                             accounting, pending=pending, exact_hermetic=provider_base_url is None
                         ):
-                            raise VerificationError("accounting_proof_failed")
+                            raise VerificationError(
+                                "accounting_proof_failed:"
+                                + repr({
+                                    "requests_used": accounting.requests_used,
+                                    "tokens_used": accounting.tokens_used,
+                                    "reservation_statuses": accounting.reservation_statuses,
+                                    "ledger_statuses": accounting.ledger_statuses,
+                                    "ledger_successes": accounting.ledger_successes,
+                                    "ledger_error_types": accounting.ledger_error_types,
+                                    "ledger_http_statuses": accounting.ledger_http_statuses,
+                                    "ledger_native_currencies": accounting.ledger_native_currencies,
+                                    "usage": accounting.usage,
+                                    "ledger_actual_costs_eur": [str(x) for x in accounting.ledger_actual_costs_eur],
+                                    "cost_used_eur": str(accounting.cost_used_eur),
+                                }).replace("\n", "|")[:1600]
+                            )
                         if loopback_provider:
                             image_parts = [
                                 part
@@ -809,6 +825,18 @@ def _run_real_hermetic_for_target(
                         ]
                         if __import__("asyncio").run(gateway.sentinels_persisted(target.url, sentinels)):
                             raise VerificationError("privacy_proof_failed")
+                        if provider_base_url is not None and not (
+                            result.returncode == 0
+                            and gateway._codex_completed(result)
+                            and marker.is_file()
+                            and marker.read_text(encoding="utf-8") == "SLAIF_QWEN38_FILE_OK\n"
+                        ):
+                            raise VerificationError(
+                                "codex_live_phase_failed:"
+                                + result.stdout.decode("utf-8", "replace")[-2400:].replace("\n", "|")
+                                + ":stderr:"
+                                + result.stderr.decode("utf-8", "replace")[-400:].replace("\n", "|")
+                            )
                         if provider_base_url is not None:
                             return {
                                 "codex_version": version, "request_count": accounting.requests_used,
@@ -949,7 +977,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
             real_provider_called=live_phase["real_provider_called"] is True,
         )
         lines = (*lines, "LIVE_EVIDENCE_PASSED=true")
-    except Exception:
+    except Exception as exc:
+        if os.environ.get("SLAIF_QWEN38_VISION_DEBUG") == "1":
+            import traceback
+            traceback.print_exc()
+        else:
+            print(f"VERIFIER_STAGE={exc}")
         present = bool(os.environ.get(BASE_URL_ENV) or os.environ.get(API_KEY_ENV))
         print(
             "RESULT=FAIL\nLIVE_TARGET_PRESENT="
