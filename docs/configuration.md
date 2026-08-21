@@ -726,6 +726,13 @@ ordinary/compact route row only for the same provider and upstream model. V2
 
 ### Codex protocol qualification and profile v2
 
+The Qwen3.8-27B text / Codex 0.148 candidate is currently
+`mocked-conformant, unregistered, live target absent`. Its candidate metadata
+uses Responses text only, a 150,000-token context window, client-local
+compaction at 125,000 tokens, and conservative 8,192/24,576 default/max output
+limits. It is not available to production route declarations, CLI/admin
+selection, or live qualification until the bounded private-vLLM phase succeeds.
+
 `slaif-gateway codex inspect` reads provider, route, active pricing, and FX
 state and reports deterministic safe qualification fields only. A positive
 `protocol_qualified` result requires the exact enabled

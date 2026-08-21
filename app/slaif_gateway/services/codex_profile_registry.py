@@ -18,6 +18,8 @@ from typing import Mapping
 PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
+QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
+QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -40,9 +42,25 @@ _CATALOG_TOP_LEVEL_FIELDS = frozenset({"models"})
 _CATALOG_MODEL_FIELDS = frozenset(
     {
         "slug",
+        "display_name",
         "context_window",
+        "description",
+        "additional_speed_tiers",
+        "service_tiers",
+        "default_service_tier",
+        "availability_nux",
+        "upgrade",
+        "base_instructions",
+        "model_messages",
+        "supports_reasoning_summaries",
+        "default_reasoning_summary",
+        "default_verbosity",
+        "web_search_tool_type",
+        "effective_context_window_percent",
+        "experimental_supported_tools",
         "max_context_window",
         "auto_compact_token_limit",
+        "priority",
         "input_modalities",
         "default_reasoning_level",
         "supported_reasoning_levels",
@@ -66,6 +84,7 @@ _CATALOG_MODEL_FIELDS = frozenset(
 )
 _CATALOG_ENUMS = {
     "default_reasoning_level": frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}),
+    "default_reasoning_summary": frozenset({"none"}),
     "shell_type": frozenset({"default", "disabled", "local", "shell_command", "unified_exec"}),
     "tool_mode": frozenset({"code_mode", "code_mode_only", "direct"}),
     "apply_patch_tool_type": frozenset({"freeform"}),
@@ -84,10 +103,21 @@ _CATALOG_BOOLEAN_FIELDS = frozenset(
         "include_plugin_usage_instructions",
         "include_skills_usage_instructions",
         "use_responses_lite",
+        "supports_reasoning_summaries",
     }
 )
 _CATALOG_INTEGER_FIELDS = frozenset(
-    {"context_window", "max_context_window", "auto_compact_token_limit"}
+    {
+        "context_window", "max_context_window", "auto_compact_token_limit", "priority",
+        "effective_context_window_percent",
+    }
+)
+_CATALOG_ARRAY_FIELDS = frozenset(
+    {"additional_speed_tiers", "service_tiers", "experimental_supported_tools"}
+)
+_CATALOG_NULLABLE_FIELDS = frozenset(
+    {"default_service_tier", "availability_nux", "upgrade", "base_instructions", "model_messages", "default_verbosity",
+     "apply_patch_tool_type"}
 )
 _SECRET_MARKERS = ("sk-", "api_key", "authorization", "bearer ", "password", "secret", "token")
 
@@ -412,6 +442,26 @@ _FORBIDDEN_FIXTURE_KEYS = {
     "reasoning", "encrypted", "body", "request", "response", "url", "headers",
     "key", "cookie", "authorization", "environment", "workspace", "path", "metadata",
 }
+_STRUCTURAL_CONTAINER_KEYS = frozenset(
+    {
+        "event_sequence", "request_facts", "catalog_facts", "route_facts", "credential_facts",
+        "accounting_facts", "phases", "relationships", "gates", "facts", "reservations",
+        "ledgers", "text_only", "no_search", "no_parallel",
+    }
+)
+_STRUCTURAL_STRING_KEYS = frozenset(
+    {
+        "phase", "relation", "taxonomy_id", "endpoint", "provider_kind", "model_rewrite",
+        "gate", "status", "catalog_source", "ledger_status", "reservation_status",
+    }
+)
+_STRUCTURAL_INTEGER_KEYS = frozenset(
+    {
+        "event_count", "request_index", "event_index", "input_tokens", "cached_tokens",
+        "output_tokens", "reasoning_tokens", "total_tokens", "cost_nano_eur", "requests_used",
+        "tokens_used",
+    }
+)
 
 
 def sanitize_codex_fixture(
@@ -448,7 +498,10 @@ def sanitize_codex_fixture(
                 raw_value = node[raw_key]
                 if not isinstance(raw_key, str) or raw_key.lower() in _FORBIDDEN_FIXTURE_KEYS:
                     raise ValueError("Codex fixture contains prohibited content.")
-                if raw_key not in {"event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest"}:
+                if raw_key not in {
+                    "event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest",
+                    *_STRUCTURAL_CONTAINER_KEYS, *_STRUCTURAL_STRING_KEYS, *_STRUCTURAL_INTEGER_KEYS,
+                }:
                     raise ValueError("Codex fixture contains arbitrary metadata.")
                 if raw_key == "digest":
                     raise ValueError("Codex fixture input digest is not accepted.")
@@ -470,10 +523,24 @@ def sanitize_codex_fixture(
                     if type(raw_value) is not int or raw_value < 0 or raw_value > 1_000_000:
                         raise ValueError("Codex fixture count/index is invalid.")
                     output[raw_key] = raw_value
+                elif raw_key in _STRUCTURAL_INTEGER_KEYS:
+                    if type(raw_value) is not int or raw_value < 0 or raw_value > 1_000_000_000:
+                        raise ValueError("Codex fixture structural number is invalid.")
+                    output[raw_key] = raw_value
+                elif raw_key in _STRUCTURAL_STRING_KEYS:
+                    if (
+                        not isinstance(raw_value, str)
+                        or not _SAFE_TOKEN.fullmatch(raw_value)
+                        or any(marker in raw_value.lower() for marker in _SECRET_MARKERS)
+                    ):
+                        raise ValueError("Codex fixture structural string is invalid.")
+                    output[raw_key] = raw_value
                 elif raw_key == "enabled":
                     if type(raw_value) is not bool:
                         raise ValueError("Codex fixture enabled value is invalid.")
                     output[raw_key] = raw_value
+                elif raw_key in _STRUCTURAL_CONTAINER_KEYS:
+                    output[raw_key] = walk(raw_value, depth=depth + 1)
                 else:
                     output[raw_key] = walk(raw_value, depth=depth + 1)
             return output
@@ -496,8 +563,10 @@ def sanitize_codex_fixture(
 
 
 def _safe_catalog_string(value: object, *, field: str) -> None:
-    if not isinstance(value, str) or not value or len(value) > 128:
+    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 128:
         raise ValueError("Codex model catalog string is invalid.")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Codex model catalog contains control data.")
     if any(marker in value.lower() for marker in _SECRET_MARKERS) or "://" in value or "/" in value:
         raise ValueError("Codex model catalog contains unsafe string data.")
     allowed = _CATALOG_ENUMS.get(field)
@@ -531,8 +600,33 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
                 not isinstance(value, list)
                 or not value
                 or len(value) > 8
-                or len(set(value)) != len(value)
-                or any(item not in _CATALOG_ENUMS["default_reasoning_level"] for item in value)
+            ):
+                raise ValueError("Codex model catalog reasoning levels are invalid.")
+            efforts = [
+                item.get("effort")
+                for item in value
+                if isinstance(item, Mapping)
+                and set(item) in ({"effort"}, {"effort", "description"})
+                and (
+                    set(item) == {"effort"}
+                    or (
+                        isinstance(item.get("description"), str)
+                        and len(item["description"].encode("utf-8")) <= 128
+                        and not any(
+                            ord(char) < 32 or ord(char) == 127
+                            for char in item["description"]
+                        )
+                        and not any(
+                            marker in item["description"].lower()
+                            for marker in _SECRET_MARKERS
+                        )
+                        and "://" not in item["description"]
+                        and "/" not in item["description"]
+                    )
+                )
+            ]
+            if len(efforts) != len(value) or len(set(efforts)) != len(efforts) or any(
+                effort not in _CATALOG_ENUMS["default_reasoning_level"] for effort in efforts
             ):
                 raise ValueError("Codex model catalog reasoning levels are invalid.")
         elif key == "truncation_policy":
@@ -540,6 +634,26 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
                 raise ValueError("Codex model catalog truncation policy is invalid.")
             if value["mode"] not in {"bytes", "tokens"} or type(value["limit"]) is not int or value["limit"] < 0:
                 raise ValueError("Codex model catalog truncation policy is invalid.")
+        elif key in _CATALOG_ARRAY_FIELDS:
+            if (
+                not isinstance(value, list)
+                or len(value) > 32
+                or any(type(item) is not str or len(item) > 64 for item in value)
+            ):
+                raise ValueError("Codex model catalog array metadata is invalid.")
+        elif key in _CATALOG_NULLABLE_FIELDS:
+            if value is None:
+                continue
+            if key == "base_instructions":
+                if value != "":
+                    raise ValueError("Codex model catalog instructions are invalid.")
+            elif key == "apply_patch_tool_type":
+                if value not in _CATALOG_ENUMS["apply_patch_tool_type"]:
+                    raise ValueError("Codex model catalog patch metadata is invalid.")
+            elif key in {"availability_nux", "upgrade", "model_messages"}:
+                raise ValueError("Codex model catalog nullable metadata is invalid.")
+            else:
+                _safe_catalog_string(value, field=key)
         elif key in _CATALOG_BOOLEAN_FIELDS:
             if type(value) is not bool:
                 raise ValueError("Codex model catalog boolean is invalid.")
@@ -573,6 +687,15 @@ def _validate_catalog_artifact(
         raise ValueError("Codex model catalog compaction threshold does not match profile.")
     if entry["input_modalities"] != list(input_modalities):
         raise ValueError("Codex model catalog modalities do not match profile.")
+    if input_modalities == ("text",):
+        if entry.get("supports_search_tool") is not False:
+            raise ValueError("Codex text catalog search capability is unsafe.")
+        if entry.get("supports_parallel_tool_calls") is not False:
+            raise ValueError("Codex text catalog parallel calls are unsafe.")
+        if entry.get("supports_reasoning_summaries") is not False:
+            raise ValueError("Codex text catalog reasoning replay is unsafe.")
+        if entry.get("apply_patch_tool_type") is not None:
+            raise ValueError("Codex text catalog patch authority is unsafe.")
     _validate_catalog_size(catalog)
 
 
@@ -599,3 +722,62 @@ def _validate_catalog_size(node: object, *, depth: int = 0, budget: list[int] | 
         raise ValueError("Codex model catalog contains a non-finite number.")
     elif node is not None and not isinstance(node, (bool, int, float)):
         raise ValueError("Codex model catalog contains unsupported data.")
+
+
+# Candidate metadata is intentionally not placed in CODEX_PROFILE_REGISTRY.
+# It can be rendered and verified in isolation, but cannot be selected by a
+# route or CLI until the separately required live phase succeeds.
+QWEN38_TEXT_CODEX_CANDIDATE = _profile(
+    profile_id=QWEN38_TEXT_PROFILE_ID,
+    metadata_version=PROFILE_METADATA_VERSION,
+    cli_version="0.148.0",
+    public_model="qwen3.8-27b-text",
+    upstream_model="qwen3.8-27b",
+    wire_api="responses",
+    provider_kind="openai_compatible",
+    provider_slug=None,
+    required_endpoints=("/v1/responses",),
+    required_route_gates=(
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+    ),
+    context_window_tokens=150_000,
+    default_max_output_tokens=8_192,
+    max_output_tokens=24_576,
+    compaction_mode="client_local",
+    reasoning_replay=False,
+    streaming_tool_events=True,
+    local_tools=("function",),
+    input_modalities=("text",),
+    auto_compaction_token_threshold=125_000,
+    credential_free_provider_fields={
+        "name": "OpenAICompatible",
+        "wire_api": "responses",
+        "requires_openai_auth": False,
+        "supports_websockets": False,
+    },
+    model_catalog_artifact=(
+        '{"models":[{"additional_speed_tiers":[],"auto_compact_token_limit":125000,'
+        '"availability_nux":null,"base_instructions":"","context_window":150000,'
+        '"default_reasoning_level":"none","default_reasoning_summary":"none",'
+        '"default_service_tier":null,"default_verbosity":null,"description":"Qwen3.8 text model",'
+        '"display_name":"Qwen3.8 27B Text","effective_context_window_percent":83,'
+        '"experimental_supported_tools":[],"input_modalities":["text"],"max_context_window":150000,'
+        '"model_messages":null,"priority":0,"service_tiers":[],"shell_type":"shell_command",'
+        '"slug":"qwen3.8-27b-text","support_verbosity":false,"supported_in_api":true,'
+        '"supported_reasoning_levels":[{"description":"No reasoning","effort":"none"}],'
+        '"supports_image_detail_original":false,"supports_parallel_tool_calls":false,'
+        '"supports_reasoning_summaries":false,"supports_search_tool":false,'
+        '"truncation_policy":{"limit":150000,"mode":"tokens"},"upgrade":null,'
+        '"use_responses_lite":true,"visibility":"list","web_search_tool_type":"text"}]}'
+    ),
+    model_catalog_target="qwen3.8-27b-text.json",
+    fixture_sha256=QWEN38_TEXT_PROFILE_FIXTURE_SHA256,
+    evidence_date="2026-08-21",
+    mocked_qualification=True,
+    live_qualification=False,
+    profile_name="qwen3_8_text",
+    provider_display_name="Qwen3.8 text OpenAI-compatible",
+    catalog_source="replacement",
+)

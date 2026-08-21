@@ -89,6 +89,10 @@ def _synthetic_profile(
                 "context_window": 150_000,
                 "input_modalities": list(modalities),
                 "slug": model,
+                "supports_parallel_tool_calls": False,
+                "supports_reasoning_summaries": False,
+                "supports_search_tool": False,
+                "apply_patch_tool_type": None,
                 "use_responses_lite": True,
             }
         ],

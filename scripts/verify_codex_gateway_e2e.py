@@ -197,6 +197,7 @@ class MockAction:
     kind: Literal["sse", "json", "interrupted", "error"]
     payload: object = field(repr=False)
     status_code: int = 200
+    expected_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -751,7 +752,11 @@ class ScriptedOpenAIMock:
                         if not self._actions:
                             raise VerificationError(SAFE_STAGE_ERROR)
                         action = self._actions.pop(0)
-                    facts = self._reduce_request(request, expected_path=action.path)
+                    facts = self._reduce_request(
+                        request,
+                        expected_path=action.path,
+                        expected_model=action.expected_model,
+                    )
                     with self._lock:
                         self._facts.append(facts)
                     self._respond(connection, action)
@@ -761,7 +766,11 @@ class ScriptedOpenAIMock:
                     return
 
     def _reduce_request(
-        self, request: capture.ParsedHttpRequest, *, expected_path: str
+        self,
+        request: capture.ParsedHttpRequest,
+        *,
+        expected_path: str,
+        expected_model: str | None = None,
     ) -> UpstreamRequestFacts:
         if request.method != "POST" or request.target != expected_path:
             raise VerificationError(SAFE_STAGE_ERROR)
@@ -781,7 +790,7 @@ class ScriptedOpenAIMock:
             body = json.loads(request.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise VerificationError(SAFE_STAGE_ERROR) from exc
-        if not isinstance(body, dict) or body.get("model") != CODEX_MODEL:
+        if not isinstance(body, dict) or body.get("model") != (expected_model or CODEX_MODEL):
             raise VerificationError(SAFE_STAGE_ERROR)
         input_value = body.get("input")
         input_items = (
