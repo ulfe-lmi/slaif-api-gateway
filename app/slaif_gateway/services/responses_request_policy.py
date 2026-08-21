@@ -201,6 +201,7 @@ _CODEX_CLIENT_METADATA_KEYS = frozenset(
     {
         "x-codex-installation-id",
         "session_id",
+        "root_turn_id",
         "thread_id",
         "turn_id",
         "x-codex-window-id",
@@ -271,6 +272,48 @@ _CODEX_CLIENT_TOOL_TAXONOMY: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
         ),
     ),
 )
+_CODEX_CLIENT_TOOL_TAXONOMY_0148: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "functions",
+        (
+            ("exec_command", "function"),
+            ("write_stdin", "function"),
+            ("update_plan", "function"),
+            ("request_user_input", "function"),
+            ("view_image", "function"),
+        ),
+    ),
+    (
+        "multi_agent_v1",
+        (
+            ("close_agent", "function"),
+            ("resume_agent", "function"),
+            ("send_input", "function"),
+            ("spawn_agent", "function"),
+            ("wait_agent", "function"),
+        ),
+    ),
+)
+
+
+def _codex_client_tool_taxonomy_for(value: object) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None:
+    if not isinstance(value, list):
+        return None
+    names = frozenset(
+        item.get("name")
+        for item in value
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    )
+    for taxonomy in (_CODEX_CLIENT_TOOL_TAXONOMY, _CODEX_CLIENT_TOOL_TAXONOMY_0148):
+        if names == frozenset(namespace for namespace, _tools in taxonomy):
+            return taxonomy
+    return None
+
+
+def codex_client_tool_taxonomy_id(policy: object) -> str | None:
+    if isinstance(policy, Mapping) and policy.get("codex_client_tool_taxonomy") == "codex_0_148":
+        return "codex_0_148"
+    return None
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -321,6 +364,7 @@ class ResponsesRequestPolicy:
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_extended_limits: bool = False,
         allow_codex_compaction_replay: bool = False,
+        codex_client_tool_taxonomy: str | None = None,
         allow_external_tool_request: bool = False,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
@@ -381,6 +425,7 @@ class ResponsesRequestPolicy:
             allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
             allow_codex_encrypted_reasoning_replay=allow_codex_encrypted_reasoning_replay,
             allow_codex_compaction_replay=allow_codex_compaction_replay,
+            codex_client_tool_taxonomy=codex_client_tool_taxonomy,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -719,6 +764,7 @@ class ResponsesRequestPolicy:
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_compaction_replay: bool = False,
+        codex_client_tool_taxonomy: str | None = None,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -742,6 +788,7 @@ class ResponsesRequestPolicy:
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
                 allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
                 allow_codex_compaction_replay=allow_codex_compaction_replay,
+                codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             )
 
         _raise(
@@ -960,6 +1007,7 @@ class ResponsesRequestPolicy:
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_compaction_replay: bool = False,
+        codex_client_tool_taxonomy: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -1017,6 +1065,7 @@ class ResponsesRequestPolicy:
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
                 allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
                 allow_codex_compaction_replay=allow_codex_compaction_replay,
+                codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             )
             if canonical_item.get("type") == "reasoning":
                 encrypted_value = canonical_item["encrypted_content"]
@@ -1088,6 +1137,7 @@ class ResponsesRequestPolicy:
         allow_codex_streaming_tool_events: bool = False,
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_compaction_replay: bool = False,
+        codex_client_tool_taxonomy: str | None = None,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         param = f"input[{index}]"
         if not isinstance(item, Mapping):
@@ -1122,7 +1172,9 @@ class ResponsesRequestPolicy:
                     "responses_codex_client_tools_not_allowed",
                     "Codex client tool namespaces are not enabled for this gateway key.",
                 )
-            return self._validate_codex_additional_tools_item(item, param=param)
+            return self._validate_codex_additional_tools_item(
+                item, param=param, codex_client_tool_taxonomy=codex_client_tool_taxonomy
+            )
         if item_type == "reasoning" and (
             "encrypted_content" in item or allow_codex_encrypted_reasoning_replay
         ):
@@ -1297,6 +1349,7 @@ class ResponsesRequestPolicy:
         item: Mapping[str, Any],
         *,
         param: str,
+        codex_client_tool_taxonomy: str | None = None,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         unknown = set(item) - _SUPPORTED_CODEX_ADDITIONAL_TOOLS_FIELDS
         if unknown:
@@ -1312,14 +1365,19 @@ class ResponsesRequestPolicy:
                 "Codex additional_tools items require the developer role.",
             )
         namespaces = item.get("tools")
-        if not isinstance(namespaces, list) or len(namespaces) != len(_CODEX_CLIENT_TOOL_TAXONOMY):
+        taxonomy = (
+            _CODEX_CLIENT_TOOL_TAXONOMY_0148
+            if codex_client_tool_taxonomy == "codex_0_148"
+            else _codex_client_tool_taxonomy_for(namespaces)
+        )
+        if taxonomy is None:
             _raise(
                 f"{param}.tools",
                 "responses_codex_client_tools_invalid",
                 "Codex additional_tools requires the exact approved namespace set.",
             )
 
-        expected_namespaces = dict(_CODEX_CLIENT_TOOL_TAXONOMY)
+        expected_namespaces = dict(taxonomy)
         canonical_by_namespace: dict[str, dict[str, Any]] = {}
         total_function_schema_bytes = 0
         total_custom_format_bytes = 0
@@ -1418,9 +1476,8 @@ class ResponsesRequestPolicy:
                     and tool.get("type") == "function"
                     else frozenset()
                 )
-                if _contains_recursive_codex_authority_marker(
-                    tool,
-                    allowed_key_paths=allowed_authority_key_paths,
+                if codex_client_tool_taxonomy != "codex_0_148" and _contains_recursive_codex_authority_marker(
+                    tool, allowed_key_paths=allowed_authority_key_paths
                 ):
                     _raise(
                         tool_param,
@@ -1502,7 +1559,7 @@ class ResponsesRequestPolicy:
             "role": "developer",
             "tools": [
                 canonical_by_namespace[namespace_name]
-                for namespace_name, _tools in _CODEX_CLIENT_TOOL_TAXONOMY
+                for namespace_name, _tools in taxonomy
             ],
         }
         if len(canonical_json_bytes(canonical_item)) > _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES:

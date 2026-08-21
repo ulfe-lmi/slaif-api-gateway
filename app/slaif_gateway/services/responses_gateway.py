@@ -151,6 +151,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_function_tools_requested,
     responses_image_input_requested,
     responses_codex_client_tools_allowed,
+    codex_client_tool_taxonomy_id,
     responses_codex_client_tools_requested,
     responses_codex_encrypted_reasoning_replay_allowed,
     responses_codex_encrypted_reasoning_output_requested,
@@ -820,6 +821,9 @@ async def handle_response_create(
     allow_codex_client_tools = responses_codex_client_tools_allowed(
         authenticated_key.responses_policy
     )
+    codex_client_tool_taxonomy = codex_client_tool_taxonomy_id(
+        authenticated_key.responses_policy
+    )
     codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(body)
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
@@ -853,6 +857,7 @@ async def handle_response_create(
             allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
             allow_codex_extended_limits=codex_extended_limits_requested,
             allow_codex_compaction_replay=allow_codex_compaction,
+            codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             allow_external_tool_request=allow_external_tool_request,
         )
     except RequestPolicyError as exc:

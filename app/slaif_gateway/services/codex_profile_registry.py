@@ -42,9 +42,25 @@ _CATALOG_TOP_LEVEL_FIELDS = frozenset({"models"})
 _CATALOG_MODEL_FIELDS = frozenset(
     {
         "slug",
+        "display_name",
         "context_window",
+        "description",
+        "additional_speed_tiers",
+        "service_tiers",
+        "default_service_tier",
+        "availability_nux",
+        "upgrade",
+        "base_instructions",
+        "model_messages",
+        "supports_reasoning_summaries",
+        "default_reasoning_summary",
+        "default_verbosity",
+        "web_search_tool_type",
+        "effective_context_window_percent",
+        "experimental_supported_tools",
         "max_context_window",
         "auto_compact_token_limit",
+        "priority",
         "input_modalities",
         "default_reasoning_level",
         "supported_reasoning_levels",
@@ -86,10 +102,21 @@ _CATALOG_BOOLEAN_FIELDS = frozenset(
         "include_plugin_usage_instructions",
         "include_skills_usage_instructions",
         "use_responses_lite",
+        "supports_reasoning_summaries",
     }
 )
 _CATALOG_INTEGER_FIELDS = frozenset(
-    {"context_window", "max_context_window", "auto_compact_token_limit"}
+    {
+        "context_window", "max_context_window", "auto_compact_token_limit", "priority",
+        "effective_context_window_percent",
+    }
+)
+_CATALOG_ARRAY_FIELDS = frozenset(
+    {"additional_speed_tiers", "service_tiers", "experimental_supported_tools"}
+)
+_CATALOG_NULLABLE_FIELDS = frozenset(
+    {"default_service_tier", "availability_nux", "upgrade", "base_instructions", "model_messages", "default_verbosity",
+     "apply_patch_tool_type"}
 )
 _SECRET_MARKERS = ("sk-", "api_key", "authorization", "bearer ", "password", "secret", "token")
 
@@ -541,8 +568,23 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
                 not isinstance(value, list)
                 or not value
                 or len(value) > 8
-                or len(set(value)) != len(value)
-                or any(item not in _CATALOG_ENUMS["default_reasoning_level"] for item in value)
+            ):
+                raise ValueError("Codex model catalog reasoning levels are invalid.")
+            efforts = [
+                item.get("effort")
+                for item in value
+                if isinstance(item, Mapping)
+                and set(item) in ({"effort"}, {"effort", "description"})
+                and (
+                    set(item) == {"effort"}
+                    or (
+                        isinstance(item.get("description"), str)
+                        and len(item["description"]) <= 128
+                    )
+                )
+            ]
+            if len(efforts) != len(value) or len(set(efforts)) != len(efforts) or any(
+                effort not in _CATALOG_ENUMS["default_reasoning_level"] for effort in efforts
             ):
                 raise ValueError("Codex model catalog reasoning levels are invalid.")
         elif key == "truncation_policy":
@@ -550,6 +592,24 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
                 raise ValueError("Codex model catalog truncation policy is invalid.")
             if value["mode"] not in {"bytes", "tokens"} or type(value["limit"]) is not int or value["limit"] < 0:
                 raise ValueError("Codex model catalog truncation policy is invalid.")
+        elif key in _CATALOG_ARRAY_FIELDS:
+            if (
+                not isinstance(value, list)
+                or len(value) > 32
+                or any(type(item) is not str or len(item) > 64 for item in value)
+            ):
+                raise ValueError("Codex model catalog array metadata is invalid.")
+        elif key in _CATALOG_NULLABLE_FIELDS:
+            if value is None:
+                continue
+            if key == "base_instructions":
+                if value != "":
+                    raise ValueError("Codex model catalog instructions are invalid.")
+            elif key == "apply_patch_tool_type":
+                if value not in _CATALOG_ENUMS["apply_patch_tool_type"]:
+                    raise ValueError("Codex model catalog patch metadata is invalid.")
+            else:
+                _safe_catalog_string(value, field=key)
         elif key in _CATALOG_BOOLEAN_FIELDS:
             if type(value) is not bool:
                 raise ValueError("Codex model catalog boolean is invalid.")
@@ -645,10 +705,19 @@ QWEN38_TEXT_CODEX_CANDIDATE = _profile(
         "supports_websockets": False,
     },
     model_catalog_artifact=(
-        '{"models":[{"auto_compact_token_limit":125000,"context_window":150000,'
-        '"input_modalities":["text"],"slug":"qwen3.8-27b-text",'
-        '"supported_in_api":true,"supports_parallel_tool_calls":false,'
-        '"use_responses_lite":true}]}'
+        '{"models":[{"additional_speed_tiers":[],"auto_compact_token_limit":125000,'
+        '"availability_nux":null,"base_instructions":"","context_window":150000,'
+        '"default_reasoning_level":"none","default_reasoning_summary":"none",'
+        '"default_service_tier":null,"default_verbosity":null,"description":"Qwen3.8 text model",'
+        '"display_name":"Qwen3.8 27B Text","effective_context_window_percent":83,'
+        '"experimental_supported_tools":[],"input_modalities":["text"],"max_context_window":150000,'
+        '"model_messages":null,"priority":0,"service_tiers":[],"shell_type":"shell_command",'
+        '"slug":"qwen3.8-27b-text","support_verbosity":false,"supported_in_api":true,'
+        '"supported_reasoning_levels":[{"description":"No reasoning","effort":"none"}],'
+        '"supports_image_detail_original":false,"supports_parallel_tool_calls":false,'
+        '"supports_reasoning_summaries":false,"supports_search_tool":false,'
+        '"truncation_policy":{"limit":150000,"mode":"tokens"},"upgrade":null,'
+        '"use_responses_lite":true,"visibility":"list","web_search_tool_type":"text"}]}'
     ),
     model_catalog_target="qwen3.8-27b-text.json",
     fixture_sha256=QWEN38_TEXT_PROFILE_FIXTURE_SHA256,

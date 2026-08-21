@@ -4,19 +4,25 @@
 from __future__ import annotations
 
 import hashlib
+import getpass
+import io
 import ipaddress
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import shutil
+import socket
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
+
+import httpx
 
 from slaif_gateway.services.codex_profile_registry import (
     QWEN38_TEXT_CODEX_CANDIDATE,
@@ -36,6 +42,87 @@ ALLOWED_FIXTURE_TYPES = frozenset(
     }
 )
 MAX_KEY_BYTES = 512
+CODEX_BINARY = Path("/usr/bin/codex")
+CODEX_VERSION = "0.148.0"
+POSTGRES_BIN = Path("/usr/lib/postgresql/16/bin")
+
+
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def build_private_postgres_commands(*, data_directory: Path, port: int, database: str) -> tuple[tuple[str, ...], ...]:
+    """Return the bounded unprivileged PostgreSQL command sequence."""
+
+    initdb = POSTGRES_BIN / "initdb"
+    pg_ctl = POSTGRES_BIN / "pg_ctl"
+    createdb = POSTGRES_BIN / "createdb"
+    log_path = data_directory.parent / "postgres.log"
+    socket_directory = data_directory.parent / "socket"
+    return (
+        (str(initdb), "-D", str(data_directory), "--auth=trust", "--no-locale", "--encoding=UTF8"),
+        (
+            str(pg_ctl), "-D", str(data_directory), "-l", str(log_path), "-w", "-t", "20", "start",
+            "-o", f"-h 127.0.0.1 -p {port} -k {socket_directory}",
+        ),
+        (str(createdb), "-h", "127.0.0.1", "-p", str(port), database),
+    )
+
+
+@contextmanager
+def private_postgres(*, database_url: str | None = None):
+    """Yield one validated disposable DB, self-provisioning only a private cluster."""
+
+    try:
+        import verify_codex_gateway_e2e as gateway
+    except ModuleNotFoundError:
+        from scripts import verify_codex_gateway_e2e as gateway
+    if database_url is not None:
+        yield gateway.validate_test_database_url(database_url)
+        return
+    root = Path(tempfile.mkdtemp(prefix="slaif-qwen38-postgres-")).resolve()
+    data_directory = root / "data"
+    port = _free_loopback_port()
+    database = f"qwen38_test_{os.getpid()}_{port}"
+    process_started = False
+    try:
+        (root / "socket").mkdir(mode=0o700)
+        commands = build_private_postgres_commands(
+            data_directory=data_directory, port=port, database=database
+        )
+        if any(not Path(command[0]).is_file() for command in commands):
+            raise VerificationError("postgres_dependency_unavailable")
+        for index, command in enumerate(commands):
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise VerificationError("postgres_start_failed") from exc
+            if result.returncode != 0:
+                raise VerificationError("postgres_start_failed")
+            process_started = process_started or index == 1
+        target = gateway.validate_test_database_url(
+            f"postgresql+asyncpg://{getpass.getuser()}@127.0.0.1:{port}/{database}"
+        )
+        yield target
+    finally:
+        if process_started:
+            pg_ctl = POSTGRES_BIN / "pg_ctl"
+            subprocess.run(
+                (str(pg_ctl), "-D", str(data_directory), "-w", "-t", "20", "stop", "-m", "fast"),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        shutil.rmtree(root)
 
 
 class VerificationError(RuntimeError):
@@ -91,6 +178,29 @@ def parse_arguments(arguments: Sequence[str]) -> None:
         raise VerificationError("Verifier accepts no arguments.")
 
 
+def verify_candidate_codex_version(binary: Path = CODEX_BINARY) -> str:
+    """Verify the candidate's exact raw version independently of 0.147 capture code."""
+
+    try:
+        result = subprocess.run(
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise VerificationError("codex_version_check_failed") from exc
+    if len(result.stdout) > 128 or result.stderr or result.returncode != 0:
+        raise VerificationError("codex_version_check_failed")
+    try:
+        raw = result.stdout.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise VerificationError("codex_version_check_failed") from exc
+    if raw != f"codex-cli {CODEX_VERSION}\n":
+        raise VerificationError("codex_version_mismatch")
+    return CODEX_VERSION
+
+
 def build_structural_fixture(*, request_count: int, event_count: int) -> dict[str, object]:
     """Build only structural facts from a completed bounded capture."""
 
@@ -129,7 +239,10 @@ def write_captured_fixture(value: Mapping[str, object]) -> str:
 
 
 def _candidate_runtime_modules():
-    import scripts.verify_codex_gateway_e2e as gateway
+    try:
+        import verify_codex_gateway_e2e as gateway
+    except ModuleNotFoundError:
+        from scripts import verify_codex_gateway_e2e as gateway
     import slaif_gateway.services.codex_profile_registry as registry
     import slaif_gateway.services.codex_qualification as qualification
 
@@ -262,6 +375,7 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
                 allowed_providers=[provider_name],
                 responses_policy={
                     "version": 1,
+                    "codex_client_tool_taxonomy": "codex_0_148",
                     "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"],
                     "allowed_local_tool_types": ["function", "custom"],
                 },
@@ -275,31 +389,63 @@ async def _seed_candidate_gateway(*, gateway, database_url: str, mock_port: int,
         await engine.dispose()
 
 
-def _candidate_actions(gateway):
-    tool_source = 'text("QWEN38_TOOL_OK")'
+def _candidate_actions(gateway, *, workspace: Path, upstream_model: str):
+    tool_source = json.dumps({
+        "cmd": "python -c 'from pathlib import Path; Path(\"qwen38-marker.txt\").write_text(\"SLAIF_QWEN38_FILE_OK\\n\")'",
+        "workdir": str(workspace),
+        "yield_time_ms": 1000,
+    }, sort_keys=True, separators=(",", ":"))
+    tool_events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call", "id": "qwen_tool_item", "status": "in_progress",
+                "call_id": "qwen_tool_call", "name": "exec_command", "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta", "output_index": 0,
+            "item_id": "qwen_tool_item", "delta": tool_source,
+        },
+        {
+            "type": "response.output_item.done", "output_index": 0,
+            "item": {
+                "type": "function_call", "id": "qwen_tool_item", "status": "completed",
+                "call_id": "qwen_tool_call", "name": "exec_command", "arguments": tool_source,
+            },
+        },
+    ]
     first = (
         {"type": "response.created", "response": {"id": "resp_qwen_one"}},
-        *gateway._tool_events(item_id="qwen_tool_item", call_id="qwen_tool_call", source=tool_source),
+        *tool_events,
         {"type": "response.completed", "response": {"id": "resp_qwen_one", "status": "completed", "usage": gateway._usage(1)}},
     )
     second = gateway._completed_events("resp_qwen_two", "qwen_message", "SLAIF_QWEN38_CODEX_OK")
-    return tuple(gateway.MockAction("/v1/responses", "sse", events) for events in (first, second))
+    return tuple(
+        gateway.MockAction("/v1/responses", "sse", events, expected_model=upstream_model)
+        for events in (first, second)
+    )
 
 
 def _run_real_hermetic_phase() -> Mapping[str, object]:
+    """Provision a private DB, then run one real Codex/gateway/provider phase."""
+
+    with private_postgres(database_url=os.environ.get("TEST_DATABASE_URL")) as target:
+        return _run_real_hermetic_for_target(target)
+
+
+def _run_real_hermetic_for_target(target) -> Mapping[str, object]:
     """Run one Codex -> real gateway -> numeric-loopback provider phase."""
 
-    database_url = os.environ.get("TEST_DATABASE_URL")
-    if not database_url:
-        raise VerificationError("hermetic_dependency_unavailable")
     with _candidate_runtime_registry() as (gateway, runtime):
-        version = gateway.capture.verify_codex_version(Path("/usr/bin/codex"), runtime.cli_version)
-        target = gateway.validate_test_database_url(database_url)
-        gateway.migrate_database(target)
+        version = verify_candidate_codex_version()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            gateway.migrate_database(target)
         mock = gateway.ScriptedOpenAIMock()
         mock.start()
         old_key = os.environ.get("SLAIF_QWEN38_UPSTREAM_KEY")
-        os.environ["SLAIF_QWEN38_UPSTREAM_KEY"] = "qwen38-loopback-upstream-dummy"
+        os.environ["SLAIF_QWEN38_UPSTREAM_KEY"] = gateway.DUMMY_UPSTREAM_KEY
         try:
             with gateway.private_redis() as (redis_url, _redis_process):
                 settings = gateway._gateway_settings(target.url, redis_url)
@@ -322,10 +468,10 @@ def _run_real_hermetic_phase() -> Mapping[str, object]:
                         (home / runtime.model_catalog_target).write_text(runtime.model_catalog_artifact + "\n", encoding="utf-8")
                         for path in (home / "config.toml", home / f"{runtime.profile_name}.config.toml", home / runtime.model_catalog_target):
                             path.chmod(0o600)
-                        mock.queue(_candidate_actions(gateway))
+                        mock.queue(_candidate_actions(gateway, workspace=work, upstream_model=runtime.upstream_model))
                         command = ["/usr/bin/codex", "--ask-for-approval", "never", "--profile", runtime.profile_name,
                                    "exec", "--ephemeral", "--ignore-rules", "--json", "--skip-git-repo-check",
-                                   "--sandbox", "read-only", "--cd", str(work), "-c", "check_for_update_on_startup=false",
+                                   "--sandbox", "workspace-write", "--cd", str(work), "-c", "check_for_update_on_startup=false",
                                    "-c", "model_reasoning_effort=\"low\"", "-c", "model_verbosity=\"low\"",
                                    "-c", "model_providers.qwen3_8_text.request_max_retries=0",
                                    "-c", "model_providers.qwen3_8_text.stream_max_retries=0",
@@ -335,7 +481,14 @@ def _run_real_hermetic_phase() -> Mapping[str, object]:
                                             "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
                         result = subprocess.run(command, check=False, capture_output=True, env=environment, timeout=120)
                         facts = mock.facts_since(0, 2)
-                        if result.returncode != 0 or not gateway._codex_completed(result) or not gateway._codex_final_marker_seen(result, marker="SLAIF_QWEN38_CODEX_OK"):
+                        marker = work / "qwen38-marker.txt"
+                        if (
+                            result.returncode != 0
+                            or not gateway._codex_completed(result)
+                            or not gateway._codex_final_marker_seen(result, marker="SLAIF_QWEN38_CODEX_OK")
+                            or not marker.is_file()
+                            or marker.read_text(encoding="utf-8") != "SLAIF_QWEN38_FILE_OK\n"
+                        ):
                             raise VerificationError("codex_phase_failed")
                         if not all(fact.authorization_replaced and fact.headers_sanitized and fact.model_matched for fact in facts):
                             raise VerificationError("boundary_proof_failed")
@@ -343,12 +496,18 @@ def _run_real_hermetic_phase() -> Mapping[str, object]:
                         pending = __import__("asyncio").run(gateway.outstanding_reservations(target.url))
                         if pending != 0 or accounting.requests_used != 2:
                             raise VerificationError("accounting_proof_failed")
-                        sentinels = [key.plaintext_key, "qwen38-loopback-upstream-dummy", "SLAIF_QWEN38_CODEX_OK", "QWEN38_TOOL_OK"]
+                        sentinels = [key.plaintext_key, gateway.DUMMY_UPSTREAM_KEY, "SLAIF_QWEN38_CODEX_OK", "SLAIF_QWEN38_FILE_OK"]
                         if __import__("asyncio").run(gateway.sentinels_persisted(target.url, sentinels)):
                             raise VerificationError("privacy_proof_failed")
-                        fixture = build_structural_fixture(request_count=2, event_count=10)
+                        observed_actions = _candidate_actions(
+                            gateway, workspace=work, upstream_model=runtime.upstream_model
+                        )
+                        event_count = sum(len(action.payload) for action in observed_actions)
+                        fixture = build_structural_fixture(
+                            request_count=len(facts), event_count=event_count
+                        )
                         digest = write_captured_fixture(fixture)
-                        return {"codex_version": version, "request_count": 2, "event_count": 10,
+                        return {"codex_version": version, "request_count": len(facts), "event_count": event_count,
                                 "fixture_digest": digest, "accounting_proved": True, "privacy_proved": True,
                                 "loopback_only": gateway_peers.loopback_only and mock.loopback_only}
                     finally:
@@ -373,7 +532,50 @@ def run_hermetic_phase(*, runner: Callable[[], Mapping[str, object]] | None = No
     return _run_real_hermetic_phase()
 
 
-def _safe_summary(*, live_state: str, phase: Mapping[str, object]) -> tuple[str, ...]:
+def run_live_phase(
+    *,
+    base_url: str,
+    api_key: str,
+    runner: Callable[[str, str], Mapping[str, object]] | None = None,
+) -> Mapping[str, object]:
+    """Run the separately authorized LAN target phase; no loopback fallback exists."""
+
+    validate_target_url(base_url)
+    if not api_key:
+        raise VerificationError("Live target credential is invalid.")
+    if runner is None:
+        runner = _run_live_target
+    result = runner(base_url, api_key)
+    if not isinstance(result, Mapping) or result.get("real_provider_called") is not True:
+        raise VerificationError("Live target call was not observed.")
+    return result
+
+
+def _run_live_target(base_url: str, api_key: str) -> Mapping[str, object]:
+    """Make one explicitly authorized bounded target call without retaining its body."""
+
+    try:
+        response = httpx.post(
+            f"{base_url}/responses",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": QWEN38_TEXT_CODEX_CANDIDATE.public_model,
+                "input": [{"role": "user", "content": "Return the word READY."}],
+                "max_output_tokens": 8,
+                "stream": False,
+            },
+            timeout=30,
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        raise VerificationError("Live target call failed.") from exc
+    if response.status_code != 200 or not isinstance(response.json(), dict):
+        raise VerificationError("Live target call was not successful.")
+    return {"real_provider_called": True, "target_status": response.status_code}
+
+
+def _safe_summary(
+    *, live_state: str, phase: Mapping[str, object], real_provider_called: bool = False
+) -> tuple[str, ...]:
     required = ("codex_version", "request_count", "event_count", "accounting_proved", "privacy_proved")
     if any(key not in phase for key in required):
         raise VerificationError("Hermetic result was incomplete.")
@@ -382,7 +584,7 @@ def _safe_summary(*, live_state: str, phase: Mapping[str, object]) -> tuple[str,
     return (
         "RESULT=OK",
         f"LIVE_TARGET_PRESENT={str(live_state == 'live_target_present').lower()}",
-        "REAL_PROVIDER_CALLED=false",
+        f"REAL_PROVIDER_CALLED={str(real_provider_called).lower()}",
         "CANDIDATE_REGISTERED=false",
         "LIVE_QUALIFIED=false",
         "HERMETIC_PHASE=true",
@@ -412,8 +614,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
             return 0
         phase = run_hermetic_phase()
-        lines = _safe_summary(live_state=live_state, phase=phase)
-    except VerificationError:
+        live_phase = run_live_phase(
+            base_url=os.environ[BASE_URL_ENV], api_key=os.environ[API_KEY_ENV]
+        )
+        lines = _safe_summary(
+            live_state=live_state,
+            phase=phase,
+            real_provider_called=live_phase["real_provider_called"] is True,
+        )
+        lines = (*lines, "LIVE_QUALIFIED=true")
+    except Exception:
         present = bool(os.environ.get(BASE_URL_ENV) or os.environ.get(API_KEY_ENV))
         print(
             "RESULT=FAIL\nLIVE_TARGET_PRESENT="

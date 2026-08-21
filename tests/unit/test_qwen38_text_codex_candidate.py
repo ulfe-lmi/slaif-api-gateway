@@ -85,6 +85,29 @@ def test_present_target_enters_bounded_orchestration_seam() -> None:
     assert result["accounting_proved"] is True
 
 
+def test_present_target_runs_hermetic_then_distinct_live_runner() -> None:
+    calls: list[str] = []
+
+    def hermetic() -> dict[str, object]:
+        calls.append("hermetic")
+        return {
+            "codex_version": "0.148.0", "request_count": 2, "event_count": 10,
+            "accounting_proved": True, "privacy_proved": True,
+        }
+
+    def live(base_url: str, api_key: str) -> dict[str, object]:
+        calls.extend((base_url, api_key, "live"))
+        return {"real_provider_called": True}
+
+    phase = verifier.run_hermetic_phase(runner=hermetic)
+    result = verifier.run_live_phase(
+        base_url="http://127.0.0.1:8080/v1", api_key="private-test-key", runner=live
+    )
+    assert phase["request_count"] == 2
+    assert result["real_provider_called"] is True
+    assert calls == ["hermetic", "http://127.0.0.1:8080/v1", "private-test-key", "live"]
+
+
 def test_target_url_rejects_percent_backslash_and_bad_port() -> None:
     for value in (
         "http://127.0.0.1:0/v1",
