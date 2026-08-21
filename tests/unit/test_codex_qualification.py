@@ -16,11 +16,14 @@ from slaif_gateway.services.codex_qualification import (
     CODEX_COMPACT_ENDPOINT,
     CODEX_FIXTURE_SHA256,
     CODEX_MODEL,
+    CODEX_PROFILE_ID,
+    CODEX_PROFILE_METADATA_VERSION,
     CODEX_QUALIFICATION_METADATA,
     CODEX_RESPONSES_ENDPOINT,
     CODEX_RESPONSES_POLICY,
     CodexQualificationService,
     parse_codex_qualification_metadata,
+    parse_codex_profile_metadata,
     render_codex_profile,
     render_codex_profile_text,
     validate_codex_gateway_base_url,
@@ -54,6 +57,17 @@ def _capabilities(companion: uuid.UUID) -> dict[str, object]:
         "codex_compaction_compatible_route_ids": [str(companion)],
         "codex_qualification": copy.deepcopy(CODEX_QUALIFICATION_METADATA),
     }
+
+
+def _v2_capabilities(companion: uuid.UUID) -> dict[str, object]:
+    capabilities = _capabilities(companion)
+    capabilities.pop("codex_qualification")
+    capabilities["codex_profile"] = {
+        "version": CODEX_PROFILE_METADATA_VERSION,
+        "profile_id": CODEX_PROFILE_ID,
+        "fixture_sha256": CODEX_FIXTURE_SHA256,
+    }
+    return capabilities
 
 
 def _pair(**responses_overrides: object) -> tuple[SimpleNamespace, SimpleNamespace]:
@@ -201,6 +215,8 @@ async def test_exact_route_pair_is_protocol_qualified_and_safe() -> None:
         "catalog_source",
         "wire_api",
         "real_provider_e2e",
+        "profile_id",
+        "metadata_version",
         "ready",
     }
 
@@ -289,6 +305,55 @@ def test_metadata_parser_rejects_unknown_partial_coerced_and_alias_values(mutate
     value = copy.deepcopy(CODEX_QUALIFICATION_METADATA)
     mutate(value)
     assert parse_codex_qualification_metadata({"codex_qualification": value}) == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_known_v2_profile_pair_is_qualified_without_route_capability_authority() -> None:
+    responses, compact = _pair()
+    responses.capabilities = _v2_capabilities(compact.id)
+    compact.capabilities = _v2_capabilities(responses.id)
+    results = await _service([responses, compact]).inspect(now=NOW)
+    assert all(result.state == "protocol_qualified" for result in results)
+    assert all(result.profile_id == CODEX_PROFILE_ID for result in results)
+    assert all(result.metadata_version == CODEX_PROFILE_METADATA_VERSION for result in results)
+    assert all("metadata v2" in result.badge for result in results)
+    assert parse_codex_profile_metadata(responses.capabilities) == (
+        "protocol_qualified",
+        CODEX_PROFILE_ID,
+        CODEX_PROFILE_METADATA_VERSION,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"version": 2, "profile_id": "unknown-profile", "fixture_sha256": "0" * 64},
+        {
+            "version": 2,
+            "profile_id": CODEX_PROFILE_ID,
+            "fixture_sha256": "0" * 64,
+        },
+        {
+            "version": 2,
+            "profile_id": CODEX_PROFILE_ID,
+            "fixture_sha256": CODEX_FIXTURE_SHA256,
+            "extra": "rejected",
+        },
+    ],
+)
+async def test_v2_unknown_or_drifted_profile_fails_closed(declaration: dict[str, object]) -> None:
+    responses, compact = _pair()
+    responses.capabilities = _v2_capabilities(compact.id)
+    compact.capabilities = _v2_capabilities(responses.id)
+    responses.capabilities["codex_profile"] = declaration
+    result = next(
+        item
+        for item in await _service([responses, compact]).inspect(now=NOW)
+        if item.route_id == responses.id
+    )
+    assert result.state in {"invalid", "not_ready"}
+    assert result.reason_codes[0].startswith("codex_profile_")
 
 
 @pytest.mark.asyncio

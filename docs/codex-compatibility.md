@@ -48,6 +48,22 @@ requires a distinct fixture and review.
 
 ## Protocol qualification and profile-v2 configuration
 
+Qualification profiles are immutable server-defined registry entries. The
+current built-in entry is `openai-gpt-5.6-sol-codex-0.147-v1` (registry
+metadata version 2), pinned to CLI `0.147.0`, model `gpt-5.6-sol`, OpenAI
+Responses/compact, the limits below, and the fixture digest in this document.
+Route metadata may contain only the exact `{version, profile_id,
+fixture_sha256}` identity declaration; it cannot declare capabilities, limits,
+provider claims, or qualification. Unknown, drifted, mixed, or mismatched
+declarations fail closed. Version-1 `codex_qualification` remains supported
+unchanged for the existing route pair.
+
+The registry distinguishes configured, mocked-conformant, protocol-qualified,
+and live-qualified evidence. The built-in profile is protocol-qualified from
+local mocked/provider-boundary evidence; `real_provider_e2e` and live
+qualification remain false. No later model or provider is registered as
+qualified by this framework objective.
+
 Codex custom-provider selection belongs in the user's Codex configuration, not
 in a repository checkout. The official configuration reference states that
 project-local config cannot safely override provider/authentication settings,

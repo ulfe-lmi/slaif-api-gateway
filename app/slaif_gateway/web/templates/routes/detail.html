@@ -44,6 +44,8 @@
         <dt>Codex qualification</dt><dd>{{ route.codex_qualification_badge }}</dd>
         <dt>Codex readiness state</dt><dd>{{ route.codex_qualification_state }}</dd>
         <dt>Codex readiness reasons</dt><dd>{{ route.codex_qualification_reason_codes | join(", ") if route.codex_qualification_reason_codes else "None" }}</dd>
+        <dt>Codex profile ID</dt><dd>{{ route.codex_profile_id or "None" }}</dd>
+        <dt>Codex metadata version</dt><dd>{{ route.codex_metadata_version or "None" }}</dd>
         <dt>Codex paired route</dt><dd>{% if route.codex_paired_route_id %}<a href="/admin/routes/{{ route.codex_paired_route_id }}">{{ route.codex_paired_route_id }}</a>{% else %}None{% endif %}</dd>
         <dt>Created</dt><dd>{{ route.created_at.isoformat() }}</dd>
         <dt>Updated</dt><dd>{{ route.updated_at.isoformat() }}</dd>

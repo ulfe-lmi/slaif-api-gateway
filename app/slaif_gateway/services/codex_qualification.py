@@ -19,16 +19,24 @@ from slaif_gateway.services.responses_route_capabilities import (
     parse_codex_compaction_compatible_route_ids,
     parse_codex_route_limits,
 )
+from slaif_gateway.services.codex_profile_registry import (
+    OPENAI_CODEX_PROFILE,
+    PROFILE_ID,
+    PROFILE_METADATA_VERSION,
+    CodexQualificationProfile,
+    get_codex_profile,
+    validate_codex_profile_declaration,
+)
 from slaif_gateway.utils.redaction import redact_text
 
 CODEX_QUALIFICATION_KEY = "codex_qualification"
-CODEX_MODEL = "gpt-5.6-sol"
-CODEX_CLI_VERSION = "0.147.0"
+CODEX_MODEL = OPENAI_CODEX_PROFILE.public_model
+CODEX_CLI_VERSION = OPENAI_CODEX_PROFILE.cli_version
 CODEX_PROFILE_VERSION = 1
 CODEX_EVIDENCE_PROFILE = "api-key-responses-v1"
 CODEX_PROFILE_NAME = "slaif"
 CODEX_PROVIDER_NAME = "slaif"
-CODEX_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
+CODEX_FIXTURE_SHA256 = OPENAI_CODEX_PROFILE.fixture_sha256
 CODEX_RESPONSES_ENDPOINT = "/v1/responses"
 CODEX_COMPACT_ENDPOINT = "/v1/responses/compact"
 
@@ -78,6 +86,9 @@ _CODEX_ACCOUNTING_CACHE_FIELDS = frozenset(
     {"cache_write_input_price_per_1m", "cache_write_input_multiplier"}
 )
 _EXACT_PILOT_ENDPOINTS = frozenset({"/v1/models", CODEX_RESPONSES_ENDPOINT, CODEX_COMPACT_ENDPOINT})
+CODEX_PROFILE_DECLARATION_KEY = "codex_profile"
+CODEX_PROFILE_ID = PROFILE_ID
+CODEX_PROFILE_METADATA_VERSION = PROFILE_METADATA_VERSION
 
 
 class _RoutesRepository(Protocol):
@@ -128,6 +139,8 @@ class CodexQualificationResult:
     catalog_source: str | None = None
     wire_api: str | None = None
     real_provider_e2e: bool | None = None
+    profile_id: str | None = None
+    metadata_version: int | None = None
 
     @property
     def ready(self) -> bool:
@@ -136,6 +149,8 @@ class CodexQualificationResult:
     @property
     def badge(self) -> str:
         if self.ready:
+            if self.metadata_version == CODEX_PROFILE_METADATA_VERSION:
+                return f"Protocol-qualified: profile {self.profile_id} / metadata v2"
             return "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1"
         if self.state == "not_declared":
             return "Not declared"
@@ -164,6 +179,9 @@ class CodexProfileArtifacts:
     model: str = CODEX_MODEL
     provider: str = CODEX_PROVIDER_NAME
     invocation: str = "codex --profile slaif"
+    qualification_profile_id: str = CODEX_PROFILE_ID
+    model_catalog_json: str | None = None
+    model_catalog_target: str | None = None
 
     def to_safe_dict(self) -> dict[str, object]:
         return {
@@ -177,6 +195,9 @@ class CodexProfileArtifacts:
             "model": self.model,
             "provider": self.provider,
             "invocation": self.invocation,
+            "qualification_profile_id": self.qualification_profile_id,
+            "model_catalog_json": self.model_catalog_json,
+            "model_catalog_target": self.model_catalog_target,
         }
 
 
@@ -232,14 +253,17 @@ class CodexQualificationService:
         self,
         *,
         provider: str | None = None,
+        qualification_profile: str | None = None,
         now: datetime | None = None,
     ) -> CodexQualificationResult:
+        selected_profile = _selected_profile(qualification_profile)
         candidates = [
             result
             for result in await self.inspect(now=now)
             if result.endpoint == CODEX_RESPONSES_ENDPOINT
-            and result.requested_model == CODEX_MODEL
+            and result.requested_model == selected_profile.public_model
             and result.ready
+            and result.profile_id == selected_profile.profile_id
             and (provider is None or result.provider == provider)
         ]
         if len(candidates) != 1:
@@ -259,7 +283,9 @@ class CodexQualificationService:
         requested_model = str(getattr(route, "requested_model", "") or "")
         provider = str(getattr(route, "provider", "") or "")
         endpoint = str(getattr(route, "endpoint", "") or "")
-        metadata_state = parse_codex_qualification_metadata(getattr(route, "capabilities", None))
+        metadata_state, declaration_profile_id, declaration_version = (
+            parse_codex_profile_metadata(getattr(route, "capabilities", None))
+        )
         if metadata_state == "not_declared":
             return _result(
                 route_id=route_id,
@@ -269,32 +295,55 @@ class CodexQualificationService:
                 state="not_declared",
                 reasons=("codex_qualification_not_declared",),
             )
-        if metadata_state == "invalid":
+        if metadata_state in {"invalid", "not_ready"}:
+            declaration_reason = (
+                declaration_profile_id
+                if CODEX_PROFILE_DECLARATION_KEY
+                in (getattr(route, "capabilities", None) or {})
+                and declaration_profile_id
+                else "codex_qualification_invalid"
+            )
             return _result(
                 route_id=route_id,
                 requested_model=requested_model,
                 provider=provider,
                 endpoint=endpoint,
-                state="invalid",
-                reasons=("codex_qualification_invalid",),
+                state=metadata_state,
+                reasons=(declaration_reason,),
                 include_profile=True,
+            )
+
+        profile = get_codex_profile(declaration_profile_id or CODEX_PROFILE_ID)
+        if profile is None:
+            return _result(
+                route_id=route_id,
+                requested_model=requested_model,
+                provider=provider,
+                endpoint=endpoint,
+                state="not_ready",
+                reasons=("codex_profile_unknown",),
+                include_profile=True,
+                profile_id=declaration_profile_id,
+                metadata_version=declaration_version,
             )
 
         reasons: list[str] = []
         if not bool(getattr(route, "enabled", False)):
             reasons.append("route_disabled")
-        if endpoint not in {CODEX_RESPONSES_ENDPOINT, CODEX_COMPACT_ENDPOINT}:
+        if endpoint not in profile.required_endpoints:
             reasons.append("endpoint_invalid")
         if str(getattr(route, "match_type", "") or "") != "exact":
             reasons.append("match_type_invalid")
-        if requested_model != CODEX_MODEL:
+        if requested_model != profile.public_model:
             reasons.append("requested_model_invalid")
-        if str(getattr(route, "upstream_model", "") or "") != CODEX_MODEL:
+        if profile.provider_slug is not None and provider != profile.provider_slug:
+            reasons.append("provider_mismatch")
+        if str(getattr(route, "upstream_model", "") or "") != profile.upstream_model:
             reasons.append("upstream_model_invalid")
         if not _is_runtime_selected_route(route, all_routes=all_routes):
             reasons.append("route_not_selected")
         capabilities = getattr(route, "capabilities", None)
-        reasons.extend(_route_capability_reasons(route, capabilities=capabilities))
+        reasons.extend(_route_capability_reasons(route, capabilities=capabilities, profile=profile))
 
         compatible_ids: frozenset[uuid.UUID] = frozenset()
         try:
@@ -303,7 +352,10 @@ class CodexQualificationService:
             reasons.append("compatible_route_ids_invalid")
         paired_route: object | None = None
         paired_route_id: uuid.UUID | None = None
-        if len(compatible_ids) != 1:
+        requires_pair = len(profile.required_endpoints) > 1
+        if not requires_pair and endpoint == profile.required_endpoints[0]:
+            compatible_ids = frozenset()
+        elif len(compatible_ids) != 1:
             reasons.append("paired_route_not_exact")
         else:
             paired_route_id = next(iter(compatible_ids))
@@ -320,6 +372,8 @@ class CodexQualificationService:
                             if endpoint == CODEX_RESPONSES_ENDPOINT
                             else CODEX_RESPONSES_ENDPOINT
                         ),
+                        profile=profile,
+                        declaration_version=declaration_version,
                     )
                 )
                 if not _is_runtime_selected_route(paired_route, all_routes=all_routes):
@@ -341,7 +395,7 @@ class CodexQualificationService:
             )
             pricing = await self._pricing.find_active_pricing_rule(
                 provider=provider,
-                upstream_model=CODEX_MODEL,
+                upstream_model=profile.upstream_model,
                 endpoint=pricing_endpoint,
                 at_time=now,
             )
@@ -371,6 +425,8 @@ class CodexQualificationService:
             state="not_ready" if deduplicated else "protocol_qualified",
             reasons=deduplicated,
             include_profile=True,
+            profile_id=profile.profile_id,
+            metadata_version=declaration_version,
         )
 
 
@@ -389,6 +445,28 @@ def parse_codex_qualification_metadata(capabilities: object) -> str:
         if type(actual) is not type(expected) or actual != expected:  # noqa: E721
             return "invalid"
     return "protocol_qualified"
+
+
+def parse_codex_profile_metadata(capabilities: object) -> tuple[str, str | None, int | None]:
+    """Parse v1 legacy metadata or the minimal server-owned v2 declaration."""
+
+    if not isinstance(capabilities, Mapping):
+        return "not_declared", None, None
+    if CODEX_PROFILE_DECLARATION_KEY in capabilities:
+        if CODEX_QUALIFICATION_KEY in capabilities:
+            return "invalid", "codex_profile_declaration_mixed", CODEX_PROFILE_METADATA_VERSION
+        state, reason = validate_codex_profile_declaration(
+            capabilities.get(CODEX_PROFILE_DECLARATION_KEY)
+        )
+        if state != "ready":
+            return state, reason, CODEX_PROFILE_METADATA_VERSION
+        declaration = capabilities[CODEX_PROFILE_DECLARATION_KEY]
+        assert isinstance(declaration, Mapping)
+        return "protocol_qualified", str(declaration["profile_id"]), CODEX_PROFILE_METADATA_VERSION
+    if CODEX_QUALIFICATION_KEY in capabilities:
+        state = parse_codex_qualification_metadata(capabilities)
+        return state, CODEX_PROFILE_ID if state == "protocol_qualified" else None, CODEX_PROFILE_VERSION
+    return "not_declared", None, None
 
 
 def validate_codex_pilot_key_input(payload: object, *, confirmed: bool) -> None:
@@ -423,29 +501,44 @@ def validate_codex_pilot_key_input(payload: object, *, confirmed: bool) -> None:
         raise ValueError("Codex protocol pilot keys require an audit reason.")
 
 
-def render_codex_profile(base_url: str) -> CodexProfileArtifacts:
+def render_codex_profile(
+    base_url: str,
+    qualification_profile: str | CodexQualificationProfile | None = None,
+) -> CodexProfileArtifacts:
     """Render two independent profile-v2 TOML documents without credentials."""
 
     canonical_url = validate_codex_gateway_base_url(base_url)
+    profile = _selected_profile(qualification_profile)
     encoded_url = json.dumps(canonical_url, ensure_ascii=True)
+    provider_fields = profile.credential_free_provider_fields
     base_config = (
         "[model_providers.slaif]\n"
-        'name = "OpenAI"\n'
+        f'name = {json.dumps(str(provider_fields["name"]), ensure_ascii=True)}\n'
         f"base_url = {encoded_url}\n"
         'env_key = "OPENAI_API_KEY"\n'
-        'wire_api = "responses"\n'
-        "requires_openai_auth = false\n"
-        "supports_websockets = false\n"
+        f'wire_api = {json.dumps(profile.wire_api, ensure_ascii=True)}\n'
+        f"requires_openai_auth = {str(bool(provider_fields['requires_openai_auth'])).lower()}\n"
+        f"supports_websockets = {str(bool(provider_fields['supports_websockets'])).lower()}\n"
     )
     profile_config = (
-        'model = "gpt-5.6-sol"\n'
+        f"model = {json.dumps(profile.public_model, ensure_ascii=True)}\n"
         'model_provider = "slaif"\n'
         "\n[features]\n"
-        "remote_compaction_v2 = false\n"
+        f"remote_compaction_v2 = {str(profile.compaction_mode != 'remote_v1').lower()}\n"
     )
     return CodexProfileArtifacts(
         base_config_toml=base_config,
         profile_config_toml=profile_config,
+        profile=profile.profile_name if qualification_profile is not None else CODEX_PROFILE_NAME,
+        model=profile.public_model,
+        qualification_profile_id=profile.profile_id,
+        invocation=(
+            f"codex --profile {profile.profile_name}"
+            if qualification_profile is not None
+            else "codex --profile slaif"
+        ),
+        model_catalog_json=profile.model_catalog_artifact,
+        model_catalog_target=profile.model_catalog_target,
     )
 
 
@@ -460,7 +553,7 @@ def render_codex_profile_text(artifacts: CodexProfileArtifacts) -> str:
         "--- profile_config_toml (complete file) ---\n"
         f"{artifacts.profile_config_toml}"
         "\nSet the gateway-issued key only in OPENAI_API_KEY.\n"
-        "Run: codex --profile slaif\n"
+        f"Run: codex --profile {artifacts.profile}\n"
     )
 
 
@@ -510,7 +603,12 @@ def validate_codex_gateway_base_url(value: str) -> str:
     return urlunsplit((parsed.scheme.lower(), netloc, parsed.path, "", ""))
 
 
-def _route_capability_reasons(route: object, *, capabilities: object) -> list[str]:
+def _route_capability_reasons(
+    route: object,
+    *,
+    capabilities: object,
+    profile: CodexQualificationProfile = OPENAI_CODEX_PROFILE,
+) -> list[str]:
     reasons: list[str] = []
     if not isinstance(capabilities, Mapping):
         return ["route_capabilities_invalid"]
@@ -519,10 +617,10 @@ def _route_capability_reasons(route: object, *, capabilities: object) -> list[st
         reasons.append("responses_capabilities_invalid")
     else:
         try:
-            _enforce_codex_runtime_operation(route, capabilities=capabilities)
+            _enforce_codex_runtime_operation(route, capabilities=capabilities, profile=profile)
         except ResponsesRouteCapabilityError:
             reasons.append("responses_runtime_capabilities_invalid")
-        if any(responses.get(gate) is not True for gate in _CODEX_GATES):
+        if any(responses.get(gate) is not True for gate in profile.required_route_gates):
             reasons.append("codex_gates_incomplete")
         endpoint = str(getattr(route, "endpoint", "") or "")
         if endpoint == CODEX_RESPONSES_ENDPOINT:
@@ -535,7 +633,13 @@ def _route_capability_reasons(route: object, *, capabilities: object) -> list[st
         elif endpoint == CODEX_COMPACT_ENDPOINT and responses.get("compact") is not True:
             reasons.append("compact_route_capability_missing")
     try:
-        parse_codex_route_limits(capabilities)
+        limits = parse_codex_route_limits(capabilities)
+        if (
+            limits.context_window_tokens != profile.context_window_tokens
+            or limits.default_max_output_tokens != profile.default_max_output_tokens
+            or limits.max_output_tokens != profile.max_output_tokens
+        ):
+            reasons.append("codex_limits_mismatch")
     except Exception:
         reasons.append("codex_limits_invalid")
     return reasons
@@ -545,6 +649,7 @@ def _enforce_codex_runtime_operation(
     route: object,
     *,
     capabilities: Mapping[str, object],
+    profile: CodexQualificationProfile = OPENAI_CODEX_PROFILE,
 ) -> None:
     """Apply the existing runtime parser with the exact qualified operation flags."""
 
@@ -554,23 +659,23 @@ def _enforce_codex_runtime_operation(
             route_capabilities=capabilities,
             streaming_requested=True,
             route_supports_streaming=bool(getattr(route, "supports_streaming", False)),
-            codex_request_envelope_requested=True,
-            codex_client_tools_requested=True,
-            codex_streaming_tool_events_requested=True,
-            codex_encrypted_reasoning_replay_requested=True,
+            codex_request_envelope_requested="codex_request_envelope" in profile.required_route_gates,
+            codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
+            codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
+            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
             codex_extended_limits_requested=True,
-            codex_compaction_requested=True,
+            codex_compaction_requested="codex_compaction" in profile.required_route_gates,
         )
     elif endpoint == CODEX_COMPACT_ENDPOINT:
         enforce_responses_route_capabilities(
             route_capabilities=capabilities,
             compact_requested=True,
-            codex_request_envelope_requested=True,
-            codex_client_tools_requested=True,
-            codex_streaming_tool_events_requested=True,
-            codex_encrypted_reasoning_replay_requested=True,
+            codex_request_envelope_requested="codex_request_envelope" in profile.required_route_gates,
+            codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
+            codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
+            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
             codex_extended_limits_requested=True,
-            codex_compaction_requested=True,
+            codex_compaction_requested="codex_compaction" in profile.required_route_gates,
         )
 
 
@@ -625,6 +730,8 @@ def _paired_route_reasons(
     paired: object,
     *,
     expected_endpoint: str,
+    profile: CodexQualificationProfile = OPENAI_CODEX_PROFILE,
+    declaration_version: int | None = CODEX_PROFILE_VERSION,
 ) -> list[str]:
     reasons: list[str] = []
     if str(getattr(paired, "endpoint", "") or "") != expected_endpoint:
@@ -636,13 +743,16 @@ def _paired_route_reasons(
             reasons.append(f"paired_{field}_mismatch")
     if str(getattr(paired, "match_type", "") or "") != "exact":
         reasons.append("paired_match_type_invalid")
-    if parse_codex_qualification_metadata(getattr(paired, "capabilities", None)) != (
-        "protocol_qualified"
-    ):
-        reasons.append("paired_qualification_invalid")
-    reasons.extend(
-        _route_capability_reasons(paired, capabilities=getattr(paired, "capabilities", None))
+    paired_state, paired_profile_id, paired_version = parse_codex_profile_metadata(
+        getattr(paired, "capabilities", None)
     )
+    if paired_state != "protocol_qualified" or paired_profile_id != profile.profile_id:
+        reasons.append("paired_qualification_invalid")
+    if declaration_version != paired_version:
+        reasons.append("paired_profile_version_mismatch")
+    reasons.extend(_route_capability_reasons(
+        paired, capabilities=getattr(paired, "capabilities", None), profile=profile
+    ))
     try:
         reciprocal = parse_codex_compaction_compatible_route_ids(
             getattr(paired, "capabilities", None)
@@ -738,6 +848,8 @@ def _result(
     reasons: tuple[str, ...],
     paired_route_id: uuid.UUID | None = None,
     include_profile: bool = False,
+    profile_id: str | None = None,
+    metadata_version: int | None = None,
 ) -> CodexQualificationResult:
     return CodexQualificationResult(
         state=state,
@@ -753,7 +865,27 @@ def _result(
         catalog_source="bundled" if include_profile else None,
         wire_api="responses" if include_profile else None,
         real_provider_e2e=False if include_profile else None,
+        profile_id=profile_id if profile_id is not None else (CODEX_PROFILE_ID if include_profile else None),
+        metadata_version=(
+            metadata_version if metadata_version is not None else (CODEX_PROFILE_VERSION if include_profile else None)
+        ),
     )
+
+
+def _selected_profile(
+    qualification_profile: str | CodexQualificationProfile | None,
+) -> CodexQualificationProfile:
+    if qualification_profile is None:
+        return OPENAI_CODEX_PROFILE
+    if isinstance(qualification_profile, CodexQualificationProfile):
+        profile = qualification_profile
+    else:
+        profile = get_codex_profile(qualification_profile)
+    if profile is None:
+        raise ValueError("Unknown Codex qualification profile.")
+    if not profile.mocked_qualification and not profile.live_qualification:
+        raise ValueError("Codex qualification profile is not ready.")
+    return profile
 
 
 def _aware_time(value: datetime | None) -> datetime:
