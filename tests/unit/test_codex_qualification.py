@@ -80,21 +80,18 @@ def _synthetic_profile(
     upstream_model: str = "synthetic-upstream",
     profile_name: str = "synthetic",
     target: str = "synthetic-models.json",
+    modalities: tuple[str, ...] = ("text",),
 ) -> CodexQualificationProfile:
     catalog = {
-        "auto_compact_token_limit": 125_000,
-        "context_window": 150_000,
-        "input_modalities": ["text"],
         "models": [
             {
                 "auto_compact_token_limit": 125_000,
                 "context_window": 150_000,
-                "input_modalities": ["text"],
+                "input_modalities": list(modalities),
                 "slug": model,
                 "use_responses_lite": True,
             }
         ],
-        "schema_version": 1,
     }
     return CodexQualificationProfile(
         profile_id=profile_id,
@@ -106,7 +103,9 @@ def _synthetic_profile(
         provider_kind="openai_compatible",
         provider_slug="synthetic",
         required_endpoints=(CODEX_RESPONSES_ENDPOINT,),
-        required_route_gates=("codex_request_envelope",),
+        required_route_gates=("codex_request_envelope", "image_input")
+        if "image" in modalities
+        else ("codex_request_envelope",),
         context_window_tokens=150_000,
         default_max_output_tokens=32_768,
         max_output_tokens=128_000,
@@ -114,7 +113,7 @@ def _synthetic_profile(
         reasoning_replay=False,
         streaming_tool_events=False,
         local_tools=("function",),
-        input_modalities=("text",),
+        input_modalities=modalities,
         auto_compaction_token_threshold=125_000,
         credential_free_provider_fields=MappingProxyType(
             {
@@ -269,6 +268,8 @@ def test_replacement_profiles_render_distinct_catalog_targets_without_provider_l
     assert first_artifacts.model_catalog_target in first_artifacts.profile_config_toml
     assert second_artifacts.model_catalog_target in second_artifacts.profile_config_toml
     assert first_artifacts.model_catalog_target in render_codex_profile_text(first_artifacts)
+    assert f"Place this complete content in {first_artifacts.profile_config_target}" in render_codex_profile_text(first_artifacts)
+    assert "$CODEX_HOME/slaif.config.toml" not in render_codex_profile_text(first_artifacts)
     assert first_artifacts.model_catalog_target in json.dumps(first_artifacts.to_safe_dict())
     for artifacts in (first_artifacts, second_artifacts):
         combined = artifacts.base_config_toml + artifacts.profile_config_toml + (artifacts.model_catalog_json or "")
@@ -277,6 +278,10 @@ def test_replacement_profiles_render_distinct_catalog_targets_without_provider_l
         assert "remote_compaction_v2 = true" not in combined
         assert artifacts.model_catalog_json is not None
         assert artifacts.model_catalog_target in artifacts.profile_config_toml
+        parsed_profile = tomllib.loads(artifacts.profile_config_toml)
+        assert parsed_profile["model_catalog_json"] == artifacts.model_catalog_target
+        assert parsed_profile["features"] == {"remote_compaction_v2": False}
+        assert "model_catalog" not in parsed_profile
 
 
 def _pricing(endpoint: str, *, currency: str = "EUR", **overrides: object) -> SimpleNamespace:
@@ -525,6 +530,74 @@ async def test_text_profile_rejects_declared_image_capability() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vision_profile_requires_authoritative_image_capability_and_parser() -> None:
+    profile = _synthetic_profile(
+        profile_id="synthetic-vision-profile-v2",
+        model="synthetic-vision",
+        upstream_model="synthetic-vision-upstream",
+        profile_name="syntheticvision",
+        target="synthetic-vision-models.json",
+        modalities=("text", "image"),
+    )
+    route = SimpleNamespace(
+        id=uuid.UUID("55555555-5555-4555-8555-555555555555"),
+        requested_model=profile.public_model,
+        match_type="exact",
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+        endpoint=CODEX_RESPONSES_ENDPOINT,
+        priority=10,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={
+            "responses": {
+                "text": True,
+                "stateless": True,
+                "streaming": True,
+                "codex_request_envelope": True,
+                "image_input": True,
+            },
+            "codex_limits": {
+                "context_window_tokens": profile.context_window_tokens,
+                "default_max_output_tokens": profile.default_max_output_tokens,
+                "max_output_tokens": profile.max_output_tokens,
+            },
+            "codex_profile": {
+                "version": profile.metadata_version,
+                "profile_id": profile.profile_id,
+                "fixture_sha256": profile.fixture_sha256,
+            },
+        },
+    )
+    pricing = _Pricing(
+        {CODEX_RESPONSES_ENDPOINT: _pricing(
+            CODEX_RESPONSES_ENDPOINT,
+            provider="synthetic",
+            upstream_model=profile.upstream_model,
+        )},
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+    )
+    service = _service(
+        [route],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    )
+    result = (await service.inspect(now=NOW))[0]
+    assert result.state == "protocol_qualified"
+
+    route.capabilities["responses"]["image_input"] = False
+    rejected = (await service.inspect(now=NOW))[0]
+    assert rejected.state == "not_ready"
+    assert "codex_image_input_missing" in rejected.reason_codes
+    assert "responses_runtime_capabilities_invalid" in rejected.reason_codes
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "declaration",
     [
@@ -670,11 +743,26 @@ def test_profile_v2_artifacts_parse_independently_and_are_credential_free() -> N
             }
         }
     }
+    assert artifacts.base_config_toml == (
+        "[model_providers.slaif]\n"
+        'name = "OpenAI"\n'
+        'base_url = "https://gateway.example.org/edge/v1"\n'
+        'env_key = "OPENAI_API_KEY"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n"
+        "supports_websockets = false\n"
+    )
     assert profile == {
         "model": CODEX_MODEL,
         "model_provider": "slaif",
         "features": {"remote_compaction_v2": False},
     }
+    assert artifacts.profile_config_toml == (
+        'model = "gpt-5.6-sol"\n'
+        'model_provider = "slaif"\n\n'
+        "[features]\n"
+        "remote_compaction_v2 = false\n"
+    )
     combined = artifacts.base_config_toml + artifacts.profile_config_toml
     assert "model_catalog_json" not in combined
     assert "[profiles" not in combined

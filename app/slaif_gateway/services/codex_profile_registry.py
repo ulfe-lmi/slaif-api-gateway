@@ -32,13 +32,11 @@ _SUPPORTED_GATES = frozenset(
         "codex_streaming_tool_events",
         "codex_encrypted_reasoning_replay",
         "codex_compaction",
-        "responses_image_input",
+        "image_input",
     }
 )
 _SUPPORTED_LOCAL_TOOLS = frozenset({"function", "custom"})
-_CATALOG_TOP_LEVEL_FIELDS = frozenset(
-    {"schema_version", "models", "context_window", "auto_compact_token_limit", "input_modalities"}
-)
+_CATALOG_TOP_LEVEL_FIELDS = frozenset({"models"})
 _CATALOG_MODEL_FIELDS = frozenset(
     {
         "slug",
@@ -89,7 +87,7 @@ _CATALOG_BOOLEAN_FIELDS = frozenset(
     }
 )
 _CATALOG_INTEGER_FIELDS = frozenset(
-    {"context_window", "max_context_window", "auto_compact_token_limit", "schema_version"}
+    {"context_window", "max_context_window", "auto_compact_token_limit"}
 )
 _SECRET_MARKERS = ("sk-", "api_key", "authorization", "bearer ", "password", "secret", "token")
 
@@ -214,9 +212,9 @@ class CodexQualificationProfile:
                 raise ValueError("No compaction mode cannot declare a threshold.")
             if "/v1/responses/compact" in self.required_endpoints or "codex_compaction" in self.required_route_gates:
                 raise ValueError("No compaction mode cannot require remote compaction.")
-        if "responses_image_input" in self.required_route_gates and "image" not in self.input_modalities:
+        if "image_input" in self.required_route_gates and "image" not in self.input_modalities:
             raise ValueError("Image input gate requires image modality.")
-        if "image" in self.input_modalities and "responses_image_input" not in self.required_route_gates:
+        if "image" in self.input_modalities and "image_input" not in self.required_route_gates:
             raise ValueError("Image modality requires the image-input gate.")
         if "codex_client_tools" in self.required_route_gates and not self.local_tools:
             raise ValueError("Client-tool gate requires local tools.")
@@ -508,7 +506,13 @@ def _safe_catalog_string(value: object, *, field: str) -> None:
 
 
 def _safe_catalog_model(entry: object, *, public_model: str) -> None:
-    if not isinstance(entry, Mapping) or not entry or set(entry) - _CATALOG_MODEL_FIELDS:
+    required_fields = {"slug", "context_window", "auto_compact_token_limit", "input_modalities"}
+    if (
+        not isinstance(entry, Mapping)
+        or not entry
+        or not required_fields.issubset(entry)
+        or set(entry) - _CATALOG_MODEL_FIELDS
+    ):
         raise ValueError("Codex model catalog model entry is not allowlisted.")
     if entry.get("slug") != public_model:
         raise ValueError("Codex model catalog model slug is invalid.")
@@ -539,7 +543,7 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
         elif key in _CATALOG_BOOLEAN_FIELDS:
             if type(value) is not bool:
                 raise ValueError("Codex model catalog boolean is invalid.")
-        elif key in _CATALOG_INTEGER_FIELDS - {"schema_version"}:
+        elif key in _CATALOG_INTEGER_FIELDS:
             if type(value) is not int or value < 0:
                 raise ValueError("Codex model catalog number is invalid.")
         elif key != "slug":
@@ -556,17 +560,18 @@ def _validate_catalog_artifact(
 ) -> None:
     if not isinstance(catalog, Mapping) or set(catalog) != _CATALOG_TOP_LEVEL_FIELDS:
         raise ValueError("Codex model catalog top-level shape is invalid.")
-    if catalog["schema_version"] != 1:
-        raise ValueError("Codex model catalog schema version is invalid.")
     models = catalog["models"]
     if not isinstance(models, list) or len(models) != 1:
         raise ValueError("Codex model catalog must contain exactly one model.")
     _safe_catalog_model(models[0], public_model=public_model)
-    if catalog["context_window"] != context_window_tokens:
+    entry = models[0]
+    if not isinstance(entry, Mapping):
+        raise ValueError("Codex model catalog model entry is invalid.")
+    if entry["context_window"] != context_window_tokens:
         raise ValueError("Codex model catalog context window does not match profile.")
-    if catalog["auto_compact_token_limit"] != auto_compaction_token_threshold:
+    if entry["auto_compact_token_limit"] != auto_compaction_token_threshold:
         raise ValueError("Codex model catalog compaction threshold does not match profile.")
-    if catalog["input_modalities"] != list(input_modalities):
+    if entry["input_modalities"] != list(input_modalities):
         raise ValueError("Codex model catalog modalities do not match profile.")
     _validate_catalog_size(catalog)
 

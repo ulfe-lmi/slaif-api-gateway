@@ -14,6 +14,7 @@ from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from slaif_gateway.services.responses_route_capabilities import (
+    RESPONSES_CAPABILITY_IMAGE_INPUT,
     ResponsesRouteCapabilityError,
     enforce_responses_route_capabilities,
     parse_codex_compaction_compatible_route_ids,
@@ -575,14 +576,10 @@ def render_codex_profile_artifacts(
     profile_config = (
         f"model = {json.dumps(profile.public_model, ensure_ascii=True)}\n"
         f'model_provider = {json.dumps(provider_alias, ensure_ascii=True)}\n'
-        "\n[features]\n"
-        "remote_compaction_v2 = false\n"
     )
     if not legacy_default and profile.model_catalog_target is not None:
-        profile_config += (
-            "\n[model_catalog]\n"
-            f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
-        )
+        profile_config += f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
+    profile_config += "\n[features]\nremote_compaction_v2 = false\n"
     return CodexProfileArtifacts(
         base_config_toml=base_config,
         profile_config_toml=profile_config,
@@ -613,7 +610,7 @@ def render_codex_profile_text(artifacts: CodexProfileArtifacts) -> str:
         "Merge this fragment into $CODEX_HOME/config.toml:\n"
         "--- base_config_toml (merge fragment) ---\n"
         f"{artifacts.base_config_toml}"
-        "\nPlace this complete content in $CODEX_HOME/slaif.config.toml:\n"
+        f"\nPlace this complete content in {artifacts.profile_config_target}:\n"
         "--- profile_config_toml (complete file) ---\n"
         f"{artifacts.profile_config_toml}"
         f"{catalog_line}"
@@ -687,7 +684,7 @@ def _route_capability_reasons(
             reasons.append("responses_runtime_capabilities_invalid")
         if any(responses.get(gate) is not True for gate in profile.required_route_gates):
             reasons.append("codex_gates_incomplete")
-        declared_image_input = responses.get("image_input") is True
+        declared_image_input = responses.get(RESPONSES_CAPABILITY_IMAGE_INPUT) is True
         if "image" in profile.input_modalities and not declared_image_input:
             reasons.append("codex_image_input_missing")
         if "image" not in profile.input_modalities and declared_image_input:
@@ -739,6 +736,7 @@ def _enforce_codex_runtime_operation(
                 "codex_encrypted_reasoning_replay",
             }.issubset(profile.required_route_gates),
             codex_compaction_requested="codex_compaction" in profile.required_route_gates,
+            image_input_requested="image" in profile.input_modalities,
         )
     elif endpoint == CODEX_COMPACT_ENDPOINT:
         enforce_responses_route_capabilities(
@@ -754,6 +752,7 @@ def _enforce_codex_runtime_operation(
                 "codex_encrypted_reasoning_replay",
             }.issubset(profile.required_route_gates),
             codex_compaction_requested="codex_compaction" in profile.required_route_gates,
+            image_input_requested="image" in profile.input_modalities,
         )
 
 
