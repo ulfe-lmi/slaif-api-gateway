@@ -28,6 +28,7 @@
         <dt>Kind</dt><dd>{{ provider.kind }}</dd>
         <dt>Status</dt><dd>{{ "enabled" if provider.enabled else "disabled" }}</dd>
         <dt>Base URL</dt><dd>{{ provider.base_url }}</dd>
+        <dt>Runtime</dt><dd>Built-in adapters remain fixed; operator-defined <code>openai_compatible</code> backends use the generic runtime.</dd>
         <dt>API key env var</dt><dd><code>{{ provider.api_key_env_var }}</code></dd>
         <dt>Timeout</dt><dd>{{ provider.timeout_seconds }}s</dd>
         <dt>Max retries</dt><dd>{{ provider.max_retries }}</dd>

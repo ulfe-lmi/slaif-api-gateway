@@ -145,3 +145,30 @@ async def test_provider_config_service_rejects_secret_looking_env_var() -> None:
             enabled=True,
             notes=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_generic_http_requires_confirmation_and_reason() -> None:
+    service, _providers, _audit = _service()
+
+    with pytest.raises(ValueError, match="confirmation"):
+        await service.create_provider_config(
+            provider="lan-qwen-text",
+            display_name="LAN Qwen",
+            base_url="http://qwen.lan:8000/v1",
+            api_key_env_var="LAN_QWEN_KEY",
+            enabled=True,
+            notes=None,
+        )
+
+    row = await service.create_provider_config(
+        provider="lan-qwen-text",
+        display_name="LAN Qwen",
+        base_url="http://qwen.lan:8000/v1/",
+        api_key_env_var="LAN_QWEN_KEY",
+        enabled=True,
+        notes=None,
+        reason="LAN reverse proxy is operator-owned",
+        confirm_insecure_http=True,
+    )
+    assert row.base_url == "http://qwen.lan:8000/v1"

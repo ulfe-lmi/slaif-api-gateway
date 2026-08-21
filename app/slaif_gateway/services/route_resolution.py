@@ -158,6 +158,7 @@ class RouteResolutionService:
             route_match_type=best.route.match_type,
             route_pattern=best.route.requested_model,
             priority=best.route.priority,
+            provider_kind=getattr(best.provider_config, "kind", None),
             provider_base_url=best.provider_config.base_url,
             provider_api_key_env_var=best.provider_config.api_key_env_var,
             provider_timeout_seconds=getattr(best.provider_config, "timeout_seconds", None),

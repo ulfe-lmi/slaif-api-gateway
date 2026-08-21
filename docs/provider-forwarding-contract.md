@@ -814,6 +814,12 @@ Provider-completed finalization failures are not treated as zero-cost provider f
 
 ## Safety Boundaries
 
+Operator-defined `openai_compatible` backends reuse the canonical OpenAI wire
+adapter and retain their configured provider slug in safe responses and
+diagnostics. They do not inherit OpenAI hosted web-search authority or
+OpenRouter provider-reported cost semantics. Redirects remain disabled and
+client `Authorization` is never forwarded.
+
 - Provider API keys come from server settings or provider config environment variable names; they are not accepted from clients.
 - Client gateway keys, provider keys, token hashes, cookies, sessions, and Authorization headers are not stored in ledger metadata.
 - Raw provider response bodies are not returned to clients or stored.

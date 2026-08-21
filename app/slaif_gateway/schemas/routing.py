@@ -17,6 +17,7 @@ class RouteResolutionResult:
     route_match_type: str
     route_pattern: str
     priority: int
+    provider_kind: str | None = None
     provider_base_url: str | None = None
     provider_api_key_env_var: str | None = None
     provider_timeout_seconds: int | None = None

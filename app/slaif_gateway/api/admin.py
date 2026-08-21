@@ -3365,6 +3365,7 @@ async def create_admin_provider(
     max_retries: str = Form("2"),
     notes: str = Form(""),
     reason: str = Form(""),
+    confirm_insecure_http: str = Form(""),
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -3385,6 +3386,7 @@ async def create_admin_provider(
         max_retries=max_retries,
         notes=notes,
         reason=reason,
+        confirm_insecure_http=confirm_insecure_http,
     )
     try:
         parsed = _parse_provider_config_form(form, require_reason=True)
@@ -3413,6 +3415,7 @@ async def create_admin_provider(
                 notes=parsed["notes"],
                 actor_admin_id=action_context.admin_user.id,
                 reason=parsed["reason"],
+                confirm_insecure_http=parsed["confirm_insecure_http"],
             )
     except (DuplicateRecordError, ValueError):
         return _render_provider_config_form(
@@ -3475,6 +3478,7 @@ async def update_admin_provider(
     max_retries: str = Form("2"),
     notes: str = Form(""),
     reason: str = Form(""),
+    confirm_insecure_http: str = Form(""),
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -3500,6 +3504,7 @@ async def update_admin_provider(
         max_retries=max_retries,
         notes=notes,
         reason=reason,
+        confirm_insecure_http=confirm_insecure_http,
     )
     try:
         parsed = _parse_provider_config_form(form, require_reason=True, require_base_url=True)
@@ -3530,6 +3535,7 @@ async def update_admin_provider(
                 notes=parsed["notes"],
                 actor_admin_id=action_context.admin_user.id,
                 reason=parsed["reason"],
+                confirm_insecure_http=parsed["confirm_insecure_http"],
             )
     except RecordNotFoundError:
         return HTMLResponse("Provider config not found.", status_code=404)
@@ -8070,6 +8076,7 @@ def _default_provider_config_form() -> dict[str, str]:
         "max_retries": "2",
         "notes": "",
         "reason": "",
+        "confirm_insecure_http": "",
     }
 
 
@@ -8085,6 +8092,7 @@ def _provider_config_form_from_detail(provider: object) -> dict[str, str]:
         max_retries=str(getattr(provider, "max_retries")),
         notes=str(getattr(provider, "notes") or ""),
         reason="",
+        confirm_insecure_http="",
     )
 
 
@@ -8100,6 +8108,7 @@ def _provider_config_form_from_values(
     max_retries: str,
     notes: str,
     reason: str,
+    confirm_insecure_http: str = "",
 ) -> dict[str, str]:
     return {
         "provider": provider,
@@ -8112,6 +8121,7 @@ def _provider_config_form_from_values(
         "max_retries": max_retries,
         "notes": notes,
         "reason": reason,
+        "confirm_insecure_http": confirm_insecure_http,
     }
 
 
@@ -9104,6 +9114,14 @@ def _parse_provider_config_form(
     reason = _clean_admin_reason(form.get("reason"))
     if require_reason and reason is None:
         raise ValueError(_ADMIN_STATUS_MESSAGES["provider_config_reason_required"][1])
+    parsed_url = urlparse(base_url) if base_url else None
+    insecure_http = bool(parsed_url and parsed_url.scheme == "http")
+    if (
+        insecure_http
+        and provider not in {"openai", "openrouter"}
+        and not _is_checked(form.get("confirm_insecure_http"))
+    ):
+        raise ValueError("HTTP generic backends require explicit confirmation and an audit reason.")
 
     return {
         "provider": provider,
@@ -9116,6 +9134,11 @@ def _parse_provider_config_form(
         "max_retries": max_retries,
         "notes": _clean_admin_reason(form.get("notes")),
         "reason": reason,
+        "confirm_insecure_http": (
+            insecure_http
+            and provider not in {"openai", "openrouter"}
+            and _is_checked(form.get("confirm_insecure_http"))
+        ),
     }
 
 
@@ -9516,8 +9539,15 @@ def _looks_like_provider_secret_value(value: str) -> bool:
 
 def _validate_admin_base_url(value: str) -> None:
     parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Base URL must be an absolute http or https URL.")
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.path.rstrip("/") != "/v1"
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() or ord(char) < 32 for char in value)
+    ):
+        raise ValueError("Base URL must be an http(s) host URL ending in /v1.")
     if parsed.username or parsed.password:
         raise ValueError("Base URL must not contain credentials.")
 

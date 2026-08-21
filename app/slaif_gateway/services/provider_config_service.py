@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+import re
+from urllib.parse import urlsplit
 
 from slaif_gateway.db.models import ProviderConfig
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -36,19 +38,27 @@ class ProviderConfigService:
         max_retries: int = 2,
         actor_admin_id: uuid.UUID | None = None,
         reason: str | None = None,
+        confirm_insecure_http: bool = False,
     ) -> ProviderConfig:
         normalized_provider = _required_text(provider, "Provider")
         normalized_kind = _validate_kind(kind)
         normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
-        if _looks_like_secret(normalized_env_var):
-            raise ValueError("Store the provider API key in an environment variable; pass only its name")
+        _validate_env_var(normalized_env_var)
+        normalized_base_url = _clean_optional(base_url) or _default_base_url(normalized_provider)
+        normalized_base_url = _validate_base_url(
+            normalized_base_url,
+            provider=normalized_provider,
+            kind=normalized_kind,
+            confirm_insecure_http=confirm_insecure_http,
+            reason=reason,
+        )
         if await self._providers.get_provider_config_by_provider(normalized_provider) is not None:
             raise DuplicateRecordError("Provider config", "provider")
 
         row = await self._providers.create_provider_config(
             provider=normalized_provider,
             display_name=_clean_optional(display_name) or normalized_provider,
-            base_url=_clean_optional(base_url) or _default_base_url(normalized_provider),
+            base_url=normalized_base_url,
             api_key_env_var=normalized_env_var,
             kind=normalized_kind,
             enabled=enabled,
@@ -103,13 +113,21 @@ class ProviderConfigService:
         notes: str | None,
         actor_admin_id: uuid.UUID | None = None,
         reason: str | None = None,
+        confirm_insecure_http: bool = False,
     ) -> ProviderConfig:
         row = await self.get_provider_config(provider_or_id)
         old_values = _safe_audit_values(row)
         normalized_provider = _required_text(provider, "Provider")
         normalized_env_var = _required_text(api_key_env_var, "API key environment variable")
-        if _looks_like_secret(normalized_env_var):
-            raise ValueError("Store the provider API key in an environment variable; pass only its name")
+        _validate_env_var(normalized_env_var)
+        normalized_kind = _validate_kind(kind)
+        normalized_base_url = _validate_base_url(
+            base_url,
+            provider=normalized_provider,
+            kind=normalized_kind,
+            confirm_insecure_http=confirm_insecure_http,
+            reason=reason,
+        )
         if normalized_provider != row.provider:
             existing = await self._providers.get_provider_config_by_provider(normalized_provider)
             if existing is not None and existing.id != row.id:
@@ -119,8 +137,8 @@ class ProviderConfigService:
             row.id,
             provider=normalized_provider,
             display_name=_clean_optional(display_name) or normalized_provider,
-            kind=_validate_kind(kind),
-            base_url=_required_text(base_url, "Base URL"),
+            kind=normalized_kind,
+            base_url=normalized_base_url,
             api_key_env_var=normalized_env_var,
             timeout_seconds=_positive_int(timeout_seconds, "Timeout seconds"),
             max_retries=_non_negative_int(max_retries, "Max retries"),
@@ -211,9 +229,46 @@ def _non_negative_int(value: int, label: str) -> int:
     return value
 
 
-def _looks_like_secret(value: str) -> bool:
-    lowered = value.lower()
-    return lowered.startswith(("sk-", "sk_", "sk-or-")) or " " in value
+def _validate_env_var(value: str) -> None:
+    if value == "OPENAI_API_KEY" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError("API key environment variable must be a valid name and cannot be OPENAI_API_KEY")
+
+
+def _validate_base_url(
+    value: str,
+    *,
+    provider: str,
+    kind: str,
+    confirm_insecure_http: bool,
+    reason: str | None,
+) -> str:
+    normalized = _required_text(value, "Base URL").rstrip("/")
+    parsed = urlsplit(normalized)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("Base URL port is invalid") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() or ord(char) < 32 for char in normalized)
+        or (
+            kind == "openai_compatible"
+            and provider not in {"openai", "openrouter"}
+            and parsed.path != "/v1"
+        )
+    ):
+        raise ValueError("Base URL must be http(s)://host[:port]/v1 with no credentials, query, or fragment")
+    if kind == "openai_compatible" and provider not in {"openai", "openrouter"} and parsed.scheme == "http":
+        if not confirm_insecure_http or not _clean_optional(reason):
+            raise ValueError(
+                "HTTP generic backends require explicit confirmation and a non-empty audit reason"
+            )
+    return normalized
 
 
 def _safe_audit_values(row: ProviderConfig) -> dict[str, object]:

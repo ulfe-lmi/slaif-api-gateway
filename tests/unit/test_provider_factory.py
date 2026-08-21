@@ -9,6 +9,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
+from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
 from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 from slaif_gateway.schemas.routing import RouteResolutionResult
 
@@ -100,3 +101,35 @@ def test_factory_rejects_unknown_provider() -> None:
         get_provider_adapter("unknown", Settings())
 
     assert exc_info.value.error_code == "unsupported_provider"
+
+
+def test_factory_builds_generic_adapter_with_operator_slug(monkeypatch) -> None:
+    monkeypatch.setenv("LAN_QWEN_KEY", "operator-key")
+    route = SimpleNamespace(
+        provider="lan-qwen-text",
+        provider_kind="openai_compatible",
+        provider_base_url="http://qwen.lan:8000/v1/",
+        provider_api_key_env_var="LAN_QWEN_KEY",
+        provider_timeout_seconds=12,
+        provider_max_retries=1,
+    )
+
+    adapter = get_provider_adapter(route, Settings())
+
+    assert isinstance(adapter, OpenAICompatibleProviderAdapter)
+    assert adapter.provider_name == "lan-qwen-text"
+    assert adapter._base_url == "http://qwen.lan:8000/v1"
+    assert adapter._api_key == "operator-key"
+
+
+def test_factory_rejects_generic_bad_url_and_client_env_name(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "client-key-must-not-be-used")
+    route = SimpleNamespace(
+        provider="lan-qwen-text",
+        provider_kind="openai_compatible",
+        provider_base_url="http://qwen.lan:8000/model",
+        provider_api_key_env_var="OPENAI_API_KEY",
+    )
+
+    with pytest.raises(ProviderConfigurationError):
+        get_provider_adapter(route, Settings())
