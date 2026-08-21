@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -213,6 +214,7 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
 
     provider = "lan-qwen-gateway"
     chat_model = "generic-chat-gateway"
+    zero_model = "generic-chat-local-zero"
     responses_model = "generic-responses-gateway"
     now = datetime.now(UTC)
     await ProviderConfigsRepository(async_test_session).create_provider_config(
@@ -230,6 +232,13 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
             "chat_multimodal": False, "chat_function_tools": True,
         }},
     )
+    await routes.create_model_route(
+        requested_model=zero_model, provider=provider, upstream_model="qwen/zero",
+        endpoint="/v1/chat/completions", capabilities={"chat_completions": {
+            "chat_text": True, "chat_streaming": False, "chat_image_inputs": True,
+            "chat_multimodal": False, "chat_function_tools": True,
+        }},
+    )
     responses_capabilities = default_responses_capabilities()
     responses_capabilities.update({"streaming": True, "image_input": True, "function_tools": True})
     await routes.create_model_route(
@@ -243,6 +252,14 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
             input_price_per_1m=Decimal("1.000000000"), output_price_per_1m=Decimal("2.000000000"),
             request_price=Decimal("0.000000000"), pricing_metadata={}, notes="generic gateway matrix",
         ))
+    async_test_session.add(PricingRule(
+        provider=provider, upstream_model="qwen/zero", endpoint="/v1/chat/completions",
+        valid_from=now - timedelta(days=1), currency="EUR",
+        input_price_per_1m=Decimal("0.000000000"), output_price_per_1m=Decimal("0.000000000"),
+        request_price=Decimal("0.000000000"),
+        pricing_metadata={"pricing_basis": "operator_confirmed_local_zero"},
+        notes="generic gateway local zero matrix",
+    ))
     key = await _create_key(async_test_session)
     key_id = key.id
     key.token_limit_total = 1_000_000
@@ -271,8 +288,9 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
             calls.append(request.endpoint)
             if failure_mode["value"] == "provider":
                 raise ProviderError("provider failure canary", provider=provider, error_code="provider_request_error")
+            upstream_model = "qwen/zero" if request.upstream_model == "qwen/zero" else "qwen/chat"
             return ProviderResponse(
-                provider=provider, upstream_model="qwen/chat", status_code=200,
+                provider=provider, upstream_model=upstream_model, status_code=200,
                 json_body={"id": "chat-gateway", "object": "chat.completion", "model": "qwen/chat",
                            "choices": [{"index": 0, "message": {"role": "assistant", "content": "safe"}, "finish_reason": "stop"}],
                            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}},
@@ -289,6 +307,26 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
             )
 
         async def stream_response(self, request):
+            if failure_mode["value"] == "missing":
+                for payload in (
+                    {"type": "response.created", "sequence_number": 0, "response": {
+                        "id": "missing-usage", "object": "response", "created_at": 123,
+                        "status": "in_progress", "model": "qwen/responses",
+                    }},
+                    {"type": "response.output_text.delta", "sequence_number": 1,
+                     "item_id": "missing-item", "output_index": 0, "content_index": 0,
+                     "delta": "MISSING_USAGE_CANARY"},
+                    {"type": "response.completed", "sequence_number": 2, "response": {
+                        "id": "missing-usage", "object": "response", "created_at": 123,
+                        "status": "completed", "model": "qwen/responses", "output": [],
+                    }},
+                ):
+                    yield ProviderStreamChunk(
+                        provider=provider, upstream_model="qwen/responses", data="event",
+                        raw_sse_event=f"data: {json.dumps(payload)}\n\n", json_body=payload,
+                        usage=None,
+                    )
+                return
             _ = request
             yield ProviderStreamChunk(
                 provider=provider, upstream_model="qwen/responses", data="event",
@@ -323,6 +361,9 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
         responses_response = await client.post("/v1/responses", headers={"Authorization": "Bearer gateway-test"}, json={
             "model": responses_model, "input": "RESPONSES_CANARY", "store": False,
         })
+        zero_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
+            "model": zero_model, "messages": [{"role": "user", "content": "LOCAL_ZERO_CANARY"}],
+        })
         remote_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
             "model": chat_model, "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://remote.test/canary"}}]}],
         })
@@ -343,18 +384,36 @@ async def test_generic_gateway_chat_and_responses_execute_with_postgres_accounti
         provider_failure_response = await client.post("/v1/chat/completions", headers={"Authorization": "Bearer gateway-test"}, json={
             "model": chat_model, "messages": [{"role": "user", "content": "PROVIDER_FAILURE_CANARY"}],
         })
+        failure_mode["value"] = "missing"
+        missing_usage_response = await client.post("/v1/responses", headers={"Authorization": "Bearer gateway-test"}, json={
+            "model": responses_model, "input": "MISSING_USAGE_CANARY", "store": False, "stream": True,
+        })
     assert chat_response.status_code == 200, chat_response.text
     assert responses_response.status_code == 200, responses_response.text
+    assert zero_response.status_code == 200, zero_response.text
     assert remote_response.status_code == 400
     assert exhausted_response.status_code == 429
     assert provider_failure_response.status_code >= 400
-    assert calls == ["chat.completions", "responses", "chat.completions"]
+    assert missing_usage_response.status_code == 200
+    assert "responses_stream_usage_missing" in missing_usage_response.text
+    assert "response.completed" not in missing_usage_response.text
+    assert calls == ["chat.completions", "responses", "chat.completions", "chat.completions"]
     async_test_session.expire_all()
     rows = (await async_test_session.execute(select(UsageLedger).where(UsageLedger.gateway_key_id == key_id))).scalars().all()
-    assert len(rows) == 3
-    assert sum(row.accounting_status == "finalized" for row in rows) == 2
-    assert sum(row.accounting_status != "finalized" for row in rows) == 1
+    assert len(rows) == 5
+    assert sum(row.accounting_status == "finalized" for row in rows) == 3
+    assert sum(row.accounting_status != "finalized" for row in rows) == 2
     assert {row.provider for row in rows} == {provider}
-    assert {row.accounting_status for row in rows} == {"finalized", "failed"}
+    assert {row.accounting_status for row in rows} >= {"finalized", "failed"}
+    missing_row = next(row for row in rows if row.requested_model == responses_model and row.streaming)
+    assert missing_row.accounting_status != "finalized"
+    assert missing_row.actual_cost_eur is not None
+    zero_ledger = next(row for row in rows if row.resolved_model == "qwen/zero")
+    assert zero_ledger.actual_cost_native == Decimal("0E-9")
+    assert zero_ledger.actual_cost_eur == Decimal("0E-9")
+    pricing_row = (await async_test_session.execute(select(PricingRule).where(
+        PricingRule.provider == provider, PricingRule.upstream_model == "qwen/zero"
+    ))).scalar_one()
+    assert pricing_row.pricing_metadata["pricing_basis"] == "operator_confirmed_local_zero"
     assert await async_test_session.scalar(select(func.count()).select_from(QuotaReservation).where(
         QuotaReservation.gateway_key_id == key_id, QuotaReservation.status == "pending")) == 0
