@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from types import MappingProxyType
 
 import pytest
 
@@ -16,12 +17,16 @@ from slaif_gateway.services.codex_qualification import (
     CODEX_COMPACT_ENDPOINT,
     CODEX_FIXTURE_SHA256,
     CODEX_MODEL,
+    CODEX_PROFILE_ID,
+    CODEX_PROFILE_METADATA_VERSION,
     CODEX_QUALIFICATION_METADATA,
     CODEX_RESPONSES_ENDPOINT,
     CODEX_RESPONSES_POLICY,
     CodexQualificationService,
     parse_codex_qualification_metadata,
+    parse_codex_profile_metadata,
     render_codex_profile,
+    render_codex_profile_artifacts,
     render_codex_profile_text,
     validate_codex_gateway_base_url,
     validate_codex_pilot_key_input,
@@ -29,6 +34,7 @@ from slaif_gateway.services.codex_qualification import (
 from slaif_gateway.services.responses_route_capabilities import (
     enforce_responses_route_capabilities,
 )
+from slaif_gateway.services.codex_profile_registry import CodexQualificationProfile
 
 NOW = datetime(2026, 8, 18, tzinfo=UTC)
 
@@ -54,6 +60,79 @@ def _capabilities(companion: uuid.UUID) -> dict[str, object]:
         "codex_compaction_compatible_route_ids": [str(companion)],
         "codex_qualification": copy.deepcopy(CODEX_QUALIFICATION_METADATA),
     }
+
+
+def _v2_capabilities(companion: uuid.UUID) -> dict[str, object]:
+    capabilities = _capabilities(companion)
+    capabilities.pop("codex_qualification")
+    capabilities["codex_profile"] = {
+        "version": CODEX_PROFILE_METADATA_VERSION,
+        "profile_id": CODEX_PROFILE_ID,
+        "fixture_sha256": CODEX_FIXTURE_SHA256,
+    }
+    return capabilities
+
+
+def _synthetic_profile(
+    *,
+    profile_id: str = "synthetic-generic-profile-v2",
+    model: str = "synthetic-model",
+    upstream_model: str = "synthetic-upstream",
+    profile_name: str = "synthetic",
+    target: str = "synthetic-models.json",
+    modalities: tuple[str, ...] = ("text",),
+) -> CodexQualificationProfile:
+    catalog = {
+        "models": [
+            {
+                "auto_compact_token_limit": 125_000,
+                "context_window": 150_000,
+                "input_modalities": list(modalities),
+                "slug": model,
+                "use_responses_lite": True,
+            }
+        ],
+    }
+    return CodexQualificationProfile(
+        profile_id=profile_id,
+        metadata_version=CODEX_PROFILE_METADATA_VERSION,
+        cli_version="1.0.0",
+        public_model=model,
+        upstream_model=upstream_model,
+        wire_api="responses",
+        provider_kind="openai_compatible",
+        provider_slug="synthetic",
+        required_endpoints=(CODEX_RESPONSES_ENDPOINT,),
+        required_route_gates=("codex_request_envelope", "image_input")
+        if "image" in modalities
+        else ("codex_request_envelope",),
+        context_window_tokens=150_000,
+        default_max_output_tokens=32_768,
+        max_output_tokens=128_000,
+        compaction_mode="client_local",
+        reasoning_replay=False,
+        streaming_tool_events=False,
+        local_tools=("function",),
+        input_modalities=modalities,
+        auto_compaction_token_threshold=125_000,
+        credential_free_provider_fields=MappingProxyType(
+            {
+                "name": "Synthetic",
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                "supports_websockets": False,
+            }
+        ),
+        model_catalog_artifact=json.dumps(catalog, sort_keys=True, separators=(",", ":")),
+        model_catalog_target=target,
+        fixture_sha256="a" * 64,
+        evidence_date="2026-08-21",
+        mocked_qualification=True,
+        live_qualification=False,
+        profile_name=profile_name,
+        provider_display_name="Synthetic Backend",
+        catalog_source="replacement",
+    )
 
 
 def _pair(**responses_overrides: object) -> tuple[SimpleNamespace, SimpleNamespace]:
@@ -89,6 +168,122 @@ def _pair(**responses_overrides: object) -> tuple[SimpleNamespace, SimpleNamespa
     return responses, compact
 
 
+@pytest.mark.asyncio
+async def test_unregistered_synthetic_profile_uses_own_model_kind_and_single_endpoint() -> None:
+    profile = _synthetic_profile()
+    route = SimpleNamespace(
+        id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        requested_model=profile.public_model,
+        match_type="exact",
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+        endpoint=CODEX_RESPONSES_ENDPOINT,
+        priority=10,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={
+            "responses": {
+                "text": True,
+                "stateless": True,
+                "streaming": True,
+                "codex_request_envelope": True,
+            },
+            "codex_limits": {
+                "context_window_tokens": profile.context_window_tokens,
+                "default_max_output_tokens": profile.default_max_output_tokens,
+                "max_output_tokens": profile.max_output_tokens,
+            },
+            "codex_profile": {
+                "version": profile.metadata_version,
+                "profile_id": profile.profile_id,
+                "fixture_sha256": profile.fixture_sha256,
+            },
+        },
+    )
+    pricing = _Pricing(
+        {CODEX_RESPONSES_ENDPOINT: _pricing(
+            CODEX_RESPONSES_ENDPOINT,
+            provider="synthetic",
+            upstream_model=profile.upstream_model,
+        )},
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+    )
+    decoy = copy.copy(route)
+    decoy.id = uuid.UUID("44444444-4444-4444-8444-444444444444")
+    decoy.requested_model = "synthetic"
+    decoy.match_type = "prefix"
+    decoy.priority = 20
+    decoy.capabilities = {}
+    results = await _service(
+        [route, decoy],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    ).inspect(now=NOW)
+    result = next(item for item in results if item.route_id == route.id)
+    assert result.state == "protocol_qualified"
+    assert result.paired_route_id is None
+    assert result.profile_id == profile.profile_id
+    assert result.cli_version == profile.cli_version
+    assert result.profile == profile.profile_name
+    assert result.provider_kind == profile.provider_kind
+    assert result.provider_display_name == profile.provider_display_name
+    assert result.metadata_version == profile.metadata_version
+    wrong_kind_results = await _service(
+        [route],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai",
+        upstream_model=profile.upstream_model,
+    ).inspect(now=NOW)
+    assert wrong_kind_results[0].state == "not_ready"
+    assert "provider_kind_mismatch" in wrong_kind_results[0].reason_codes
+
+    artifacts = render_codex_profile_artifacts("https://gateway.example.org/v1", profile)
+    assert artifacts.model_catalog_json == profile.model_catalog_artifact
+    assert artifacts.model_catalog_target == profile.model_catalog_target
+    assert "synthetic-upstream" not in artifacts.base_config_toml
+    with pytest.raises(ValueError, match="registry-owned"):
+        render_codex_profile("https://gateway.example.org/v1", profile)
+
+
+def test_replacement_profiles_render_distinct_catalog_targets_without_provider_leaks() -> None:
+    first = _synthetic_profile()
+    second = _synthetic_profile(
+        profile_id="synthetic-vision-profile-v2",
+        model="synthetic-vision",
+        upstream_model="synthetic-vision-upstream",
+        profile_name="syntheticvision",
+        target="synthetic-vision-models.json",
+    )
+    first_artifacts = render_codex_profile_artifacts("https://gateway.example.org/v1", first)
+    second_artifacts = render_codex_profile_artifacts("https://gateway.example.org/v1", second)
+    assert first_artifacts.model_catalog_target != second_artifacts.model_catalog_target
+    assert first_artifacts.profile_config_target != second_artifacts.profile_config_target
+    assert first_artifacts.model_catalog_target in first_artifacts.profile_config_toml
+    assert second_artifacts.model_catalog_target in second_artifacts.profile_config_toml
+    assert first_artifacts.model_catalog_target in render_codex_profile_text(first_artifacts)
+    assert f"Place this complete content in {first_artifacts.profile_config_target}" in render_codex_profile_text(first_artifacts)
+    assert "$CODEX_HOME/slaif.config.toml" not in render_codex_profile_text(first_artifacts)
+    assert first_artifacts.model_catalog_target in json.dumps(first_artifacts.to_safe_dict())
+    for artifacts in (first_artifacts, second_artifacts):
+        combined = artifacts.base_config_toml + artifacts.profile_config_toml + (artifacts.model_catalog_json or "")
+        assert "https://api.openai" not in combined
+        assert "OPENAI_UPSTREAM_API_KEY" not in combined
+        assert "remote_compaction_v2 = true" not in combined
+        assert artifacts.model_catalog_json is not None
+        assert artifacts.model_catalog_target in artifacts.profile_config_toml
+        parsed_profile = tomllib.loads(artifacts.profile_config_toml)
+        assert parsed_profile["model_catalog_json"] == artifacts.model_catalog_target
+        assert parsed_profile["features"] == {"remote_compaction_v2": False}
+        assert "model_catalog" not in parsed_profile
+
+
 def _pricing(endpoint: str, *, currency: str = "EUR", **overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "provider": "openai",
@@ -122,24 +317,28 @@ class _Routes:
 
 
 class _Providers:
-    def __init__(self, *, enabled: bool = True) -> None:
+    def __init__(self, *, enabled: bool = True, provider: str = "openai", kind: str = "openai") -> None:
         self.enabled = enabled
+        self.provider = provider
+        self.kind = kind
 
     async def list_provider_configs(self, **kwargs: object) -> list[object]:
         assert kwargs == {"limit": 1000, "offset": 0}
-        return [SimpleNamespace(provider="openai", enabled=self.enabled)]
+        return [SimpleNamespace(provider=self.provider, kind=self.kind, enabled=self.enabled)]
 
 
 class _Pricing:
-    def __init__(self, rows: dict[str, object | None] | None = None) -> None:
+    def __init__(self, rows: dict[str, object | None] | None = None, *, provider: str = "openai", upstream_model: str = CODEX_MODEL) -> None:
+        self.provider = provider
+        self.upstream_model = upstream_model
         self.rows = rows or {
             CODEX_RESPONSES_ENDPOINT: _pricing(CODEX_RESPONSES_ENDPOINT),
             CODEX_COMPACT_ENDPOINT: _pricing(CODEX_COMPACT_ENDPOINT),
         }
 
     async def find_active_pricing_rule(self, **kwargs: object) -> object | None:
-        assert kwargs["provider"] == "openai"
-        assert kwargs["upstream_model"] == CODEX_MODEL
+        assert kwargs["provider"] == self.provider
+        assert kwargs["upstream_model"] == self.upstream_model
         assert kwargs["at_time"] == NOW
         return self.rows.get(str(kwargs["endpoint"]))
 
@@ -160,12 +359,17 @@ def _service(
     provider_enabled: bool = True,
     pricing: _Pricing | None = None,
     fx: _Fx | None = None,
+    profile_registry: MappingProxyType | None = None,
+    provider: str = "openai",
+    provider_kind: str = "openai",
+    upstream_model: str = CODEX_MODEL,
 ) -> CodexQualificationService:
     return CodexQualificationService(
-        provider_configs_repository=_Providers(enabled=provider_enabled),
+        provider_configs_repository=_Providers(enabled=provider_enabled, provider=provider, kind=provider_kind),
         model_routes_repository=_Routes(rows),
-        pricing_rules_repository=pricing or _Pricing(),
+        pricing_rules_repository=pricing or _Pricing(provider=provider, upstream_model=upstream_model),
         fx_rates_repository=fx or _Fx(),
+        profile_registry=profile_registry,
     )
 
 
@@ -201,6 +405,8 @@ async def test_exact_route_pair_is_protocol_qualified_and_safe() -> None:
         "catalog_source",
         "wire_api",
         "real_provider_e2e",
+        "profile_id",
+        "metadata_version",
         "ready",
     }
 
@@ -289,6 +495,138 @@ def test_metadata_parser_rejects_unknown_partial_coerced_and_alias_values(mutate
     value = copy.deepcopy(CODEX_QUALIFICATION_METADATA)
     mutate(value)
     assert parse_codex_qualification_metadata({"codex_qualification": value}) == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_known_v2_profile_pair_is_qualified_without_route_capability_authority() -> None:
+    responses, compact = _pair()
+    responses.capabilities = _v2_capabilities(compact.id)
+    compact.capabilities = _v2_capabilities(responses.id)
+    results = await _service([responses, compact]).inspect(now=NOW)
+    assert all(result.state == "protocol_qualified" for result in results)
+    assert all(result.profile_id == CODEX_PROFILE_ID for result in results)
+    assert all(result.metadata_version == CODEX_PROFILE_METADATA_VERSION for result in results)
+    assert all("metadata v2" in result.badge for result in results)
+    assert parse_codex_profile_metadata(responses.capabilities) == (
+        "protocol_qualified",
+        CODEX_PROFILE_ID,
+        CODEX_PROFILE_METADATA_VERSION,
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_profile_rejects_declared_image_capability() -> None:
+    responses, compact = _pair()
+    responses.capabilities = _v2_capabilities(compact.id)
+    compact.capabilities = _v2_capabilities(responses.id)
+    responses.capabilities["responses"]["image_input"] = True
+    result = next(
+        item
+        for item in await _service([responses, compact]).inspect(now=NOW)
+        if item.route_id == responses.id
+    )
+    assert result.state == "not_ready"
+    assert "codex_image_input_not_allowed" in result.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_vision_profile_requires_authoritative_image_capability_and_parser() -> None:
+    profile = _synthetic_profile(
+        profile_id="synthetic-vision-profile-v2",
+        model="synthetic-vision",
+        upstream_model="synthetic-vision-upstream",
+        profile_name="syntheticvision",
+        target="synthetic-vision-models.json",
+        modalities=("text", "image"),
+    )
+    route = SimpleNamespace(
+        id=uuid.UUID("55555555-5555-4555-8555-555555555555"),
+        requested_model=profile.public_model,
+        match_type="exact",
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+        endpoint=CODEX_RESPONSES_ENDPOINT,
+        priority=10,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={
+            "responses": {
+                "text": True,
+                "stateless": True,
+                "streaming": True,
+                "codex_request_envelope": True,
+                "image_input": True,
+            },
+            "codex_limits": {
+                "context_window_tokens": profile.context_window_tokens,
+                "default_max_output_tokens": profile.default_max_output_tokens,
+                "max_output_tokens": profile.max_output_tokens,
+            },
+            "codex_profile": {
+                "version": profile.metadata_version,
+                "profile_id": profile.profile_id,
+                "fixture_sha256": profile.fixture_sha256,
+            },
+        },
+    )
+    pricing = _Pricing(
+        {CODEX_RESPONSES_ENDPOINT: _pricing(
+            CODEX_RESPONSES_ENDPOINT,
+            provider="synthetic",
+            upstream_model=profile.upstream_model,
+        )},
+        provider="synthetic",
+        upstream_model=profile.upstream_model,
+    )
+    service = _service(
+        [route],
+        pricing=pricing,
+        profile_registry=MappingProxyType({profile.profile_id: profile}),
+        provider="synthetic",
+        provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    )
+    result = (await service.inspect(now=NOW))[0]
+    assert result.state == "protocol_qualified"
+
+    route.capabilities["responses"]["image_input"] = False
+    rejected = (await service.inspect(now=NOW))[0]
+    assert rejected.state == "not_ready"
+    assert "codex_image_input_missing" in rejected.reason_codes
+    assert "responses_runtime_capabilities_invalid" in rejected.reason_codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"version": 2, "profile_id": "unknown-profile", "fixture_sha256": "0" * 64},
+        {
+            "version": 2,
+            "profile_id": CODEX_PROFILE_ID,
+            "fixture_sha256": "0" * 64,
+        },
+        {
+            "version": 2,
+            "profile_id": CODEX_PROFILE_ID,
+            "fixture_sha256": CODEX_FIXTURE_SHA256,
+            "extra": "rejected",
+        },
+    ],
+)
+async def test_v2_unknown_or_drifted_profile_fails_closed(declaration: dict[str, object]) -> None:
+    responses, compact = _pair()
+    responses.capabilities = _v2_capabilities(compact.id)
+    compact.capabilities = _v2_capabilities(responses.id)
+    responses.capabilities["codex_profile"] = declaration
+    result = next(
+        item
+        for item in await _service([responses, compact]).inspect(now=NOW)
+        if item.route_id == responses.id
+    )
+    assert result.state in {"invalid", "not_ready"}
+    assert result.reason_codes[0].startswith("codex_profile_")
 
 
 @pytest.mark.asyncio
@@ -405,11 +743,26 @@ def test_profile_v2_artifacts_parse_independently_and_are_credential_free() -> N
             }
         }
     }
+    assert artifacts.base_config_toml == (
+        "[model_providers.slaif]\n"
+        'name = "OpenAI"\n'
+        'base_url = "https://gateway.example.org/edge/v1"\n'
+        'env_key = "OPENAI_API_KEY"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n"
+        "supports_websockets = false\n"
+    )
     assert profile == {
         "model": CODEX_MODEL,
         "model_provider": "slaif",
         "features": {"remote_compaction_v2": False},
     }
+    assert artifacts.profile_config_toml == (
+        'model = "gpt-5.6-sol"\n'
+        'model_provider = "slaif"\n\n'
+        "[features]\n"
+        "remote_compaction_v2 = false\n"
+    )
     combined = artifacts.base_config_toml + artifacts.profile_config_toml
     assert "model_catalog_json" not in combined
     assert "[profiles" not in combined

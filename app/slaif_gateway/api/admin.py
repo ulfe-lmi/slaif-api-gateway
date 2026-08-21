@@ -50,6 +50,7 @@ from slaif_gateway.services.codex_qualification import (
     CODEX_RESPONSES_POLICY,
     CodexQualificationResult,
     CodexQualificationService,
+    render_codex_profile,
     validate_codex_pilot_key_input,
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
@@ -4752,6 +4753,44 @@ async def _set_admin_route_enabled(
     )
 
 
+@router.get("/routes/{route_id}/codex-profile/{artifact_name}")
+async def admin_codex_profile_artifact(
+    request: Request,
+    route_id: str,
+    artifact_name: str,
+) -> Response:
+    """Download only artifacts from an actually ready registered profile."""
+
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+    try:
+        parsed_route_id = uuid.UUID(route_id)
+    except ValueError:
+        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        try:
+            route = await service.get_route_detail(parsed_route_id)
+        except AdminCatalogNotFoundError:
+            return HTMLResponse("Codex profile artifact not found.", status_code=404)
+    if not route.codex_protocol_ready or not route.codex_profile_id:
+        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+    try:
+        artifacts = render_codex_profile(settings.PUBLIC_BASE_URL, route.codex_profile_id)
+    except ValueError:
+        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+    if artifact_name == "base":
+        return Response(artifacts.base_config_toml, media_type="text/plain")
+    if artifact_name == "profile":
+        return Response(artifacts.profile_config_toml, media_type="text/plain")
+    if artifact_name == "catalog" and artifacts.model_catalog_json is not None:
+        return Response(artifacts.model_catalog_json, media_type="application/json")
+    return HTMLResponse("Codex profile artifact not found.", status_code=404)
+
+
 @router.get("/routes/{route_id}", response_class=HTMLResponse)
 async def admin_route_detail(request: Request, route_id: str) -> Response:
     settings = _settings(request)
@@ -4774,6 +4813,16 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
     except AdminCatalogNotFoundError:
         return HTMLResponse("Model route not found.", status_code=404)
 
+    codex_profile_artifacts = None
+    if route.codex_protocol_ready and route.codex_profile_id:
+        try:
+            codex_profile_artifacts = render_codex_profile(
+                settings.PUBLIC_BASE_URL,
+                route.codex_profile_id,
+            )
+        except ValueError:
+            codex_profile_artifacts = None
+
     return templates.TemplateResponse(
         request,
         "routes/detail.html",
@@ -4782,6 +4831,7 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "route": route,
+            "codex_profile_artifacts": codex_profile_artifacts,
             "external_tool_policy": _external_tool_route_policy_for_display(
                 getattr(route, "capabilities", None),
                 settings=settings,

@@ -36,10 +36,15 @@ async def _inspect_codex() -> list[CodexQualificationResult]:
         return await _service(session).inspect()
 
 
-async def _build_profile(base_url: str) -> tuple[CodexQualificationResult, CodexProfileArtifacts]:
+async def _build_profile(
+    base_url: str,
+    qualification_profile: str | None = None,
+) -> tuple[CodexQualificationResult, CodexProfileArtifacts]:
     async with cli_db_session() as (_, session):
-        qualification = await _service(session).ready_responses_profile()
-    return qualification, render_codex_profile(base_url)
+        qualification = await _service(session).ready_responses_profile(
+            qualification_profile=qualification_profile
+        )
+    return qualification, render_codex_profile(base_url, qualification_profile)
 
 
 @app.callback()
@@ -75,6 +80,8 @@ def inspect(
         typer.echo(f"route_id: {result['route_id']}")
         typer.echo(f"paired_route_id: {result['paired_route_id'] or ''}")
         typer.echo(f"reason_codes: {','.join(result['reason_codes'])}")
+        typer.echo(f"profile_id: {result['profile_id'] or ''}")
+        typer.echo(f"metadata_version: {result['metadata_version'] or ''}")
         typer.echo(f"real_provider_e2e: {str(result['real_provider_e2e']).lower()}")
 
 
@@ -87,12 +94,22 @@ def profile(
             help="Credential-free SLAIF gateway base URL ending exactly /v1",
         ),
     ],
+    qualification_profile: Annotated[
+        str | None,
+        typer.Option(
+            "--qualification-profile",
+            help="Select a registered ready qualification profile; default is the legacy profile.",
+        ),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output stable safe JSON")] = False,
 ) -> None:
     """Print, but never write, the ready two-file Codex profile-v2 layout."""
 
     try:
-        qualification, artifacts = run_async(_build_profile(base_url))
+        if qualification_profile is None:
+            qualification, artifacts = run_async(_build_profile(base_url))
+        else:
+            qualification, artifacts = run_async(_build_profile(base_url, qualification_profile))
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)
         return

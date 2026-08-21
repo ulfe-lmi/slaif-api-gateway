@@ -48,6 +48,43 @@ requires a distinct fixture and review.
 
 ## Protocol qualification and profile-v2 configuration
 
+Qualification profiles are immutable server-defined registry entries. The
+current built-in entry is `openai-gpt-5.6-sol-codex-0.147-v1` (registry
+metadata version 2), pinned to CLI `0.147.0`, model `gpt-5.6-sol`, OpenAI
+Responses/compact, the limits below, and the fixture digest in this document.
+Route metadata may contain only the exact `{version, profile_id,
+fixture_sha256}` identity declaration; it cannot declare capabilities, limits,
+provider claims, or qualification. Unknown, drifted, mixed, or mismatched
+declarations fail closed. Version-1 `codex_qualification` remains supported
+unchanged for the existing route pair.
+
+The registry distinguishes configured, mocked-conformant, protocol-qualified,
+and live-qualified evidence. The built-in profile is protocol-qualified from
+local mocked/provider-boundary evidence; `real_provider_e2e` and live
+qualification remain false. No later model or provider is registered as
+qualified by this framework objective.
+
+Each profile declares the finite `text`/`image` input modalities and one of
+`none`, client-local compaction, or the exact Responses/compact `remote_v1`
+pair. Client-local profiles carry a bounded auto-compaction threshold and all
+profiles render `remote_compaction_v2 = false` until a separately represented
+remote-V2 contract exists. A replacement catalog is a bounded canonical JSON
+artifact with one exact model entry and matching context, compaction, and
+modality facts; its safe vocabulary admits structural shell/apply-patch/tool
+mode fields but rejects unknown keys, URLs, credentials, prompts, outputs,
+schemas, and tool arguments/results. Bundled profiles carry no replacement
+artifact.
+
+The registry and qualification service are profile-scoped: model ranking,
+provider kind/slug, endpoint requirements, gates, limits, and safe result facts
+come from the resolved definition. Focused tests exercise an unregistered
+synthetic non-OpenAI profile with one Responses endpoint and client-local
+compaction; that definition is available only to the pure test renderer and
+cannot be selected by the CLI or admin path. Admin route pages display and
+offer downloads only for an actually ready registry-owned profile, using the
+validated configured SLAIF gateway `/v1` URL. Provider base URLs, upstream
+credentials, and non-ready route declarations never become Codex artifacts.
+
 Codex custom-provider selection belongs in the user's Codex configuration, not
 in a repository checkout. The official configuration reference states that
 project-local config cannot safely override provider/authentication settings,
@@ -94,10 +131,12 @@ model_provider = "slaif"
 remote_compaction_v2 = false
 ```
 
-Do not add `profile = "slaif"`, `[profiles.slaif]`,
-`[profiles.slaif.features]`, or `model_catalog_json`. Those are not the
-reviewed profile-v2 contract. Exact bundled slug `gpt-5.6-sol` supplies the
-pinned model catalog and instructions.
+Do not add `profile = "slaif"`, `[profiles.slaif]`, or
+`[profiles.slaif.features]`. A registered replacement profile uses its own
+safe provider alias and profile filename and references its exact
+`model_catalog_json` target in the complete named profile. The target is also
+returned in CLI JSON/text and admin artifact output. Exact bundled slug
+`gpt-5.6-sol` supplies the pinned model catalog and instructions.
 
 The user would set the normal OpenAI-compatible variable to a gateway-issued
 key:

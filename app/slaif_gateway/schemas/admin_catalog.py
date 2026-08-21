@@ -8,6 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 
 
+
 @dataclass(frozen=True, slots=True)
 class AdminProviderSummary:
     id: uuid.UUID
@@ -89,6 +90,14 @@ class AdminRouteListRow:
     )
     codex_paired_route_id: uuid.UUID | None = None
     codex_protocol_ready: bool = False
+    codex_profile_id: str | None = None
+    codex_metadata_version: int | None = None
+    codex_cli_version: str | None = None
+    codex_profile_name: str | None = None
+    codex_provider_kind: str | None = None
+    codex_provider_display_name: str | None = None
+    codex_wire_api: str | None = None
+    codex_real_provider_e2e: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

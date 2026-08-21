@@ -44,12 +44,30 @@
         <dt>Codex qualification</dt><dd>{{ route.codex_qualification_badge }}</dd>
         <dt>Codex readiness state</dt><dd>{{ route.codex_qualification_state }}</dd>
         <dt>Codex readiness reasons</dt><dd>{{ route.codex_qualification_reason_codes | join(", ") if route.codex_qualification_reason_codes else "None" }}</dd>
+        <dt>Codex profile ID</dt><dd>{{ route.codex_profile_id or "None" }}</dd>
+        <dt>Codex metadata version</dt><dd>{{ route.codex_metadata_version or "None" }}</dd>
+        <dt>Codex CLI version</dt><dd>{{ route.codex_cli_version or "None" }}</dd>
+        <dt>Codex provider identity</dt><dd>{{ route.codex_provider_display_name or route.codex_provider_kind or "None" }}</dd>
+        <dt>Codex wire API</dt><dd>{{ route.codex_wire_api or "None" }}</dd>
         <dt>Codex paired route</dt><dd>{% if route.codex_paired_route_id %}<a href="/admin/routes/{{ route.codex_paired_route_id }}">{{ route.codex_paired_route_id }}</a>{% else %}None{% endif %}</dd>
         <dt>Created</dt><dd>{{ route.created_at.isoformat() }}</dd>
         <dt>Updated</dt><dd>{{ route.updated_at.isoformat() }}</dd>
       </dl>
       {% if route.codex_protocol_ready %}
+      {% if route.codex_metadata_version != 2 %}
       <p class="muted small">Exact protocol/profile locally qualified for Codex 0.147.0 and gpt-5.6-sol. Real provider-through-gateway E2E has not yet run.</p>
+      {% else %}
+      <p class="muted small">Exact registered profile {{ route.codex_profile_id }} (metadata v{{ route.codex_metadata_version }}) is locally qualified; live provider E2E is {% if route.codex_real_provider_e2e %}qualified{% else %}not claimed{% endif %}.</p>
+      {% endif %}
+      {% if codex_profile_artifacts %}
+      <section class="action-panel" aria-labelledby="codex-artifacts-heading">
+        <h2 id="codex-artifacts-heading">Credential-free Codex artifacts</h2>
+        <p class="muted small">Generated from the resolved registered profile and validated gateway URL only.</p>
+        <p><a href="/admin/routes/{{ route.id }}/codex-profile/base">Download base fragment</a> · <a href="/admin/routes/{{ route.id }}/codex-profile/profile">Download named profile</a>{% if codex_profile_artifacts.model_catalog_json %} · <a href="/admin/routes/{{ route.id }}/codex-profile/catalog">Download model catalog</a>{% endif %}</p>
+        <pre><code>{{ codex_profile_artifacts.base_config_toml }}</code></pre>
+        <pre><code>{{ codex_profile_artifacts.profile_config_toml }}</code></pre>
+      </section>
+      {% endif %}
       {% endif %}
       <p class="warning-text">External-tool support metadata is only one part of runtime authority. Exact OpenAI Responses <code>provider_web_search</code> also requires matching key/provider/pricing facts; all other hosted capabilities remain denied.</p>
     </section>
