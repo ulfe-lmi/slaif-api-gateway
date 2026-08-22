@@ -42,7 +42,7 @@ def test_alembic_has_exactly_one_head_revision_after_fence_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0017_oidc_identities"]
+    assert heads == ["0018_admin_roles"]
 
 
 def test_fence_migration_adds_only_the_fence_foundation_columns() -> None:

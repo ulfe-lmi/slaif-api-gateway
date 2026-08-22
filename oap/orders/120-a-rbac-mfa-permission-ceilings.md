@@ -1,6 +1,6 @@
 # OAP Work Order — 120-a
 
-PR mode: CREATE_NEW_PR
+PR mode: `CREATE_NEW_PR`
 Branch: oap/120-rbac-mfa-permission-ceilings
 Base: main @ d451610
 
