@@ -44,7 +44,7 @@ class _FakeConnection:
 def test_get_alembic_head_revision_reads_single_head() -> None:
     head = schema_status.get_alembic_head_revision()
 
-    assert head == "0021_policy_bundles_approved_catalogs"
+    assert head == "0022_provider_governance"
 
 
 @pytest.mark.asyncio
