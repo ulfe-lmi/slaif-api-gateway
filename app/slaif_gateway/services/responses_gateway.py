@@ -804,16 +804,6 @@ async def handle_response_create(
     ):
         if field in payload.model_fields_set and field not in body:
             body[field] = None
-    if isinstance(body.get("include"), list) and "reasoning.encrypted_content" in body["include"]:
-        body["include"] = [v for v in body["include"] if v != "reasoning.encrypted_content"]
-        if not body["include"]:
-            del body["include"]
-    if isinstance(body.get("input"), list):
-        filtered_input = [
-            item for item in body["input"]
-            if not (isinstance(item, dict) and item.get("type") == "reasoning" and "encrypted_content" in item)
-        ]
-        body["input"] = filtered_input
     external_web_search_requested = any(
         isinstance(tool, Mapping) and tool.get("type") == "web_search"
         for tool in body.get("tools", [])

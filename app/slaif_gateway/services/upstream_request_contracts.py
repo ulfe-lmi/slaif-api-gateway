@@ -548,64 +548,6 @@ def normalize_chat_completion_upstream_request(
     )
 
 
-
-def _ensure_image_detail(item: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Ensure inline image parts carry an explicit detail for strict upstreams."""
-
-    if not isinstance(item, Mapping):
-        return item
-    content = item.get("content")
-    if not isinstance(content, list):
-        return item
-    for part in content:
-        if (
-            isinstance(part, Mapping)
-            and part.get("type") == "input_image"
-            and "detail" not in part
-        ):
-            part["detail"] = "auto"
-    return item
-
-
-def _flatten_additional_tools(
-    input_items: tuple[Mapping[str, Any], ...],
-) -> tuple[Mapping[str, Any], ...]:
-    """Return items without additional_tools; callers re-attach tools top-level."""
-
-    return tuple(
-        item for item in input_items
-        if not (isinstance(item, Mapping) and item.get("type") == "additional_tools")
-    )
-
-
-def _extract_additional_tools(
-    input_items: tuple[Mapping[str, Any], ...],
-) -> list[Mapping[str, Any]]:
-    """Extract standard function tool declarations from additional_tools items."""
-
-    tools: list[Mapping[str, Any]] = []
-    for item in input_items:
-        if not (isinstance(item, Mapping) and item.get("type") == "additional_tools"):
-            continue
-        for namespace in item.get("tools", []):
-            if not isinstance(namespace, Mapping):
-                continue
-            for tool in namespace.get("tools", []):
-                if isinstance(tool, Mapping) and tool.get("type") == "function":
-                    tools.append(tool)
-    return tools
-
-
-
-def _strip_reasoning_include(value: object) -> object:
-    """Remove reasoning.encrypted_content from include list for strict upstreams."""
-
-    if isinstance(value, list):
-        filtered = [v for v in value if v != "reasoning.encrypted_content"]
-        return filtered if filtered else _UNSET
-    return value
-
-
 def normalize_responses_upstream_request(
     effective_body: Mapping[str, Any],
     *,
@@ -625,34 +567,14 @@ def normalize_responses_upstream_request(
     allowed_fields = RESPONSES_UPSTREAM_ALLOWED_FIELDS
     _ensure_no_unknown_fields(body, allowed_fields=allowed_fields)
 
-    normalized_input = (
-        tuple(
-            _ensure_image_detail(copy.deepcopy(item))
-            for item in _flatten_additional_tools(body["input"])
-            if not (
-                isinstance(item, Mapping)
-                and item.get("type") == "reasoning"
-                and "encrypted_content" in item
-            )
-        )
-        if isinstance(body["input"], list)
-        else copy.deepcopy(body["input"])
-    )
-    upstream_tools = _select_field(body.get("tools", _UNSET))
-    if isinstance(body.get("input"), list):
-        has_additional = any(
-            isinstance(item, Mapping) and item.get("type") == "additional_tools"
-            for item in body["input"]
-        )
-        if upstream_tools is _UNSET:
-            extracted = _extract_additional_tools(body["input"])
-            if extracted:
-                upstream_tools = extracted
-
     return NormalizedResponsesUpstreamRequest(
         requested_model=requested_model,
         upstream_model=upstream_model,
-        input=normalized_input,
+        input=(
+            tuple(copy.deepcopy(item) for item in body["input"])
+            if isinstance(body["input"], list)
+            else copy.deepcopy(body["input"])
+        ),
         instructions=_select_field(body.get("instructions", _UNSET)),
         max_output_tokens=_select_field(body.get("max_output_tokens", _UNSET)),
         max_tool_calls=_select_field(body.get("max_tool_calls", _UNSET)),
@@ -663,7 +585,7 @@ def normalize_responses_upstream_request(
         store=_select_field(body.get("store", _UNSET)),
         text=_select_field(body.get("text", _UNSET)),
         service_tier=_select_field(body.get("service_tier", _UNSET)),
-        tools=upstream_tools,
+        tools=_select_field(body.get("tools", _UNSET)),
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
         previous_response_id=_select_field(body.get("previous_response_id", _UNSET)),
         conversation=_select_field(body.get("conversation", _UNSET)),

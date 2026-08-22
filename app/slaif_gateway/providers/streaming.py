@@ -24,21 +24,12 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         *RESPONSES_TEXT_STREAM_EVENT_TYPES,
         "response.output_item.added",
         "response.output_item.done",
-        "response.output_text.done",
-        "response.content_part.added",
-        "response.content_part.done",
         "response.function_call_arguments.delta",
-        "response.function_call_arguments.done",
         "response.custom_tool_call_input.delta",
-        "response.reasoning_part.added",
-        "response.reasoning_part.done",
         "response.reasoning_summary_part.added",
         "response.reasoning_summary_text.delta",
         "response.reasoning_summary_text.done",
         "response.reasoning_text.delta",
-        "response.reasoning_text.done",
-        "response.content_part.added",
-        "response.content_part.done",
         "response.completed",
     }
 )
@@ -280,62 +271,21 @@ class ResponsesStreamEventValidator:
             return _validate_response_completed_event(payload)
         if event_type == "response.output_text.delta":
             return _validate_delta_event(payload, require_item=False)
-        if event_type == "response.output_text.done":
-            return self._validate_output_text_done(payload)
         if event_type in {
             "response.function_call_arguments.delta",
             "response.custom_tool_call_input.delta",
         }:
             return self._validate_tool_delta(payload, event_type)
-        if event_type == "response.function_call_arguments.done":
-            allowed = {"type", "item_id", "output_index", "arguments", "sequence_number", "name"}
-            if not _only_fields(payload, allowed):
-                return False
-            item_id = payload.get("item_id")
-            state = self._active_items.get(str(item_id))
-            return state is not None and state.item_type == "function_call"
         if event_type in {
-            "response.reasoning_part.added",
-            "response.reasoning_part.done",
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_text.delta",
             "response.reasoning_summary_text.done",
             "response.reasoning_text.delta",
-            "response.reasoning_text.done",
         }:
             return self._validate_reasoning_event(payload, event_type)
-        if event_type in {"response.content_part.added", "response.content_part.done"}:
-            return self._validate_content_part_event(payload, event_type)
         if event_type in {"response.output_item.added", "response.output_item.done"}:
-            result = self._validate_output_item(payload, event_type)
-            if not result:
-                import sys; item = payload.get("item",{})
-            return result
+            return self._validate_output_item(payload, event_type)
         return False
-
-    def _validate_output_text_done(self, payload: Mapping[str, Any]) -> bool:
-        allowed = {"type", "item_id", "output_index", "content_index", "text", "sequence_number", "logprobs"}
-        if not _only_fields(payload, allowed):
-            return False
-        text = payload.get("text")
-        return isinstance(text, str) and _bounded_utf8(text, _MAX_STREAM_ITEM_TEXT_BYTES)
-
-    def _validate_content_part_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
-        allowed = {"type", "item_id", "output_index", "sequence_number", "content_index", "part"}
-        if not _only_fields(payload, allowed):
-            return False
-        item_id = payload.get("item_id")
-        if not _bounded_identifier(item_id, required=True):
-            return False
-        if not _required_index(payload, "output_index") or not _optional_index(
-            payload, "sequence_number"
-        ):
-            return False
-        state = self._active_items.get(str(item_id))
-        if state is None or state.item_type != "message":
-            return False
-        part = payload.get("part")
-        return isinstance(part, Mapping) and isinstance(part.get("text"), str)
 
     def _validate_output_item(self, payload: Mapping[str, Any], event_type: str) -> bool:
         if not _only_fields(payload, {"type", "output_index", "item", "sequence_number"}):
@@ -417,7 +367,6 @@ class ResponsesStreamEventValidator:
                 "id",
                 "status",
                 "namespace",
-                "caller",
                 "name",
                 "arguments",
                 "call_id",
@@ -562,12 +511,6 @@ class ResponsesStreamEventValidator:
         common = {"type", "item_id", "output_index", "sequence_number"}
         if event_type == "response.reasoning_summary_part.added":
             allowed = common | {"summary_index", "part"}
-        elif event_type == "response.reasoning_part.added":
-            allowed = common | {"content_index", "part"}
-        elif event_type == "response.reasoning_part.done":
-            allowed = common | {"content_index", "part"}
-        elif event_type == "response.reasoning_text.done":
-            allowed = common | {"content_index", "text"}
         elif event_type == "response.reasoning_summary_text.done":
             allowed = common | {"summary_index", "text"}
         elif event_type == "response.reasoning_summary_text.delta":
@@ -594,28 +537,14 @@ class ResponsesStreamEventValidator:
             return isinstance(part, Mapping) and _validate_reasoning_text_part(
                 part, expected_type="summary_text"
             )
-        if event_type == "response.reasoning_part.added":
-            if not _required_index(payload, "content_index"):
-                return False
-            part = payload.get("part")
-            return isinstance(part, Mapping) and _validate_reasoning_text_part(
-                part, expected_type="reasoning_text"
-            )
-        if event_type == "response.reasoning_part.done":
-            if not _required_index(payload, "content_index"):
-                return False
-            part = payload.get("part")
-            return isinstance(part, Mapping) and _validate_reasoning_text_part(
-                part, expected_type="reasoning_text"
-            )
 
-        index_name = "content_index" if event_type in ("response.reasoning_text.delta", "response.reasoning_text.done") else "summary_index"
+        index_name = "content_index" if event_type == "response.reasoning_text.delta" else "summary_index"
         if not _required_index(payload, index_name):
             return False
         index = int(payload[index_name])
         category = "content" if index_name == "content_index" else "summary"
         key = (str(item_id), category, index)
-        field = "text" if event_type in ("response.reasoning_summary_text.done", "response.reasoning_text.done") else "delta"
+        field = "text" if event_type == "response.reasoning_summary_text.done" else "delta"
         value = payload.get(field)
         limit = _MAX_STREAM_ITEM_TEXT_BYTES if field == "text" else _MAX_STREAM_DELTA_BYTES
         if not isinstance(value, str) or not _bounded_utf8(value, limit):
@@ -675,9 +604,10 @@ def _validate_response_progress_event(payload: Mapping[str, Any]) -> bool:
     if not _optional_index(payload, "sequence_number"):
         return False
     response = payload.get("response")
-    if not isinstance(response, Mapping):
-        return False
-    if not _bounded_identifier(response.get("id"), required=True):
+    if not isinstance(response, Mapping) or not _only_fields(
+        response,
+        {"id", "object", "created_at", "status", "model"},
+    ):
         return False
     if not _bounded_identifier(response.get("id"), required=True):
         return False
@@ -697,18 +627,42 @@ def _validate_response_progress_event(payload: Mapping[str, Any]) -> bool:
 
 
 def _validate_response_completed_event(payload: Mapping[str, Any]) -> bool:
-    if not isinstance(payload.get("response"), Mapping):
+    if not _only_fields(payload, {"type", "response", "sequence_number"}):
         return False
-    response = payload["response"]
+    if not _optional_index(payload, "sequence_number"):
+        return False
+    response = payload.get("response")
+    if not isinstance(response, Mapping) or not _only_fields(
+        response,
+        {"id", "object", "status", "usage", "end_turn"},
+    ):
+        return False
     if not _bounded_identifier(response.get("id"), required=True):
         return False
+    object_type = response.get("object")
+    if object_type is not None and object_type != "response":
+        return False
     status = response.get("status")
-    return status is None or status in {"completed", "incomplete"}
+    if status is not None and status != "completed":
+        return False
+    end_turn = response.get("end_turn")
+    if end_turn is not None and not isinstance(end_turn, bool):
+        return False
+    usage = response.get("usage")
+    return isinstance(usage, Mapping) and _validate_completed_usage(usage)
 
 
 def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
-    required = {"input_tokens", "output_tokens", "total_tokens"}
-    if not all(name in usage for name in required):
+    if not _only_fields(
+        usage,
+        {
+            "input_tokens",
+            "input_tokens_details",
+            "output_tokens",
+            "output_tokens_details",
+            "total_tokens",
+        },
+    ):
         return False
     for name in ("input_tokens", "output_tokens", "total_tokens"):
         value = usage.get(name)
@@ -755,7 +709,6 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
         "content_index",
         "delta",
         "sequence_number",
-        "logprobs",
     }
     if payload.get("type") == "response.custom_tool_call_input.delta":
         allowed.add("call_id")
@@ -778,7 +731,7 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
 
 
 def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
-    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase", "summary", "annotations"}):
+    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase"}):
         return False
     if item.get("role") != "assistant" or not _optional_item_status(item):
         return False
@@ -790,7 +743,7 @@ def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
         return False
     total_bytes = 0
     for part in content:
-        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text", "annotations", "logprobs"}):
+        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text"}):
             return False
         if part.get("type") != "output_text":
             return False
@@ -816,14 +769,11 @@ def _validate_reasoning_item(
 ) -> int | None:
     if encrypted_replay:
         if event_type == "response.output_item.done":
-            required_fields = {"type", "id"}
-            if not all(field in item for field in required_fields):
+            if set(item) != {"type", "id", "summary", "encrypted_content"}:
                 return None
             if not _bounded_identifier(item.get("id"), required=True):
                 return None
             encrypted_content = item.get("encrypted_content")
-            if encrypted_content is None:
-                return 0
             if not isinstance(encrypted_content, str) or not _bounded_utf8(
                 encrypted_content,
                 _MAX_STREAM_ENCRYPTED_REASONING_ITEM_BYTES,
@@ -832,13 +782,13 @@ def _validate_reasoning_item(
                 return None
             encrypted_bytes = len(encrypted_content.encode("utf-8"))
         else:
-            if not all(field in item for field in {"type", "id"}):
+            if not _only_fields(item, {"type", "id", "status", "summary"}):
                 return None
             if not _optional_item_status(item):
                 return None
             encrypted_bytes = 0
     else:
-        if not all(field in item for field in {"type", "id"}):
+        if not _only_fields(item, {"type", "id", "status", "summary", "content"}):
             return None
         if not _optional_item_status(item):
             return None
