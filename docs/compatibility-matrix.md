@@ -166,3 +166,11 @@ Luna/Terra/Sol could not complete tier-2 for two separate reasons:
 This is a gateway defect in the same class as objective 023-b (vLLM SSE
 compatibility), but affecting OpenAI's own SSE stream shape rather than vLLM's.
 It requires a continuation round scoped to fixing the streaming validator.
+
+### OpenAI Pro model streaming limitation
+
+Luna/Terra/Sol pass tier-1 hello (single non-streaming request) but cannot
+sustain Codex CLI streaming sessions. The gateway streaming validator rejects
+standard Responses SSE events when `codex_streaming_tool_events=False`. Fix
+requires separating standard-event acceptance from hosted-tool content
+validation.
