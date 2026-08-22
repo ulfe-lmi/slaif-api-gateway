@@ -174,3 +174,13 @@ sustain Codex CLI streaming sessions. The gateway streaming validator rejects
 standard Responses SSE events when `codex_streaming_tool_events=False`. Fix
 requires separating standard-event acceptance from hosted-tool content
 validation.
+
+## Codex CLI model qualification — tier-3 tool-use
+
+| Model | Exit | Reply | File content |
+|---|---|---|---|
+| nvidia/nemotron-3-super-120b-a12b:free | 0 | DONE | TOOL_TEST=PASS |
+| moonshotai/kimi-k3 | 0 | DONE | TOOL_TEST=PASS |
+
+Both models used `exec_command` to create a file through SLAIF with the
+workspace-write sandbox.
