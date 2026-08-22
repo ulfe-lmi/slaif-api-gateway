@@ -22,6 +22,15 @@ def _table_exists(table_name: str) -> bool:
     return result.scalar()
 
 
+def _index_exists(index_name: str) -> bool:
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text("SELECT EXISTS (SELECT FROM pg_indexes WHERE indexname = :name)"),
+        {"name": index_name},
+    )
+    return result.scalar()
+
+
 def upgrade() -> None:
     if not _table_exists("organizations"):
         op.create_table(
@@ -33,7 +42,8 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         )
-        op.create_index("uq_organizations_slug", "organizations", ["slug"], unique=True)
+        if not _index_exists("uq_organizations_slug"):
+            op.create_index("uq_organizations_slug", "organizations", ["slug"], unique=True)
 
     if not _table_exists("teams"):
         op.create_table(
@@ -46,8 +56,10 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         )
-        op.create_index("ix_teams_organization_id", "teams", ["organization_id"])
-        op.create_index("uq_teams_org_slug", "teams", ["organization_id", "slug"], unique=True)
+        if not _index_exists("ix_teams_organization_id"):
+            op.create_index("ix_teams_organization_id", "teams", ["organization_id"])
+        if not _index_exists("uq_teams_org_slug"):
+            op.create_index("uq_teams_org_slug", "teams", ["organization_id", "slug"], unique=True)
 
     if not _table_exists("projects"):
         op.create_table(
@@ -62,8 +74,10 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         )
-        op.create_index("ix_projects_team_id", "projects", ["team_id"])
-        op.create_index("uq_projects_team_slug", "projects", ["team_id", "slug"], unique=True)
+        if not _index_exists("ix_projects_team_id"):
+            op.create_index("ix_projects_team_id", "projects", ["team_id"])
+        if not _index_exists("uq_projects_team_slug"):
+            op.create_index("uq_projects_team_slug", "projects", ["team_id", "slug"], unique=True)
 
     if not _table_exists("team_members"):
         op.create_table(
@@ -74,7 +88,8 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
             sa.CheckConstraint("role IN ('member', 'lead', 'admin')", name="ck_team_members_role"),
         )
-        op.create_index("ix_team_members_owner_id", "team_members", ["owner_id"])
+        if not _index_exists("ix_team_members_owner_id"):
+            op.create_index("ix_team_members_owner_id", "team_members", ["owner_id"])
 
     conn = op.get_bind()
     result = conn.execute(sa.text("SELECT column_name FROM information_schema.columns WHERE table_name='institutions' AND column_name='organization_id'"))
