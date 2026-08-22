@@ -697,6 +697,7 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
         "delta",
         "sequence_number",
         "logprobs",
+        "obfuscation",
     }
     if payload.get("type") == "response.custom_tool_call_input.delta":
         allowed.add("call_id")

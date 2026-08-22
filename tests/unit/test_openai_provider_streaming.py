@@ -103,6 +103,46 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     assert original_body["stream_options"]["include_usage"] is False
 
 
+def test_openai_responses_output_delta_accepts_openai_obfuscation_field() -> None:
+    original_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    completed = {
+        "type": "response.completed",
+        "response": {"id": "resp_123", "object": "response"},
+    }
+    delta = {
+        "type": "response.output_text.delta",
+        "content_index": 0,
+        "delta": "HI",
+        "item_id": "msg_test",
+        "logprobs": [],
+        "obfuscation": "0soI4pWDqWR2vm",
+        "output_index": 0,
+        "sequence_number": 4,
+    }
+    sse = _sse({"type": "response.created", "response": {"id": "resp_123"}}) + _sse(delta) + _sse(completed)
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(200, content=sse.encode(), headers={"x-request-id": "upstream"})
+            )
+            chunks = [chunk async for chunk in adapter.stream_response(_responses_request(original_body))]
+            return upstream, chunks
+
+    upstream, chunks = asyncio.run(_collect())
+    assert [chunk.json_body["type"] for chunk in chunks if chunk.json_body is not None] == [
+        "response.created", "response.output_text.delta", "response.completed"
+    ]
+    assert chunks[1].raw_sse_event == _sse(delta)
+
+
 def test_openai_responses_streaming_preserves_typed_events_and_parses_completed_usage() -> None:
     original_body = {
         "model": "client-model",
