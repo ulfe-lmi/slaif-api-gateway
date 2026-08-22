@@ -1,6 +1,6 @@
 # OAP Work Order — 121-a
 
-PR mode: CREATE_NEW_PR
+PR mode: `CREATE_NEW_PR`
 Branch: oap/121-service-accounts-workload-identities
 Base: main @ 8726333
 
