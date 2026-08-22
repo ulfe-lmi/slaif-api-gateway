@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from authlib.jose import JsonWebToken, jwt as _jwt_module  # noqa: F401
+from authlib.jose import JsonWebToken
 from authlib.jose.errors import ExpiredTokenError, InvalidClaimError, JoseError
 
 from slaif_gateway.config import Settings
