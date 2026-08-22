@@ -2337,3 +2337,44 @@ backends is runtime configuration, not a provider-secret store: the database
 keeps the canonical provider slug, exact base URL, and secret environment
 variable name, never the bearer value. The runtime foundation has no migration
 or qualification claim and preserves PostgreSQL as the accounting authority.
+
+## 5.30 `budget_periods`
+
+Hierarchical recurring budget periods linked to the organizational hierarchy
+or service identity. PostgreSQL remains the sole accounting truth source.
+
+Columns:
+
+```text
+id UUID primary key
+organization_id UUID null references organizations(id) on delete cascade
+team_id UUID null references teams(id) on delete cascade
+project_id UUID null references projects(id) on delete cascade
+owner_id UUID null references owners(id) on delete cascade
+service_account_id UUID null references owners(id) on delete cascade
+name text not null
+period_type text not null default 'fixed'
+period_start timestamptz not null
+period_end timestamptz not null
+cost_limit_eur numeric(18,9) null
+token_limit_total bigint null
+request_limit_total bigint null
+cost_used_eur numeric(18,9) not null default 0
+tokens_used_total bigint not null default 0
+requests_used_total bigint not null default 0
+cost_reserved_eur numeric(18,9) not null default 0
+tokens_reserved_total bigint not null default 0
+requests_reserved_total bigint not null default 0
+carryover_policy text not null default 'none'
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Constraints:
+
+```text
+period_type in ('fixed','rolling')
+period_end > period_start
+all limits non-negative when present
+at least one limit present
+```

@@ -1472,3 +1472,71 @@ class OidcIdentity(Base):
     )
 
     owner = relationship("Owner")
+
+
+class BudgetPeriod(Base):
+    """PostgreSQL-authoritative recurring budget at any organizational scope."""
+
+    __tablename__ = "budget_periods"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="CASCADE"), nullable=True
+    )
+    service_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    period_type: Mapped[str] = mapped_column(Text, nullable=False, default="fixed", server_default=text("'fixed'"))
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cost_limit_eur: Mapped[Decimal | None] = mapped_column(Numeric(18, 9), nullable=True)
+    token_limit_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    request_limit_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cost_used_eur: Mapped[Decimal] = mapped_column(
+        Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    tokens_used_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    requests_used_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    cost_reserved_eur: Mapped[Decimal] = mapped_column(
+        Numeric(18, 9), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    tokens_reserved_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    requests_reserved_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    carryover_policy: Mapped[str] = mapped_column(Text, nullable=False, default="none", server_default=text("'none'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint("period_type in ('fixed', 'rolling')", name="budget_periods_period_type_allowed_values"),
+        CheckConstraint("period_end > period_start", name="budget_periods_valid_window"),
+        CheckConstraint(
+            "cost_limit_eur is null or cost_limit_eur >= 0",
+            name="budget_periods_cost_limit_non_negative",
+        ),
+        CheckConstraint(
+            "token_limit_total is null or token_limit_total >= 0",
+            name="budget_periods_token_limit_non_negative",
+        ),
+        CheckConstraint(
+            "request_limit_total is null or request_limit_total >= 0",
+            name="budget_periods_request_limit_non_negative",
+        ),
+        CheckConstraint(
+            "(cost_limit_eur is not null or token_limit_total is not null or request_limit_total is not null)",
+            name="budget_periods_has_at_least_one_limit",
+        ),
+        Index("ix_budget_periods_scope", "organization_id", "team_id", "project_id"),
+        Index("ix_budget_periods_owner_service", "owner_id", "service_account_id"),
+    )
