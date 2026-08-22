@@ -310,6 +310,135 @@ index(starts_at, ends_at)
 
 ---
 
+## 5.3a `organizations`
+
+Top-level organizational entity. One organization per deployment.
+
+Columns:
+
+```text
+id UUID primary key
+name text not null
+slug text not null unique
+notes text null
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Indexes:
+
+```text
+pk_organizations PRIMARY KEY (id)
+uq_organizations_slug UNIQUE (slug)
+```
+
+Referenced by:
+
+```text
+institutions.organization_id UUID null references organizations(id) on delete set null
+teams.organization_id UUID not null references organizations(id)
+```
+
+### 5.3b `teams`
+
+Team/department within an organization.
+
+Columns:
+
+```text
+id UUID primary key
+organization_id UUID not null references organizations(id) on delete cascade
+name text not null
+slug text not null
+notes text null
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Indexes:
+
+```text
+pk_teams PRIMARY KEY (id)
+uq_teams_org_slug UNIQUE (organization_id, slug)
+ix_teams_organization_id (organization_id)
+```
+
+Referenced by:
+
+```text
+projects.team_id UUID not null references teams(id) on delete cascade
+team_members.team_id UUID not null references teams(id) on delete cascade
+```
+
+### 5.3c `projects`
+
+Project/cohort within a team. Replaces the legacy `cohorts` concept for new records.
+
+Columns:
+
+```text
+id UUID primary key
+team_id UUID not null references teams(id) on delete cascade
+name text not null
+slug text not null
+description text null
+starts_at timestamptz null
+ends_at timestamptz null
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Indexes:
+
+```text
+pk_projects PRIMARY KEY (id)
+uq_projects_team_slug UNIQUE (team_id, slug)
+ix_projects_team_id (team_id)
+```
+
+Referenced by:
+
+```text
+gateway_keys.project_id UUID null references projects(id) on delete set null
+usage_ledger.project_id UUID null references projects(id) on delete set null
+```
+
+### 5.3d `team_members`
+
+Junction table mapping owners to teams with roles.
+
+Columns:
+
+```text
+team_id UUID not null references teams(id) on delete cascade
+owner_id UUID not null references owners(id) on delete cascade
+role text not null default 'member'
+created_at timestamptz not null
+```
+
+Primary key: `(team_id, owner_id)`
+
+Indexes:
+
+```text
+pk_team_members PRIMARY KEY (team_id, owner_id)
+ix_team_members_owner_id (owner_id)
+```
+
+Constraints:
+
+```text
+ck_team_members_role role in ('member', 'lead', 'admin')
+```
+
+### One-organization-per-deployment
+
+Each deployment serves exactly one organization. The `organizations` table
+is expected to contain at most one row in production. This is enforced by
+convention and validated at the service layer, not by a database constraint,
+to preserve forward-compatibility for future multi-organization support.
+
+
 ## 5.4 `admin_users`
 
 Dashboard and CLI administrators.

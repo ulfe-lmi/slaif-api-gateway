@@ -37,4 +37,4 @@ def test_alembic_has_exactly_one_head_revision_after_fourth_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0015_external_tool_exclusive_fence"]
+    assert heads == ["0016_organization_team_project"]
