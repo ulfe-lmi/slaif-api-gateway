@@ -1435,3 +1435,24 @@ class TeamMember(Base):
 
     team = relationship("Team", back_populates="members")
     owner = relationship("Owner")
+
+
+class OidcIdentity(Base):
+    __tablename__ = "oidc_identities"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="CASCADE"), nullable=False
+    )
+    issuer_url: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("issuer_url", "subject", name="uq_oidc_identities_issuer_subject"),
+        Index("ix_oidc_identities_owner_id", "owner_id"),
+        Index("ix_oidc_identities_email", "email"),
+    )
+
+    owner = relationship("Owner")

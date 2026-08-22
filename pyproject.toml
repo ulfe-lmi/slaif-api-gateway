@@ -27,6 +27,7 @@ dependencies = [
   "python-multipart",
   "argon2-cffi",
   "itsdangerous",
+  "authlib",
   "aiosmtplib",
   "structlog",
   "prometheus-client",
