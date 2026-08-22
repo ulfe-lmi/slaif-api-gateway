@@ -596,6 +596,16 @@ def _extract_additional_tools(
     return tools
 
 
+
+def _strip_reasoning_include(value: object) -> object:
+    """Remove reasoning.encrypted_content from include list for strict upstreams."""
+
+    if isinstance(value, list):
+        filtered = [v for v in value if v != "reasoning.encrypted_content"]
+        return filtered if filtered else _UNSET
+    return value
+
+
 def normalize_responses_upstream_request(
     effective_body: Mapping[str, Any],
     *,
@@ -619,15 +629,25 @@ def normalize_responses_upstream_request(
         tuple(
             _ensure_image_detail(copy.deepcopy(item))
             for item in _flatten_additional_tools(body["input"])
+            if not (
+                isinstance(item, Mapping)
+                and item.get("type") == "reasoning"
+                and "encrypted_content" in item
+            )
         )
         if isinstance(body["input"], list)
         else copy.deepcopy(body["input"])
     )
     upstream_tools = _select_field(body.get("tools", _UNSET))
-    if upstream_tools is _UNSET and isinstance(body.get("input"), list):
-        extracted = _extract_additional_tools(body["input"])
-        if extracted:
-            upstream_tools = extracted
+    if isinstance(body.get("input"), list):
+        has_additional = any(
+            isinstance(item, Mapping) and item.get("type") == "additional_tools"
+            for item in body["input"]
+        )
+        if upstream_tools is _UNSET:
+            extracted = _extract_additional_tools(body["input"])
+            if extracted:
+                upstream_tools = extracted
 
     return NormalizedResponsesUpstreamRequest(
         requested_model=requested_model,
@@ -643,7 +663,7 @@ def normalize_responses_upstream_request(
         store=_select_field(body.get("store", _UNSET)),
         text=_select_field(body.get("text", _UNSET)),
         service_tier=_select_field(body.get("service_tier", _UNSET)),
-        tools=_select_field(body.get("tools", _UNSET)),
+        tools=upstream_tools,
         tool_choice=_select_field(body.get("tool_choice", _UNSET)),
         previous_response_id=_select_field(body.get("previous_response_id", _UNSET)),
         conversation=_select_field(body.get("conversation", _UNSET)),

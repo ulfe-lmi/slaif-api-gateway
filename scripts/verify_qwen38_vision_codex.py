@@ -455,6 +455,7 @@ async def _seed_candidate_gateway(
                 "text": True, "stateless": True, "streaming": True,
                 "codex_request_envelope": True, "codex_client_tools": True,
                 "codex_streaming_tool_events": True,
+                "codex_encrypted_reasoning_replay": True,
                 "image_input": True,
             })
             route_caps = {
@@ -514,7 +515,9 @@ async def _seed_candidate_gateway(
                     "codex_client_tool_taxonomy": "codex_0_148",
                     "allowed_capabilities": [
                         "codex_request_envelope", "codex_client_tools",
-                        "codex_streaming_tool_events", "image_input",
+                        "codex_streaming_tool_events",
+                        "codex_encrypted_reasoning_replay",
+                        "image_input",
                     ],
                     "allowed_local_tool_types": list(runtime.local_tools),
                 },
@@ -654,7 +657,7 @@ def _vision_codex_command(
         "-c", f"model_providers.{profile_name}.stream_max_retries=0",
         "-i", str(image_path),
         "--",
-        "Use the attached image only as bounded visual context. Satisfy the local function tool turn and return the final marker.",
+        "Look at the attached image. Then call the exec_command function tool with cmd='echo done' to confirm you can use tools, then reply with the final marker text SLAIF_QWEN38_CODEX_OK.",
     ]
 
 def _run_real_hermetic_phase() -> Mapping[str, object]:
