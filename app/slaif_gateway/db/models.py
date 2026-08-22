@@ -345,6 +345,12 @@ class GatewayKey(Base):
     )
 
     key_purpose: Mapped[str] = mapped_column(Text, nullable=False, default="standard", server_default=text("'standard'"))
+    service_owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    service_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_validity_days: Mapped[int | None] = mapped_column(nullable=True)
     capability_policy_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="standard", server_default=text("'standard'")
     )
