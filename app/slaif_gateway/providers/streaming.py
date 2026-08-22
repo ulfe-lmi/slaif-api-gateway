@@ -30,6 +30,12 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         "response.reasoning_summary_text.delta",
         "response.reasoning_summary_text.done",
         "response.reasoning_text.delta",
+        "response.reasoning_part.added",
+        "response.reasoning_part.done",
+        "response.reasoning_text.done",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.output_text.done",
         "response.completed",
     }
 )
@@ -283,6 +289,14 @@ class ResponsesStreamEventValidator:
             "response.reasoning_text.delta",
         }:
             return self._validate_reasoning_event(payload, event_type)
+        if event_type in {"response.reasoning_part.added", "response.reasoning_part.done"}:
+            return True
+        if event_type == "response.reasoning_text.done":
+            return self._validate_reasoning_event(payload, event_type)
+        if event_type in {"response.content_part.added", "response.content_part.done"}:
+            return True
+        if event_type == "response.output_text.done":
+            return True
         if event_type in {"response.output_item.added", "response.output_item.done"}:
             return self._validate_output_item(payload, event_type)
         return False
@@ -515,6 +529,8 @@ class ResponsesStreamEventValidator:
             allowed = common | {"summary_index", "text"}
         elif event_type == "response.reasoning_summary_text.delta":
             allowed = common | {"summary_index", "delta"}
+        elif event_type == "response.reasoning_text.done":
+            allowed = common | {"content_index", "text"}
         else:
             allowed = common | {"content_index", "delta"}
         if not _only_fields(payload, allowed):
@@ -538,13 +554,14 @@ class ResponsesStreamEventValidator:
                 part, expected_type="summary_text"
             )
 
-        index_name = "content_index" if event_type == "response.reasoning_text.delta" else "summary_index"
+        is_content = event_type in ("response.reasoning_text.delta", "response.reasoning_text.done")
+        index_name = "content_index" if is_content else "summary_index"
         if not _required_index(payload, index_name):
             return False
         index = int(payload[index_name])
-        category = "content" if index_name == "content_index" else "summary"
+        category = "content" if is_content else "summary"
         key = (str(item_id), category, index)
-        field = "text" if event_type == "response.reasoning_summary_text.done" else "delta"
+        field = "text" if event_type in ("response.reasoning_summary_text.done", "response.reasoning_text.done") else "delta"
         value = payload.get(field)
         limit = _MAX_STREAM_ITEM_TEXT_BYTES if field == "text" else _MAX_STREAM_DELTA_BYTES
         if not isinstance(value, str) or not _bounded_utf8(value, limit):
@@ -604,10 +621,9 @@ def _validate_response_progress_event(payload: Mapping[str, Any]) -> bool:
     if not _optional_index(payload, "sequence_number"):
         return False
     response = payload.get("response")
-    if not isinstance(response, Mapping) or not _only_fields(
-        response,
-        {"id", "object", "created_at", "status", "model"},
-    ):
+    if not isinstance(response, Mapping):
+        return False
+    if "id" not in response:
         return False
     if not _bounded_identifier(response.get("id"), required=True):
         return False
@@ -627,29 +643,13 @@ def _validate_response_progress_event(payload: Mapping[str, Any]) -> bool:
 
 
 def _validate_response_completed_event(payload: Mapping[str, Any]) -> bool:
-    if not _only_fields(payload, {"type", "response", "sequence_number"}):
-        return False
-    if not _optional_index(payload, "sequence_number"):
-        return False
     response = payload.get("response")
-    if not isinstance(response, Mapping) or not _only_fields(
-        response,
-        {"id", "object", "status", "usage", "end_turn"},
-    ):
+    if not isinstance(response, Mapping):
         return False
-    if not _bounded_identifier(response.get("id"), required=True):
-        return False
-    object_type = response.get("object")
-    if object_type is not None and object_type != "response":
+    if "id" not in response:
         return False
     status = response.get("status")
-    if status is not None and status != "completed":
-        return False
-    end_turn = response.get("end_turn")
-    if end_turn is not None and not isinstance(end_turn, bool):
-        return False
-    usage = response.get("usage")
-    return isinstance(usage, Mapping) and _validate_completed_usage(usage)
+    return status is None or status in {"completed", "incomplete"}
 
 
 def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
@@ -673,24 +673,11 @@ def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
         ):
             return False
     input_details = usage.get("input_tokens_details")
-    if input_details is not None:
-        if not isinstance(input_details, Mapping) or not _only_fields(
-            input_details, {"cached_tokens", "cache_write_tokens"}
-        ):
-            return False
-        for value in input_details.values():
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 0 <= value <= _MAX_STREAM_TOKEN_COUNT
-            ):
-                return False
+    if input_details is not None and not isinstance(input_details, Mapping):
+        return False
     output_details = usage.get("output_tokens_details")
-    if output_details is not None:
-        if not isinstance(output_details, Mapping) or not _only_fields(
-            output_details, {"reasoning_tokens"}
-        ):
-            return False
+    if output_details is not None and not isinstance(output_details, Mapping):
+        return False
         reasoning_tokens = output_details.get("reasoning_tokens")
         if (
             isinstance(reasoning_tokens, bool)
@@ -709,6 +696,7 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
         "content_index",
         "delta",
         "sequence_number",
+        "logprobs",
     }
     if payload.get("type") == "response.custom_tool_call_input.delta":
         allowed.add("call_id")
@@ -731,7 +719,7 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
 
 
 def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
-    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase"}):
+    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase", "summary", "annotations"}):
         return False
     if item.get("role") != "assistant" or not _optional_item_status(item):
         return False
@@ -743,7 +731,7 @@ def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
         return False
     total_bytes = 0
     for part in content:
-        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text"}):
+        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text", "annotations", "logprobs"}):
             return False
         if part.get("type") != "output_text":
             return False
@@ -782,15 +770,21 @@ def _validate_reasoning_item(
                 return None
             encrypted_bytes = len(encrypted_content.encode("utf-8"))
         else:
-            if not _only_fields(item, {"type", "id", "status", "summary"}):
+            if not _only_fields(item, {"type", "id", "status", "summary", "content", "encrypted_content"}):
                 return None
             if not _optional_item_status(item):
                 return None
+            encrypted_value = item.get("encrypted_content")
+            if isinstance(encrypted_value, str) and encrypted_value:
+                return None
             encrypted_bytes = 0
     else:
-        if not _only_fields(item, {"type", "id", "status", "summary", "content"}):
+        if not _only_fields(item, {"type", "id", "status", "summary", "content", "encrypted_content"}):
             return None
         if not _optional_item_status(item):
+            return None
+        encrypted_value = item.get("encrypted_content")
+        if isinstance(encrypted_value, str) and encrypted_value:
             return None
         encrypted_bytes = 0
     summary = item.get("summary")
