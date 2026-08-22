@@ -14,6 +14,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Check if organizations table already exists (e.g., created by metadata)
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'organizations')")
+    )
+    if result.scalar():
+        return
+
     op.create_table(
         "organizations",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
