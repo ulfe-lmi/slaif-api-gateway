@@ -350,6 +350,14 @@ class Settings(BaseSettings):
     EXTERNAL_TOOL_MAX_PROVIDER_TOOL_DECLARATIONS_PER_REQUEST: int = 16
     EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST: int = 16
 
+    OIDC_ENABLED: bool = False
+    OIDC_ISSUER_URL: str = ""
+    OIDC_CLIENT_ID: str = ""
+    OIDC_CLIENT_SECRET: str = ""  # env-sourced, never stored in DB
+    OIDC_REDIRECT_URI: str = ""
+    OIDC_SCOPES: str = "openid profile email"
+    LOCAL_ADMIN_FALLBACK: bool = True
+
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")
