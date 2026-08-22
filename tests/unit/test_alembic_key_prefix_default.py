@@ -28,4 +28,4 @@ def test_alembic_has_exactly_one_head_revision_after_fifth_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0021_policy_bundles_approved_catalogs"]
+    assert heads == ["0022_provider_governance"]
