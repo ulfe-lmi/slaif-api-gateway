@@ -5,14 +5,14 @@ from alembic.script import ScriptDirectory
 
 from slaif_gateway.db.models import Base
 
-MIGRATION_PATH = Path("migrations/versions/0016_organization_team_project.py")
+MIGRATION_PATH = Path("migrations/versions/0015_external_tool_exclusive_fence.py")
 
 
 def test_migration_file_exists_and_targets_only_fence_foundation() -> None:
     assert MIGRATION_PATH.exists()
     content = MIGRATION_PATH.read_text()
 
-    assert 'revision = "0016_organization_team_project"' in content
+    assert 'revision = "0015_external_tool_exclusive_fence"' in content
     assert 'down_revision = "0014_codex_context_accounting_compaction"' in content
 
     for table_name in (

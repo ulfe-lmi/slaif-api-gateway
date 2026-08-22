@@ -9,7 +9,7 @@ def test_member_of_one_team_not_auto_member_of_another():
     """Verify that adding a member to one team does not add them to other teams."""
     org_id = uuid.uuid4()
     team_a = Team(organization_id=org_id, name="Team A", slug="team-a")
-    team_b = Team(organization_id=org_id, name="Team B", slug="team-b")
+    Team(organization_id=org_id, name="Team B", slug="team-b")
 
     member_a = TeamMember(team_id=team_a.id, owner_id=uuid.uuid4(), role="member")
     assert member_a.team_id == team_a.id

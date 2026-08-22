@@ -1,6 +1,6 @@
 # OAP Work Order — 118-a
 
-PR mode: CREATE_NEW_PR
+PR mode: `CREATE_NEW_PR`
 Branch: oap/118-organization-team-project-data-model
 Base: main @ ffe1a899bd03b6dd3120eefaa482235241fb01b9
 
