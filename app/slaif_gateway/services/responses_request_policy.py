@@ -467,6 +467,7 @@ class ResponsesRequestPolicy:
         tools_schema_bytes = self._validate_tools(
             effective_body,
             allow_external_tool_request=allow_external_tool_request,
+            allow_codex_client_tools=allow_codex_client_tools,
         )
         if "max_tool_calls" in effective_body and not any(
             isinstance(tool, Mapping) and tool.get("type") == "web_search"
@@ -3170,6 +3171,7 @@ class ResponsesRequestPolicy:
         body: dict[str, Any],
         *,
         allow_external_tool_request: bool = False,
+        allow_codex_client_tools: bool = False,
     ) -> int:
         value = body.get("tools")
         if value is None:
@@ -3222,6 +3224,7 @@ class ResponsesRequestPolicy:
             canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
                 tool,
                 param=f"tools[{index}]",
+                allow_namespace=allow_codex_client_tools,
             )
             name = canonical_tool["name"]
             if name in seen_names:
@@ -3278,6 +3281,7 @@ class ResponsesRequestPolicy:
         *,
         param: str,
         description_max_bytes: int | None = None,
+        allow_namespace: bool = False,
     ) -> tuple[dict[str, Any], int, int]:
         if not isinstance(tool, Mapping):
             _raise(
@@ -3301,6 +3305,17 @@ class ResponsesRequestPolicy:
             )
             return canonical_tool, 0, format_bytes
         if tool_type == "namespace":
+            if not allow_namespace:
+                code = (
+                    "responses_hosted_tool_not_supported"
+                    if tool_type in _HOSTED_TOOL_TYPES
+                    else "responses_tool_type_not_supported"
+                )
+                raise ResponsesRequestPolicyError(
+                    "Only local Responses function and custom tools are enabled by this gateway.",
+                    param=f"{param}.type",
+                    error_code=code,
+                )
             canonical_tool = self._validate_namespace_tool(tool, param=param)
             return canonical_tool, 0, 0
 
