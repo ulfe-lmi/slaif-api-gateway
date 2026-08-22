@@ -17,6 +17,11 @@ RESPONSES_TEXT_STREAM_EVENT_TYPES = frozenset(
         "response.created",
         "response.in_progress",
         "response.output_text.delta",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.output_text.done",
     }
 )
 RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(

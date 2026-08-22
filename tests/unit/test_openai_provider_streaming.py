@@ -103,6 +103,62 @@ def test_openai_streaming_sends_stream_true_and_parses_usage() -> None:
     assert original_body["stream_options"]["include_usage"] is False
 
 
+def test_openai_non_codex_streaming_accepts_standard_output_and_part_events() -> None:
+    original_body = {
+        "model": "client-model",
+        "input": "hello",
+        "store": False,
+        "stream": True,
+        "max_output_tokens": 20,
+    }
+    adapter = OpenAIProviderAdapter(Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key"))
+    events = [
+        {"type": "response.created", "response": {"id": "resp_123"}},
+        {
+            "type": "response.output_item.added", "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "status": "in_progress", "role": "assistant", "content": []},
+        },
+        {
+            "type": "response.content_part.added", "item_id": "msg_1", "output_index": 0,
+            "content_index": 0, "part": {"type": "output_text", "text": ""},
+        },
+        {
+            "type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
+            "content_index": 0, "delta": "ok",
+        },
+        {
+            "type": "response.output_text.done", "item_id": "msg_1", "output_index": 0,
+            "content_index": 0, "text": "ok",
+        },
+        {
+            "type": "response.content_part.done", "item_id": "msg_1", "output_index": 0,
+            "content_index": 0, "part": {"type": "output_text", "text": "ok"},
+        },
+        {
+            "type": "response.output_item.done", "output_index": 0,
+            "item": {
+                "type": "message", "id": "msg_1", "status": "completed", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            },
+        },
+        {"type": "response.completed", "response": {"id": "resp_123", "object": "response"}},
+    ]
+    sse = "".join(_sse(event) for event in events)
+
+    async def _collect():
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            upstream = router.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(200, content=sse.encode(), headers={"x-request-id": "upstream"})
+            )
+            chunks = [chunk async for chunk in adapter.stream_response(_responses_request(original_body))]
+            return upstream, chunks
+
+    _upstream, chunks = asyncio.run(_collect())
+    assert [chunk.json_body["type"] for chunk in chunks if chunk.json_body is not None] == [
+        event["type"] for event in events
+    ]
+
+
 def test_openai_responses_output_delta_accepts_openai_obfuscation_field() -> None:
     original_body = {
         "model": "client-model",
