@@ -1048,6 +1048,7 @@ async def handle_response_create(
                     live_burn_budget=quota.live_burn_budget,
                     stream_validation_profile=ResponsesStreamValidationProfile(
                         codex_streaming_tool_events=codex_streaming_tool_events_requested,
+
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
                         ),

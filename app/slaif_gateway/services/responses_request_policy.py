@@ -1610,7 +1610,7 @@ class ResponsesRequestPolicy:
             )
         item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         encrypted_content = item.get("encrypted_content")
-        if not isinstance(encrypted_content, str) or not encrypted_content:
+        if encrypted_content is not None and (not isinstance(encrypted_content, str) or not encrypted_content):
             _raise(
                 f"{param}.encrypted_content",
                 "responses_codex_encrypted_reasoning_replay_invalid",
@@ -3300,6 +3300,9 @@ class ResponsesRequestPolicy:
                 description_max_bytes=description_max_bytes,
             )
             return canonical_tool, 0, format_bytes
+        if tool_type == "namespace":
+            canonical_tool = self._validate_namespace_tool(tool, param=param)
+            return canonical_tool, 0, 0
 
         code = (
             "responses_hosted_tool_not_supported"
@@ -3313,6 +3316,33 @@ class ResponsesRequestPolicy:
             param=f"{param}.type",
             error_code=code,
         )
+
+    def _validate_namespace_tool(self, tool: Any, *, param: str) -> dict[str, Any]:
+        """Validate a Codex client-side namespace tool declaration."""
+
+        allowed_fields = {"type", "name", "description", "tools"}
+        unknown = set(tool) - allowed_fields
+        if unknown:
+            _raise(
+                f"{param}.{sorted(unknown)[0]}",
+                "responses_namespace_tool_invalid",
+                "Namespace tool declaration contains unsupported fields.",
+            )
+        name = tool.get("name")
+        if not isinstance(name, str) or not name or len(name.encode("utf-8")) > 256:
+            _raise(f"{param}.name", "responses_namespace_tool_invalid", "Invalid namespace tool name.")
+        nested_tools = tool.get("tools")
+        if not isinstance(nested_tools, list) or len(nested_tools) > 128:
+            _raise(f"{param}.tools", "responses_namespace_tool_invalid", "Invalid namespace tools list.")
+        for index, nested in enumerate(nested_tools):
+            if not isinstance(nested, Mapping) or nested.get("type") not in {"function", "custom"}:
+                _raise(f"{param}.tools[{index}]", "responses_namespace_tool_invalid", "Invalid namespace nested tool.")
+        return {
+            "type": "namespace",
+            "name": name,
+            "description": tool.get("description", ""),
+            "tools": copy.deepcopy(nested_tools),
+        }
 
     def _validate_function_tool(
         self,
@@ -4044,15 +4074,21 @@ def responses_codex_client_tools_allowed(policy: object) -> bool:
 def responses_codex_streaming_tool_events_requested(body: Mapping[str, Any]) -> bool:
     """Detect the streaming declaration or bounded tool-roundtrip request shape."""
 
+    has_namespace_tools = any(
+        isinstance(tool, Mapping) and tool.get("type") == "namespace"
+        for tool in (body.get("tools") or [])
+        if isinstance(body.get("tools"), list)
+    )
     input_value = body.get("input")
     if not isinstance(input_value, list):
-        return False
+        return has_namespace_tools and body.get("stream") is True
     item_types = {
         item.get("type")
         for item in input_value
         if isinstance(item, Mapping) and isinstance(item.get("type"), str)
     }
-    if "additional_tools" not in item_types:
+    has_additional_tools = "additional_tools" in item_types
+    if not has_additional_tools and not has_namespace_tools:
         return False
     return body.get("stream") is True or bool(
         item_types.intersection(
