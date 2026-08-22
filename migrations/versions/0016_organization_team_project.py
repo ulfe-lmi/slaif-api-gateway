@@ -7,7 +7,7 @@ Revises: 0015_external_tool_exclusive_fence
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0016"
+revision = "0016_organization_team_project"
 down_revision = "0015_external_tool_exclusive_fence"
 branch_labels = None
 depends_on = None
