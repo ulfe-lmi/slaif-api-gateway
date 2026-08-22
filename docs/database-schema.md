@@ -2378,3 +2378,11 @@ period_end > period_start
 all limits non-negative when present
 at least one limit present
 ```
+
+## 5.31 `policy_bundles`, `policy_bundle_revisions`, `approved_catalog_entries`
+
+Versioned SME policy packages with immutable revision provenance.
+
+- `policy_bundles`: id, organization_id, team_id, project_id, name, created_at
+- `policy_bundle_revisions`: id, bundle_id, revision, policy_json, created_at; unique(bundle_id, revision)
+- `approved_catalog_entries`: id, revision_id, entry_kind, provider, name, metadata_json, created_at; unique(revision_id, entry_kind, provider, name)
