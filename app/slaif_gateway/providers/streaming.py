@@ -273,6 +273,14 @@ class ResponsesStreamEventValidator:
             return False
         if event_type == "response.output_text.delta":
             return isinstance(payload.get("delta"), str)
+        if event_type in {
+            "response.output_item.added",
+            "response.output_item.done",
+            "response.content_part.added",
+            "response.content_part.done",
+            "response.output_text.done",
+        }:
+            return self._validate_codex_event(payload, event_type)
         return True
 
     def _validate_codex_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
