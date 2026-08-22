@@ -138,3 +138,31 @@ POST calls (ledger entries confirmed) after discovering that the
 `codex-subscription pro` wrapper ignores `OPENAI_BASE_URL` and sends directly
 to `api.openai.com`. The gateway-level proof is still valid because the same
 request shape was forwarded successfully with accounting recorded.
+
+## Codex CLI model qualification — tier-2 basic task
+
+| Model | Exit | Reply | Tool used | Notes |
+|---|---|---|---|---|
+| nvidia/nemotron-3-super-120b-a12b:free | 0 | ANSWER=25 | exec_command (cat) | Correct value from fixture |
+| moonshotai/kimi-k3 | 0 | ANSWER=25 | exec_command (cat) | Correct value from fixture |
+| gpt-5.6-luna | — | — | — | Not qualified at this tier |
+| gpt-5.6-terra | — | — | — | Not qualified at this tier |
+| gpt-5.6-sol | — | — | — | Not qualified at this tier |
+
+Fixture: `/tmp/oap-025-fixture/config.env` contained `MAX_CONNECTIONS=25`.
+Both passing models correctly identified this value using a shell tool call.
+
+Luna/Terra/Sol could not complete tier-2 for two separate reasons:
+
+1. The `codex-subscription pro` wrapper ignores the `OPENAI_BASE_URL`
+   environment variable and sends requests directly to `api.openai.com`,
+   bypassing SLAIF entirely. This means the gateway cannot see or account
+   for these calls.
+2. When routed through SLAIF using a custom provider profile, the gateway's
+   streaming validator rejects one or more SSE event fields that OpenAI's
+   Responses API emits. The error code is
+   `responses_stream_event_not_supported`.
+
+This is a gateway defect in the same class as objective 023-b (vLLM SSE
+compatibility), but affecting OpenAI's own SSE stream shape rather than vLLM's.
+It requires a continuation round scoped to fixing the streaming validator.
