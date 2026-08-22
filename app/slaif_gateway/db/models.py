@@ -130,7 +130,10 @@ class Owner(Base):
     )
 
     institution: Mapped[Institution | None] = relationship(back_populates="owners")
-    gateway_keys: Mapped[list[GatewayKey]] = relationship(back_populates="owner")
+    gateway_keys: Mapped[list[GatewayKey]] = relationship(
+        back_populates="owner",
+        foreign_keys="[GatewayKey.owner_id]",
+    )
     usage_ledger_rows: Mapped[list[UsageLedger]] = relationship(back_populates="owner")
     usage_profile_rows: Mapped[list[UsageProfile]] = relationship(back_populates="owner")
     one_time_secrets: Mapped[list[OneTimeSecret]] = relationship(back_populates="owner")
@@ -156,7 +159,10 @@ class AdminUser(Base):
     )
 
     sessions: Mapped[list[AdminSession]] = relationship(back_populates="admin_user")
-    gateway_keys_created: Mapped[list[GatewayKey]] = relationship(back_populates="created_by_admin_user")
+    gateway_keys_created: Mapped[list[GatewayKey]] = relationship(
+        back_populates="created_by_admin_user",
+        foreign_keys="[GatewayKey.created_by_admin_user_id]",
+    )
     background_jobs: Mapped[list[BackgroundJob]] = relationship(back_populates="created_by_admin_user")
     key_templates_created: Mapped[list[KeyTemplate]] = relationship(
         back_populates="created_by_admin_user",
@@ -403,7 +409,10 @@ class GatewayKey(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    owner: Mapped[Owner] = relationship(back_populates="gateway_keys")
+    owner: Mapped[Owner] = relationship(
+        back_populates="gateway_keys",
+        foreign_keys=[owner_id],
+    )
     cohort: Mapped[Cohort | None] = relationship(back_populates="gateway_keys")
     created_by_admin_user: Mapped[AdminUser | None] = relationship(back_populates="gateway_keys_created")
     quota_reservations: Mapped[list[QuotaReservation]] = relationship(
