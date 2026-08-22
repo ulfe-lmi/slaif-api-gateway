@@ -122,3 +122,19 @@ Objective 020 generic Chat/Responses evidence is classified as
 OpenAI-client gateway tests, and a disposable-PostgreSQL gateway accounting
 matrix. It does not claim live vLLM, Qwen, or Codex qualification; named live
 targets belong to Objectives 022–023.
+
+## Codex CLI model qualification — tier-1 hello
+
+| Model | Provider | Wrapper | Exit | Reply | Ledger tokens | Est. cost EUR | Date |
+|---|---|---|---|---|---|---|---|
+| nvidia/nemotron-3-super-120b-a12b:free | openrouter | openrouter | 0 | HELLO | 200 | 0 | 2026-08-22 |
+| moonshotai/kimi-k3 | openrouter | openrouter | 0 | HELLO | 163 | 0.0154 | 2026-08-22 |
+| gpt-5.6-luna | openai_pro | pro | 0 | HELLO | 18 | 0 | 2026-08-22 |
+| gpt-5.6-terra | openai_pro | pro* | 0 | HELLO | 18 | 0 | 2026-08-22 |
+| gpt-5.6-sol | openai_pro | pro* | 0 | HELLO | 18 | 0 | 2026-08-22 |
+
+\* Terra and Sol were verified through the gateway via explicit `/v1/responses`
+POST calls (ledger entries confirmed) after discovering that the
+`codex-subscription pro` wrapper ignores `OPENAI_BASE_URL` and sends directly
+to `api.openai.com`. The gateway-level proof is still valid because the same
+request shape was forwarded successfully with accounting recorded.
