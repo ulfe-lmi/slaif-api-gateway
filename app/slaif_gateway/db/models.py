@@ -1540,3 +1540,73 @@ class BudgetPeriod(Base):
         Index("ix_budget_periods_scope", "organization_id", "team_id", "project_id"),
         Index("ix_budget_periods_owner_service", "owner_id", "service_account_id"),
     )
+
+
+class PolicyBundle(Base):
+    """Versioned policy bundle scoped to an organizational hierarchy."""
+
+    __tablename__ = "policy_bundles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    revisions = relationship("PolicyBundleRevision", back_populates="bundle", cascade="all, delete-orphan")
+
+
+class PolicyBundleRevision(Base):
+    """Immutable policy revision; assignments retain exact provenance."""
+
+    __tablename__ = "policy_bundle_revisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bundle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_bundles.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    bundle = relationship("PolicyBundle", back_populates="revisions")
+    catalog_entries = relationship(
+        "ApprovedCatalogEntry",
+        back_populates="revision",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (UniqueConstraint("bundle_id", "revision", name="uq_policy_bundle_revision"),)
+
+
+class ApprovedCatalogEntry(Base):
+    """Approved organizational model or tool catalog fact for one revision."""
+
+    __tablename__ = "approved_catalog_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_bundle_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    entry_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    revision = relationship("PolicyBundleRevision", back_populates="catalog_entries")
+
+    __table_args__ = (
+        UniqueConstraint("revision_id", "entry_kind", "provider", "name", name="uq_approved_catalog_entry"),
+    )

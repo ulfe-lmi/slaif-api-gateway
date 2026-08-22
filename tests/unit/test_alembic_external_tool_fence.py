@@ -42,7 +42,7 @@ def test_alembic_has_exactly_one_head_revision_after_fence_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0020_hierarchical_recurring_budgets"]
+    assert heads == ["0021_policy_bundles_approved_catalogs"]
 
 
 def test_fence_migration_adds_only_the_fence_foundation_columns() -> None:
