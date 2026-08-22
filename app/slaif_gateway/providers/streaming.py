@@ -173,6 +173,10 @@ class ResponsesStreamEventValidator:
             return False
         self._web_search_event_count += 1
         if event_type in RESPONSES_TEXT_STREAM_EVENT_TYPES:
+            if event_type in {"response.output_item.added", "response.output_item.done"}:
+                item = payload.get("item")
+                if isinstance(item, Mapping) and item.get("type") == "web_search_call":
+                    return self._validate_web_search_item_done(payload, event_type)
             return self._validate_existing_text_event(payload, event_type)
         sequence = payload.get("sequence_number")
         if type(sequence) is not int or sequence < 0 or sequence > _MAX_STREAM_INDEX:
@@ -262,6 +266,46 @@ class ResponsesStreamEventValidator:
             return True
         return False
 
+    def _validate_web_search_item_done(
+        self,
+        payload: Mapping[str, Any],
+        event_type: str,
+    ) -> bool:
+        sequence = payload.get("sequence_number")
+        if type(sequence) is not int or sequence < 0 or sequence > _MAX_STREAM_INDEX:
+            return False
+        if sequence in self._web_search_seen_sequences:
+            return False
+        self._web_search_seen_sequences.add(sequence)
+        if event_type != "response.output_item.done":
+            return False
+        item_id = payload.get("item", {}).get("id") if isinstance(payload.get("item"), Mapping) else None
+        index = payload.get("output_index")
+        status = payload["item"].get("status") if isinstance(payload.get("item"), Mapping) else None
+        action = payload["item"].get("action") if isinstance(payload.get("item"), Mapping) else None
+        if not isinstance(item_id, str) or not item_id or type(index) is not int or index < 0:
+            return False
+        if status not in {"completed", "in_progress", "searching", "failed"}:
+            return False
+        if not validate_web_search_action(action):
+            return False
+        self._web_search_evidence.append(
+            {
+                "type": event_type,
+                "output_index": index,
+                "sequence_number": sequence,
+                "item": {
+                    "type": "web_search_call",
+                    "id": item_id,
+                    "status": status,
+                    "output_index": index,
+                    "sequence_number": sequence,
+                    "action": {"type": action["type"]},
+                },
+            }
+        )
+        return True
+
     def _validate_existing_text_event(
         self,
         payload: Mapping[str, Any],
@@ -273,14 +317,26 @@ class ResponsesStreamEventValidator:
             return False
         if event_type == "response.output_text.delta":
             return isinstance(payload.get("delta"), str)
-        if event_type in {
-            "response.output_item.added",
-            "response.output_item.done",
-            "response.content_part.added",
-            "response.content_part.done",
-            "response.output_text.done",
-        }:
-            return self._validate_codex_event(payload, event_type)
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            item = payload.get("item")
+            if isinstance(item, Mapping) and item.get("type") == "message":
+                return _validate_assistant_message_item(item)
+        if event_type in {"response.content_part.added", "response.content_part.done"}:
+            return _only_fields(
+                payload,
+                {
+                    "type", "item_id", "output_index", "content_index", "part",
+                    "sequence_number",
+                },
+            ) and isinstance(payload.get("part"), Mapping)
+        if event_type == "response.output_text.done":
+            return (
+                isinstance(payload.get("text"), str)
+                and _bounded_utf8(payload["text"], _MAX_STREAM_ITEM_TEXT_BYTES)
+                and _bounded_identifier(payload.get("item_id"), required=True)
+                and _required_index(payload, "output_index")
+                and _optional_index(payload, "content_index")
+            )
         return True
 
     def _validate_codex_event(self, payload: Mapping[str, Any], event_type: str) -> bool:

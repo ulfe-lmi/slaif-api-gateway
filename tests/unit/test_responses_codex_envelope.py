@@ -767,7 +767,6 @@ def test_full_captured_profile_still_has_separate_tool_namespace_and_choice_gaps
     )
     assert {
         "response.function_call_arguments.delta",
-        "response.output_item.added",
         "response.reasoning_summary_text.delta",
     }.isdisjoint(_ALLOWED_RESPONSES_STREAM_EVENT_TYPES)
 
