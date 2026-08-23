@@ -10,6 +10,7 @@ from slaif_gateway.providers.errors import (
     ProviderRequestError,
     ProviderResponseParseError,
     ProviderTimeoutError,
+    UnsupportedProviderEndpointError,
 )
 from slaif_gateway.schemas.providers import ProviderRequest
 
@@ -165,6 +166,50 @@ async def test_only_nonempty_supported_base64_data_urls_are_admitted(url: str) -
                 {
                     "role": "user",
                     "content": [
+                        {"type": "file", "file": {"filename": "image.png", "file_data": "AAAA"}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "video", "video": {"url": "data:video/mp4;base64,AAAA"}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": {"data": "AAAA"}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
                     ],
@@ -191,7 +236,43 @@ async def test_unsupported_shapes_are_rejected_before_native_call(body_fields: d
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload", [{"status": "scored", "score": 2}, {"status": "unknown"}, {}])
+@pytest.mark.parametrize("endpoint", ["responses", "/v1/responses", "/v1/completions"])
+async def test_non_chat_endpoints_are_rejected_before_native_call(endpoint: str) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"status": "scored", "score": 0.1})
+
+    adapter, client = _adapter(handler)
+    try:
+        request = _request()
+        request = ProviderRequest(
+            provider=request.provider,
+            upstream_model=request.upstream_model,
+            endpoint=endpoint,
+            body=request.body,
+            request_id=request.request_id,
+        )
+        with pytest.raises(UnsupportedProviderEndpointError):
+            await adapter.forward_chat_completion(request)
+    finally:
+        await client.aclose()
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "scored", "score": 2},
+        {"status": "scored", "score": "0.2"},
+        {"status": "scored", "score": None},
+        {"status": "unknown"},
+        {},
+    ],
+)
 async def test_malformed_score_result_is_safe_parse_error(payload: dict[str, object]) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
@@ -219,6 +300,40 @@ async def test_native_http_failure_does_not_expose_body() -> None:
     assert exc_info.value.upstream_status_code == 502
     assert "private native body" not in str(exc_info.value)
     assert exc_info.value.diagnostic is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 503])
+async def test_native_client_and_server_failures_are_safe(status_code: int) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            json={"error": {"message": "private native body"}},
+            request=request,
+        )
+
+    adapter, client = _adapter(handler)
+    try:
+        with pytest.raises(ProviderHTTPError) as exc_info:
+            await adapter.forward_chat_completion(_request())
+    finally:
+        await client.aclose()
+    assert exc_info.value.upstream_status_code == status_code
+    assert "private native body" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [b"", b"not-json"])
+async def test_empty_or_non_json_success_is_safe_parse_error(content: bytes) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content, headers={"content-type": "application/json"})
+
+    adapter, client = _adapter(handler)
+    try:
+        with pytest.raises(ProviderResponseParseError):
+            await adapter.forward_chat_completion(_request())
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio

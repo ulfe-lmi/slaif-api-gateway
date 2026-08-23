@@ -303,6 +303,34 @@ route for public model `facial-manipulation-scoring` with
 operator activation steps; this configuration does not perform a live score
 request or probe the service during setup.
 
+A non-secret metadata example is:
+
+```text
+provider = facial_scoring
+kind = module
+base_url = <operator-selected-origin>
+api_key_env_var = FACIAL_SCORING_API_KEY
+timeout_seconds = 30
+max_retries = 0
+route.requested_model = facial-manipulation-scoring
+route.endpoint = /v1/chat/completions
+route.supports_streaming = false
+route.capabilities.chat_completions = facial_scoring_chat_completion_capabilities()
+pricing.currency = EUR
+pricing.request_price = 0
+pricing.input_price_per_1m = 0
+pricing.output_price_per_1m = 0
+```
+
+The fixed `0 EUR` request price does not make the route unlimited: normal
+request/rate/concurrency controls, PostgreSQL reservation/finalization/release,
+quota limits, key revocation and expiry, audit logging, and failed-attempt
+handling remain active. Current facial-module evidence is mocked HTTP plus
+PostgreSQL qualification only. Live score qualification is `NOT RUN` because
+no authorized credential is supplied; the project makes no endpoint
+reachability, model-accuracy, authenticity, calibration, certification,
+production, or SLA claim from this setup.
+
 ## OpenAI Assisted Catalog Proposals
 
 The admin-only proposal generator uses a separate discovery key:

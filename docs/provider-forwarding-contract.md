@@ -847,6 +847,13 @@ The facial adapter permits only one non-streaming Chat image request, sends a
 single `image` multipart field, and returns an OpenAI-shaped text completion
 with zero provider token usage. Module Responses and module streaming remain
 unsupported.
+The current qualification record for this adapter is limited to mocked HTTP
+and PostgreSQL evidence for the gateway boundaries; live score qualification is
+`NOT RUN` because no authorized credential is supplied. It does not establish
+downstream reachability, model accuracy, authenticity, calibration,
+certification, production readiness, or an SLA. A fixed zero-EUR request price
+still leaves request, rate, concurrency, quota, revocation, expiry, audit, and
+failed-attempt controls active.
 # External-tool accounting boundary
 
 The external-tool accounting hold/reconciliation foundation is implemented, but
