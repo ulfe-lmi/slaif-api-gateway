@@ -418,6 +418,99 @@ def test_facial_scoring_module_forwards_one_image_and_finalizes_fixed_usage(
     assert state["provider_responses"][0].usage.total_tokens == 0
 
 
+def test_facial_scoring_module_preserves_unscorable_result_without_native_content(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("FACIAL_SCORING_API_KEY", "facial-native-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="facial_scoring",
+        resolved_model="facial-manipulation-scoring",
+        route_requested_model="facial-manipulation-scoring",
+        expected_requested_model="facial-manipulation-scoring",
+        provider_kind="module",
+        provider_base_url="https://facial-native.example",
+        provider_api_key_env_var="FACIAL_SCORING_API_KEY",
+        route_capabilities={
+            "chat_completions": facial_scoring_chat_completion_capabilities(),
+        },
+    )
+    upstream = respx_mock.post("https://facial-native.example/v1/score").mock(
+        return_value=httpx.Response(200, json={"status": "unscorable", "reason": "insufficient evidence"})
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            "model": "facial-manipulation-scoring",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+                }
+            ],
+        },
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == (
+        "Result: unscorable (insufficient evidence)"
+    )
+    assert response.json()["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert upstream.called
+    assert state["reserve_calls"]
+    assert state["finalize_calls"]
+
+
+def test_facial_scoring_streaming_is_rejected_before_reservation_or_native_call(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("FACIAL_SCORING_API_KEY", "facial-native-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="facial_scoring",
+        resolved_model="facial-manipulation-scoring",
+        route_requested_model="facial-manipulation-scoring",
+        expected_requested_model="facial-manipulation-scoring",
+        provider_kind="module",
+        provider_base_url="https://facial-native.example",
+        provider_api_key_env_var="FACIAL_SCORING_API_KEY",
+        route_capabilities={
+            "chat_completions": facial_scoring_chat_completion_capabilities(),
+        },
+    )
+    upstream = respx_mock.post("https://facial-native.example/v1/score").mock(
+        return_value=httpx.Response(200, json={"status": "scored", "score": 0.1})
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            "model": "facial-manipulation-scoring",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+                }
+            ],
+            "stream": True,
+        },
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "module_streaming_not_supported"
+    assert not state["reserve_calls"]
+    assert not upstream.called
+
+
 def test_generic_provider_remote_image_is_rejected_before_side_effects(
     monkeypatch,
     respx_mock,
