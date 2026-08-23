@@ -19,6 +19,7 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     ChatCompletionRouteCapabilityError,
     default_chat_completion_capabilities,
     enforce_chat_completion_route_capabilities,
+    facial_scoring_chat_completion_capabilities,
 )
 
 
@@ -35,6 +36,20 @@ def _caps(**overrides: bool) -> dict[str, object]:
     capabilities = default_chat_completion_capabilities(supports_streaming=True)
     capabilities.update(overrides)
     return {CHAT_COMPLETIONS_CAPABILITIES_KEY: capabilities}
+
+
+def test_facial_scoring_capability_profile_is_narrow_and_non_streaming() -> None:
+    capabilities = facial_scoring_chat_completion_capabilities()
+
+    assert capabilities["chat_text"] is True
+    assert capabilities["chat_image_inputs"] is True
+    assert capabilities["chat_multimodal"] is True
+    assert capabilities["chat_streaming"] is False
+    assert capabilities["chat_function_tools"] is False
+    assert capabilities["chat_audio"] is False
+    assert capabilities["chat_file_inputs"] is False
+    assert capabilities["chat_multiple_choices"] is False
+    assert capabilities["chat_structured_outputs"] is False
 
 
 def test_text_only_request_passes_when_route_allows_text_chat() -> None:

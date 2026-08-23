@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.facial_scoring import FacialScoringAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
@@ -26,6 +27,48 @@ def test_factory_returns_openrouter_adapter() -> None:
 
     assert isinstance(adapter, OpenRouterProviderAdapter)
     assert adapter._base_url == "https://openrouter.ai/api/v1"
+
+
+def test_factory_returns_static_facial_scoring_adapter(monkeypatch) -> None:
+    monkeypatch.setenv("FACIAL_SCORING_API_KEY", "facial-native-key")
+    route = RouteResolutionResult(
+        requested_model="facial-manipulation-scoring",
+        resolved_model="facial-manipulation-scoring",
+        provider="facial_scoring",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern="facial-manipulation-scoring",
+        priority=100,
+        provider_kind="module",
+        provider_base_url="https://facial-native.example",
+        provider_timeout_seconds=17,
+        provider_max_retries=0,
+    )
+
+    adapter = get_provider_adapter(route, Settings())
+
+    assert isinstance(adapter, FacialScoringAdapter)
+    assert adapter.module_id == "facial_scoring"
+    assert adapter._api_key == "facial-native-key"
+    assert adapter._max_retries == 0
+
+
+def test_factory_rejects_facial_scoring_secret_alias(monkeypatch) -> None:
+    monkeypatch.setenv("OTHER_NATIVE_KEY", "facial-native-key")
+    route = SimpleNamespace(
+        provider="facial_scoring",
+        provider_kind="module",
+        provider_base_url="https://facial-native.example",
+        provider_api_key_env_var="OTHER_NATIVE_KEY",
+        provider_timeout_seconds=17,
+        provider_max_retries=0,
+    )
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        get_provider_adapter(route, Settings())
+
+    assert exc_info.value.error_code == "invalid_provider_configuration"
+    assert "OTHER_NATIVE_KEY" not in str(exc_info.value)
 
 
 def test_factory_builds_openai_adapter_from_route_metadata(monkeypatch) -> None:

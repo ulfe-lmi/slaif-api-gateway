@@ -273,6 +273,8 @@ required live-burn accounting coverage.
 
 - `OPENAI_UPSTREAM_API_KEY` supplies the OpenAI provider key.
 - `OPENROUTER_API_KEY` supplies the OpenRouter provider key.
+- `FACIAL_SCORING_API_KEY` supplies the reviewed `facial_scoring` module key
+  when that operator-configured module route is enabled.
 - `ENABLE_OPENAI_PROVIDER` and `ENABLE_OPENROUTER_PROVIDER` toggle provider
   availability at configuration level.
 
@@ -288,6 +290,15 @@ metadata rows by referencing environment variable names only; they do not accept
 actual provider key values. Model routes, pricing, and FX rates are configured
 through CLI/database metadata and the implemented admin metadata forms; those
 forms do not accept provider key values or call upstream providers.
+
+For the facial scoring module, use provider slug `facial_scoring`, kind `module`,
+an operator-selected HTTPS origin, `FACIAL_SCORING_API_KEY`, timeout metadata,
+and `max_retries=0`. Create one exact `/v1/chat/completions` route for public
+model `facial-manipulation-scoring` with
+`facial_scoring_chat_completion_capabilities()` serialized under
+`capabilities.chat_completions`. The route and fixed-request pricing row are
+operator activation steps; this configuration does not perform a live score
+request during setup.
 
 ## OpenAI Assisted Catalog Proposals
 

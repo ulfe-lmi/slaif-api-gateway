@@ -34,6 +34,12 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
 
     base_url = _provider_base_url(provider)
     api_key_env_var = _provider_api_key_env_var(provider) or _default_api_key_env_var(normalized)
+    if normalized == "facial_scoring" and api_key_env_var != "FACIAL_SCORING_API_KEY":
+        raise ProviderConfigurationError(
+            "Facial scoring requires the FACIAL_SCORING_API_KEY environment variable",
+            provider=normalized,
+            error_code="invalid_provider_configuration",
+        )
     api_key = _provider_api_key(api_key_env_var, settings=settings, provider=normalized)
     timeout_seconds = _provider_timeout_seconds(provider)
     max_retries = _provider_max_retries(provider)
@@ -140,6 +146,8 @@ def _default_api_key_env_var(provider: str) -> str | None:
         return _DEFAULT_OPENAI_API_KEY_ENV_VAR
     if provider == "openrouter":
         return _DEFAULT_OPENROUTER_API_KEY_ENV_VAR
+    if provider == "facial_scoring":
+        return "FACIAL_SCORING_API_KEY"
     return None
 
 
