@@ -42,6 +42,7 @@
           Kind
           <select name="kind">
             <option value="openai_compatible" {% if form.kind == "openai_compatible" %}selected{% endif %}>OpenAI-compatible</option>
+            <option value="module" {% if form.kind == "module" %}selected{% endif %}>Native module</option>
           </select>
         </label>
       </div>
@@ -100,7 +101,7 @@
 
     <section class="action-panel" aria-labelledby="provider-edit-submit-heading">
       <h2 id="provider-edit-submit-heading">Save</h2>
-      <p class="muted">This changes provider metadata only. Route, pricing, FX, forwarding, and health behavior are unchanged.</p>
+      <p class="muted">This changes provider metadata only. Native modules require a reviewed static adapter; configuration cannot select imports or classes.</p>
       <button type="submit">Save provider config</button>
     </section>
   </form>

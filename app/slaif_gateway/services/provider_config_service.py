@@ -232,8 +232,8 @@ def _default_base_url(provider: str) -> str:
 
 def _validate_kind(value: str) -> str:
     kind = _required_text(value, "Provider kind")
-    if kind != "openai_compatible":
-        raise ValueError("Provider kind must be openai_compatible")
+    if kind not in {"openai_compatible", "module"}:
+        raise ValueError("Provider kind must be openai_compatible or module")
     return kind
 
 
@@ -279,13 +279,13 @@ def _validate_base_url(
         or parsed.fragment
         or any(char.isspace() or ord(char) < 32 for char in normalized)
         or (
-            kind == "openai_compatible"
-            and provider not in {"openai", "openrouter"}
-            and parsed.path != "/v1"
+        kind == "openai_compatible"
+        and provider not in {"openai", "openrouter"}
+        and parsed.path != "/v1"
         )
     ):
         raise ValueError("Base URL must be http(s)://host[:port]/v1 with no credentials, query, or fragment")
-    if kind == "openai_compatible" and provider not in {"openai", "openrouter"} and parsed.scheme == "http":
+    if kind in {"openai_compatible", "module"} and provider not in {"openai", "openrouter"} and parsed.scheme == "http":
         if not confirm_insecure_http or not _clean_optional(reason):
             raise ValueError(
                 "HTTP generic backends require explicit confirmation and a non-empty audit reason"
@@ -311,7 +311,7 @@ def _safe_audit_values(
         "notes": row.notes,
     }
     is_generic_http = (
-        row.kind == "openai_compatible"
+        row.kind in {"openai_compatible", "module"}
         and row.provider not in {"openai", "openrouter"}
         and row.base_url.lower().startswith("http://")
     )

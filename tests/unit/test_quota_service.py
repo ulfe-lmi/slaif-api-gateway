@@ -157,7 +157,7 @@ def _authenticated_key(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:
     )
 
 
-def _route() -> RouteResolutionResult:
+def _route(*, provider_kind: str | None = None) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
         resolved_model="gpt-4.1-mini",
@@ -166,6 +166,7 @@ def _route() -> RouteResolutionResult:
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        provider_kind=provider_kind,
     )
 
 
@@ -243,6 +244,28 @@ async def test_successful_reservation_creates_pending_row_and_updates_reserved_c
     assert key_repo.lock_calls == [key.id]
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_module_chat_reservation_keeps_request_hold_but_reserves_zero_tokens() -> None:
+    key = FakeGatewayKeyRow(id=uuid.uuid4())
+    service, _, quota_repo = _service(key)
+
+    result = await service.reserve_for_chat_completion(
+        authenticated_key=_authenticated_key(key.id),
+        route=_route(provider_kind="module"),
+        policy=_policy(input_tokens=900, output_tokens=90),
+        cost_estimate=_estimate(cost=Decimal("0"), input_tokens=0, output_tokens=0),
+        request_id="req_module",
+        now=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert result.reserved_tokens == 0
+    assert result.reserved_cost_eur == Decimal("0")
+    assert result.status == "pending"
+    assert key.tokens_reserved_total == 200
+    assert key.requests_reserved_total == 3
+    assert quota_repo.create_calls == 1
 
 
 @pytest.mark.asyncio

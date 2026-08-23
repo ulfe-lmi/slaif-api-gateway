@@ -63,6 +63,7 @@ from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import AccountingError
 from slaif_gateway.services.chat_completion_route_capabilities import (
     enforce_chat_completion_route_capabilities,
+    is_fixed_request_module_billing,
 )
 from slaif_gateway.services.chat_streaming_live_burn import (
     CHAT_STREAMING_LIVE_BURN_ERROR_CODE,
@@ -792,8 +793,10 @@ async def _resolve_chat_completion_route(
             enforce_chat_completion_route_capabilities(
                 policy_result.effective_body,
                 route_capabilities=route.capabilities,
-                route_supports_streaming=route.supports_streaming,
+                route_supports_streaming=route.supports_streaming
+                and not is_fixed_request_module_billing(route.provider_kind, "chat.completions"),
                 requested_model=route.requested_model,
+                provider_kind=route.provider_kind,
             )
         except RouteResolutionError as exc:
             raise openai_error_from_route_resolution_error(exc) from exc

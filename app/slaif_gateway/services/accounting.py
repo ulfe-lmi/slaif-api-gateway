@@ -37,6 +37,9 @@ from slaif_gateway.services.accounting_errors import (
     UnsupportedProviderCostError,
     UsageMissingError,
 )
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    is_fixed_request_module_billing,
+)
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
@@ -139,9 +142,12 @@ class AccountingService:
         usage: ActualUsage,
         pricing_estimate: ChatCostEstimate,
         at: datetime | None = None,
+        endpoint: str = "chat.completions",
     ) -> ActualCost:
         """Compute actual cost from actual usage and safe provider cost metadata."""
         _ = at
+        if is_fixed_request_module_billing(route.provider_kind, endpoint):
+            return _fixed_request_actual_cost(pricing_estimate)
         native_currency = _normalize_currency(pricing_estimate.native_currency)
         warnings: list[str] = []
         provider_reported_cost, provider_reported_currency, provider_warning = (
@@ -241,13 +247,18 @@ class AccountingService:
         if gateway_key is None:
             raise ReservationFinalizationError("Gateway key was not found during finalization")
 
-        usage = self.extract_usage(provider_response)
+        usage = (
+            _fixed_request_usage()
+            if is_fixed_request_module_billing(route.provider_kind, endpoint)
+            else self.extract_usage(provider_response)
+        )
         actual_cost = self.compute_actual_cost(
             provider_response,
             route,
             usage,
             pricing_estimate,
             at=finished,
+            endpoint=endpoint,
         )
         overrun_metadata = _reservation_overrun_metadata(
             actual_cost_eur=actual_cost.actual_cost_eur,
@@ -447,13 +458,18 @@ class AccountingService:
         if reservation.status != "pending":
             raise FinalizationRecoveryNotSupportedError("Quota reservation is not pending")
 
-        usage = self.extract_usage(provider_response)
+        usage = (
+            _fixed_request_usage()
+            if is_fixed_request_module_billing(route.provider_kind, endpoint)
+            else self.extract_usage(provider_response)
+        )
         actual_cost = self.compute_actual_cost(
             provider_response,
             route,
             usage,
             pricing_estimate,
             at=finished,
+            endpoint=endpoint,
         )
         overrun_metadata = _reservation_overrun_metadata(
             actual_cost_eur=actual_cost.actual_cost_eur,
@@ -1489,6 +1505,39 @@ def _overrun_policy(endpoint: str) -> str:
     return _OVERRUN_POLICY_CHAT
 
 
+def _fixed_request_usage() -> ActualUsage:
+    """Return the content-free usage record for native fixed-request billing."""
+    return ActualUsage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        cached_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
+        other_usage={},
+    )
+
+
+def _fixed_request_actual_cost(pricing_estimate: ChatCostEstimate) -> ActualCost:
+    request_price = pricing_estimate.request_price
+    if request_price is None or not isinstance(request_price, Decimal) or request_price < 0:
+        raise UnsupportedProviderCostError(
+            "Native module fixed-request pricing is missing or invalid",
+            param="request_price",
+        )
+    return ActualCost(
+        actual_cost_eur=pricing_estimate.estimated_total_cost_eur,
+        actual_cost_native=request_price,
+        native_currency=_normalize_currency(pricing_estimate.native_currency),
+        slaif_calculated_cost_eur=pricing_estimate.estimated_total_cost_eur,
+        slaif_calculated_cost_native=request_price,
+        cost_source=_COST_SOURCE_SLAIF,
+        cost_confidence="fixed_request_pricing",
+        component_costs_native={"request": request_price},
+        component_token_counts={"total_tokens": 0},
+    )
+
+
 def _aware_now(value: datetime | None = None) -> datetime:
     if value is None:
         return datetime.now(UTC)
@@ -1520,6 +1569,8 @@ def _response_metadata(
         "slaif_calculated_cost_native": str(actual_cost.slaif_calculated_cost_native),
         "slaif_calculated_cost_eur": str(actual_cost.slaif_calculated_cost_eur),
     }
+    if actual_cost.cost_confidence == "fixed_request_pricing":
+        metadata["billing_mode"] = "fixed_request"
     if actual_cost.component_token_counts:
         metadata["component_token_counts"] = dict(actual_cost.component_token_counts)
     if actual_cost.component_costs_native:

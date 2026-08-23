@@ -210,3 +210,53 @@ async def test_provider_slug_rejects_secret_like_or_unsafe_values() -> None:
                 enabled=True,
                 notes=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_module_provider_config_accepts_operator_url_and_audits_kind() -> None:
+    service, _providers, audit = _service()
+
+    row = await service.create_provider_config(
+        provider="face-score",
+        display_name="Face score",
+        kind="module",
+        base_url="https://operator.example/score",
+        api_key_env_var="FACE_SCORE_KEY",
+        enabled=True,
+        notes="foundation only",
+        reason="reviewed module configuration",
+    )
+
+    assert row.kind == "module"
+    assert row.base_url == "https://operator.example/score"
+    assert audit.rows[0]["new_values"]["kind"] == "module"
+
+
+@pytest.mark.asyncio
+async def test_module_http_requires_existing_confirmation_and_reason_boundary() -> None:
+    service, _providers, _audit = _service()
+
+    with pytest.raises(ValueError, match="confirmation"):
+        await service.create_provider_config(
+            provider="face-score",
+            display_name="Face score",
+            kind="module",
+            base_url="http://module.lan:8000/score",
+            api_key_env_var="FACE_SCORE_KEY",
+            enabled=True,
+            notes=None,
+        )
+
+    row = await service.create_provider_config(
+        provider="face-score",
+        display_name="Face score",
+        kind="module",
+        base_url="http://module.lan:8000/score",
+        api_key_env_var="FACE_SCORE_KEY",
+        enabled=True,
+        notes=None,
+        reason="operator-owned LAN module",
+        confirm_insecure_http=True,
+    )
+
+    assert row.kind == "module"

@@ -188,7 +188,10 @@ def add(
     base_url: Annotated[str | None, typer.Option("--base-url", help="OpenAI-compatible base URL")] = None,
     enabled: Annotated[bool, typer.Option("--enabled/--disabled", help="Enable provider")] = True,
     notes: Annotated[str | None, typer.Option("--notes", help="Administrative notes")] = None,
-    kind: Annotated[str, typer.Option("--kind", help="Provider kind")] = "openai_compatible",
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="Provider kind: openai_compatible or module"),
+    ] = "openai_compatible",
     reason: Annotated[str | None, typer.Option("--reason", help="Audit reason")] = None,
     confirm_insecure_http: Annotated[
         bool,

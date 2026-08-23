@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlsplit
 
 from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
+from slaif_gateway.modules import get_module_adapter
 from slaif_gateway.providers.base import ProviderAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
@@ -21,7 +22,10 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
     """Return an adapter for a configured provider or resolved route."""
     normalized = _provider_name(provider)
     provider_kind = _provider_kind(provider)
-    if normalized not in {"openai", "openrouter"} and provider_kind != "openai_compatible":
+    if normalized not in {"openai", "openrouter"} and provider_kind not in {
+        "openai_compatible",
+        "module",
+    }:
         raise ProviderConfigurationError(
             "Unsupported provider configured for route",
             provider=normalized,
@@ -52,6 +56,22 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
         if base_url:
             kwargs["base_url"] = base_url
         return OpenRouterProviderAdapter(settings, **kwargs)
+    if provider_kind == "module":
+        if not base_url:
+            raise ProviderConfigurationError(
+                "Native module provider requires a base URL",
+                provider=normalized,
+                error_code="invalid_provider_configuration",
+            )
+        _validate_module_base_url(base_url)
+        return get_module_adapter(
+            normalized,
+            settings,
+            base_url=base_url,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or 300,
+            max_retries=max_retries or 0,
+        )
     if provider_kind == "openai_compatible":
         if not base_url:
             raise ProviderConfigurationError(
@@ -171,5 +191,29 @@ def _validate_generic_base_url(value: str) -> None:
     ):
         raise ProviderConfigurationError(
             "Generic OpenAI-compatible base URL is invalid",
+            error_code="invalid_provider_configuration",
+        )
+
+
+def _validate_module_base_url(value: str) -> None:
+    parsed = urlsplit(value)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ProviderConfigurationError(
+            "Native module base URL is invalid",
+            error_code="invalid_provider_configuration",
+        ) from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() or ord(char) < 32 for char in value)
+    ):
+        raise ProviderConfigurationError(
+            "Native module base URL is invalid",
             error_code="invalid_provider_configuration",
         )

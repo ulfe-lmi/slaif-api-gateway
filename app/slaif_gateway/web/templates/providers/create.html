@@ -42,6 +42,7 @@
           Kind
           <select name="kind">
             <option value="openai_compatible" {% if form.kind == "openai_compatible" %}selected{% endif %}>OpenAI-compatible</option>
+            <option value="module" {% if form.kind == "module" %}selected{% endif %}>Native module</option>
           </select>
         </label>
       </div>
@@ -53,7 +54,7 @@
       <div class="form-grid">
         <label>
           Base URL
-          <input name="base_url" value="{{ form.base_url }}" autocomplete="off" placeholder="https://api.openai.com/v1">
+          <input name="base_url" value="{{ form.base_url }}" autocomplete="off" placeholder="https://operator.example/module">
         </label>
         <label>
           API key environment variable
@@ -100,7 +101,7 @@
 
     <section class="action-panel" aria-labelledby="provider-submit-heading">
       <h2 id="provider-submit-heading">Create</h2>
-      <p class="muted">This updates provider metadata only. It does not add routes, pricing, FX rates, or health checks.</p>
+      <p class="muted">This updates provider metadata only. A native module is usable only after a reviewed static adapter is registered in source; this form never selects imports or classes.</p>
       <button type="submit">Create provider config</button>
     </section>
   </form>

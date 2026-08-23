@@ -25,6 +25,9 @@ from slaif_gateway.services.quota_errors import (
     QuotaLimitExceededError,
     QuotaReservationNotFoundError,
 )
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    is_fixed_request_module_billing,
+)
 
 _CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 _AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
@@ -68,9 +71,12 @@ class QuotaService:
         reserved_cost_eur = _validate_cost(cost_estimate.estimated_total_cost_eur)
         _validate_tokens(policy.estimated_input_tokens)
         _validate_tokens(policy.effective_output_tokens)
-        reserved_tokens = _validate_tokens(
-            policy.estimated_input_tokens + policy.effective_output_tokens
-        )
+        if is_fixed_request_module_billing(route.provider_kind, endpoint):
+            reserved_tokens = 0
+        else:
+            reserved_tokens = _validate_tokens(
+                policy.estimated_input_tokens + policy.effective_output_tokens
+            )
         _validate_tokens(cost_estimate.estimated_input_tokens)
         _validate_tokens(cost_estimate.estimated_output_tokens)
 
