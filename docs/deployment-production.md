@@ -53,6 +53,14 @@ API is healthy.
 Only Nginx ports 80/443 are exposed. PostgreSQL, Redis, migrations, and the API
 remain on the internal network; the API itself is loopback-bound.
 
-Worker/scheduler services are intentionally not included in this bounded
-production profile. Reconciliation is manual unless a future profile explicitly
-adds them.
+The default production profile runs API + PostgreSQL + Redis + Nginx only.
+
+Async operations such as email delivery and scheduled reconciliation require the
+optional `async` profile:
+
+```bash
+docker compose -f docker-compose.production.yml --profile async up -d
+```
+
+Without that profile, worker/scheduler do not run and reconciliation remains
+available through the CLI.
