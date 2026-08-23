@@ -745,13 +745,21 @@ provider-specific translation, or live model qualification. Objective 020 owns
 
 `ProviderConfig.kind=module` is an operator metadata and accounting
 foundation, not a new OpenAI-compatible provider claim. Dispatch is restricted
-to a reviewed static source registry; the current registry is empty, so an
-unregistered module identifier fails closed. Configuration cannot select an
-import path, class, or plugin.
+to a reviewed static source registry. The registry contains the bounded
+`facial_scoring` adapter; unknown module identifiers still fail closed and
+configuration cannot select an import path, class, or plugin.
 
-The only prepared public operation is the bounded Chat Completions accounting
-boundary: module routes require fixed non-negative request pricing, reserve one
-request and zero tokens, and finalize zero provider usage tokens plus the
-fixed request cost. Streaming and Responses are not enabled for modules in
-this objective. No facial-scoring adapter, image validation, downstream call,
-or production endpoint is included.
+The `facial-manipulation-scoring` public model is limited to non-streaming
+`POST /v1/chat/completions`. Its route must use the exact narrow capability
+profile returned by `facial_scoring_chat_completion_capabilities()`: text and
+image input are enabled, while streaming, tools, audio, files, multiple
+choices, hosted tools, structured outputs, and non-default controls are
+disabled. Module routes reserve one request and zero tokens and finalize zero
+provider usage tokens plus the fixed request cost.
+
+The adapter accepts exactly one supported non-empty base64 image data URL from
+`messages` and translates it to one `image` multipart field at the configured
+operator-selected `/v1/score` origin. Text is validation-only and is never
+sent, logged, or persisted. The module credential is read only from
+`FACIAL_SCORING_API_KEY`; the client gateway credential is never reused. No
+live score request or production route activation is implied by this contract.

@@ -12,6 +12,7 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 CHAT_COMPLETIONS_CAPABILITIES_KEY = "chat_completions"
 MODULE_PROVIDER_KIND = "module"
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+FACIAL_SCORING_PUBLIC_MODEL = "facial-manipulation-scoring"
 
 CHAT_CAPABILITY_TEXT = "chat_text"
 CHAT_CAPABILITY_STREAMING = "chat_streaming"
@@ -111,6 +112,27 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
         CHAT_CAPABILITY_SERVICE_TIER_NON_DEFAULT: False,
         CHAT_CAPABILITY_MULTIPLE_CHOICES: False,
     }
+
+
+def facial_scoring_chat_completion_capabilities() -> dict[str, bool]:
+    """Return the exact narrow capability profile for the facial module route."""
+
+    capabilities = default_chat_completion_capabilities(supports_streaming=False)
+    capabilities.update(
+        {
+            CHAT_CAPABILITY_FUNCTION_TOOLS: False,
+            CHAT_CAPABILITY_LEGACY_FUNCTIONS: False,
+            CHAT_CAPABILITY_STRUCTURED_OUTPUTS: False,
+            CHAT_CAPABILITY_JSON_MODE: False,
+            CHAT_CAPABILITY_LOGPROBS: False,
+            CHAT_CAPABILITY_REASONING_USAGE: False,
+            CHAT_CAPABILITY_CACHED_INPUT_USAGE: False,
+            CHAT_CAPABILITY_IMAGE_INPUTS: True,
+            CHAT_CAPABILITY_MULTIMODAL: True,
+            CHAT_CAPABILITY_MULTIPLE_CHOICES: False,
+        }
+    )
+    return capabilities
 
 
 def ensure_default_chat_completion_capabilities(

@@ -835,16 +835,18 @@ client `Authorization` is never forwarded.
 
 Native module configurations use `kind=module` and a separately reviewed
 static adapter contract built on the same safe `ProviderRequest` and
-`ProviderResponse` boundary. The registry is intentionally empty in the
-current foundation. Unknown module identifiers, arbitrary import paths,
-user-supplied classes, and dynamic plugin loading fail closed. Module base URLs
-remain operator configuration and are validated without hardcoding a
-downstream endpoint; credentials are read only from the configured server-side
-environment-variable name. Client `Authorization`, raw credentials, request
-bodies, response bodies, image content, and data URLs are not forwarded as
-module credentials or persisted by the foundation. Module Chat streaming and
-Responses forwarding are not enabled; the future facial-specific adapter is a
-separate objective.
+`ProviderResponse` boundary. The reviewed `facial_scoring` registration is
+the only native module currently available; unknown identifiers, arbitrary
+import paths, user-supplied classes, and dynamic plugin loading fail closed.
+Module base URLs remain operator configuration and are validated without
+hardcoding a downstream host; the facial adapter uses the configured origin's
+`/v1/score` path and reads only `FACIAL_SCORING_API_KEY`. Client
+`Authorization`, raw credentials, request bodies, response bodies, image
+content, and data URLs are not forwarded as module credentials or persisted.
+The facial adapter permits only one non-streaming Chat image request, sends a
+single `image` multipart field, and returns an OpenAI-shaped text completion
+with zero provider token usage. Module Responses and module streaming remain
+unsupported.
 # External-tool accounting boundary
 
 The external-tool accounting hold/reconciliation foundation is implemented, but

@@ -22,7 +22,10 @@ from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
 )
-from slaif_gateway.services.chat_completion_route_capabilities import default_chat_completion_capabilities
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    default_chat_completion_capabilities,
+    facial_scoring_chat_completion_capabilities,
+)
 
 
 class FakeSession:
@@ -65,13 +68,14 @@ def _route(
     provider: str = "openai",
     resolved_model: str = "gpt-4.1-mini",
     *,
+    requested_model: str = "classroom-cheap",
     provider_kind: str | None = None,
     provider_base_url: str | None = None,
     provider_api_key_env_var: str | None = None,
     capabilities: dict[str, object] | None = None,
 ) -> RouteResolutionResult:
     return RouteResolutionResult(
-        requested_model="classroom-cheap",
+        requested_model=requested_model,
         resolved_model=resolved_model,
         provider=provider,
         route_id=uuid.uuid4(),
@@ -198,6 +202,7 @@ def _wire_pipeline(
     provider_kind: str | None = None,
     authenticated_key: AuthenticatedGatewayKey | None = None,
     expected_requested_model: str = "classroom-cheap",
+    route_requested_model: str = "classroom-cheap",
     route_capabilities: dict[str, object] | None = None,
 ) -> dict[str, object]:
     from slaif_gateway.api import dependencies as dependencies_module
@@ -213,6 +218,7 @@ def _wire_pipeline(
     route_result = _route(
         provider=provider,
         resolved_model=resolved_model,
+        requested_model=route_requested_model,
         provider_base_url=provider_base_url,
         provider_api_key_env_var=provider_api_key_env_var,
         provider_kind=provider_kind,
@@ -349,6 +355,67 @@ def test_openai_nonstreaming_happy_path_uses_adapter_and_finalizes(
     assert state["session"].commit_calls == 2
     metrics = prometheus_response_body().decode()
     assert 'gateway_cost_eur_total{model="gpt-4.1-mini",provider="openai"}' in metrics
+
+
+def test_facial_scoring_module_forwards_one_image_and_finalizes_fixed_usage(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    monkeypatch.setenv("FACIAL_SCORING_API_KEY", "facial-native-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch,
+        app,
+        provider="facial_scoring",
+        resolved_model="facial-manipulation-scoring",
+        route_requested_model="facial-manipulation-scoring",
+        expected_requested_model="facial-manipulation-scoring",
+        provider_kind="module",
+        provider_base_url="https://facial-native.example",
+        provider_api_key_env_var="FACIAL_SCORING_API_KEY",
+        route_capabilities={
+            "chat_completions": facial_scoring_chat_completion_capabilities(),
+        },
+    )
+    upstream = respx_mock.post("https://facial-native.example/v1/score").mock(
+        return_value=httpx.Response(
+            200,
+            json={"status": "scored", "score": 0.8234},
+        )
+    )
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={
+            "model": "facial-manipulation-scoring",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "must not be forwarded"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ],
+        },
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == (
+        "Score: 0.8234 (type: uncalibrated_model_score)"
+    )
+    assert response.json()["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert upstream.called
+    request = upstream.calls[0].request
+    assert request.headers["x-api-key"] == "facial-native-key"
+    assert request.headers.get("authorization") is None
+    assert request.headers.get("cookie") is None
+    assert b"must not be forwarded" not in request.content
+    assert b'name="image"' in request.content
+    assert state["reserve_calls"]
+    assert state["finalize_calls"]
+    assert state["provider_responses"][0].usage.total_tokens == 0
 
 
 def test_generic_provider_remote_image_is_rejected_before_side_effects(
