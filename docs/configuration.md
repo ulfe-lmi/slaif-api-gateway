@@ -303,6 +303,16 @@ route for public model `facial-manipulation-scoring` with
 operator activation steps; this configuration does not perform a live score
 request or probe the service during setup.
 
+Separately, one explicitly human-authorized native smoke used a disposable
+synthetic image and a transient testing credential outside the repository. It
+returned HTTP 200 with the native `unscorable` result and reason
+`no_face_detected`. This is `PASS` evidence for credential acceptance,
+multipart transport, and safe native response-shape handling only. It does not
+qualify a positive score, model accuracy, authenticity, calibration, gateway
+end-to-end behavior, certification, production readiness, or an SLA; no
+credential, service address, image, data URL, or raw request/response is part
+of the repository record.
+
 A non-secret metadata example is:
 
 ```text
@@ -326,10 +336,11 @@ The fixed `0 EUR` request price does not make the route unlimited: normal
 request/rate/concurrency controls, PostgreSQL reservation/finalization/release,
 quota limits, key revocation and expiry, audit logging, and failed-attempt
 handling remain active. Current facial-module evidence is mocked HTTP plus
-PostgreSQL qualification only. Live score qualification is `NOT RUN` because
-no authorized credential is supplied; the project makes no endpoint
-reachability, model-accuracy, authenticity, calibration, certification,
-production, or SLA claim from this setup.
+PostgreSQL gateway qualification, with one explicitly authorized live native
+smoke. That smoke returned HTTP 200 and the sanitized native
+`unscorable/no_face_detected` result; it does not establish a positive score,
+model accuracy, authenticity, calibration, gateway end-to-end qualification,
+certification, production readiness, or an SLA.
 
 ## OpenAI Assisted Catalog Proposals
 
