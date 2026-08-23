@@ -296,3 +296,26 @@ Actual overruns are charged into used counters and later admission is rejected
 normally when the key is over limit. Scheduled reconciliation inspects and
 alerts on holds but never mutates them. See
 `docs/runbooks/external-tool-hold-reconciliation.md`.
+
+## Native module fixed-request billing foundation
+
+Provider configurations with `kind=module` are a bounded foundation for a
+reviewed, statically registered native downstream module. The current
+objective registers no module and makes no downstream call. A module Chat
+Completions route must have a non-null, non-negative `request_price`; token
+component prices are ignored for this billing mode. The configured currency is
+converted through the existing EUR FX path, so a `0 EUR` request price is an
+exact zero-cost estimate.
+
+Module Chat reservations still reserve one request and retain key lifecycle,
+request-limit, rate-limit, concurrency, expiry, revocation, and external-tool
+fence controls. They reserve zero tokens and therefore do not turn zero price
+into unlimited requests. Successful normal Chat finalization records zero
+provider usage tokens and the fixed request cost atomically in PostgreSQL.
+Provider failure or timeout uses the existing failed-attempt ledger and
+reservation-release path.
+
+Streaming, Responses, facial-specific behavior, content persistence, and
+dynamic module/plugin loading are not enabled by this foundation. Module
+credentials remain server-side and are resolved only from the configured
+environment-variable name.

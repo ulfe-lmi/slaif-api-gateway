@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -196,7 +196,7 @@ def _auth(gateway_key_id: uuid.UUID) -> AuthenticatedGatewayKey:
     )
 
 
-def _route() -> RouteResolutionResult:
+def _route(*, provider_kind: str | None = None) -> RouteResolutionResult:
     return RouteResolutionResult(
         requested_model="classroom-cheap",
         resolved_model="gpt-4.1-mini",
@@ -205,6 +205,7 @@ def _route() -> RouteResolutionResult:
         route_match_type="exact",
         route_pattern="classroom-cheap",
         priority=100,
+        provider_kind=provider_kind,
     )
 
 
@@ -312,6 +313,47 @@ async def test_finalize_successful_response_moves_counters_and_writes_ledger() -
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
     assert usage_repo.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_module_fixed_request_finalization_ignores_provider_token_usage() -> None:
+    service, key, reservation, _, _, usage_repo = _service()
+    reservation.reserved_cost_eur = Decimal("0")
+    reservation.reserved_tokens = 0
+    key.cost_reserved_eur = Decimal("0")
+    key.tokens_reserved_total = 0
+    fixed_estimate = replace(
+        _estimate(),
+        provider="test-module",
+        requested_model="module-score",
+        resolved_model="module-score-v1",
+        estimated_input_tokens=0,
+        estimated_output_tokens=0,
+        estimated_input_cost_native=Decimal("0"),
+        estimated_output_cost_native=Decimal("0"),
+        estimated_total_cost_native=Decimal("0"),
+        estimated_total_cost_eur=Decimal("0"),
+        request_price=Decimal("0"),
+    )
+
+    result = await service.finalize_successful_response(
+        reservation.id,
+        _auth(key.id),
+        _route(provider_kind="module"),
+        _policy(),
+        fixed_estimate,
+        _response(),
+        request_id="req_module",
+    )
+
+    assert result.actual_cost_eur == Decimal("0")
+    assert result.prompt_tokens == 0
+    assert result.completion_tokens == 0
+    assert result.total_tokens == 0
+    assert key.tokens_used_total == 0
+    assert key.requests_used_total == 1
+    assert usage_repo.success_calls[0]["usage_raw"] == {}
+    assert usage_repo.success_calls[0]["response_metadata"]["billing_mode"] == "fixed_request"
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,8 @@ from slaif_gateway.services.hosted_tool_policy import is_search_specific_chat_co
 from slaif_gateway.services.policy_errors import RequestPolicyError
 
 CHAT_COMPLETIONS_CAPABILITIES_KEY = "chat_completions"
+MODULE_PROVIDER_KIND = "module"
+CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 
 CHAT_CAPABILITY_TEXT = "chat_text"
 CHAT_CAPABILITY_STREAMING = "chat_streaming"
@@ -157,8 +159,19 @@ def enforce_chat_completion_route_capabilities(
     route_capabilities: Mapping[str, object] | None,
     route_supports_streaming: bool,
     requested_model: str,
+    provider_kind: str | None = None,
 ) -> None:
     """Raise when a request shape exceeds route/model Chat Completions metadata."""
+
+    if provider_kind == MODULE_PROVIDER_KIND and payload.get("stream") is True:
+        raise ChatCompletionRouteCapabilityError(
+            ChatCompletionRouteCapabilityFinding(
+                capability=CHAT_CAPABILITY_STREAMING,
+                field="stream",
+                error_code="module_streaming_not_supported",
+                safe_message="Native module Chat Completions routes do not support streaming.",
+            )
+        )
 
     capabilities = _parse_route_capabilities(
         route_capabilities,
@@ -171,6 +184,14 @@ def enforce_chat_completion_route_capabilities(
     for finding in findings:
         if not capabilities.get(finding.capability, False):
             raise ChatCompletionRouteCapabilityError(finding)
+
+
+def is_fixed_request_module_billing(provider_kind: str | None, endpoint: str) -> bool:
+    """Return whether a route uses the native-module fixed-request billing mode."""
+    normalized_endpoint = endpoint.strip()
+    if normalized_endpoint == "chat.completions":
+        normalized_endpoint = CHAT_COMPLETIONS_ENDPOINT
+    return provider_kind == MODULE_PROVIDER_KIND and normalized_endpoint == CHAT_COMPLETIONS_ENDPOINT
 
 
 def classify_chat_completion_route_capability_requirements(

@@ -31,6 +31,9 @@ from slaif_gateway.services.pricing_errors import (
     RealtimeClientSecretPricingNotSupportedError,
     UnsupportedCurrencyError,
 )
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    is_fixed_request_module_billing,
+)
 
 _ONE_MILLION: Final[Decimal] = Decimal("1000000")
 _EUR: Final[str] = "EUR"
@@ -127,6 +130,38 @@ class PricingService:
                 model=route.resolved_model,
                 endpoint=endpoint,
                 at=at,
+            )
+
+        if is_fixed_request_module_billing(route.provider_kind, endpoint):
+            if pricing.request_price is None:
+                raise InvalidPricingDataError(
+                    "Native module Chat Completions pricing requires a request price."
+                )
+            request_price = _required_non_negative_decimal(
+                pricing.request_price,
+                field_name="request_price",
+            )
+            total_eur, fx = await self.convert_to_eur(request_price, pricing.currency, at=at)
+            return ChatCostEstimate(
+                provider=route.provider,
+                requested_model=route.requested_model,
+                resolved_model=route.resolved_model,
+                native_currency=pricing.currency,
+                estimated_input_tokens=0,
+                estimated_output_tokens=0,
+                estimated_input_cost_native=Decimal("0"),
+                estimated_output_cost_native=Decimal("0"),
+                estimated_total_cost_native=request_price,
+                estimated_total_cost_eur=total_eur,
+                pricing_rule_id=pricing.pricing_rule_id,
+                fx_rate_id=fx.fx_rate_id,
+                input_price_per_1m=pricing.input_price_per_1m,
+                cached_input_price_per_1m=pricing.cached_input_price_per_1m,
+                output_price_per_1m=pricing.output_price_per_1m,
+                reasoning_price_per_1m=pricing.reasoning_price_per_1m,
+                audio_output_price_per_1m=pricing.audio_output_price_per_1m,
+                request_price=request_price,
+                fx_rate=fx.rate,
             )
 
         input_tokens = policy.estimated_input_tokens

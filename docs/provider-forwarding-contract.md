@@ -832,6 +832,19 @@ client `Authorization` is never forwarded.
 - Raw provider response bodies are not returned to clients or stored.
 - Provider diagnostics are bounded and sanitized.
 - Normal tests mock upstream OpenAI/OpenRouter with RESPX and do not require real provider keys.
+
+Native module configurations use `kind=module` and a separately reviewed
+static adapter contract built on the same safe `ProviderRequest` and
+`ProviderResponse` boundary. The registry is intentionally empty in the
+current foundation. Unknown module identifiers, arbitrary import paths,
+user-supplied classes, and dynamic plugin loading fail closed. Module base URLs
+remain operator configuration and are validated without hardcoding a
+downstream endpoint; credentials are read only from the configured server-side
+environment-variable name. Client `Authorization`, raw credentials, request
+bodies, response bodies, image content, and data URLs are not forwarded as
+module credentials or persisted by the foundation. Module Chat streaming and
+Responses forwarding are not enabled; the future facial-specific adapter is a
+separate objective.
 # External-tool accounting boundary
 
 The external-tool accounting hold/reconciliation foundation is implemented, but

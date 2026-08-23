@@ -740,3 +740,18 @@ provider-specific translation, or live model qualification. Objective 020 owns
   create/rotate email modes, CLI commands, or the one-time-secret-backed email
   delivery detail actions.
 - Real upstream smoke tests in the normal test suite.
+
+## Native module foundation boundary
+
+`ProviderConfig.kind=module` is an operator metadata and accounting
+foundation, not a new OpenAI-compatible provider claim. Dispatch is restricted
+to a reviewed static source registry; the current registry is empty, so an
+unregistered module identifier fails closed. Configuration cannot select an
+import path, class, or plugin.
+
+The only prepared public operation is the bounded Chat Completions accounting
+boundary: module routes require fixed non-negative request pricing, reserve one
+request and zero tokens, and finalize zero provider usage tokens plus the
+fixed request cost. Streaming and Responses are not enabled for modules in
+this objective. No facial-scoring adapter, image validation, downstream call,
+or production endpoint is included.

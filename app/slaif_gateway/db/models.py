@@ -55,7 +55,7 @@ KIND_VALUES_CODEX_REPLAY_REFERENCES = (
     "compaction",
 )
 SOURCE_VALUES_USAGE_PROFILES_COST = ("provider_reported", "slaif_calculated", "mixed", "unknown")
-KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible",)
+KIND_VALUES_PROVIDER_CONFIGS = ("openai_compatible", "module")
 MATCH_TYPE_VALUES_MODEL_ROUTES = ("exact", "prefix", "glob")
 PURPOSE_VALUES_ONE_TIME_SECRETS = ("gateway_key_email", "gateway_key_rotation_email")
 STATUS_VALUES_ONE_TIME_SECRETS = ("pending", "consumed", "expired", "revoked")

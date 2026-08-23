@@ -9393,13 +9393,13 @@ def _parse_provider_config_form(
     provider = _parse_provider_slug(form.get("provider"))
     display_name = _clean_admin_reason(form.get("display_name")) or provider
     kind = (form.get("kind") or "openai_compatible").strip()
-    if kind != "openai_compatible":
-        raise ValueError("Provider kind must be openai_compatible.")
+    if kind not in {"openai_compatible", "module"}:
+        raise ValueError("Provider kind must be openai_compatible or module.")
     base_url = _clean_admin_reason(form.get("base_url"))
     if require_base_url and base_url is None:
         raise ValueError("Base URL is required.")
     if base_url is not None:
-        _validate_admin_base_url(base_url, provider=provider)
+        _validate_admin_base_url(base_url, provider=provider, kind=kind)
     api_key_env_var = _parse_provider_api_key_env_var(form.get("api_key_env_var"))
     timeout_seconds = _parse_required_positive_admin_int(
         form.get("timeout_seconds"), field_name="timeout_seconds"
@@ -9414,6 +9414,7 @@ def _parse_provider_config_form(
     insecure_http = bool(parsed_url and parsed_url.scheme == "http")
     if (
         insecure_http
+        and kind in {"openai_compatible", "module"}
         and provider not in {"openai", "openrouter"}
         and not _is_checked(form.get("confirm_insecure_http"))
     ):
@@ -9432,6 +9433,7 @@ def _parse_provider_config_form(
         "reason": reason,
         "confirm_insecure_http": (
             insecure_http
+            and kind in {"openai_compatible", "module"}
             and provider not in {"openai", "openrouter"}
             and _is_checked(form.get("confirm_insecure_http"))
         ),
@@ -9837,20 +9839,26 @@ def _looks_like_provider_secret_value(value: str) -> bool:
     return lowered.startswith(("sk-", "sk_", "sk-or-")) or any(ch.isspace() for ch in value)
 
 
-def _validate_admin_base_url(value: str, *, provider: str | None = None) -> None:
+def _validate_admin_base_url(
+    value: str,
+    *,
+    provider: str | None = None,
+    kind: str = "openai_compatible",
+) -> None:
     parsed = urlparse(value)
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
         or (
-            provider not in {"openai", "openrouter"}
+            kind == "openai_compatible"
+            and provider not in {"openai", "openrouter"}
             and parsed.path.rstrip("/") != "/v1"
         )
         or parsed.query
         or parsed.fragment
         or any(char.isspace() or ord(char) < 32 for char in value)
     ):
-        raise ValueError("Base URL must be an http(s) host URL ending in /v1.")
+        raise ValueError("Base URL must be a safe http(s) URL with no credentials, query, or fragment.")
     if parsed.username or parsed.password:
         raise ValueError("Base URL must not contain credentials.")
     try:

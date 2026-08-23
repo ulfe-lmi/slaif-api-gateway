@@ -141,15 +141,22 @@ def _service(
     )
 
 
-def _route(*, requested_model: str = "classroom-cheap", resolved_model: str = "gpt-4.1-mini"):
+def _route(
+    *,
+    requested_model: str = "classroom-cheap",
+    resolved_model: str = "gpt-4.1-mini",
+    provider: str = "openai",
+    provider_kind: str | None = None,
+):
     return RouteResolutionResult(
         requested_model=requested_model,
         resolved_model=resolved_model,
-        provider="openai",
+        provider=provider,
         route_id=uuid.uuid4(),
         route_match_type="exact",
         route_pattern=requested_model,
         priority=100,
+        provider_kind=provider_kind,
     )
 
 
@@ -877,5 +884,75 @@ async def test_realtime_client_secret_estimate_requires_fx_rate_for_non_eur_pric
                 effective_output_tokens=200,
             ),
             endpoint="/v1/realtime/client_secrets",
+            at=datetime(2026, 4, 25, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_module_chat_fixed_request_pricing_is_zero_token_and_exact_zero_cost() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                provider="test-module",
+                upstream_model="module-score-v1",
+                currency="EUR",
+                request_price=Decimal("0"),
+                input_price_per_1m=Decimal("99"),
+                output_price_per_1m=Decimal("99"),
+            )
+        ]
+    )
+
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(
+            requested_model="module-score",
+            resolved_model="module-score-v1",
+            provider="test-module",
+            provider_kind="module",
+        ),
+        policy=ChatCompletionPolicyResult(
+            effective_body={
+                "model": "module-score",
+                "messages": [{"role": "user", "content": "bounded input"}],
+                "max_completion_tokens": 4096,
+            },
+            requested_output_tokens=4096,
+            effective_output_tokens=4096,
+            estimated_input_tokens=128,
+            injected_default_output_tokens=False,
+        ),
+        endpoint="chat.completions",
+        at=datetime(2026, 4, 25, tzinfo=UTC),
+    )
+
+    assert estimate.estimated_input_tokens == 0
+    assert estimate.estimated_output_tokens == 0
+    assert estimate.estimated_total_cost_native == Decimal("0")
+    assert estimate.estimated_total_cost_eur == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_module_chat_fixed_request_pricing_requires_request_price() -> None:
+    service = _service(
+        pricing_rows=[
+            _pricing_rule(
+                provider="test-module",
+                upstream_model="module-score-v1",
+                currency="EUR",
+                request_price=None,
+            )
+        ]
+    )
+
+    with pytest.raises(InvalidPricingDataError, match="request price"):
+        await service.estimate_chat_completion_cost(
+            route=_route(
+                requested_model="module-score",
+                resolved_model="module-score-v1",
+                provider="test-module",
+                provider_kind="module",
+            ),
+            policy=_policy(),
+            endpoint="chat.completions",
             at=datetime(2026, 4, 25, tzinfo=UTC),
         )
