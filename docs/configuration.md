@@ -292,13 +292,16 @@ through CLI/database metadata and the implemented admin metadata forms; those
 forms do not accept provider key values or call upstream providers.
 
 For the facial scoring module, use provider slug `facial_scoring`, kind `module`,
-an operator-selected HTTPS origin, `FACIAL_SCORING_API_KEY`, timeout metadata,
-and `max_retries=0`. Create one exact `/v1/chat/completions` route for public
-model `facial-manipulation-scoring` with
+an operator-selected origin with HTTPS preferred. An internal HTTP origin is
+permitted only through the existing explicit insecure-HTTP confirmation with a
+non-empty audit reason and an operator-controlled firewall/reverse-proxy
+boundary; it must not be exposed publicly. Use `FACIAL_SCORING_API_KEY`,
+timeout metadata, and `max_retries=0`. Create one exact `/v1/chat/completions`
+route for public model `facial-manipulation-scoring` with
 `facial_scoring_chat_completion_capabilities()` serialized under
 `capabilities.chat_completions`. The route and fixed-request pricing row are
 operator activation steps; this configuration does not perform a live score
-request during setup.
+request or probe the service during setup.
 
 ## OpenAI Assisted Catalog Proposals
 
