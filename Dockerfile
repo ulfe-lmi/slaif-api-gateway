@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,13 +13,17 @@ RUN addgroup --system slaif && adduser --system --ingroup slaif slaif
 COPY pyproject.toml README.md LICENSE alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
+COPY deploy/production/load-secrets.sh /usr/local/bin/load-production-secrets
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install . \
+    && chmod 0755 /usr/local/bin/load-production-secrets \
     && chown -R slaif:slaif /app
 
 USER slaif
 
 EXPOSE 8000
+
+ENTRYPOINT ["/usr/local/bin/load-production-secrets"]
 
 CMD ["gunicorn", "slaif_gateway.main:app", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]

@@ -178,6 +178,12 @@ API/worker/scheduler startup.
 
 ## Production Notes
 
+The hardened production appliance is defined separately in
+[`deployment-production.md`](deployment-production.md). It uses file-backed
+Docker/Compose secrets, authenticated Redis, a named PostgreSQL volume, private
+networks, and Nginx for the public HTTPS boundary. Follow that document rather
+than adapting the local `.env` workflow for production.
+
 Docker Compose is local/development packaging and a clear service layout. It is
 not full production hardening by itself.
 
