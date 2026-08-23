@@ -847,10 +847,13 @@ The facial adapter permits only one non-streaming Chat image request, sends a
 single `image` multipart field, and returns an OpenAI-shaped text completion
 with zero provider token usage. Module Responses and module streaming remain
 unsupported.
-The current qualification record for this adapter is limited to mocked HTTP
-and PostgreSQL evidence for the gateway boundaries; live score qualification is
-`NOT RUN` because no authorized credential is supplied. It does not establish
-downstream reachability, model accuracy, authenticity, calibration,
+The current qualification record for this adapter is mocked HTTP plus
+PostgreSQL evidence for the gateway boundaries, with one explicitly authorized
+live native smoke. The sanitized smoke returned HTTP 200 with the native
+`unscorable` result and reason `no_face_detected`, which is `PASS` evidence for
+credential acceptance, multipart transport, and safe native response-shape
+handling only. It does not establish a positive score, downstream gateway
+end-to-end qualification, model accuracy, authenticity, calibration,
 certification, production readiness, or an SLA. A fixed zero-EUR request price
 still leaves request, rate, concurrency, quota, revocation, expiry, audit, and
 failed-attempt controls active.
