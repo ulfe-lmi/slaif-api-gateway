@@ -118,6 +118,74 @@ services:
           cpus: "1.0"
           memory: 256m
 
+  worker:
+    profiles: [async]
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: production
+      DATABASE_URL_FILE: /run/secrets/database_url
+      REDIS_URL: redis://redis:6379/0
+      TOKEN_HMAC_SECRET_V1_FILE: /run/secrets/token_hmac_secret_v1
+      ADMIN_SESSION_SECRET_FILE: /run/secrets/admin_session_secret
+      ONE_TIME_SECRET_ENCRYPTION_KEY_FILE: /run/secrets/one_time_secret_encryption_key
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      OPENAI_UPSTREAM_API_KEY_FILE: /run/secrets/openai_upstream_api_key
+    secrets:
+      - database_url
+      - token_hmac_secret_v1
+      - admin_session_secret
+      - one_time_secret_encryption_key
+      - openrouter_api_key
+      - openai_upstream_api_key
+    command: ["celery", "-A", "slaif_gateway.worker", "worker", "--loglevel=INFO"]
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  scheduler:
+    profiles: [async]
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: production
+      DATABASE_URL_FILE: /run/secrets/database_url
+      REDIS_URL: redis://redis:6379/0
+      TOKEN_HMAC_SECRET_V1_FILE: /run/secrets/token_hmac_secret_v1
+      ADMIN_SESSION_SECRET_FILE: /run/secrets/admin_session_secret
+      ONE_TIME_SECRET_ENCRYPTION_KEY_FILE: /run/secrets/one_time_secret_encryption_key
+    secrets:
+      - database_url
+      - token_hmac_secret_v1
+      - admin_session_secret
+      - one_time_secret_encryption_key
+    command: ["celery", "-A", "slaif_gateway.worker", "beat", "--loglevel=INFO"]
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
 secrets:
   postgres_password:
     file: ./secrets/postgres_password
