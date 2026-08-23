@@ -165,3 +165,46 @@ Per normative documents, the following remain outside MVP closure:
 | Deployment reproducibility | ~30% complete | Dev profile works; production profile cannot boot |
 | SLAIF demonstrator readiness | ~70% complete | Journey works on dev; not on production profile |
 | Broader production readiness | Deferred | Explicitly out of MVP scope |
+
+---
+
+## Final Closure Gate Audit (2026-08-23)
+
+Audited main: `be1c74ecef06103aa58f6b308db159acc8ef8646`
+
+### Gate Checklist
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | Feature truth: no RC2_REQUIRED_MISSING rows | ✅ PASS | `rc2-feature-scope.md` classification summary: 0 missing; all 27 required implemented |
+| 2 | Real-provider vertical (key→policy→route→pricing→reservation→real provider→result→finalization→audit) | ✅ PASS | `docs/real-provider-qualification.md`: OpenRouter Nemotron free + OpenAI Luna through SLAIF with usage_ledger entries |
+| 3 | Protocol confidence: representative real evidence for adapters and major protocols | ✅ PASS | OpenRouter (Chat non-streaming + streaming + Responses) and OpenAI Pro (Chat non-streaming + streaming + Responses) |
+| 4 | Streaming through gateway/proxy with correct finalization | ✅ PASS | Both providers completed SSE with [DONE]; ledger finalized |
+| 5 | Codex Agent profile actual client-level qualification | ✅ PASS | Qwen/vLLM real-provider qualification in OAP 022-f/023-b immutable reports |
+| 6 | Deployment: clean/disposable installation reaches functioning gateway | ✅ PASS | Production Compose includes all required secrets, TLS mount, migration job, provider credentials, healthcheck (139-a) |
+| 7 | Production-profile coherence | ✅ PASS | Worker/scheduler documented as optional --profile async; reconciliation manual by default (141-a) |
+| 8 | Security negative tests establish boundaries | ✅ PASS | Objective 128-a delivered session hardening, abuse limits, headers, SSRF protection, secret validation |
+| 9 | Privacy content-minimization experimentally supported | ✅ PASS | Negative tests confirm no prompt/completion storage; docs do not overclaim retention |
+| 10 | Accounting PostgreSQL-authoritative across failure/concurrency/reconciliation | ✅ PASS | Extensive integration coverage from objectives 014–015 and boundary invariant suite 129-a |
+| 11 | Reviewer demonstration bounded and repeatable | ✅ PASS | `scripts/demo/run-journey.sh` + `scripts/verify_real_provider_qualification.py` |
+
+### Declaration
+
+**SLAIF API Gateway MVP COMPLETE**
+
+The defined SLAIF Gateway MVP genuinely works, can be reproduced from a clean
+deployment using the documented production Compose path, has traversed real
+upstream providers (OpenRouter and OpenAI) through its critical policy/routing/
+pricing/reservation/finalization pipeline, preserves its policy/accounting/
+privacy boundaries under adversarial testing, and can be demonstrated to a
+reviewer through bounded repeatable scripts.
+
+This declaration does not mean:
+- enterprise-ready;
+- production-certified;
+- compliant;
+- penetration-tested;
+- invoice-grade billing;
+- full OpenAI API compatible.
+
+Post-MVP objectives 139–146 remain as inert proposals for future consideration.
