@@ -2,6 +2,10 @@
 
 Date: 2026-08-24 (Europe/Ljubljana)
 
+Implementation head SHA: `91ebb9248911e7ee733274506a56d14199c319bc`
+Report publication commit: `SELF`
+Pull request: [#286](https://github.com/ulfe-lmi/slaif-api-gateway/pull/286)
+
 This report records one successful disposable qualification of the production
 Compose appliance and its composed Nginx boundary. It is RC-beta evidence only;
 it is not a production certification, penetration test, compliance assessment,
