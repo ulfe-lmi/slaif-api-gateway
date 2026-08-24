@@ -68,6 +68,9 @@ class FakeReservationRow:
     reserved_requests: int
     status: str
     expires_at: datetime
+    provider: str | None = None
+    resolved_model: str | None = None
+    streaming: bool | None = None
     created_at: datetime = datetime(2026, 5, 4, tzinfo=UTC)
     finalized_at: datetime | None = None
     released_at: datetime | None = None
