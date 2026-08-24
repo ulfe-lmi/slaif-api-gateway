@@ -1,5 +1,8 @@
 # Gateway Key Leak Response
 
+> **Status:** Current incident runbook
+> **Safety:** Revoke/rotate; plaintext gateway keys are not recoverable
+
 ## What A Leaked Gateway Key Means
 
 A gateway key is the bearer token a user supplies as `OPENAI_API_KEY` or in the

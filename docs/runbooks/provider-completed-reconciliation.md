@@ -1,5 +1,8 @@
 # Provider-Completed Finalization Recovery
 
+> **Status:** Current reconciliation runbook
+> **Safety:** Preserve provider-completed usage/cost; never convert it to zero-cost failure
+
 ## What It Means
 
 `provider_completed_finalization_failed` means the provider returned final usage

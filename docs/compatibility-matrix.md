@@ -1,5 +1,8 @@
 # Compatibility Matrix
 
+> **Authority:** Current endpoint-family support and evidence summary
+> **Detail:** Field behavior lives in the OpenAI and Responses contracts
+
 This matrix summarizes implemented behavior for reviewers. It describes the current repository state, not a future roadmap promise.
 
 For the canonical RC2 target classification, see
@@ -102,7 +105,7 @@ verification-clean for this implemented scope, not feature-full RC2.
 | Pricing catalog / price refresh | Planned | OpenAI, OpenRouter | Local pricing remains runtime source of truth. OpenRouter model metadata may seed previewed pricing proposals; OpenAI pricing remains curated/manual or confirmed import unless a stable official pricing API exists. No silent production replacement | Future pricing import/refresh, audit, and accounting tests required |
 | Bounded-overrun calculator | Planned | Not provider-specific | Tool-enabled Responses policies may allow only bounded, admin-visible single-request overrun. PostgreSQL accounting must block future requests after actual overrun until limits are restored or reset | Future accounting, dashboard preview, and integration tests required |
 | Real upstream calls in normal tests | Not used | None | Upstream HTTP is mocked with RESPX | Test suite configuration |
-# External-tool accounting status
+## External-tool accounting status
 
 External-tool accounting holds are an operator/accounting foundation only.
 They do not add provider forwarding or claim hosted-tool compatibility. Holds
@@ -186,17 +189,21 @@ validation.
 Both models used `exec_command` to create a file through SLAIF with the
 workspace-write sandbox.
 
-## Real-provider adapter qualification — objective 140
+## Historical real-provider transport evidence — Objective 140
 
 Objective 140 recorded bounded, opt-in, secret-safe real-provider evidence
 through SLAIF for both adapters:
 
 - OpenRouter `nvidia/nemotron-3-super-120b-a12b:free`: non-streaming Chat,
-  streaming Chat completion with `[DONE]`, and non-streaming Responses all
-  passed with finalized PostgreSQL usage-ledger entries.
+  streaming Chat completion with `[DONE]`, and non-streaming Responses
+  returned recorded successful results.
 - OpenAI Pro `gpt-5.6-luna`: non-streaming Chat, streaming Chat completion with
-  `[DONE]`, and non-streaming Responses all passed with finalized ledger entries.
+  `[DONE]`, and non-streaming Responses returned recorded successful results.
 
-This updates earlier caveats that lacked immutable real-provider evidence for
-these adapters. It remains a bounded qualification, not an SLA or broad
-performance claim.
+The historical report also claims finalized PostgreSQL ledger rows and no
+pending reservations, but the committed verifier performs no SQL query, emits
+no correlatable streaming request identity or usage, and omits Responses
+streaming. The repository can therefore reproduce the transport calls but not
+independently establish those database claims from that verifier. See
+[real-provider qualification](real-provider-qualification.md). Complete current
+real-provider accounting qualification is not established.

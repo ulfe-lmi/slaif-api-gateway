@@ -1,644 +1,211 @@
-<div style="text-align: center;">
+<div align="center">
   <a href="https://www.slaif.si">
-    <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="400" height="400">
+    <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="320" alt="SLAIF">
   </a>
 </div>
 
 # SLAIF API Gateway
 
+<div align="center">
+
 [![CI](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/ulfe-lmi/slaif-api-gateway/actions/workflows/codeql.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-SLAIF API Gateway is an open-source, self-hosted, OpenAI-compatible
-organizational AI access control plane for SMEs, institutions, and bounded
-teams. Ordinary OpenAI SDK clients use gateway-issued keys through
-`OPENAI_API_KEY` and `OPENAI_BASE_URL`, while upstream provider credentials stay
-server-side. Operators govern provider, model, and endpoint access; quotas and
-budgets; routing; pricing and accounting; and safe audit metadata.
+**A self-hosted, OpenAI-compatible access, policy, and usage control plane for
+SMEs, institutions, and bounded teams.**
 
-The current SME MVP assumes **one organization per deployment**. Workshop,
-Organization, Research, Agent/Codex, and Trusted Evaluation are documented
-policy/deployment profiles built from current primitives and approved target
-capabilities—not separate tenants or five fully implemented one-click modes.
-This positioning is not an enterprise-readiness, regulatory-compliance, or
-production-certification claim.
+</div>
 
-If you are new to the project, start with the step-by-step
-[`docs/quickstart.md`](docs/quickstart.md). For the canonical current-vs-target
-product boundary and profile definitions, see
-[`docs/product-scope.md`](docs/product-scope.md). For RC-beta release status,
-verification scope, and known limitations, see
-[`docs/rc-beta.md`](docs/rc-beta.md) and
-[`docs/beta-readiness.md`](docs/beta-readiness.md). For the locked RC2 target
-classifications and remaining verification/release gates, see
-[`docs/rc2-feature-scope.md`](docs/rc2-feature-scope.md). A green full-harness
-run means verification-clean for the implemented scope; it does not mean
-feature-full RC2.
+SLAIF API Gateway is an organizational AI access control plane that gives
+ordinary OpenAI SDK clients a gateway-issued key while
+keeping upstream provider credentials on the server. Operators control which
+providers, models, endpoints, and capabilities each key may use. PostgreSQL is
+the authoritative quota and accounting store; Redis provides operational rate
+and concurrency limiting.
 
-For exact reviewer-facing behavior, see:
+> [!IMPORTANT]
+> The current project is a credible **RC-beta foundation**, not a production,
+> security, compliance, or SLA certification. The current SME MVP assumes one organization per deployment.
+> See the [product boundary](docs/product-scope.md)
+> and [readiness evidence](docs/beta-readiness.md) before deployment decisions.
+> The [RC2 scope matrix](docs/rc2-feature-scope.md) is a target-classification
+> contract, not proof that every OpenAI feature is implemented.
 
-- [`docs/product-scope.md`](docs/product-scope.md) for the organizational AI
-  control-plane proposition, current deployment boundary, policy profiles,
-  approved target behavior, and explicit non-goals.
-- [`docs/releases/v0.1.0-rc.1.md`](docs/releases/v0.1.0-rc.1.md) for the
-  first RC-beta release-candidate notes and tagging checklist.
-- [`docs/openai-compatibility.md`](docs/openai-compatibility.md) for supported OpenAI-compatible endpoints, request field policy, streaming behavior, and unsupported APIs.
-- [`docs/responses-compatibility.md`](docs/responses-compatibility.md) for the
-  current local, stored, Codex, and bounded hosted-web-search Responses
-  contract.
-- [`docs/key-templates.md`](docs/key-templates.md) for implemented template
-  snapshots and single-key creation from template revisions, and
-  [`docs/pricing-catalog.md`](docs/pricing-catalog.md) for local pricing
-  catalog behavior and future refresh direction.
-- [`docs/provider-forwarding-contract.md`](docs/provider-forwarding-contract.md) for provider body/header mutation rules, accounting boundaries, and OpenAI/OpenRouter forwarding details.
-- [`docs/accounting.md`](docs/accounting.md) and
-  [`docs/streaming-live-burn-margin.md`](docs/streaming-live-burn-margin.md)
-  for accounting invariants and the implemented Chat Completions and Responses
-  streaming live-burn behavior.
-- [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md) for the current support and test coverage matrix.
-- [`SECURITY.md`](SECURITY.md) for vulnerability reporting and review/audit scope.
-- [`.env.example`](.env.example) and [`docs/configuration.md`](docs/configuration.md) for safe configuration templates and environment variable reference.
-- [`docs/security-model.md`](docs/security-model.md) for gateway key lifecycle, provider isolation, quota/accounting, Redis, email/Celery, and logging security boundaries.
-- [`docs/deployment.md`](docs/deployment.md) for Docker Compose, worker/scheduler, and Nginx deployment notes.
+## What it provides
 
-## Current Status
+| Capability | Current behavior |
+|---|---|
+| OpenAI-compatible ingress | Standard `OPENAI_API_KEY` and `OPENAI_BASE_URL`; OpenAI-shaped requests, responses, SSE, and errors for the supported subset. |
+| Server-side provider isolation | Gateway credentials are replaced with configured OpenAI, OpenRouter, module, or reviewed OpenAI-compatible backend credentials. |
+| Per-key policy | Explicit model, endpoint, capability, tool, quota, rate, concurrency, validity, and lifecycle controls. Unknown or unsupported input fails closed. |
+| PostgreSQL accounting | Admission reservation, terminal finalization/release, usage and EUR cost metadata, bounded overrun behavior, and operator reconciliation. |
+| Operator surfaces | Typer CLI and a server-rendered admin dashboard for keys, providers, routes, pricing, FX, usage, audit, and delivery workflows. |
+| Self-hosted appliance | Development Compose and a separate production-style PostgreSQL/Redis/API/NGINX topology with file-backed secrets and explicit migrations. |
 
-Implemented:
+## Architecture
 
-- `GET /healthz` and `GET /readyz`.
-- Authenticated `GET /v1/models` backed by local provider and route metadata, filtered by the gateway key's effective model allow-list.
-- Non-streaming and SSE streaming `POST /v1/chat/completions` with request field registry checks, scalar/request caps, route/model capability metadata, route resolution, pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization.
-- Current Chat Completions support includes text chat, streaming text, local function tools, non-streaming local custom tools, bounded `n > 1` multiple choices, image input to text output, inline file input to text output, audio input to text output, and non-streaming audio output when the resolved route/model explicitly enables the matching capability.
-- Standalone Audio API support is implemented for bounded `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` with separate endpoint permission, route/model capability checks, PostgreSQL quota reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of uploaded audio, transcripts, generated speech bytes, or raw multipart/JSON bodies.
-- Standalone `POST /v1/embeddings` is implemented for a bounded RC2-safe subset with separate endpoint permission, route/model capability checks, PostgreSQL quota reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of embedding inputs, token arrays, vectors, or raw JSON/provider bodies.
-- Realtime audio now has a bounded RC2 foundation through `POST /v1/realtime/client_secrets` for browser/mobile WebRTC session admission with separate endpoint permission, explicit route/model `realtime` capability checks, PostgreSQL admission reservation/finalization, canonical OpenAI provider forwarding, OpenRouter fail-closed behavior, and no local storage/logging of ephemeral client secrets, instructions, raw session config, audio, transcripts, raw SDP, or raw events. Because OpenAI client secrets are reusable until expiry and later session behavior is client-updatable, quota-limited keys fail closed unless the route explicitly accepts direct-provider exposure and provides admission pricing.
-- Chat Completions streaming live-burn monitoring is implemented per key for
-  `POST /v1/chat/completions` with `stream=true`. Defaults are enabled with
-  zero cost/token margins; positive margins stop early, zero margins stop near
-  the estimated boundary, and negative margins allow bounded estimated overrun.
-  Final provider usage/cost remains authoritative when available.
-- Chat Completions policy remains fail-closed for unknown fields and unsupported request shapes. Hosted/provider-side tools, MCP/connectors, web search, file search, code interpreter, computer use, image-generation tools, tool search, non-default service tiers, streaming custom tools, streaming audio output, file IDs/provider-side file lifecycle, and `n > 1` with audio output remain unsupported unless future explicit policy, pricing/accounting, forwarding, and tests add them.
-- Local `POST /v1/responses` with text output, string input or bounded text item arrays, route-enabled image input to text output, route-enabled file input to text output, non-streaming JSON, typed SSE streaming for stateless requests, non-streaming structured `text.format` JSON object/schema output, local function tools, local custom tools, string-only function/custom tool output follow-up items, explicit key endpoint permission, route/model Responses capability metadata, route resolution, `/v1/responses` pricing/FX lookup, PostgreSQL quota reservation, provider forwarding through OpenAI/OpenRouter adapters, and accounting finalization. Streaming requires explicit Responses streaming route capability and finalizes from provider usage on the completed response event. The gateway injects `store=false` when omitted. Non-streaming `store=true` create plus ownership-checked `GET`/`DELETE /v1/responses/{response_id}` and `GET /v1/responses/{response_id}/input_items` are implemented behind explicit stored/list-input-items capability and safe local response-reference metadata; SLAIF does not store response content or input-item content. Non-streaming `previous_response_id` is supported only for active, locally recorded, same-key provider response references after provider/route compatibility checks. `POST /v1/conversations`, owned `POST`/`GET`/`DELETE /v1/conversations/{conversation_id}`, owned `POST`/`GET`/`DELETE /v1/conversations/{conversation_id}/items`, and non-streaming `POST /v1/responses` with an owned `conversation` ID are implemented through safe local conversation-reference metadata; SLAIF does not store conversation item content or conversation update metadata locally. `POST /v1/responses/compact` is implemented as a bounded non-streaming text-focused compaction endpoint behind explicit endpoint permission, route capability, endpoint-specific pricing, quota reservation, provider usage finalization, and no compact input/output storage. Safe key-template `responses_policy` metadata is implemented for the supported local/stored/stateful/compact capabilities. `POST /v1/responses/input_tokens` is implemented as a separate provider-reported input-token count endpoint for the same local subset, behind explicit endpoint permission and route capability, without creating a Response or reserving generation quota.
-- OpenAI Responses canonical `web_search` is the sole implemented
-  provider-hosted tool family. It requires a stateless `store=false` request,
-  positive `max_tool_calls`, an explicit `external_tool_fenced` standard-key
-  policy, an exactly matching OpenAI route with `provider_web_search`, finite
-  request/token/EUR limits, configured per-call pricing, and explicit overrun
-  acknowledgement. PostgreSQL reserves the key's full remaining balance and
-  admits at most one unresolved hosted request for that key. One admitted
-  request may overrun; later requests are rejected after exhaustion, and
-  missing or ambiguous final usage/cost leaves a durable blocking hold for
-  audited reconciliation. Non-streaming and bounded typed-SSE execution have
-  mocked-provider coverage; no real-provider or production-qualification claim
-  follows.
-- `slaif-gateway bootstrap openai-completions-catalog` for seeding the local OpenAI provider config, exact Chat Completions routes, and explicit pricing rows from a curated in-repo catalog and an operator-controlled pricing CSV.
-- Gateway key generation/authentication with HMAC-only storage and configurable key prefixes.
-- Typer CLI commands for admin bootstrap, institutions, cohorts, owners, key management, provider config, model routes, pricing, FX rates, usage summaries/exports, and DB migration helpers.
-- PostgreSQL-backed quota/accounting, usage ledger metadata, model catalog, route resolution, and pricing/FX services.
-- Production provider-secret validation that requires enabled built-in providers to have non-placeholder upstream secrets, keeps `OPENAI_API_KEY` reserved for client gateway keys, and checks enabled DB provider config env vars in `/readyz`.
-- Manual stale quota-reservation reconciliation for operator repair of expired pending reservations after crashes, plus an opt-in Celery/Celery Beat foundation for scheduled backlog inspection, optional generic webhook alerts, and explicitly enabled dry-run/execute reconciliation.
-- Redis-backed operational rate limiting for `/v1/chat/completions` when enabled, covering request, estimated-token, and concurrency limits.
-- Observability foundation with request IDs, structured log redaction, sanitized provider diagnostics, finalized EUR cost metrics, and controlled `/metrics` exposure.
-- Admin web authentication foundation with `/admin/login`, `/admin/logout`, a placeholder `/admin` dashboard, key list/detail pages with CSRF-protected create, bulk key CSV/JSON import preview and confirmed execution, suspend/activate/revoke, validity-window, PostgreSQL hard quota limit, usage-counter reset, rotation, and create/rotate email-delivery mode actions, owner/institution/cohort pages with CSRF-protected create/edit metadata actions, provider config pages with CSRF-protected create/edit/enable/disable metadata actions, model route pages with CSRF-protected create/edit/enable/disable metadata actions plus CSV/JSON import preview and confirmed execution, pricing pages with CSRF-protected create/edit/enable/disable metadata actions plus CSV/JSON import preview and confirmed execution, FX pages with CSRF-protected create/edit metadata actions plus CSV/JSON import preview and confirmed execution, usage/audit activity pages with CSRF-protected audited CSV metadata exports, and email delivery pages with CSRF-protected send-now/enqueue actions for valid pending key deliveries, secure cookie settings, server-side session rows, and CSRF-protected forms.
-- Explicit CLI/dashboard-controlled email delivery for gateway keys using encrypted one-time secrets, SMTP via `aiosmtplib`, fail-closed in-progress/ambiguous delivery state, and Celery task payloads that carry IDs only.
-- Admin role semantics are explicit for the current implementation: every active admin account is a full operator, and `superadmin` is metadata/future-proofing rather than an enforced RBAC boundary.
-- Docker Compose packaging for API, Celery worker, Celery Beat scheduler, PostgreSQL, Redis, Mailpit, and an optional Nginx reverse proxy profile. Migrations remain explicit operator actions.
-- Mocked OpenAI/OpenRouter E2E coverage using the official OpenAI Python client, including `stream=True` chat completions.
+```mermaid
+flowchart LR
+    C[OpenAI SDK / client] -->|Gateway key| N[NGINX / HTTPS]
+    N --> G[SLAIF Gateway]
+    G --> A[Authentication and policy]
+    A --> Q[Quota reservation]
+    Q <--> P[(PostgreSQL truth)]
+    A <--> R[(Redis operational limits)]
+    Q --> F[Provider adapter]
+    F --> O[OpenAI]
+    F --> OR[OpenRouter]
+    F --> B[Reviewed compatible backend or module]
+    F --> X[Accounting finalization]
+    X --> P
+```
 
-Not implemented yet:
+Prompts, completions, uploaded media, raw provider bodies, and reasoning content
+are not stored by default. Durable records contain bounded operational,
+routing, token, cost, and audit metadata.
 
-- Responses hosted/provider-side tools other than the exact bounded OpenAI
-  `web_search` contract, including MCP/connectors, file search, code
-  interpreter, hosted shell, provider-side `apply_patch`, skills/containers,
-  computer use, image generation, audio input/output, `/v1/files`, `file_id`
-  lifecycle, response cancel/list endpoints, OpenRouter hosted tools,
-  and multimodal output. The implemented Responses subset remains text-output
-  only, with provider-reported input-token count, bounded non-streaming
-  compact, non-streaming stored create, owned previous-response chaining,
-  owned retrieve/delete/input-item listing, owned Conversations resource/item
-  lifecycle, local/client-side tools, and the separately gated OpenAI
-  `web_search` contract only in their documented bounded subsets.
-- Legacy `/v1/completions`, `/v1/files`, image generation endpoints, batch
-  endpoints, and Realtime call/WebSocket/SIP surfaces beyond
-  `POST /v1/realtime/client_secrets`.
-- Hosted/provider-side Chat Completions tools, MCP/connectors, file IDs,
-  provider-side file lifecycle, streaming custom tools, streaming audio output,
-  custom audio-output voices, previous-audio references, and `n > 1` with
-  audio output.
-- Background/cancel/stateful Responses streaming slices. Stateless text
-  Responses streaming live-burn is implemented; background mode, cancel,
-  response listing, audio, and stateful streaming remain separate milestones.
-- Arbitrary/old-key dashboard email resend actions, external FX refresh workflows, owner/institution/cohort delete/anonymization workflows, and state-changing management pages for usage and audit beyond audited CSV exports.
-- Automatic key-email sending by default.
-- OpenTelemetry tracing and full production hardening/runbooks beyond the
-  checked-in CI and RC-beta verification workflows.
+## Supported API families
 
-## OpenAI-Compatible Usage
+| Endpoint family | Support level |
+|---|---|
+| `GET /v1/models` | Local, key-filtered model catalog |
+| `POST /v1/chat/completions` | Bounded text and explicitly route-enabled multimodal/local-tool subsets; non-streaming and SSE |
+| `POST /v1/responses` | Bounded text/local-tool/stored-reference subsets, Conversations, input-token count, compact, and one separately fenced OpenAI `web_search` path |
+| `POST /v1/audio/*` | Bounded speech, transcription, and translation subsets |
+| `POST /v1/embeddings` | Bounded standalone embeddings subset |
+| `POST /v1/realtime/client_secrets` | Bounded direct-provider WebRTC admission subset |
 
-Users configure the standard OpenAI client environment variables only:
+This is not a promise of every OpenAI API or field. Consult the
+[compatibility matrix](docs/compatibility-matrix.md),
+[OpenAI contract](docs/openai-compatibility.md), and
+[Responses contract](docs/responses-compatibility.md) for exact accepted,
+mutated, and rejected behavior.
+
+## Quick local start
+
+Requirements: Docker with Compose, Git, and free local ports for the configured
+services.
+
+```bash
+git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
+cd slaif-api-gateway
+cp .env.example .env
+
+docker compose up -d postgres redis mailpit
+docker compose run --rm api slaif-gateway db upgrade
+docker compose up -d api worker scheduler
+
+curl --fail http://localhost:8000/healthz
+curl --fail http://localhost:8000/readyz
+```
+
+Create the first local administrator without putting a password in shell
+history:
+
+```bash
+docker compose run --rm api slaif-gateway admin create \
+  --email admin@example.org \
+  --display-name "Gateway administrator" \
+  --password-stdin
+```
+
+Provider, route, pricing, owner, and gateway-key setup is deliberately explicit.
+Continue with the [first-time quickstart](docs/quickstart.md). Production-style
+deployment uses a separate [production Compose guide](docs/deployment-production.md),
+not the development `.env` workflow above.
+
+## Use it with the OpenAI client
+
+Clients use the standard OpenAI variables. `OPENAI_API_KEY` contains a
+**gateway-issued** key, never the real upstream OpenAI key.
 
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."
 export OPENAI_BASE_URL="http://localhost:8000/v1"
 ```
-
-Then ordinary OpenAI Python client code works:
 
 ```python
 from openai import OpenAI
 
 client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-4o-mini",
+    model="your-approved-model",
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(response.choices[0].message.content)
 ```
 
-Streaming chat completions use OpenAI-compatible Server-Sent Events and work with the official client:
-
 ```python
-stream = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello"}],
+stream = client.responses.create(
+    model="your-approved-model",
+    input="Summarize this in one sentence.",
     stream=True,
 )
-for chunk in stream:
-    if chunk.choices:
-        print(chunk.choices[0].delta.content or "", end="")
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="")
 ```
 
-Common Chat Completions parameters such as `temperature`, `top_p`, local
-function `tools`, route-enabled non-streaming custom local tools,
-`tool_choice`, `response_format`, `seed`, `user`, `logprobs`, `metadata`, and
-`n` are passed through to the selected upstream provider only after request
-field, request-cap, hosted-tool, and route/model capability checks pass. For
-streaming requests, the gateway forwards `stream_options.include_usage=true` so
-final provider usage can be captured for accounting.
+## Documentation
 
-Chat Completions token/cost pre-reservation includes conservative serialized
-estimates for provider-forwarded non-message fields such as `tools` and
-`response_format` JSON schemas, so very large schemas may be rejected before
-provider calls; actual provider usage still finalizes accounting.
+Start at the [documentation home](docs/README.md).
 
-Chat Completions `n` is preserved when omitted or exactly `1`. `n > 1` is
-supported only when the resolved route/model explicitly enables the
-multiple-choice capability and the configured `CHAT_MAX_CHOICES_PER_REQUEST`
-cap is respected. Input is estimated once, output reservation is
-choice-aware, and final provider usage/cost is not multiplied again by `n`.
+| If you are… | Read… |
+|---|---|
+| Evaluating product scope | [Product scope](docs/product-scope.md), [current readiness](docs/beta-readiness.md), and [compatibility matrix](docs/compatibility-matrix.md) |
+| Deploying or operating | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md), [production deployment](docs/deployment-production.md), and [runbooks](docs/runbooks/README.md) |
+| Integrating a client | [OpenAI compatibility](docs/openai-compatibility.md), [Responses compatibility](docs/responses-compatibility.md), and [forwarding contract](docs/provider-forwarding-contract.md) |
+| Reviewing controls | [Security model](docs/security-model.md), [accounting](docs/accounting.md), and [database schema](docs/database-schema.md) |
+| Contributing or verifying | [Test parallelism](docs/testing-parallelism.md), [HPC testing](docs/testing-hpc.md), and [verification records](docs/verification/README.md) |
 
-Image input, inline file input, audio input, and non-streaming audio output are
-implemented only behind explicit route/model capability gates and configured
-caps. SLAIF does not store or log raw images, files, audio payloads,
-transcripts, prompts, completions, raw request bodies, or raw response bodies.
-Final accounting uses provider usage/cost where available; URL/base64 byte
-length, audio duration, and transcript length are not invoice-grade billable
-token truth.
+## Security and accounting boundaries
 
-`sk-slaif-` is the default generated gateway key prefix. New key generation uses `GATEWAY_KEY_PREFIX`, and authentication accepts only prefixes configured in `GATEWAY_KEY_ACCEPTED_PREFIXES`, which must include the active generation prefix.
+- Gateway keys are stored as HMAC digests; plaintext is delivered once at
+  creation or rotation.
+- Provider configurations store secret environment-variable names, not provider
+  key values.
+- Unknown pricing or required FX data fails closed for cost-limited requests.
+- PostgreSQL row locks and reservation counters enforce durable quota state.
+- Redis failures follow configured fail-closed operational policy but never
+  become financial truth.
+- One admitted request can exceed its estimate; finalized usage is authoritative
+  for following-request decisions. This is not exact pre-call spend containment
+  or invoice-grade billing.
+- The exact bounded OpenAI Responses `web_search` path is opt-in and fenced.
+  Other hosted tools, MCP/connectors, file search, code interpreter, computer
+  use, and provider-side authority remain denied unless separately documented.
 
-## Quick Local Setup
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+Never place provider keys, gateway keys, session secrets, database credentials,
+or request content in issues, logs, screenshots, or audit reasons.
 
-For a slower beginner tutorial with explanations and checkpoints, use
-[`docs/quickstart.md`](docs/quickstart.md). The commands below are the compact
-local setup.
-
-Docker Compose local setup:
+## Development and verification
 
 ```bash
-git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
-cd slaif-api-gateway
-cp .env.example .env
-```
-
-The checked-in `.env.example` is tuned for first-time local Docker diagnosis:
-Redis rate limiting is enabled, logs are readable DEBUG output, and production
-operators are expected to switch back to INFO plus structured JSON logs.
-
-Generate local runtime secrets before starting services. These are server
-runtime secrets, not user gateway keys:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-slaif-gateway secrets generate hmac --version 1 --env-file .env --write
-slaif-gateway secrets generate admin-session --env-file .env --write
-slaif-gateway secrets generate one-time --env-file .env --write
-slaif-gateway secrets validate-env --env-file .env
-```
-
-See [`docs/quickstart.md`](docs/quickstart.md) for the Docker-only
-bind-mounted variant, and [`docs/configuration.md`](docs/configuration.md) for
-secret meanings and rotation cautions.
-
-```bash
-docker compose build
-docker compose up -d postgres redis mailpit
-docker compose run --rm api slaif-gateway db upgrade
-docker compose up
-```
-
-Create the first admin after migrations:
-
-```bash
-printf '%s\n' 'replace-this-password' \
-  | docker compose run --rm api slaif-gateway admin create \
-      --email admin@example.org \
-      --display-name "Admin User" \
-      --password-stdin
-```
-
-Real OpenAI calls require local provider, route, and pricing metadata before a
-gateway key can see or use models. The gateway does not call OpenAI to discover
-models for `/v1/models`; model visibility comes from local enabled route
-metadata plus the gateway key policy. For a local wiring smoke test only:
-
-```bash
-docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-mode placeholder \
-  --confirm-placeholder-pricing \
-  --apply
-```
-
-The command creates local provider, exact `/v1/chat/completions` route, and
-pricing metadata only. It stores `OPENAI_UPSTREAM_API_KEY` as an environment
-variable name and never reads or prints the provider key value. Real budgeting
-requires replacing placeholder pricing with operator-reviewed prices in a local
-pricing CSV. See [`docs/quickstart.md`](docs/quickstart.md) for the full
-pricing-file path, owner/key creation, and model allow-lists. Users call the
-local gateway with standard OpenAI-compatible variables:
-
-```bash
-export OPENAI_API_KEY="sk-slaif-..."
-export OPENAI_BASE_URL="http://localhost:8000/v1"
-```
-
-Run the OpenAI-compatible smoke example after metadata bootstrap and key
-creation:
-
-```bash
-python examples/openai_gateway_smoke.py
-```
-
-After `.env` changes, recreate the runtime services without deleting local
-volumes:
-
-```bash
-./scripts/docker-refresh.sh --env-only
-```
-
-After code updates on local `main`, use the safe pull/build/migrate/recreate
-flow:
-
-```bash
-./scripts/docker-refresh.sh --pull
-```
-
-Mailpit is available at `http://localhost:8025`. API, worker, and scheduler
-containers do not run migrations automatically; `slaif-gateway db upgrade` is
-an explicit operator command. Docker Compose is local/development packaging, not
-complete production hardening. Production deployments must replace all secrets,
-run migrations explicitly, use HTTPS, and restrict `/admin`, `/readyz`, and
-`/metrics`. The Compose file publishes Postgres on host port `15432` and Redis
-on host port `16379` by default to avoid common local service collisions; the
-container-internal URLs still use `postgres:5432` and `redis:6379`.
-
-See [`docs/deployment.md`](docs/deployment.md) for the full deployment runbook
-and optional Nginx configuration.
-
-## CI / Verification
-
-GitHub Actions runs the normal public test and packaging suite without real
-provider keys or real external email:
-
-- unit tests, Ruff, Alembic head check, and whitespace checks
-- PostgreSQL-backed integration tests with Redis available
-- OpenAI-compatible E2E tests using mocked upstream providers
-- Playwright Chromium admin dashboard smoke
-- Docker Compose build/migration/API/worker/scheduler smoke and Nginx syntax
-  validation
-- CodeQL Python analysis and weekly Dependabot checks
-
-CI uses `TEST_DATABASE_URL` for test databases and does not use `DATABASE_URL`
-for destructive setup. The Docker smoke copies `.env.example` to `.env`, runs
-migrations explicitly, and does not call OpenAI/OpenRouter or send real email.
-
-Python local setup:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-```
-
-Unit tests do not require PostgreSQL, Redis, Docker, or real upstream provider keys:
-
-```bash
 python -m pytest tests/unit
-```
-
-For DB-backed operation, configure PostgreSQL and run migrations explicitly:
-
-```bash
-export DATABASE_URL="postgresql+asyncpg://slaif:slaif@localhost:5432/slaif_gateway"
-alembic upgrade head
-uvicorn --app-dir app slaif_gateway.main:app --reload
-```
-
-The FastAPI app creates one async SQLAlchemy engine/sessionmaker during lifespan and disposes the engine on shutdown. Database pool and timeout behavior is configurable:
-
-```bash
-export DATABASE_POOL_SIZE=5
-export DATABASE_MAX_OVERFLOW=10
-export DATABASE_POOL_TIMEOUT_SECONDS=30
-export DATABASE_POOL_RECYCLE_SECONDS=1800
-export DATABASE_POOL_PRE_PING=true
-export DATABASE_CONNECT_TIMEOUT_SECONDS=10
-export DATABASE_STATEMENT_TIMEOUT_MS=30000
-```
-
-`DATABASE_POOL_PRE_PING` is enabled by default so stale pooled connections are checked before use. `DATABASE_CONNECT_TIMEOUT_SECONDS` is passed to asyncpg connection setup. `DATABASE_STATEMENT_TIMEOUT_MS` is optional; when set, PostgreSQL receives a per-connection `statement_timeout` server setting.
-
-`/readyz` checks database configuration, reachability, and whether the database's `alembic_version` revision is current with the committed Alembic head. Redis is not required for readiness unless `ENABLE_REDIS_RATE_LIMITS=true`; when enabled, the app creates one Redis client during lifespan and `/readyz` requires a successful Redis ping. In production, `/readyz` also checks enabled `provider_configs.api_key_env_var` references and reports only missing environment variable names when details are enabled, never secret values. `/readyz` never runs migrations or performs destructive actions.
-
-In development/test, `/readyz` includes detailed Alembic current/head revision fields by default. In production, exact revision details are hidden by default and only coarse `database`, `schema`, and `redis` statuses are returned unless `READYZ_INCLUDE_DETAILS=true`. Keep `/readyz` internal or reverse-proxy allowlisted in production; the provided Nginx example allowlists `/readyz` to private networks by default.
-
-When `APP_ENV=production`, startup logs warn if `READYZ_INCLUDE_DETAILS=true` because detailed readiness output is more informative than the safe production default. The warning is an operator visibility guardrail, not a substitute for network or reverse-proxy controls.
-
-Redis rate limiting is optional and controls temporary operational throttles only:
-
-```bash
-export ENABLE_REDIS_RATE_LIMITS=true
-export REDIS_URL="redis://localhost:6379/0"
-export DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=60
-export DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE=120000
-export DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS=5
-export RATE_LIMIT_CONCURRENCY_TTL_SECONDS=300
-export RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS=30
-```
-
-When enabled, `/v1/chat/completions` checks Redis after request policy token estimation and before route resolution, pricing, PostgreSQL hard quota reservation, and provider forwarding. Rate-limit failures return OpenAI-shaped errors. PostgreSQL remains authoritative for durable hard quota and accounting.
-
-Request and estimated-token limits are per-window operational throttles. Concurrency limits track active request IDs separately from that window: streaming responses refresh their Redis active slot while open, release removes the specific request ID, and the concurrency TTL is a conservative crash-cleanup fallback rather than the normal lifetime of a long stream.
-
-Global defaults apply when a key does not define an override. Operators can set per-key Redis rate-limit policy at creation or later:
-
-```bash
-slaif-gateway keys create --owner-id <owner-id> --valid-days 30 \
-  --rate-limit-requests-per-minute 60 \
-  --rate-limit-tokens-per-minute 100000 \
-  --rate-limit-concurrent-requests 3
-
-slaif-gateway keys set-rate-limits <key-id> \
-  --requests-per-minute 60 \
-  --tokens-per-minute 100000 \
-  --concurrent-requests 3
-
-slaif-gateway keys set-rate-limits <key-id> --clear-all
-```
-
-Per-key Redis limits are stored with key metadata and are operational throttles only. Clearing a per-key field lets the configured global default apply; clearing all per-key Redis limits does not change PostgreSQL hard quota limits or usage counters. Redis rate limiting is enforced only when `ENABLE_REDIS_RATE_LIMITS=true`.
-
-## Observability
-
-Every HTTP response includes an `X-Request-ID` header. A safe incoming `X-Request-ID` is preserved; otherwise the gateway generates one and binds it to structured logs.
-
-Structured logs redact Authorization headers, gateway/provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted payloads, and nonces. Redaction recognizes configured gateway key prefixes as well as generic gateway-key-shaped values, and never preserves secret characters from the key secret component. Accounting and audit metadata sanitization handles nested sensitive fields across camelCase, snake_case, and kebab-case keys. Prompts and completions are not logged or stored by default.
-
-`GET /metrics` exposes Prometheus text metrics in development/test when `ENABLE_METRICS=true`. In production, metrics access is restricted by default through `METRICS_REQUIRE_AUTH`; because admin auth for metrics is not implemented yet, production access is denied unless an explicit `METRICS_ALLOWED_IPS` allowlist permits the client IP. `METRICS_PUBLIC_IN_PRODUCTION=true` intentionally makes metrics public and should not be used for internet-facing deployments. Protect `/metrics` with an internal network, reverse-proxy allowlist, or an admin/auth layer when one is available; the provided Nginx example denies `/metrics` by default. Redis is not required for metrics, and OpenTelemetry is not implemented yet.
-
-When `APP_ENV=production`, startup logs warn if metrics are explicitly made public or metrics auth is disabled. These warnings make risky overrides visible but do not replace internal networking, reverse-proxy allowlists, or an admin/auth layer.
-
-## Admin Web Foundation
-
-The server-rendered admin foundation exposes `GET /admin/login`, `POST /admin/login`, `GET /admin`, `POST /admin/logout`, key pages under `/admin/keys`, owner/institution/cohort pages, provider config pages under `/admin/providers`, model route pages under `/admin/routes`, pricing pages under `/admin/pricing`, FX pages under `/admin/fx`, activity pages under `/admin/usage` and `/admin/audit`, and email delivery pages under `/admin/email-deliveries`. Key dashboard pages show safe metadata such as public key ID, key hint, owner, status, validity, quota counters, allowed model/endpoint/provider summaries, and rate-limit policy.
-
-The dashboard includes a CSRF-protected key creation form for existing owners and cohorts, plus CSRF-protected bulk key import preview and confirmed execution for CSV/JSON key-creation rows. Bulk key import preview validates owner references, optional cohort references, validity windows, hard quota fields, allowlist policy fields, Redis rate-limit policy fields, email delivery modes, row limits, upload limits, and secret-looking input, but it does not generate plaintext keys, write `gateway_keys`, create `one_time_secrets`, create `email_deliveries`, enqueue Celery tasks, write preview audit rows, send email, or call providers.
-
-Bulk key import execution re-parses and re-validates the submitted upload or pasted content server-side, requires explicit confirmation, one-time plaintext display confirmation when browser plaintext will be shown, and a non-empty audit reason, then creates gateway keys only when every row validates. Execution supports `none`, `pending`, and `enqueue` email modes; bulk `send-now` remains future work and rejects before mutation. Generated plaintext keys are shown exactly once on a no-cache result page for `none` and `pending` rows, are suppressed for `enqueue` rows, are never stored, and are not written to audit rows, cookies, sessions, URLs, email delivery rows, logs, or Celery payloads. Bulk `enqueue` creates one-time secrets plus pending email delivery rows, then queues Celery delivery with IDs only and does not send SMTP in the admin HTTP request.
-
-Key creation and key rotation support explicit email-delivery modes: `none`, `pending`, `send-now`, and `enqueue`. `none` preserves the no-cache one-time browser plaintext result. `pending` creates an email delivery record linked to the encrypted one-time secret and still shows the plaintext once. `send-now` delivers through SMTP and suppresses browser plaintext display. `enqueue` queues Celery delivery with IDs only and suppresses browser plaintext display.
-
-Existing pending/failed key email deliveries can also be sent now or enqueued from the email delivery detail page when they are backed by a valid unconsumed one-time secret; those actions require CSRF and explicit confirmation, never accept plaintext key input, and never show plaintext keys in the browser. Email delivery is not mathematically exactly-once across SMTP and PostgreSQL, so possible SMTP acceptance followed by database finalization failure is marked `ambiguous` and is not automatically retried; operators should rotate the key if receipt cannot be confirmed.
-
-Key detail pages also provide CSRF-protected POST actions to suspend, activate, permanently revoke, update validity windows, update PostgreSQL hard quota limits, reset usage counters, and rotate keys through the existing key service and audit behavior. Reserved-counter reset requires an additional repair confirmation, usage reset does not delete usage ledger rows, and Redis operational rate-limit counters are not reset by this action. Old plaintext keys are never resent. Lost keys cannot be resent; rotate them instead. Hard quota limits are PostgreSQL-backed and distinct from Redis operational rate limits.
-
-Owner, institution, and cohort pages show safe record metadata plus key count summaries and provide CSRF-protected create/edit forms for schema-backed metadata only. These mutation forms require a non-empty audit reason, write safe audit rows through service-layer logic, reject secret-looking notes/metadata, do not create keys inline, do not modify usage ledger history, and do not implement delete or anonymization workflows. Cohorts are standalone in the current schema; owners can reference institutions but do not link directly to cohorts.
-
-Provider config pages support CSRF-protected create, edit, enable, and disable actions for safe metadata only. They store `api_key_env_var` names because those are configuration references, but they never accept, store, or display provider key values.
-
-Model route pages support CSRF-protected create, edit, enable, and disable actions for local routing metadata only, plus CSV/JSON import preview and execution. Route import preview validates rows without writing `model_routes`; execution re-parses and re-validates the submitted file or pasted content server-side, requires explicit confirmation and a non-empty audit reason, writes model route rows only when every row validates as a supported create, and audits created rows through the route service. Route imports verify provider references against provider config rows, reject unknown fields and secret-looking capabilities/metadata/source values, enforce upload size/row limits, do not call providers, and can affect future model resolution only after confirmed execution writes local route rows.
-
-Pricing pages support CSRF-protected create, edit, enable, and disable actions for local pricing metadata only, plus CSRF-protected CSV/JSON import preview and execution. Preview validates rows without writing `pricing_rules`; execution re-parses and re-validates the submitted file or pasted content server-side, requires explicit confirmation and a non-empty audit reason, writes pricing rows only when every row validates as a supported create, and audits created rows through the pricing service. Money values must be decimal strings, unknown fields and secret-looking metadata/source values are rejected, upload size/row limits apply, and external pricing/provider APIs are not called. Pricing changes affect future quota reservation and accounting through the existing pricing service; the dashboard does not change pricing calculation semantics.
-
-FX pages support CSRF-protected create and edit actions for local FX metadata only, plus CSV/JSON import preview and execution. Preview validates rows without writing `fx_rates`; execution re-parses and re-validates the submitted file or pasted content server-side, requires explicit confirmation and a non-empty audit reason, writes FX rows only when every row validates as a supported create, and audits created rows through the FX service. FX imports parse Decimal rates from strings, validate currency pairs and validity windows, reject unknown fields and secret-looking source/note/metadata values, enforce upload size/row limits, and do not call external FX APIs or providers. FX changes affect future EUR conversion, quota reservation, and accounting through the existing FX lookup path only after rows are created or confirmed imports execute; preview does not change FX runtime semantics. The current FX schema has no enabled state, so active status is controlled by validity windows.
-
-Usage and audit pages show safe local metadata and provide CSRF-protected CSV exports for current filters. Exports require explicit confirmation plus an audit reason, enforce row limits, write safe export audit rows, neutralize CSV formula injection, and exclude prompt/completion content, raw request/response bodies, email bodies, plaintext key material, token hashes, encrypted one-time-secret payloads, nonces, provider key values, password hashes, and session tokens. Usage, audit, and email delivery pages do not render prompt/completion content, raw request/response bodies, email bodies, plaintext key material, token hashes, encrypted one-time-secret payloads, nonces, provider key values, password hashes, or session tokens. Plaintext gateway keys are never shown after creation/rotation except for explicit one-time creation/rotation result output in `none` and `pending` modes.
-
-Arbitrary old-key dashboard email resend actions, bulk key send-now execution, external FX refresh workflows, owner/institution/cohort delete or anonymization workflows, and usage/audit mutation pages beyond audited CSV exports are not implemented yet.
-
-Admin passwords are verified with the existing Argon2id utilities. Login has DB/audit-backed failed-attempt rate limiting by normalized email and client IP; failed attempts and temporary lockout events are audited, messages remain generic, and Redis is not required. Login creates a server-side `admin_sessions` row and stores only HMAC-hashed session and CSRF tokens in PostgreSQL. The browser receives a session cookie named by `ADMIN_SESSION_COOKIE_NAME`; it is `HttpOnly`, `SameSite=Lax` by default, and `Secure` by default in production. State-changing admin forms use CSRF tokens. This foundation uses local Jinja2 templates and static CSS only; it does not use CDN Tailwind or CDN HTMX.
-
-All active admin users are currently full operators. The `role` field and the
-CLI `--superadmin` flag are preserved as metadata/future-proofing for later
-RBAC work, but the current dashboard and admin CLI do not enforce per-role
-permissions or superadmin-only actions. Inactive admin accounts cannot log in,
-and revoked or expired admin sessions cannot access admin routes. Protect every
-active admin account as highly privileged; MFA and role-gated permissions remain
-future hardening options.
-
-Provider HTTP and streaming errors can attach bounded, sanitized diagnostics to
-failure ledger metadata for operator troubleshooting. Raw provider response
-bodies are not returned to clients or stored. Diagnostic metadata redacts
-provider keys, gateway keys, token hashes, Authorization headers, cookies, and
-session data, and drops prompt/completion/request/response body fields. Successful
-accounting finalization records finalized EUR cost in Prometheus metrics.
-
-## CLI Quickstart
-
-Create prerequisite records and a gateway key:
-
-```bash
-slaif-gateway admin create --email admin@example.org --display-name "Admin User" --password-stdin
-slaif-gateway institutions create --name "SLAIF Test Institute" --country SI
-slaif-gateway cohorts create --name "SLAIF Workshop 2026"
-slaif-gateway owners create --name Ada --surname Lovelace --email ada@example.org --institution-id <institution-id>
-slaif-gateway keys create --owner-id <owner-id> --valid-days 30
-slaif-gateway keys set-rate-limits <key-id> --requests-per-minute 60 --tokens-per-minute 100000 --concurrent-requests 3
-```
-
-Text-mode `keys create` and `keys rotate` show the plaintext gateway key once for the operator workflow. JSON mode is secret-safe by default: use `--show-plaintext` only when intentionally capturing the one-time key in JSON, or use `--secret-output-file PATH` to write it to a new `0600` file without printing it to stdout. Lost keys cannot be resent; rotate them. Reserved-counter repair requires `keys reset-usage --reset-reserved --confirm-reset-reserved`.
-
-Email delivery is explicit and operator-controlled; key creation and rotation never send email by default. Configure local SMTP/Mailpit-style settings before using it:
-
-```bash
-export ENABLE_EMAIL_DELIVERY=true
-export SMTP_HOST=localhost
-export SMTP_PORT=1025
-export SMTP_FROM=noreply@example.org
-export CELERY_BROKER_URL="${REDIS_URL:-redis://localhost:6379/0}"
-```
-
-`slaif-gateway keys create --email-delivery pending` and `slaif-gateway keys rotate --email-delivery pending` create a pending `email_deliveries` row linked to the new one-time secret. Use `--email-delivery send-now` to send immediately, or `--email-delivery enqueue` to queue the Celery task. Send-now and enqueue modes treat email as the secret delivery channel and do not print the plaintext key to stdout; they reject `--show-plaintext` and `--secret-output-file` to avoid multiple secret destinations.
-
-`slaif-gateway email test --to ada@example.org` sends a safe test email with no gateway key material. `slaif-gateway email send-pending-key --one-time-secret-id <id> --send-now` retries/sends a key from an existing encrypted `one_time_secrets` row, and `--enqueue` queues the Celery task instead. The task payload contains only IDs such as `one_time_secret_id` and `email_delivery_id`; plaintext gateway keys are decrypted only inside the delivery process and are never placed in Redis/Celery payloads, audit rows, or `email_deliveries`. SMTP failure before acceptance remains retryable, but in-progress or ambiguous deliveries are blocked to prevent duplicate key emails. Lost keys cannot be resent from old plaintext; rotate the key and send the replacement one-time secret.
-
-Bootstrap local OpenAI Chat Completions provider, route, and pricing metadata:
-
-```bash
-slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-file docs/examples/openai-completions-pricing.example.csv \
-  --apply
-slaif-gateway fx add --base-currency USD --quote-currency EUR --rate 0.920000000
-```
-
-The checked-in pricing CSV uses placeholder values for smoke tests only. Replace
-them before production accounting. Inspect usage ledger metadata:
-
-```bash
-slaif-gateway usage summarize --group-by provider_model
-slaif-gateway usage export --format csv --output usage.csv
-```
-
-Inspect and repair expired pending quota reservations:
-
-```bash
-slaif-gateway quota list-expired-reservations
-slaif-gateway quota reconcile-expired-reservations --dry-run
-slaif-gateway quota reconcile-expired-reservations --execute --reason "crash recovery"
-```
-
-Inspect and repair streaming provider-completed rows whose accounting finalization failed:
-
-```bash
-slaif-gateway quota list-provider-completed-recovery
-slaif-gateway quota reconcile-provider-completed --dry-run
-slaif-gateway quota reconcile-provider-completed --execute --reason "finalization repair"
-```
-
-Provider, route, pricing, FX, and usage CLI commands operate on local metadata only. They do not call upstream providers, fetch live pricing, or fetch live FX rates.
-Quota reconciliation is operator tooling for expired pending reservations and provider-completed finalization failures. Manual CLI commands default to dry-run. Scheduled Celery Beat support is disabled by default; enabling `ENABLE_SCHEDULED_RECONCILIATION=true` schedules safe backlog inspection only, and automatic repair requires the relevant `RECONCILIATION_AUTO_EXECUTE_*` flag plus `RECONCILIATION_DRY_RUN=false`. Provider-completed repair uses stored usage/cost metadata, does not call providers, and does not treat a provider-completed success as a zero-cost failure. Scheduled task payloads/results are safe summaries and do not include plaintext keys, token hashes, encrypted secret material, provider keys, prompts, or completions. Optional reconciliation webhook alerts are disabled by default, are emitted only from backlog inspection, send counts only unless safe IDs are explicitly enabled, and do not mutate quota/accounting or call providers.
-
-## Testing
-
-Run the normal local checks:
-
-```bash
-python -m pytest tests/unit
-scripts/test-unit-parallel.sh
 python -m ruff check app tests
 alembic heads
+docker compose config --quiet
 ```
 
-The parallel unit wrapper defaults to `min(20, visible CPU cores)` and can be
-overridden with `PYTEST_XDIST_WORKERS`. See
-[`docs/testing-parallelism.md`](docs/testing-parallelism.md) for the current
-parallel-safety analysis; integration, E2E, and browser suites remain serial by
-default unless each worker has isolated database/browser resources.
+CI also runs PostgreSQL integration tests, mocked official-client E2E tests,
+Playwright browser smoke, Docker Compose smoke, CodeQL, and documentation
+hygiene. Green CI is necessary but is not production certification.
 
-Integration tests use `TEST_DATABASE_URL` when set, may use Testcontainers when Docker is available, and otherwise skip cleanly:
+## Project and support
 
-```bash
-TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/integration
-```
+- License: [Apache License 2.0](LICENSE)
+- Security reporting: [SECURITY.md](SECURITY.md)
+- Releases: [release archive](docs/releases/README.md)
+- Changes on `main`: [changelog](CHANGELOG.md)
+- Operational support boundary: [support policy](docs/support-policy.md)
+- Project website: [slaif.si](https://www.slaif.si)
 
-The OpenAI/OpenRouter E2E tests use the official `openai` Python package with `OpenAI()` reading `OPENAI_API_KEY` and `OPENAI_BASE_URL`, but upstream HTTP is mocked with RESPX. Normal tests require no real OpenAI or OpenRouter keys and make no real upstream calls.
-Streaming E2E tests also use mocked upstream SSE responses for OpenAI and OpenRouter. Successful streaming finalization requires provider final usage metadata. If a stream completes without final usage, the gateway releases the reservation, records a failed/incomplete ledger event with zero actual cost, emits a safe SSE error event, and does not emit a normal successful `[DONE]`. If a provider stream completes with usage but accounting finalization fails after content was delivered, the gateway keeps a durable provider-completed usage record marked for reconciliation instead of treating it as a zero-cost provider failure. Prompt and completion content are not stored. Client-disconnect cleanup is covered by a real ASGI server test that closes a stream early and verifies reservation/Redis concurrency cleanup.
+Maintainers: Janez Perš and Jon Muhovič, Laboratory for Machine Intelligence,
+Faculty of Electrical Engineering, University of Ljubljana.
 
-Redis rate-limit integration tests use `TEST_REDIS_URL` when set. If it is not set and `redis-server` is available locally, tests start a temporary user-owned Redis instance on a free localhost port.
-
-Optional admin dashboard browser smoke tests use Playwright and do not run as
-part of the normal unit, integration, or OpenAI-compatible E2E commands. Install
-Chromium explicitly and run the browser suite against a migrated test database:
-
-```bash
-python -m playwright install chromium
-TEST_DATABASE_URL="postgresql+asyncpg://..." python -m pytest tests/browser -m playwright
-```
-
-The browser smoke suite starts the local FastAPI app, seeds safe dummy admin
-dashboard data, checks login/navigation/logout, verifies representative CSRF
-forms are rendered, and asserts normal dashboard pages do not expose token
-hashes, encrypted one-time-secret material, provider keys, plaintext gateway
-keys, prompts, completions, or session data. It does not call real
-OpenAI/OpenRouter providers or send real email.
-
-## External Reviews And Remediation
-
-The project has undergone external quality/security-oriented mid-development reviews. Review artifacts and remediation status are tracked in:
-
-- [`docs/security/reviews/`](docs/security/reviews/)
-- [`docs/security/reviews/remediation-matrix.md`](docs/security/reviews/remediation-matrix.md)
-
-These reviews are not formal certifications or penetration tests. They document major architecture, security, accounting, compatibility, and production-readiness findings and the PRs/checks that addressed them.
-
-## Security Notes
-
-- Plaintext gateway keys are shown only once at creation or rotation.
-- PostgreSQL stores gateway key HMAC digests, not plaintext gateway keys.
-- Provider configs store provider API key environment variable names, not provider secret values.
-- Server-side upstream provider secrets use `OPENAI_UPSTREAM_API_KEY` and `OPENROUTER_API_KEY`; `OPENAI_API_KEY` remains reserved for OpenAI-compatible clients carrying gateway-issued keys.
-- Usage summaries and exports include metadata, token counts, and costs. They do not include prompts, completions, request bodies, response bodies, token hashes, provider keys, or other secrets.
-- Usage ledger rows do not store prompts or completions by default.
-- Unknown pricing or required FX conversion data fails closed for cost-limited requests.
-- Hard quota reservation uses PostgreSQL row locking and reserved counters, not Redis.
-- Redis rate limiting is temporary operational throttling only; PostgreSQL remains the hard quota source of truth.
-
-## Schema And Migrations
-
-`docs/database-schema.md` is the authoritative schema source. Schema changes must update that document, SQLAlchemy models, Alembic migrations, and tests together.
-
-Migrations are explicit operator actions and are not run during application startup or `/readyz`. Fresh `alembic upgrade head` runs create the project schema and version table from the committed migration chain.
-
-## Roadmap
-
-Near-term remaining work includes owner/institution/cohort delete or anonymization workflows, bulk key send-now execution, external FX refresh workflows, OpenTelemetry tracing, and fuller production hardening runbooks.
-
-For production streaming behind Nginx, disable proxy buffering and use long read/send timeouts so SSE chunks reach clients promptly.
-
-## Maintainers
-
-Janez Perš, Jon Muhovič  
-Faculty of Electrical Engineering, University of Ljubljana  
-Laboratory for Machine Intelligence (LMI)  
-- Email: 
-    - jon.muhovic@fe.uni-lj.si (Jon is first point of contact)
-    - janez.pers@fe.uni-lj.si 
-
-- Profile:
-    - https://lmi.fe.uni-lj.si/en/janez-pers-2/
-    - https://lmi.fe.uni-lj.si/en/jon-muhovic/
-- Laboratory: https://lmi.fe.uni-lj.si/en
-
-## Security Contact
-
-For responsible disclosure of vulnerabilities, please contact:  
-janez.pers@fe.uni-lj.si
-
-## Acknowledgement
-
-We acknowledge the support of the EC/EuroHPC JU and the Slovenian Ministry of HESI via the project SLAIF (grant number 101254461).
-
-Project website: https://www.slaif.si
-
-### Operator-defined OpenAI-compatible backends
-
-SLAIF includes a bounded runtime foundation for operator-defined
-`openai_compatible` backends, including LAN vLLM-style services. This is not a
-model qualification or discovery feature. Provider secrets remain server-side
-under environment-variable names; generic HTTP requires explicit operator
-acknowledgement and an audit reason because bearer credentials and request
-content traverse the LAN unencrypted. Generic backends do not inherit hosted
-OpenAI tools or OpenRouter cost authority, and redirects are not followed.
-Operators may explicitly preview `/v1/models` with
-`slaif-gateway providers discover-models <provider> --json` and use the admin
-wizard to create conservative route/local-pricing metadata. This is not model
-qualification; Objective 020 owns conformance.
-
-Objective 020's conformance result is `mocked_conformance`: it proves the
-gateway/provider-category contract with mocked generic upstreams and does not
-qualify a live vLLM, Qwen, or Codex target. Named live targets belong to
-Objectives 022–023.
+We acknowledge support from the EC/EuroHPC JU and the Slovenian Ministry of
+Higher Education, Science and Innovation through SLAIF (grant 101254461).

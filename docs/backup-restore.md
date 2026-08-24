@@ -1,5 +1,8 @@
 # Backup and restore
 
+> **Status:** Current operator procedure
+> **Safety:** Restore verification accepts only explicitly disposable database names
+
 Use `pg_dump --format=custom` against a safe disposable/test database URL:
 
 ```bash

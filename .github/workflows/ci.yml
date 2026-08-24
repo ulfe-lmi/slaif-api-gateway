@@ -266,16 +266,8 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-      - name: Check README brand header
-        run: |
-          sed -n '1,5p' README.md | diff -u - <(cat <<'EOF'
-          <div style="text-align: center;">
-            <a href="https://www.slaif.si">
-              <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="400" height="400">
-            </a>
-          </div>
-          EOF
-          )
+      - name: Check documentation structure and links
+        run: python scripts/check_documentation.py
 
       - name: Check public client environment variable names
         run: |

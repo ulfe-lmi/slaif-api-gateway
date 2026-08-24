@@ -9,3 +9,11 @@ fitness, security, compliance, provider behavior, or scale.
   one 24-worker full current-machine matrix, classified `RESULT=FAIL` because
   one of 2,534 tests failed. The separate post-PR-220 128-worker HPC
   qualification remains not run.
+- [`2026-08-24 production-appliance qualification`](2026-08-24-production-appliance-qualification.md)
+  — disposable production Compose, NGINX/TLS, PostgreSQL, Redis, worker/
+  scheduler, provider-double, accounting, failure, privacy, persistence,
+  backup/restore, and cleanup evidence for the named candidate. It is not a real-
+  provider run, release decision, security certification, or production approval.
+- [`2026-08-24 documentation architecture and truth audit`](2026-08-24-documentation-audit.md)
+  — repository-wide cross-document and documentation-versus-code baseline for
+  the documentation-modernization PR.

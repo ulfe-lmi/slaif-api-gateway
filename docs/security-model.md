@@ -1,5 +1,8 @@
 # Security Model
 
+> **Authority:** Current key, credential, privacy, session, logging, and failure boundary
+> **Not:** Security certification, penetration-test report, or compliance attestation
+
 This document summarizes the implemented security architecture. It is not a
 formal certification, compliance audit, or penetration-test report.
 
@@ -1297,7 +1300,7 @@ never recover or send old plaintext keys.
 - Slack/PagerDuty-specific alert integrations are not implemented yet.
 - This project has not completed a formal certification, compliance audit, or
   penetration test.
-# External-tool accounting hold safety
+## External-tool accounting hold safety
 
 Held external-tool accounting state is PostgreSQL truth. It retains the full
 reservation and blocks authentication/quota admission until an audited manual

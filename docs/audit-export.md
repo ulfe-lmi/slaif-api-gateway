@@ -1,16 +1,19 @@
-# Audit, finance, project, and SIEM exports
+# Audit and usage export boundaries
 
-Exports contain safe metadata only: timestamps, identifiers, provider/model
-names, token/cost totals, event types, and outcomes. They never include prompt
-or completion content, raw request bodies, credentials, or secrets.
+> **Status:** Dashboard usage/audit CSV is wired; broader export builders are foundations
+> **Audience:** Operators, security reviewers, and maintainers
 
-Formats:
+The current admin dashboard exposes confirmed, audited CSV exports for filtered
+usage and audit activity. They enforce row limits, neutralize spreadsheet
+formula prefixes, and omit prompt/completion content, request/provider bodies,
+plaintext keys, token hashes, encrypted one-time-secret material, credentials,
+password hashes, and session tokens.
 
-- Finance CSV: cost and usage by organizational unit and key.
-- Security CSV: administrative lifecycle events.
-- Project CSV: model/provider/tool usage metadata.
-- SIEM JSON or CEF: authentication failures, permission denials, and fence events.
+`services/audit_export.py` separately provides safe-column CSV builders for
+finance, security, and project rows plus a bounded CEF formatter. No current API,
+dashboard, or CLI route exposes those finance/project/CEF builders as named
+products. SIEM delivery and retention-driven pseudonymization are not automated
+by the current Gateway.
 
-Spreadsheet injection is prevented by prefixing formula-leading text. Owner
-identifiers can be pseudonymized after the configured retention window while
-ledger totals remain immutable.
+PostgreSQL usage and audit metadata remains the source for any operator export.
+Exports are not invoices, compliance reports, or complete SIEM integrations.

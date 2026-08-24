@@ -1,5 +1,8 @@
 # Stale Reservation Reconciliation
 
+> **Status:** Current reconciliation runbook
+> **Safety:** Reconcile from PostgreSQL evidence and explicit operator intent
+
 ## What Stale Pending Reservations Are
 
 A stale reservation is a `quota_reservations` row that remains `pending` after
@@ -117,7 +120,7 @@ appropriate.
   ```
 
 - Review `/admin/audit` for the reconciliation action.
-# External-tool holds
+## External-tool holds
 
 Ordinary stale reservation reconciliation must skip `external_tool_fenced`
 holds. A held fence is inspection-age information only; it may be cleared only

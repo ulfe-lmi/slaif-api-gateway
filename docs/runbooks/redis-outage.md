@@ -1,5 +1,8 @@
 # Redis Outage And Rate-Limit Degradation
 
+> **Status:** Current operator runbook
+> **Boundary:** Redis is operational state; PostgreSQL remains quota/accounting truth
+
 ## Redis Role
 
 Redis stores temporary operational state:

@@ -1,5 +1,8 @@
 # Ambiguous Email Delivery Handling
 
+> **Status:** Current operator runbook
+> **Safety:** Never resend an ambiguous one-time secret; rotate when receipt is uncertain
+
 ## States
 
 Key email delivery rows may be `pending`, `sending`, `sent`, `failed`,

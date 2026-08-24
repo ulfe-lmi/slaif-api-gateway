@@ -1,5 +1,8 @@
 # Production Compose deployment
 
+> **Status:** Current production-style appliance procedure
+> **Not:** Certification or approval for an internet-facing deployment
+
 Prerequisites: Linux host, Docker with Compose v2, TLS certificate and private
 key, and operator-created secret files under `secrets/` with directory mode
 `0700`.
@@ -43,8 +46,11 @@ file in the image.
 bash scripts/preflight.sh
 ```
 
-Preflight fails closed if any secret is missing or empty, permissions are wrong,
-TLS files are absent, Docker is unavailable, or Compose configuration is invalid.
+Preflight fails closed if a required secret is missing, unreadable, empty, or a
+symlink; if the default `secrets/` directory is not mode `0700`; if TLS files
+are missing or empty; if Docker is unavailable; or if Compose configuration is
+invalid. It does not validate certificate trust, expiry, hostname coverage, or
+every individual file mode.
 
 ## Deploy
 
@@ -57,15 +63,18 @@ service runs `alembic upgrade head` once and must complete successfully before
 API starts. The API health check probes `/healthz`; Nginx starts only after the
 API is healthy.
 
-Only Nginx ports 80/443 are exposed. PostgreSQL, Redis, migrations, and the API
-remain on the internal network; the API itself is loopback-bound.
+Only Nginx ports 80/443 are publicly bound. PostgreSQL, Redis, and migrations
+remain internal; the API has an additional host-loopback diagnostic binding at
+`127.0.0.1:${SLAIF_API_DIAGNOSTIC_PORT:-8000}` and is not publicly bound by
+Compose.
 
 The production Nginx configuration proxies the exact `/admin` landing path and
 the `/admin/` subtree without canonical-slash redirects between Nginx and
 FastAPI. It does not publish `/metrics`; the qualification-only Compose
 override permits metrics solely from the API container's `127.0.0.1` loopback.
 
-The default production profile runs API + PostgreSQL + Redis + Nginx only.
+The default production profile runs PostgreSQL, Redis, the one-shot migration
+service, API, and Nginx. It does not run worker or scheduler.
 
 Async operations such as email delivery and scheduled reconciliation require the
 optional `async` profile:

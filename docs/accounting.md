@@ -1,7 +1,11 @@
 # Accounting
 
-This document is the accounting documentation index for reviewers and future
-implementation work. It does not add runtime behavior or schema fields.
+> **Authority:** Current PostgreSQL reservation, finalization, cost, and reconciliation contract
+> **Not:** Provider-invoice or exact pre-call no-overrun assurance
+
+This document is the accounting contract and evidence index for reviewers. It
+describes current behavior but does not itself add runtime behavior or schema
+fields.
 
 For RC2 feature-fullness versus implemented-scope verification status, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). Current accounting docs describe
@@ -280,7 +284,7 @@ must not store or render streamed chunks, prompts, completions, tool arguments,
 media payloads, raw request bodies, raw response bodies, secrets, or raw
 metadata JSON for the live-burn section. Prometheus live-burn counters remain
 future work.
-# External-tool accounting holds
+## External-tool accounting holds
 
 The bounded OpenAI Responses web-search runtime uses the existing PostgreSQL
 fence and full-remaining-balance reservation. A successful response finalizes
