@@ -62,9 +62,9 @@ Claims are classified as:
 
 ### Runbooks
 
-All files under `docs/runbooks/` are current operator guides and will remain at
-stable paths. The index and these runbooks will use one template: purpose,
-prerequisites, procedure, verification, rollback/escalation, and safety:
+All files under `docs/runbooks/` are current operator guides and remain at
+stable paths. Existing procedures are preserved; the index and each runbook
+receive explicit current-status and safety framing:
 
 `admin-access.md`, `ambiguous-email-delivery.md`, `codex-openai-pilot.md`,
 `database-backup-restore.md`, `docker-nginx-troubleshooting.md`,
@@ -125,6 +125,37 @@ current compatibility contracts.
 | DOC-026 | Tiny statusless docs | Multiple 10–35-line files present strong product claims without audience, wiring, evidence, or status. | File inventory and consumer searches | Add status/authority metadata and expand, merge, or downgrade each claim. |
 | DOC-027 | Historical archives | Old release/security reviews correctly contain now-false implementation statements, but readers can reach them without a strong current-truth route. | Archive contents/indexes | Preserve historical bodies verbatim; strengthen archive indexes and current-contract links. |
 | DOC-028 | Dormant docs branch | The local `docs/current-state-truth-reconciliation` branch is based on incompatible old state and deletes large portions of current code/docs. | Branch diff against `main` | Do not reuse or stack it; implement from a fresh `main` branch only. |
+
+## Second-pass findings
+
+The implementation pass deliberately repeated consumer and entrypoint searches
+after the first edits. It found additional drift that a link-only review would
+have missed:
+
+| ID | Domain | Finding | Resolution |
+|---|---|---|---|
+| DOC-029 | Security hardening | `security-hardening.md` presented isolated helpers in `services/security.py` as deployed controls and described a URL rule that differs from provider configuration/runtime. | Document real Nginx, admin-session, settings, provider-config, and adapter paths; label the helper module standalone. |
+| DOC-030 | Schema structure | The schema called `background_jobs` future/recommended although it is migrated, described nonexistent automatic seed expectations, and appended newer tables after the document conclusion. | Reorder tables, list all 31 current models, distinguish migrated foundations from wired workflows, and describe explicit operator configuration. |
+| DOC-031 | Qualification consistency | The compatibility matrix still repeated Objective 140's unproven finalized-ledger claim after the dedicated qualification guide was corrected. | Downgrade it to historical transport evidence and add a regression assertion across both documents. |
+| DOC-032 | CLI inventory | The initial command test ignored nested Typer groups and the new reference consequently omitted key-policy, external-tool, and secret-generation commands. | Inventory nested groups and the root `version` command; test exact invocations. |
+| DOC-033 | Production topology | The production guide called only ports 80/443 “exposed” without distinguishing the host-loopback API diagnostic binding and overstated preflight permission/certificate validation. | Document public versus loopback bindings and exact preflight checks. |
+
+## Resolution status on the modernization candidate
+
+All documentation defects above are closed on this branch as documentation
+work. Closure means the prose, structure, navigation, or regression check was
+corrected; it does not convert an acknowledged software/evidence limitation
+into implemented functionality.
+
+| Findings | Status | Resolution summary |
+|---|---|---|
+| DOC-001–006 | Closed | Concise README, documentation home, authority map, one-H1 structure, explicit historical sectioning, and semantic brand checks. |
+| DOC-007–009 | Closed | Published/tagged truth separated from untagged drafts; current appliance evidence indexed. Runtime/package versions were intentionally not changed. |
+| DOC-010–013 | Closed | OIDC table/settings documented, `.env.example` classified as curated, and complete root/nested Typer inventory added. Disabled OIDC settings were not promoted into the runnable template. |
+| DOC-014–018 | Closed | Demo, observability, DLP, onboarding, and export prose now matches actual consumers and entrypoints. |
+| DOC-019–023 | Closed | Real-provider evidence downgraded honestly; stale audits framed; foundations separated from the MVP; production and development paths separated. The underlying real-provider accounting evidence gap remains explicit. |
+| DOC-024–028 | Closed | Link/anchor/heading/orphan checker, semantic inventory tests, status framing, archive navigation, and fresh-main branch discipline added. External URL availability remains a one-time review check rather than a flaky CI gate. |
+| DOC-029–033 | Closed | Second-pass security, schema, qualification, nested-CLI, and production-topology drift corrected and covered where mechanically enforceable. |
 
 ## Facts already verified as consistent
 

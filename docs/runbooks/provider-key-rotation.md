@@ -1,5 +1,8 @@
 # Provider Key Rotation
 
+> **Status:** Current operator runbook
+> **Safety:** Provider keys remain server-side and must never enter audit reasons or logs
+
 ## Purpose
 
 Rotate the upstream provider key used by the gateway to call OpenAI,

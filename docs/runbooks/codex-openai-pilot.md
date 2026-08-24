@@ -1,5 +1,8 @@
 # Codex 0.147.0 bounded OpenAI pilot
 
+> **Status:** Separately authorized pilot procedure; historical pinned client/profile
+> **Not:** General Codex or real-provider qualification
+
 Status: **PREPARED, NOT EXECUTED**. Objective 011 did not call OpenAI or any
 other real provider. `real_provider_e2e=false` remains authoritative.
 

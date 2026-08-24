@@ -1,35 +1,49 @@
 # Changelog
 
-## 0.1.0rc2 — SME control-plane release candidate
+This project follows an evidence-first pre-release process. “Unreleased” means
+merged on `main`; it does not mean tagged, deployed, or production-approved.
 
-### Added
+## Unreleased
 
-- Single-organization team/project model with explicit hierarchy and provenance.
-- OIDC human sign-in with controlled identity linking; local admin fallback retained.
-- Enforceable SME RBAC, permission ceilings, MFA direction, and service accounts.
-- Hierarchical recurring PostgreSQL budgets with atomic reservations.
-- Versioned policy bundles, approved catalogs, drift detection, and immutable revisions.
-- Guided SME onboarding/status experience.
-- Metadata-only audit/SIEM/finance/project exports.
-- Optional bounded DLP/PII policy with redacted findings only.
-- Provider governance for residency, retention, training use, ZDR claims, destinations, and stale-evidence fail-closed routing.
-- Security hardening: headers, abuse throttling, redirect boundary, secret validation, incident runbooks.
-- Boundary invariant suite, observability SLOs, backup/restore runbook, concurrency correctness profiles.
-- Production Compose profile with TLS/Nginx, secrets preflight, resource limits, and internal networking.
-- Clean-clone operator journey, full acceptance matrix, audit findings, SBOM/support gate.
+### Gateway and compatibility
 
-### Changed
+- Expanded bounded Chat Completions and Responses behavior, including stored
+  references, Conversations, input-token count, compact, selected multimodal
+  input, local tools, streaming live-burn, and the separately fenced OpenAI
+  Responses `web_search` path.
+- Added bounded Audio, Embeddings, and Realtime client-secret endpoint families.
+- Added reviewed generic OpenAI-compatible backend setup and module-provider
+  foundations without granting generic provider/model qualification.
 
-- Alembic head advanced through `0022_provider_governance`.
-- Compatibility matrix now records model qualification evidence and limitations.
+### Accounting and operations
 
-### Security
+- Added PostgreSQL external-tool fences/holds, provider-completed recovery,
+  safe usage profiles, richer reservation facts, and operator reconciliation.
+- Added production-style Compose with file-backed secrets, authenticated Redis,
+  named PostgreSQL persistence, NGINX/TLS, worker/scheduler wiring, backup/
+  restore guidance, and disposable appliance qualification.
+- Expanded admin and CLI surfaces for key lifecycle, imports, providers, routes,
+  pricing, FX, usage/audit exports, and explicit one-time key delivery.
 
-- No plaintext provider or gateway keys are stored.
-- Content-minimizing defaults remain in place; no prompt/completion storage by default.
+### Post-MVP foundations
 
-### Known limitations
+- Added organization/team/project, OIDC, service-account, RBAC, recurring-
+  budget, policy-bundle, DLP, onboarding, provider-governance, audit-export, and
+  observability service/schema foundations.
+- These foundations are not uniformly wired into current API/dashboard/CLI
+  entrypoints and do not redefine the original one-organization SME MVP. Their
+  exact status is documented individually.
 
-- No hostile public multi-tenancy or RLS guarantee.
-- One organization per deployment remains the SME MVP boundary.
-- No penetration test, compliance certification, SLA, or production approval is claimed.
+### Documentation and verification
+
+- Added current-vs-target product scope, compatibility/security/accounting
+  contracts, historical review indexes, and dated verification evidence.
+- The project remains RC-beta and makes no production, penetration-test,
+  compliance, invoice, support, or SLA certification claim.
+
+## [v0.1.0-rc.1] — 2026-05-01
+
+The first published release candidate. See the immutable
+[release notes](docs/releases/v0.1.0-rc.1.md).
+
+[v0.1.0-rc.1]: https://github.com/ulfe-lmi/slaif-api-gateway/releases/tag/v0.1.0-rc.1

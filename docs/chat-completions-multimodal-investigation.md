@@ -1,5 +1,8 @@
 # Chat Completions Multimodal Investigation
 
+> **Status:** Design/investigation reference
+> **Current behavior:** See [OpenAI compatibility](openai-compatibility.md)
+
 Checked on 2026-05-18.
 
 This note records the current upstream evidence for Chat Completions
@@ -12,7 +15,7 @@ forwarding, pricing, quota reservation, or accounting.
 
 OpenAI official docs:
 
-- [Chat Completions API reference](https://platform.openai.com/docs/api-reference/chat/create-chat-completion)
+- [Chat Completions API reference](https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions)
 - [Text generation guide](https://platform.openai.com/docs/guides/chat-completions)
 - [Images and vision guide](https://platform.openai.com/docs/guides/images-vision?api-mode=chat)
 - [Audio and speech guide](https://platform.openai.com/docs/guides/audio)

@@ -1,14 +1,16 @@
-# Supply-chain gate
+# Supply-chain evidence
 
-The committed CycloneDX SBOM at `sbom/cyclonedx.json` records the application
-and its installed Python components. It is reproducible by regenerating from the
-locked environment; the exact timestamp may differ, but component identity and
-ordering are stable.
+> **Status:** Bounded repository evidence; not signed provenance or vulnerability certification
+> **Audience:** Maintainers and security reviewers
 
-Dependency vulnerability management uses CI dependency tooling plus Dependabot.
-No known critical/high vulnerability is accepted in this gate. New advisories
-must be triaged before release closure.
+The repository contains a CycloneDX SBOM at `sbom/cyclonedx.json`, Dependabot
+configuration, CodeQL analysis, pinned versions for selected development tools,
+and standard GitHub dependency metadata. The application is Apache-2.0 licensed.
 
-License compatibility is reviewed for direct dependencies. The project remains
-Apache License 2.0. Container image signing is not yet enabled; this must not be
-represented as signed provenance until implemented.
+Current CI does **not** run pip-audit or Safety, does not sign container images,
+does not publish attestations, and does not prove that no high-severity advisory
+exists. Regenerate and review the SBOM and dependency advisories for the exact
+release candidate before a release decision.
+
+Do not describe the current artifacts as signed provenance, a complete license
+audit, an accepted vulnerability-risk register, or supply-chain certification.

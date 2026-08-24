@@ -1,5 +1,8 @@
 # Deployment
 
+> **Status:** Current development/self-hosted deployment reference
+> **Production path:** See [deployment-production.md](deployment-production.md)
+
 This document describes the repository Docker Compose packaging and the
 deployment boundaries operators must keep explicit. It is not a production
 certification or a complete site reliability runbook.

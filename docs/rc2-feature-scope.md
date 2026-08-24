@@ -1,5 +1,8 @@
 # RC2 Feature Scope
 
+> **Authority:** Canonical RC2 target classification, not current release status
+> **Current behavior:** Use the [compatibility matrix](compatibility-matrix.md)
+
 This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 
 ## Scope-Lock Rules

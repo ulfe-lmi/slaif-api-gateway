@@ -1,5 +1,8 @@
 # Metrics And Alert Thresholds
 
+> **Status:** Current metrics guidance; thresholds are operator starting points
+> **Not:** SLA or wired paging-service configuration
+
 ## Endpoint Security
 
 `/metrics` exposes Prometheus text metrics when `ENABLE_METRICS=true`.

@@ -1,5 +1,8 @@
 # Docker And Nginx Troubleshooting
 
+> **Status:** Current operator runbook
+> **Safety:** Preserve volumes and inspect exact Compose projects before cleanup
+
 ## Validate Compose
 
 ```bash

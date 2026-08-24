@@ -1,5 +1,8 @@
 # RC-Beta Upgrade Checklist
 
+> **Status:** Current pre-release upgrade checklist
+> **Not:** Guaranteed downgrade or production support policy
+
 ## Before Upgrade
 
 - Back up PostgreSQL.

@@ -1,11 +1,19 @@
-# Observability, SLOs, alerts, and reconciliation
+# Observability boundaries
 
-SLAIF exposes metadata-only operational telemetry. The bounded SLO catalog
-covers availability, provider errors, Responses latency p95, quota rejection,
-reconciliation lag, and background job failures. Alerts include safe request IDs
-and runbook links; labels are allow-listed to prevent unbounded cardinality.
+> **Status:** Prometheus/logging are wired; SLO evaluation is a standalone foundation
+> **Audience:** Operators and maintainers
 
-Reconciliation classifies expired pending holds for release and active pending
-holds for finalize/review in PostgreSQL. OTLP export is operator opt-in and
-metadata-only. No prompt, completion, tool result, credential, or raw content is
-telemetered.
+The running Gateway provides structured, redacted logs, request/diagnostic IDs,
+health/readiness endpoints, and bounded Prometheus metrics. Production NGINX
+does not expose `/metrics`; direct metrics access is controlled by the API's
+configured authentication/IP policy. See [configuration](configuration.md) and
+the [metrics runbook](runbooks/metrics-alert-thresholds.md).
+
+`services/observability.py` contains a bounded SLO catalog, safe-label helper,
+and reconciliation planner with unit coverage. It is not wired to an exporter,
+dashboard, paging service, or scheduler. There is no OpenTelemetry dependency,
+OTLP setting, or OTLP runtime export in the current repository.
+
+No prompt, completion, tool result, credential, or raw request/provider body is
+intended for logs or metrics. That privacy boundary remains mandatory for any
+future telemetry integration.

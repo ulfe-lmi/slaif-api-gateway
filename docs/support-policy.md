@@ -1,13 +1,28 @@
 # Support policy
 
-Supported deployment model is self-hosted Docker Compose on Linux from a tagged
-release or exact commit. Supported upgrade path is sequential within the same
-major version after reviewing migration runbooks.
+> **Status:** Current project support boundary
+> **Release state:** Pre-release; see [current readiness](beta-readiness.md)
 
-Security issues: report privately to the repository maintainers using GitHub
-security advisories. Do not open public issues with exploit details.
+The documented deployment model is self-hosted Docker Compose on Linux from a
+published tag or an exact reviewed commit. Operators own the host, TLS,
+provider agreements and credentials, backups, monitoring, capacity decisions,
+and change approval.
 
-Operational support covers documented deployment, migrations, backup/restore,
-and configuration questions. It does not include compliance certification,
-provider-term interpretation, custom forks, or unsupported multi-tenant use.
-No SLA is offered.
+Security vulnerabilities should be reported privately through GitHub security
+advisories. Do not open a public issue containing exploit details, credentials,
+prompts, provider responses, or personal data. See [SECURITY.md](../SECURITY.md)
+for the reporting and disclosure process.
+
+Community support may cover documented setup, migrations, configuration,
+backup/restore, and reproducible defects. It does not include:
+
+- a response-time or resolution-time SLA;
+- managed operations, incident command, or provider support;
+- compliance certification or interpretation of provider terms;
+- custom forks, unsupported endpoint behavior, or hostile multi-tenant use;
+- guaranteed downgrade across migrations; or
+- invoice-grade billing or reconciliation with provider invoices.
+
+Rehearse upgrades and restore procedures on disposable infrastructure before
+changing an important deployment. The [operator runbooks](runbooks/README.md)
+describe recovery boundaries but are not a commercial support commitment.

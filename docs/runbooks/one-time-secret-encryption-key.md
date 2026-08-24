@@ -1,5 +1,8 @@
 # One-Time-Secret Encryption Key Handling
 
+> **Status:** Current operator runbook
+> **Safety:** Losing a required version makes pending encrypted delivery unrecoverable
+
 ## Purpose
 
 `ONE_TIME_SECRET_ENCRYPTION_KEY` encrypts short-lived recoverable payloads in

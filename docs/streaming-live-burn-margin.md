@@ -1,5 +1,8 @@
 # Streaming Live-Burn Margin Milestone
 
+> **Authority:** Current Chat and supported stateless Responses streaming admission/monitoring contract
+> **Reading rule:** Later sections explicitly marked historical are implementation records, not current status
+
 **Project:** SLAIF API Gateway
 **Status:** Chat Completions streaming implemented; Responses live-burn implemented for the supported stateless text-output streaming subset
 **Implementation order:** Chat Completions first, Responses second

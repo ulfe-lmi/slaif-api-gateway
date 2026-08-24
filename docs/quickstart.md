@@ -1,5 +1,8 @@
 # Quickstart For First-Time Users
 
+> **Status:** Current local-development walkthrough
+> **Not:** Production deployment or real-provider qualification
+
 This guide starts SLAIF API Gateway on your computer and walks through the
 first admin and gateway-key setup. You do not need real OpenAI or OpenRouter
 keys for the basic local admin smoke checks. You need a real upstream provider

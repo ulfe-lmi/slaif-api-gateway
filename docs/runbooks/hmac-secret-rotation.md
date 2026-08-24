@@ -1,5 +1,8 @@
 # HMAC Secret Rotation
 
+> **Status:** Current operator runbook
+> **Safety:** Retain old versions while any active key depends on them
+
 ## Purpose
 
 Gateway keys are stored as HMAC-SHA-256 digests of the full plaintext key using

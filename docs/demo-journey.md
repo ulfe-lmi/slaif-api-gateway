@@ -1,26 +1,27 @@
-# Clean-clone SME operator journey
+# Disposable production-appliance journey
 
-This journey validates a clean clone using documented steps and no hidden local
-state. Run:
+> **Status:** Current wrapper for the production qualification harness
+> **Audience:** Maintainers and reviewers
+> **Not:** A guided onboarding demo, deployment command, or production certification
+
+`scripts/demo/run-journey.sh` delegates directly to the strict disposable
+production-appliance qualification:
 
 ```bash
-DATABASE_URL=postgresql+asyncpg://... bash scripts/demo/run-journey.sh
+bash scripts/demo/run-journey.sh
 ```
 
-The script checks prerequisites, validates Compose configuration, applies
-migrations, points to guided browser onboarding, and optionally performs backup,
-restore, and verification when safe disposable URLs are provided.
+The harness creates a unique Compose project, generated TLS and secrets,
+PostgreSQL, Redis, the production API image, NGINX, worker/scheduler processes,
+and a socket-level provider double. It exercises supported Chat and Responses
+flows, accounting failure paths, Redis controls, process interruption,
+persistence, backup/restore, dashboard access, metrics, privacy canaries, key
+lifecycle, and exact cleanup.
 
-Manual operator evidence is expected for:
-- first admin creation;
-- OIDC or local fallback choice;
-- provider metadata and secret environment name;
-- approved catalog/policy revision;
-- budget definition;
-- strict-mode key issuance;
-- OpenAI client chat/responses usage;
-- Codex CLI local-tool usage;
-- quota hold/block/release behavior;
-- finance/security/SIEM exports.
+It refuses inherited production/database/upstream-test configuration and makes
+no real OpenAI or OpenRouter call. See the
+[production qualification record](verification/2026-08-24-production-appliance-qualification.md)
+for the exact evidence and limitations.
 
-All limitations remain visible. No production data or broad live provider spend is used.
+For human first-time setup, use the [quickstart](quickstart.md). For production
+deployment preparation, use [Production Compose deployment](deployment-production.md).

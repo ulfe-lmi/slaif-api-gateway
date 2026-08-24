@@ -1,5 +1,8 @@
 # PostgreSQL Pool Exhaustion And Readiness Failure
 
+> **Status:** Current operator runbook
+> **Safety:** Diagnose pool/database state before restarting or reconciling requests
+
 ## Symptoms
 
 - `/readyz` reports database or schema not ok.

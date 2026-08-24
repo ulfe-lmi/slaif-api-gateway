@@ -1,5 +1,8 @@
 # RC-Beta Release Notes And Checklist
 
+> **Status:** Release checklist and historical RC-beta evidence
+> **Current readiness:** See [beta-readiness.md](beta-readiness.md)
+
 This document is the operator-facing RC-beta checklist. It complements
 [`beta-readiness.md`](beta-readiness.md), which records the detailed readiness
 verification pass.
@@ -16,6 +19,17 @@ after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
 ## Current verification evidence
+
+The latest merged production-path evidence is the
+[2026-08-24 production-appliance qualification](verification/2026-08-24-production-appliance-qualification.md).
+It exercises the real production Compose/NGINX/PostgreSQL/Redis entrypoints with
+a provider double and passes its bounded accounting, failure, operator, privacy,
+backup/restore, and cleanup matrix. It is not a real-provider run, benchmark,
+release decision, or production certification.
+
+The earlier 2026-08-17 record below remains immutable failed historical
+evidence for its exact commit and environment; later focused and appliance
+evidence does not rewrite its `RESULT=FAIL`.
 
 The 2026-08-17 current-machine verification record is
 [`verification/2026-08-17-current-main-baseline.md`](verification/2026-08-17-current-main-baseline.md).
