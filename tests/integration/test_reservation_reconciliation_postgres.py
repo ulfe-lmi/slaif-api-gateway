@@ -52,12 +52,18 @@ async def _create_pending_reservation(
     gateway_key,
     *,
     expires_at: datetime,
+    provider: str | None = None,
+    resolved_model: str | None = None,
+    streaming: bool | None = None,
 ):
     reservation = await QuotaReservationsRepository(async_test_session).create_reservation(
         gateway_key_id=gateway_key.id,
         request_id=f"req-{uuid.uuid4()}",
         endpoint="/v1/chat/completions",
         requested_model="gpt-test-mini",
+        provider=provider,
+        resolved_model=resolved_model,
+        streaming=streaming,
         reserved_cost_eur=Decimal("0.300000000"),
         reserved_tokens=200,
         reserved_requests=1,
@@ -140,7 +146,10 @@ async def test_postgres_reconciles_expired_pending_reservation(
     assert ledger.actual_cost_eur == Decimal("0E-9")
     assert ledger.prompt_tokens == 0
     assert ledger.completion_tokens == 0
-    assert ledger.response_metadata == {"reconciled_status": "expired"}
+    assert ledger.response_metadata == {
+        "reconciled_status": "expired",
+        "metadata_quality": "legacy_reservation_fallback",
+    }
 
     audit = (
         await async_test_session.execute(
@@ -150,6 +159,41 @@ async def test_postgres_reconciles_expired_pending_reservation(
     assert audit.action == "quota_reservation_expired"
     assert audit.request_id == reservation.request_id
     assert audit.note == "integration repair"
+
+
+@pytest.mark.asyncio
+async def test_postgres_reconciliation_copies_snapshot_facts(
+    async_test_session: AsyncSession,
+) -> None:
+    gateway_key = await _create_gateway_key(async_test_session)
+    now = datetime.now(UTC)
+    reservation = await _create_pending_reservation(
+        async_test_session,
+        gateway_key,
+        expires_at=now - timedelta(minutes=1),
+        provider="qualification-double",
+        resolved_model="qualification-model",
+        streaming=True,
+    )
+
+    await _service(async_test_session).reconcile_expired_pending_reservation(
+        reservation.id,
+        now=now,
+        reason="snapshot repair",
+    )
+    ledger = (
+        await async_test_session.execute(
+            select(UsageLedger).where(UsageLedger.request_id == reservation.request_id)
+        )
+    ).scalar_one()
+
+    assert ledger.provider == "qualification-double"
+    assert ledger.resolved_model == "qualification-model"
+    assert ledger.streaming is True
+    assert ledger.response_metadata == {
+        "reconciled_status": "expired",
+        "metadata_quality": "reservation_snapshot",
+    }
 
 
 @pytest.mark.asyncio

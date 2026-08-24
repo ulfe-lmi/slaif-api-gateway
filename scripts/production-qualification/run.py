@@ -464,6 +464,7 @@ class Runner:
             "COALESCE(ul.accounting_status,'pending'), COALESCE(ul.http_status::text,''), "
             "COALESCE(ul.total_tokens::text,'0'), COALESCE(ul.estimated_cost_eur::text,''), "
             "COALESCE(ul.actual_cost_eur::text,''), COALESCE(ul.finished_at::text,''), qr.status, "
+            "qr.provider, qr.resolved_model, COALESCE(qr.streaming::text,''), "
             "qr.reserved_tokens, qr.reserved_cost_eur, qr.reserved_requests, "
             "COALESCE(qr.finalized_at::text,''), COALESCE(qr.released_at::text,'') "
             "FROM quota_reservations qr LEFT JOIN usage_ledger ul ON ul.quota_reservation_id = qr.id "
@@ -475,7 +476,8 @@ class Runner:
         fields = (
             "request_id", "endpoint", "provider", "requested_model", "resolved_model", "streaming",
             "success", "accounting_status", "http_status", "total_tokens", "estimated_cost", "actual_cost",
-            "finished_at", "reservation_status", "reserved_tokens", "reserved_cost", "reserved_requests",
+            "finished_at", "reservation_status", "reservation_provider", "reservation_resolved_model",
+            "reservation_streaming", "reserved_tokens", "reserved_cost", "reserved_requests",
             "reservation_finalized_at", "reservation_released_at",
         )
         return dict(zip(fields, row, strict=False))
@@ -841,6 +843,15 @@ class Runner:
         evidence = self.wait_request_terminal(str(request_id), timeout=30)
         if evidence["reservation_status"] not in {"released", "expired"} or evidence["accounting_status"] == "pending":
             raise QualificationError(f"documented reconciliation did not repair interrupted request: {evidence}")
+        if (
+            evidence["provider"] != "qualification-double"
+            or evidence["resolved_model"] != "qualification-model"
+            or evidence["streaming"] != "true"
+            or evidence["reservation_provider"] != "qualification-double"
+            or evidence["reservation_resolved_model"] != "qualification-model"
+            or evidence["reservation_streaming"] != "true"
+        ):
+            raise QualificationError(f"interrupted request lost immutable route facts: {evidence}")
         counters = self.sql("SELECT tokens_reserved_total, requests_reserved_total, cost_reserved_eur FROM gateway_keys WHERE id = '" + self.key_id.replace("'", "''") + "'")
         if not counters or any(value not in {"0", "0.000000000", "0.0"} for value in counters[0]):
             raise QualificationError(f"reconciliation left key reservations outstanding: {counters}")
@@ -966,7 +977,6 @@ class Runner:
             raise QualificationError("media-shaped rejected input reached the provider")
 
     def exercise_quota_and_key_controls(self) -> None:
-        before_provider = self.provider_state()["requests"]
         rows = self.sql("SELECT requests_used_total, tokens_used_total, cost_used_eur FROM gateway_keys WHERE id = '" + self.key_id + "'")
         if not rows:
             raise QualificationError("primary gateway key disappeared before quota qualification")
@@ -989,15 +999,28 @@ class Runner:
         if not overrun_request:
             raise QualificationError("bounded admitted overrun request did not expose request ID")
         overrun_evidence = self.wait_request_terminal(str(overrun_request))
-        if int(overrun_evidence["total_tokens"]) <= int(overrun_limit) or int(overrun_evidence["total_tokens"]) <= 2:
+        after_overrun_rows = self.sql(
+            "SELECT requests_used_total, tokens_used_total, cost_used_eur FROM gateway_keys WHERE id = '" + self.key_id + "'"
+        )
+        if not after_overrun_rows:
+            raise QualificationError("primary gateway key disappeared after bounded overrun")
+        _, after_tokens, _ = after_overrun_rows[0]
+        if (
+            int(after_tokens) <= int(overrun_limit)
+            or int(after_tokens) <= int(used_tokens)
+            or int(overrun_evidence["total_tokens"]) != int(after_tokens) - int(used_tokens)
+        ):
             raise QualificationError(f"authoritative usage did not cross the remaining token limit: {overrun_evidence}")
+        if self.provider_state()["requests"] != provider_before_overrun + 1:
+            raise QualificationError("bounded overrun did not produce exactly one provider call")
+        provider_before_following = self.provider_state()["requests"]
         status, _, _ = self.api(
             "/v1/chat/completions",
             {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": "x"}], "max_tokens": 1},
             key=self.gateway_key,
             expect={429},
         )
-        if status != 429 or self.provider_state()["requests"] != provider_before_overrun + 1:
+        if status != 429 or self.provider_state()["requests"] != provider_before_following:
             raise QualificationError("following request was not denied after authoritative quota overrun")
 
         rows = self.sql("SELECT requests_used_total, tokens_used_total, cost_used_eur FROM gateway_keys WHERE id = '" + self.key_id.replace("'", "''") + "'")
@@ -1005,28 +1028,42 @@ class Runner:
         request_body = {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8}
 
         self.sql("UPDATE gateway_keys SET request_limit_total = NULL, token_limit_total = " + used_tokens + ", cost_limit_eur = 20 WHERE id = '" + self.key_id + "'")
+        provider_before_token_denial = self.provider_state()["requests"]
         status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key, expect={429})
-        if status != 429 or self.provider_state()["requests"] != before_provider:
+        if status != 429 or self.provider_state()["requests"] != provider_before_token_denial:
             raise QualificationError("token quota crossing was not rejected before provider forwarding")
 
         self.sql("UPDATE gateway_keys SET token_limit_total = NULL, cost_limit_eur = " + used_cost + " WHERE id = '" + self.key_id + "'")
+        provider_before_cost_denial = self.provider_state()["requests"]
         status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key, expect={429})
-        if status != 429 or self.provider_state()["requests"] != before_provider:
+        if status != 429 or self.provider_state()["requests"] != provider_before_cost_denial:
             raise QualificationError("cost quota crossing was not rejected before provider forwarding")
 
         self.sql("UPDATE gateway_keys SET request_limit_total = " + used_requests + ", cost_limit_eur = 20 WHERE id = '" + self.key_id + "'")
+        provider_before_request_denial = self.provider_state()["requests"]
         status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key, expect={429})
-        if status != 429 or self.provider_state()["requests"] != before_provider:
+        if status != 429 or self.provider_state()["requests"] != provider_before_request_denial:
             raise QualificationError("request quota crossing was not rejected before provider forwarding")
 
         self.sql("UPDATE gateway_keys SET valid_until = now() - interval '1 second' WHERE id = '" + self.key_id + "'")
+        provider_before_expiry_denial = self.provider_state()["requests"]
         status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key, expect={401, 403})
-        if status not in {401, 403} or self.provider_state()["requests"] != before_provider:
+        if status not in {401, 403} or self.provider_state()["requests"] != provider_before_expiry_denial:
             raise QualificationError("expired gateway key was not denied before provider forwarding")
 
+        self.sql(
+            "UPDATE gateway_keys SET status = 'active', valid_until = now() + interval '1 day', "
+            "request_limit_total = NULL, token_limit_total = NULL, cost_limit_eur = 20 "
+            "WHERE id = '" + self.key_id + "'"
+        )
+        provider_before_valid_probe = self.provider_state()["requests"]
+        valid_status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key)
+        if valid_status != 200 or self.provider_state()["requests"] != provider_before_valid_probe + 1:
+            raise QualificationError("otherwise-valid gateway key was not proven before revocation")
         self.cli(["keys", "revoke", self.key_id, "--actor-admin-id", self.admin_id, "--reason", "objective-151 qualification revocation", "--json"], name="key-revoke")
+        provider_before_revocation_denial = self.provider_state()["requests"]
         status, _, _ = self.api("/v1/chat/completions", request_body, key=self.gateway_key, expect={401, 403})
-        if status not in {401, 403} or self.provider_state()["requests"] != before_provider:
+        if status not in {401, 403} or self.provider_state()["requests"] != provider_before_revocation_denial:
             raise QualificationError("revoked gateway key was not denied before provider forwarding")
 
     def exercise_persistence(self) -> None:
@@ -1044,6 +1081,10 @@ class Runner:
 
     def backup_restore(self) -> None:
         backup = "/qualification-runtime/qualification.dump"
+        source_rows = (
+            self.sql("SELECT COUNT(*) FROM gateway_keys")[0][0],
+            self.sql("SELECT COUNT(*) FROM usage_ledger")[0][0],
+        )
         backup_run = self.compose_command(
             [
                 "--profile", "qualification", "run", "--rm", "--no-deps", "backup-adapter", "sh", "-c",
@@ -1079,6 +1120,14 @@ class Runner:
         )
         if "RESULT=OK" not in verify.stdout:
             raise QualificationError("scripts/verify_restore.py did not report RESULT=OK")
+        counts_match = re.search(r"row_counts=gateway_keys:(\d+),usage_ledger:(\d+)", verify.stdout)
+        if counts_match is None:
+            raise QualificationError("restore verifier did not emit bounded row counts")
+        restored_rows = tuple(counts_match.groups())
+        if restored_rows != tuple(str(value) for value in source_rows):
+            raise QualificationError(
+                f"restored row counts did not match source snapshot: source={source_rows} restored={restored_rows}"
+            )
 
     def privacy(self) -> None:
         logs = self.compose_command(["logs", "--no-color", "--tail", "1000"], name="privacy-logs").stdout

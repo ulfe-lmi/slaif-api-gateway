@@ -417,6 +417,13 @@ The usage ledger records metadata, token counts, cost, provider/model status,
 and safe diagnostics. It does not store prompt text, completion text, uploaded
 files, tool payloads, or raw provider bodies by default.
 
+Ordinary quota reservations also snapshot the selected provider, resolved model,
+and normalized streaming flag before forwarding. These nullable, low-cardinality
+facts let process-crash reconciliation preserve what was known at admission;
+they are not proof that transport completed. Pre-migration rows remain
+explicitly unknown, and external-tool fence reservations retain their separate
+hold semantics.
+
 Current Chat Completions requests also create advisory `usage_profiles` rows
 after successful accounting finalization when safe metadata is available. These
 rows support future calibration-key and key-template recommendation workflows;

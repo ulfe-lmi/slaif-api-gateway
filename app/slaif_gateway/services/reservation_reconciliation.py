@@ -386,10 +386,10 @@ class ReservationReconciliationService:
             quota_reservation_id=reservation.id,
             gateway_key_id=reservation.gateway_key_id,
             endpoint=reservation.endpoint,
-            provider=_UNKNOWN_PROVIDER,
+            provider=reservation.provider or _UNKNOWN_PROVIDER,
             requested_model=reservation.requested_model,
-            resolved_model=None,
-            streaming=False,
+            resolved_model=reservation.resolved_model,
+            streaming=reservation.streaming if reservation.streaming is not None else False,
             http_status=None,
             error_type=_STALE_RESERVATION_ERROR_TYPE,
             error_message=_safe_reason(reason),
@@ -405,7 +405,16 @@ class ReservationReconciliationService:
             actual_cost_native=Decimal("0"),
             native_currency="EUR",
             usage_raw={},
-            response_metadata={"reconciled_status": "expired"},
+            response_metadata={
+                "reconciled_status": "expired",
+                "metadata_quality": (
+                    "reservation_snapshot"
+                    if reservation.provider is not None
+                    and reservation.resolved_model is not None
+                    and reservation.streaming is not None
+                    else "legacy_reservation_fallback"
+                ),
+            },
             started_at=_aware_now(reservation.created_at),
             finished_at=reconciled_at,
             latency_ms=_latency_ms(_aware_now(reservation.created_at), reconciled_at),

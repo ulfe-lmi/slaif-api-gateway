@@ -32,6 +32,9 @@ class FakeReservation:
     request_id: str
     endpoint: str = "/v1/chat/completions"
     requested_model: str | None = "gpt-test-mini"
+    provider: str | None = None
+    resolved_model: str | None = None
+    streaming: bool | None = None
     quota_mode: str = "strict_bounded"
     reserved_cost_eur: Decimal = Decimal("0.300000000")
     reserved_tokens: int = 200
@@ -212,6 +215,37 @@ async def test_execute_expires_reservation_decrements_counters_and_writes_ledger
     assert "messages" not in usage_repo.records[0]
     assert audit_repo.records[0]["action"] == "quota_reservation_expired"
     assert "sk-slaif-secretvalue" not in str(audit_repo.records[0]["note"])
+
+
+@pytest.mark.asyncio
+async def test_execute_copies_snapshot_facts_into_expired_ledger() -> None:
+    reservation = FakeReservation(
+        id=uuid.uuid4(),
+        gateway_key_id=uuid.uuid4(),
+        request_id="req-snapshot",
+        provider="qualification-double",
+        resolved_model="qualification-model",
+        streaming=True,
+    )
+    service, _, _, usage_repo, _ = _service(
+        reservation=reservation,
+        key=FakeGatewayKey(id=reservation.gateway_key_id),
+    )
+
+    await service.reconcile_expired_pending_reservation(
+        reservation.id,
+        now=datetime(2026, 1, 1, 1, tzinfo=UTC),
+        reason="process crash recovery",
+    )
+
+    record = usage_repo.records[0]
+    assert record["provider"] == "qualification-double"
+    assert record["resolved_model"] == "qualification-model"
+    assert record["streaming"] is True
+    assert record["response_metadata"] == {
+        "reconciled_status": "expired",
+        "metadata_quality": "reservation_snapshot",
+    }
 
 
 @pytest.mark.asyncio

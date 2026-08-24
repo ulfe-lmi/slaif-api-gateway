@@ -836,6 +836,9 @@ gateway_key_id UUID not null references gateway_keys(id) on delete restrict
 request_id text not null
 endpoint text not null
 requested_model text null
+provider text null
+resolved_model text null
+streaming boolean null
 quota_mode text not null default 'strict_bounded'
 external_tool_capabilities jsonb not null default '[]'
 external_tool_destination_ids jsonb not null default '[]'
@@ -885,6 +888,12 @@ check((quota_mode = 'external_tool_fenced') =
 Rules:
 
 - Every quota-affecting request should create one reservation.
+- New ordinary strict-bounded reservations snapshot the selected provider,
+  resolved model, and normalized request streaming flag before upstream
+  forwarding. These are safe low-cardinality facts used for crash recovery;
+  they never contain request content. The fields remain nullable so
+  pre-migration rows are represented honestly rather than backfilled from a
+  mutable route lookup.
 - Stale `pending` reservations must be released by a scheduled cleanup job.
 - Finalization must adjust `gateway_keys.*_reserved_*` and `gateway_keys.*_used_*` counters atomically.
 - `strict_bounded` is the default/backfilled mode with empty external arrays and null external provider/route; `external_tool_fenced` rows carry a canonical non-empty capability snapshot, opaque destination IDs, a bounded non-empty provider name, and a non-null route UUID.
