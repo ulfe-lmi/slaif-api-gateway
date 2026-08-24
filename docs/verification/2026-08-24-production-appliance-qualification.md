@@ -23,7 +23,7 @@ Command:
 .venv/bin/python scripts/production-qualification/run.py
 ```
 
-Project: `slaif-151-3575828-b9f8a9`
+Project: `slaif-151-3605141-179932`
 
 | Phase | Result |
 | --- | --- |
@@ -40,6 +40,12 @@ Project: `slaif-151-3575828-b9f8a9`
 | PostgreSQL persistence | OK |
 | documented backup/restore/verification | **FAIL** |
 | later privacy/quota/dashboard phases | NOT RUN after blocking failure |
+
+The interrupted Responses request was retained in the sanitized evidence by
+its exact gateway request ID, but its reconciled ledger row reported
+`provider=unknown` and `streaming=false`. That accounting metadata limitation
+also prevents a complete qualification claim and must remain visible to the
+follow-up review.
 
 The run's automatic no-keep cleanup passed all independent checks:
 
