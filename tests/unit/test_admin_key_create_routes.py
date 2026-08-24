@@ -752,6 +752,11 @@ def test_create_codex_protocol_pilot_uses_exact_bounded_policy(monkeypatch) -> N
             "codex_compaction",
         ],
         "allowed_local_tool_types": ["function", "custom"],
+        "client_module": {
+            "id": "codex-0.147-responses-v1",
+            "version": "1",
+            "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+        },
     }
     assert response.text.count("sk-slaif-newpublic.once-only-created") == 1
     _assert_codex_responses_policy_summary(response.text)

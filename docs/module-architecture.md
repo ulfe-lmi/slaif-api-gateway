@@ -27,11 +27,13 @@ public key, mutate policy, reserve or finalize quota directly, or receive the
 public Gateway bearer.
 
 The initial default client module is the immutable `openai-default` module for
-ordinary Chat Completions and Responses create traffic. The initial server
-registry contains the built-in OpenAI, OpenRouter, generic OpenAI-compatible,
-and `facial_scoring` descriptors. Pair metadata is finite compatibility data;
-it does not grant an endpoint, model, route, provider, capability, pricing mode,
-hosted tool, or key permission.
+ordinary Chat Completions and Responses create traffic. Versioned Codex client
+modules are separate static entries: `codex-0.147-responses-v1` owns the
+qualified legacy profile, while `codex-0.149-responses-v1` owns only its
+bounded structural request facts and is default-denied. The latter has no
+server-module pair. Pair metadata is finite compatibility data; it does not
+grant an endpoint, model, route, provider, capability, pricing mode, hosted
+tool, or key permission.
 
 ## Static registration
 
@@ -61,6 +63,14 @@ non-streaming Chat image adapter. Its fixture packaging, hashes, dimensions,
 manifest provenance, zero-EUR request pricing, authentication, accounting,
 privacy, retry, and error behavior are unchanged.
 
-Codex 0.149 compatibility, Local Coding, and OpenCode modules are planned
-follow-on work, not implemented by this architecture objective. Objective 154
-owns later Codex client extraction.
+Codex 0.149 client syntax is structurally captured and registered, but has no
+qualification, provider/model E2E, Local Coding server module, or compatible
+pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
+module may return only bounded candidate facts for the observed adapter-managed
+`web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
+accounting, routing, or provider forwarding.
+
+Client-module profile facts are limited to the reviewed module ID, version,
+and fixture digest. Identity hints from Codex metadata are transient
+untrusted input and are never stored, logged, audited, exported, hashed, or
+forwarded.

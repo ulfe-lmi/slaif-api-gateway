@@ -412,6 +412,9 @@ async def test_exact_route_pair_is_protocol_qualified_and_safe() -> None:
         "profile_id",
         "metadata_version",
         "ready",
+        "client_module_id",
+        "client_module_version",
+        "client_module_fixture_sha256",
     }
 
 
@@ -914,6 +917,11 @@ def test_pilot_key_validation_and_policy_are_exact() -> None:
             "codex_compaction",
         ],
         "allowed_local_tool_types": ["function", "custom"],
+        "client_module": {
+            "id": "codex-0.147-responses-v1",
+            "version": "1",
+            "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+        },
     }
 
 

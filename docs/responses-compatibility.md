@@ -14,6 +14,15 @@ one linked replay are implemented behind three independent key/route
 capabilities. The capture itself does not authorize Codex tools or broader
 provider/client authority.
 
+Responses client selection is versioned and server-side: ordinary traffic
+uses `openai-default`, the qualified legacy Codex profile uses
+`codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
+registered default-denied with no compatible server pair. Codex 0.149's
+observed `web_search` declaration is a transient adapter-managed candidate fact
+only; unobserved `tool_search` remains rejected. It never
+set the hosted web-search admission path, external-tool fence, pricing, or
+accounting state. No raw Codex identity/session/workspace metadata is retained.
+
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
 `POST /v1/embeddings` are implemented separately, while the bounded Realtime

@@ -6,8 +6,8 @@ import asyncio
 import time
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -28,9 +28,9 @@ from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import ConversationReference, ResponseReference
-from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
-from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepository
+from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
@@ -51,14 +51,22 @@ from slaif_gateway.metrics import (
     observe_provider_call,
     record_provider_call_result,
 )
-from slaif_gateway.providers.errors import ProviderError
-from slaif_gateway.providers.errors import ProviderConfigurationError
+from slaif_gateway.modules.clients.registry import (
+    normalize_default_client_request,
+    resolve_responses_client_module,
+)
+from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
+from slaif_gateway.modules.servers.registry import (
+    ensure_client_module_has_server_pair,
+    ensure_client_server_pair,
+    resolve_server_module,
+)
+from slaif_gateway.providers.errors import ProviderConfigurationError, ProviderError
 from slaif_gateway.providers.factory import get_provider_adapter
-from slaif_gateway.modules.clients.registry import normalize_default_client_request
 from slaif_gateway.providers.streaming import (
-    CodexReplayStreamCandidate,
     RESPONSES_PROVIDER_FAILURE_EVENT_TYPES,
     RESPONSES_TEXT_STREAM_EVENT_TYPES,
+    CodexReplayStreamCandidate,
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
     format_responses_error_event,
@@ -67,8 +75,8 @@ from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceAcquireInput,
-    ExternalToolFenceRouteFacts,
     ExternalToolFenceResolveInput,
+    ExternalToolFenceRouteFacts,
 )
 from slaif_gateway.schemas.external_tool_hold import (
     ExternalToolAccountingHoldInput,
@@ -99,11 +107,15 @@ from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceService,
 )
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
+from slaif_gateway.services.openai_compatible_request_boundary import (
+    OpenAICompatibleRequestBoundaryError,
+    enforce_openai_compatible_request_boundary,
+)
 from slaif_gateway.services.openai_web_search_contract import (
     EXTERNAL_TOOL_FENCED,
+    parse_key_external_tool_policy,
     parse_web_search_output,
     parse_web_search_stream,
-    parse_key_external_tool_policy,
 )
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
@@ -113,9 +125,46 @@ from slaif_gateway.services.quota_service import QuotaService
 from slaif_gateway.services.rate_limit_errors import RateLimitError, RedisRateLimitUnavailableError
 from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
-from slaif_gateway.services.openai_compatible_request_boundary import (
-    OpenAICompatibleRequestBoundaryError,
-    enforce_openai_compatible_request_boundary,
+from slaif_gateway.services.responses_external_tool_runtime import (
+    ExternalToolRuntimeError,
+    admit_web_search_request,
+    with_pricing,
+)
+from slaif_gateway.services.responses_request_policy import (
+    TEXT_FORMAT_JSON_OBJECT,
+    TEXT_FORMAT_JSON_SCHEMA,
+    CodexCompactionReplayCandidate,
+    CodexReplayRequestCandidate,
+    ResponsesRequestPolicy,
+    apply_codex_route_limits,
+    codex_client_tool_declarations,
+    codex_client_tool_taxonomy_id,
+    codex_replay_request_candidates,
+    conversation_requested,
+    previous_response_id_requested,
+    responses_codex_client_tools_allowed,
+    responses_codex_client_tools_requested,
+    responses_codex_compaction_allowed,
+    responses_codex_compaction_replay_requested,
+    responses_codex_compaction_requested,
+    responses_codex_encrypted_reasoning_replay_allowed,
+    responses_codex_encrypted_reasoning_replay_requested,
+    responses_codex_extended_limits_allowed,
+    responses_codex_request_envelope_allowed,
+    responses_codex_request_envelope_requested,
+    responses_codex_streaming_tool_events_allowed,
+    responses_codex_streaming_tool_events_requested,
+    responses_custom_tools_requested,
+    responses_file_input_requested,
+    responses_function_tools_requested,
+    responses_image_input_requested,
+    responses_text_format_type,
+    validate_conversation_items_create_body,
+    validate_conversation_update_body,
+)
+from slaif_gateway.services.responses_route_capabilities import (
+    enforce_responses_route_capabilities,
+    parse_codex_compaction_compatible_route_ids,
 )
 from slaif_gateway.services.responses_streaming_live_burn import (
     RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
@@ -132,66 +181,24 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     responses_streaming_live_burn_policy_from_metadata,
     safe_responses_streaming_interrupted_estimate_metadata,
 )
-from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
-from slaif_gateway.services.responses_external_tool_runtime import (
-    ExternalToolRuntimeError,
-    admit_web_search_request,
-    with_pricing,
-)
-from slaif_gateway.services.responses_request_policy import (
-    apply_codex_route_limits,
-    CodexReplayRequestCandidate,
-    CodexCompactionReplayCandidate,
-    TEXT_FORMAT_JSON_OBJECT,
-    TEXT_FORMAT_JSON_SCHEMA,
-    conversation_requested,
-    codex_replay_request_candidates,
-    previous_response_id_requested,
-    responses_custom_tools_requested,
-    responses_file_input_requested,
-    responses_function_tools_requested,
-    responses_image_input_requested,
-    responses_codex_client_tools_allowed,
-    codex_client_tool_taxonomy_id,
-    responses_codex_client_tools_requested,
-    responses_codex_encrypted_reasoning_replay_allowed,
-    responses_codex_encrypted_reasoning_output_requested,
-    responses_codex_encrypted_reasoning_replay_requested,
-    responses_codex_compaction_allowed,
-    responses_codex_compaction_requested,
-    responses_codex_compaction_replay_requested,
-    responses_codex_extended_limits_allowed,
-    responses_codex_request_envelope_allowed,
-    responses_codex_request_envelope_requested,
-    responses_codex_streaming_tool_events_allowed,
-    responses_codex_streaming_tool_events_requested,
-    codex_client_tool_declarations,
-    responses_text_format_type,
-    validate_conversation_items_create_body,
-    validate_conversation_update_body,
-)
-from slaif_gateway.services.responses_route_capabilities import (
-    enforce_responses_route_capabilities,
-    parse_codex_compaction_compatible_route_ids,
-)
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
-from slaif_gateway.services.upstream_request_contracts import (
-    normalize_conversation_update_upstream_request,
-    normalize_conversation_items_create_upstream_request,
-    normalize_conversation_items_query_request,
-    normalize_responses_compact_upstream_request,
-    normalize_responses_input_tokens_upstream_request,
-    normalize_responses_upstream_request,
-)
 from slaif_gateway.services.upstream_payloads import (
-    build_conversation_update_upstream_body,
     build_conversation_items_create_upstream_body,
     build_conversation_items_query_params,
+    build_conversation_update_upstream_body,
     build_responses_compact_upstream_body,
     build_responses_input_items_query_params,
     build_responses_input_tokens_upstream_body,
     build_responses_upstream_body,
+)
+from slaif_gateway.services.upstream_request_contracts import (
+    normalize_conversation_items_create_upstream_request,
+    normalize_conversation_items_query_request,
+    normalize_conversation_update_upstream_request,
+    normalize_responses_compact_upstream_request,
+    normalize_responses_input_tokens_upstream_request,
+    normalize_responses_upstream_request,
 )
 
 RESPONSES_ENDPOINT = "/v1/responses"
@@ -561,8 +568,13 @@ async def handle_response_input_tokens_count(
     settings: Settings,
     request: Request | None = None,
 ):
+    client_module = _resolve_responses_client_module(authenticated_key)
+    _ensure_client_module_pair_exists(client_module.module_id)
     body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply_input_token_count(body)
     except RequestPolicyError as exc:
@@ -621,13 +633,25 @@ async def handle_response_compact(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+    client_module = _resolve_responses_client_module(authenticated_key)
+    try:
+        raw_body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+        body = (
+            raw_body
+            if client_module.module_id == DEFAULT_CLIENT_MODULE_ID
+            else client_module.normalize(RESPONSES_COMPACT_ENDPOINT, raw_body).body
+        )
+    except ModuleSelectionError as exc:
+        raise _openai_error_from_client_module_error(exc) from exc
     for field in ("parallel_tool_calls", "reasoning", "prompt_cache_key", "text"):
         if field in payload.model_fields_set and field not in body:
             body[field] = None
     codex_compaction_requested = responses_codex_compaction_requested(body)
     allow_codex_compaction = responses_codex_compaction_allowed(authenticated_key.responses_policy)
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply_compact(
             body,
@@ -667,6 +691,7 @@ async def handle_response_compact(
         codex_compaction_requested=codex_compaction_requested,
         request=request,
     )
+    _ensure_client_server_pair(client_module.module_id, route)
     if codex_compaction_requested:
         try:
             policy_result = apply_codex_route_limits(
@@ -795,10 +820,21 @@ async def handle_response_create(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = normalize_default_client_request(
-        "/v1/responses",
-        payload.model_dump(mode="python", exclude_none=True, exclude_unset=True),
-    ).body
+    client_module = _resolve_responses_client_module(authenticated_key)
+    try:
+        raw_body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+        normalized_client_request = (
+            normalize_default_client_request("/v1/responses", raw_body)
+            if client_module.module_id == DEFAULT_CLIENT_MODULE_ID
+            else client_module.normalize_responses(raw_body)
+        )
+    except ModuleSelectionError as exc:
+        raise _openai_error_from_client_module_error(exc) from exc
+    body = normalized_client_request.body
+    _ensure_client_module_pair_exists(client_module.module_id)
+    adapter_managed_candidates = frozenset(
+        normalized_client_request.adapter_managed_declaration_candidates
+    )
     for field in (
         "client_metadata",
         "include",
@@ -811,7 +847,7 @@ async def handle_response_create(
     external_web_search_requested = any(
         isinstance(tool, Mapping) and tool.get("type") == "web_search"
         for tool in body.get("tools", [])
-    ) if isinstance(body.get("tools", []), list) else False
+    ) if isinstance(body.get("tools", []), list) and "web_search" not in adapter_managed_candidates else False
     allow_external_tool_request = _key_allows_external_web_search(
         authenticated_key
     ) if external_web_search_requested else False
@@ -848,9 +884,12 @@ async def handle_response_create(
     )
     codex_encrypted_reasoning_event_requested = codex_encrypted_reasoning_replay_requested or (
         allow_codex_encrypted_reasoning_replay
-        and responses_codex_encrypted_reasoning_output_requested(body)
+        and client_module.encrypted_reasoning_output_requested(body)
     )
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply(
             body,
@@ -904,6 +943,7 @@ async def handle_response_create(
         codex_compaction_requested=codex_compaction_replay_requested,
         request=request,
     )
+    _ensure_client_server_pair(client_module.module_id, route)
     try:
         enforce_openai_compatible_request_boundary(
             policy_result.effective_body,
@@ -1814,6 +1854,49 @@ async def _verify_owned_codex_replay_references(
             raise _openai_error_from_codex_replay_error(exc) from exc
     finally:
         await session_iterator.aclose()
+
+
+def _resolve_responses_client_module(
+    authenticated_key: AuthenticatedGatewayKey,
+):
+    try:
+        return resolve_responses_client_module(getattr(authenticated_key, "responses_policy", None))
+    except ModuleSelectionError as exc:
+        raise _openai_error_from_client_module_error(exc) from exc
+
+
+def _openai_error_from_client_module_error(exc: ModuleSelectionError) -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "The selected client module is unavailable for this request.",
+        status_code=400,
+        error_type="invalid_request_error",
+        code=exc.error_code,
+    )
+
+
+def _ensure_client_server_pair(client_module_id: str, route: RouteResolutionResult) -> None:
+    try:
+        descriptor = resolve_server_module(route.provider, getattr(route, "provider_kind", None))
+        ensure_client_server_pair(client_module_id, descriptor.module_id)
+    except ProviderConfigurationError as exc:
+        raise OpenAICompatibleError(
+            "The selected client and server modules are not compatible.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="incompatible_client_server_pair",
+        ) from exc
+
+
+def _ensure_client_module_pair_exists(client_module_id: str) -> None:
+    try:
+        ensure_client_module_has_server_pair(client_module_id)
+    except ProviderConfigurationError as exc:
+        raise OpenAICompatibleError(
+            "The selected client and server modules are not compatible.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="incompatible_client_server_pair",
+        ) from exc
 
 
 def _verify_codex_replay_route(

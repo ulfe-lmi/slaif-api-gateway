@@ -20,6 +20,8 @@ class OpenAIDefaultClientModule:
 
     module_id = DEFAULT_CLIENT_MODULE_ID
     module_version = DEFAULT_CLIENT_MODULE_VERSION
+    fixture_sha256 = None
+    policy_spec = None
 
     def normalize(
         self,
@@ -45,3 +47,17 @@ class OpenAIDefaultClientModule:
             endpoint=endpoint,
             body=canonical_body,
         )
+
+    def normalize_responses(
+        self,
+        body: Mapping[str, object],
+    ) -> CanonicalClientRequest:
+        return self.normalize("/v1/responses", body)
+
+    def stream_profile(self, body: Mapping[str, object]) -> str | None:
+        _ = body
+        return None
+
+    def encrypted_reasoning_output_requested(self, body: Mapping[str, object]) -> bool:
+        _ = body
+        return False

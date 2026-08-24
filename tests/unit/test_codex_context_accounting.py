@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -25,6 +26,8 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _route_capabilities(**limits: object) -> dict[str, object]:
     responses = default_responses_capabilities()
     responses.update(
@@ -54,7 +57,7 @@ def _codex_policy(*, max_output_tokens: int | None = None) -> ResponsesPolicyRes
     }
     if max_output_tokens is not None:
         body["max_output_tokens"] = max_output_tokens
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_extended_limits=True,
@@ -83,13 +86,13 @@ def test_codex_route_default_replaces_only_legacy_injected_default() -> None:
 
 
 def test_ordinary_responses_keeps_legacy_default() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply({"model": "ordinary", "input": "bounded"})
+    result = _policy(Settings()).apply({"model": "ordinary", "input": "bounded"})
     assert result.effective_output_tokens == 1024
     assert result.codex_limits_applied is False
 
 
 def test_codex_compact_reserves_route_maximum_without_forwarding_output_field() -> None:
-    compact = ResponsesRequestPolicy(Settings()).apply_compact(
+    compact = _policy(Settings()).apply_compact(
         {
             "model": "gpt-5.6-sol",
             "input": [{"type": "message", "role": "user", "content": "bounded"}],

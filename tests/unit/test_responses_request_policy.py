@@ -5,6 +5,7 @@ import json
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
@@ -13,6 +14,8 @@ from slaif_gateway.services.responses_request_policy import (
 )
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "model": "gpt-test",
@@ -24,7 +27,7 @@ def _body(**overrides: object) -> dict[str, object]:
 
 
 def test_valid_string_input_injects_store_false_and_preserves_supported_fields() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             instructions="answer briefly",
             temperature=0.2,
@@ -41,14 +44,14 @@ def test_valid_string_input_injects_store_false_and_preserves_supported_fields()
 
 
 def test_stream_true_is_policy_valid_before_route_capability_check() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(_body(stream=True))
+    result = _policy(Settings()).apply(_body(stream=True))
 
     assert result.effective_body["stream"] is True
     assert result.effective_body["store"] is False
 
 
 def test_store_true_passes_only_in_stored_response_policy_mode() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(_body(store=True), allow_store=True)
+    result = _policy(Settings()).apply(_body(store=True), allow_store=True)
 
     assert result.effective_body["store"] is True
     assert "stream" not in result.effective_body
@@ -56,7 +59,7 @@ def test_store_true_passes_only_in_stored_response_policy_mode() -> None:
 
 def test_store_true_stream_true_rejects_before_route_provider() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(store=True, stream=True),
             allow_store=True,
         )
@@ -66,7 +69,7 @@ def test_store_true_stream_true_rejects_before_route_provider() -> None:
 
 
 def test_previous_response_id_passes_for_non_streaming_create() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(previous_response_id="resp_previous_123"),
         allow_store=True,
     )
@@ -78,7 +81,7 @@ def test_previous_response_id_passes_for_non_streaming_create() -> None:
 @pytest.mark.parametrize("value", ["", 123, None])
 def test_previous_response_id_rejects_invalid_shape(value: object) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(previous_response_id=value),
             allow_store=True,
         )
@@ -89,7 +92,7 @@ def test_previous_response_id_rejects_invalid_shape(value: object) -> None:
 
 def test_previous_response_id_rejects_oversized_value() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(
+        _policy(
             Settings(RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=8)
         ).apply(
             _body(previous_response_id="resp_previous_123"),
@@ -102,7 +105,7 @@ def test_previous_response_id_rejects_oversized_value() -> None:
 
 def test_previous_response_id_stream_true_rejects_before_route_provider() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(previous_response_id="resp_previous_123", stream=True),
             allow_store=True,
         )
@@ -112,7 +115,7 @@ def test_previous_response_id_stream_true_rejects_before_route_provider() -> Non
 
 
 def test_conversation_passes_for_non_streaming_create() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(conversation="conv_owned_123"),
         allow_store=True,
     )
@@ -124,7 +127,7 @@ def test_conversation_passes_for_non_streaming_create() -> None:
 @pytest.mark.parametrize("value", ["", 123, None, {"id": "conv_123"}])
 def test_conversation_rejects_invalid_shape(value: object) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(conversation=value),
             allow_store=True,
         )
@@ -135,7 +138,7 @@ def test_conversation_rejects_invalid_shape(value: object) -> None:
 
 def test_conversation_rejects_oversized_value() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CONVERSATION_ID_BYTES=8)).apply(
+        _policy(Settings(RESPONSES_MAX_CONVERSATION_ID_BYTES=8)).apply(
             _body(conversation="conv_owned_123"),
             allow_store=True,
         )
@@ -146,7 +149,7 @@ def test_conversation_rejects_oversized_value() -> None:
 
 def test_conversation_with_previous_response_id_rejects_before_route_provider() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(conversation="conv_123", previous_response_id="resp_123"),
             allow_store=True,
         )
@@ -157,7 +160,7 @@ def test_conversation_with_previous_response_id_rejects_before_route_provider() 
 
 def test_conversation_stream_true_rejects_before_route_provider() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(conversation="conv_123", stream=True),
             allow_store=True,
         )
@@ -167,7 +170,7 @@ def test_conversation_stream_true_rejects_before_route_provider() -> None:
 
 
 def test_omitted_max_output_tokens_injects_default() -> None:
-    result = ResponsesRequestPolicy(Settings(DEFAULT_MAX_OUTPUT_TOKENS=77)).apply(
+    result = _policy(Settings(DEFAULT_MAX_OUTPUT_TOKENS=77)).apply(
         {"model": "gpt-test", "input": "hello"}
     )
 
@@ -176,7 +179,7 @@ def test_omitted_max_output_tokens_injects_default() -> None:
 
 
 def test_input_token_count_accepts_supported_stateless_subset_without_output_defaults() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply_input_token_count(
+    result = _policy(Settings()).apply_input_token_count(
         {
             "model": "gpt-5.2",
             "input": "Count these tokens.",
@@ -243,7 +246,7 @@ def test_input_token_count_accepts_supported_stateless_subset_without_output_def
 )
 def test_input_token_count_rejects_create_or_stateful_fields(field: str, value: object) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+        _policy(Settings()).apply_input_token_count(
             {
                 "model": "gpt-5.2",
                 "input": "hello",
@@ -256,20 +259,20 @@ def test_input_token_count_rejects_create_or_stateful_fields(field: str, value: 
 
 def test_input_token_count_rejects_invalid_parallel_tool_calls_and_truncation() -> None:
     with pytest.raises(RequestPolicyError) as parallel_exc:
-        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+        _policy(Settings()).apply_input_token_count(
             {"model": "gpt-5.2", "input": "hello", "parallel_tool_calls": "yes"}
         )
     assert parallel_exc.value.error_code == "responses_field_invalid_type"
 
     with pytest.raises(RequestPolicyError) as truncation_exc:
-        ResponsesRequestPolicy(Settings()).apply_input_token_count(
+        _policy(Settings()).apply_input_token_count(
             {"model": "gpt-5.2", "input": "hello", "truncation": "unsupported"}
         )
     assert truncation_exc.value.error_code == "responses_field_value_not_supported"
 
 
 def test_compact_accepts_string_input_with_bounded_output_reservation() -> None:
-    result = ResponsesRequestPolicy(
+    result = _policy(
         Settings(RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=111)
     ).apply_compact(
         {
@@ -291,7 +294,7 @@ def test_compact_accepts_string_input_with_bounded_output_reservation() -> None:
 
 
 def test_compact_accepts_text_focused_item_array() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         {
             "model": "gpt-5.2",
             "input": [
@@ -341,7 +344,7 @@ def test_compact_accepts_text_focused_item_array() -> None:
 )
 def test_compact_rejects_create_stateful_tools_and_file_fields(field: str, value: object) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             {
                 "model": "gpt-5.2",
                 "input": "hello",
@@ -354,11 +357,11 @@ def test_compact_rejects_create_stateful_tools_and_file_fields(field: str, value
 
 def test_compact_requires_model_and_input() -> None:
     with pytest.raises(RequestPolicyError) as model_exc:
-        ResponsesRequestPolicy(Settings()).apply_compact({"input": "hello"})
+        _policy(Settings()).apply_compact({"input": "hello"})
     assert model_exc.value.param == "model"
 
     with pytest.raises(RequestPolicyError) as input_exc:
-        ResponsesRequestPolicy(Settings()).apply_compact({"model": "gpt-5.2"})
+        _policy(Settings()).apply_compact({"model": "gpt-5.2"})
     assert input_exc.value.error_code == "responses_compact_input_required"
     assert input_exc.value.param == "input"
 
@@ -374,7 +377,7 @@ def test_compact_requires_model_and_input() -> None:
 )
 def test_compact_rejects_non_text_or_extra_content_parts(part: dict[str, object]) -> None:
     with pytest.raises(RequestPolicyError):
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             {
                 "model": "gpt-5.2",
                 "input": [
@@ -398,7 +401,7 @@ def test_compact_rejects_non_text_or_extra_content_parts(part: dict[str, object]
 )
 def test_unsupported_fields_reject_before_forwarding(field: str, value: object, code: str) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(**{field: value}))
+        _policy(Settings()).apply(_body(**{field: value}))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == field
@@ -407,7 +410,7 @@ def test_unsupported_fields_reject_before_forwarding(field: str, value: object, 
 
 
 def test_list_input_with_user_text_message_passes() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(input=[{"role": "user", "content": "hello"}])
     )
 
@@ -416,7 +419,7 @@ def test_list_input_with_user_text_message_passes() -> None:
 
 
 def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {"role": "system", "content": "system text"},
@@ -444,7 +447,7 @@ def test_list_input_with_supported_roles_and_text_parts_passes() -> None:
 
 
 def test_list_input_with_user_image_url_part_passes_and_preserves_detail() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -481,7 +484,7 @@ def test_list_input_with_user_image_url_part_passes_and_preserves_detail() -> No
 def test_list_input_with_image_data_url_part_passes_and_omits_detail_when_omitted() -> None:
     data_url = "data:image/png;base64,aGVsbG8="
 
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -500,7 +503,7 @@ def test_list_input_with_image_data_url_part_passes_and_omits_detail_when_omitte
 
 
 def test_list_input_with_file_url_part_passes() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -543,7 +546,7 @@ def test_list_input_with_file_url_part_passes() -> None:
     ],
 )
 def test_list_input_with_file_data_part_passes(filename: str, file_data: str) -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -570,7 +573,7 @@ def test_list_input_with_file_data_part_passes(filename: str, file_data: str) ->
 
 @pytest.mark.parametrize("detail", ["auto", "low", "high", "original"])
 def test_list_input_with_supported_image_detail_values_passes(detail: str) -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -591,7 +594,7 @@ def test_list_input_with_supported_image_detail_values_passes(detail: str) -> No
 
 
 def test_function_call_output_input_item_passes_as_string_only_tool_result() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {"role": "user", "content": "call the tool"},
@@ -616,7 +619,7 @@ def test_function_call_output_input_item_passes_as_string_only_tool_result() -> 
 
 
 def test_custom_tool_call_output_input_item_passes_as_string_only_tool_result() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             input=[
                 {"role": "user", "content": "call the custom tool"},
@@ -668,7 +671,7 @@ def test_list_input_rejects_unsupported_shapes_without_raw_text(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(input=input_value))
+        _policy(Settings()).apply(_body(input=input_value))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == param
@@ -684,15 +687,15 @@ def test_list_input_caps_reject_without_raw_text() -> None:
     )
 
     with pytest.raises(RequestPolicyError) as count_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(input=[{"role": "user", "content": "one"}, {"role": "user", "content": "two"}])
         )
     with pytest.raises(RequestPolicyError) as item_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(input=[{"role": "user", "content": "secret text"}])
         )
     with pytest.raises(RequestPolicyError) as total_exc:
-        ResponsesRequestPolicy(
+        _policy(
             Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4)
         ).apply(
             _body(
@@ -703,7 +706,7 @@ def test_list_input_caps_reject_without_raw_text() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as parts_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(
                 input=[
                     {
@@ -785,7 +788,7 @@ def test_image_input_rejects_unsupported_shapes_without_raw_values(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(input=[{"role": "user", "content": [part]}])
         )
 
@@ -799,7 +802,7 @@ def test_image_input_rejects_non_user_role_without_raw_url() -> None:
     raw_url = "https://example.test/private.png?token=secret"
 
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(input=[{"role": "assistant", "content": [{"type": "input_image", "image_url": raw_url}]}])
         )
 
@@ -813,15 +816,15 @@ def test_image_input_caps_reject_without_raw_values() -> None:
     raw_data_url = "data:image/png;base64," + ("a" * 64)
 
     with pytest.raises(RequestPolicyError) as url_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_URL_BYTES=16)).apply(
+        _policy(Settings(RESPONSES_MAX_IMAGE_URL_BYTES=16)).apply(
             _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_url}]}])
         )
     with pytest.raises(RequestPolicyError) as data_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_DATA_URL_BYTES=16)).apply(
+        _policy(Settings(RESPONSES_MAX_IMAGE_DATA_URL_BYTES=16)).apply(
             _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_data_url}]}])
         )
     with pytest.raises(RequestPolicyError) as total_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=32)).apply(
+        _policy(Settings(RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=32)).apply(
             _body(
                 input=[
                     {
@@ -835,7 +838,7 @@ def test_image_input_caps_reject_without_raw_values() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as count_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=1)).apply(
+        _policy(Settings(RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=1)).apply(
             _body(
                 input=[
                     {
@@ -858,10 +861,10 @@ def test_image_input_caps_reject_without_raw_values() -> None:
 
 
 def test_image_input_material_contributes_to_admission_estimate() -> None:
-    text_only = ResponsesRequestPolicy(Settings()).apply(
+    text_only = _policy(Settings()).apply(
         _body(input=[{"role": "user", "content": [{"type": "input_text", "text": "describe"}]}])
     )
-    with_image = ResponsesRequestPolicy(Settings()).apply(
+    with_image = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -991,7 +994,7 @@ def test_file_input_rejects_unsupported_shapes_without_raw_values(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(input=[{"role": "user", "content": [part]}])
         )
 
@@ -1005,7 +1008,7 @@ def test_file_input_rejects_non_user_role_without_raw_url() -> None:
     raw_url = "https://example.test/secret.pdf"
 
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(input=[{"role": "assistant", "content": [{"type": "input_file", "file_url": raw_url}]}])
         )
 
@@ -1019,11 +1022,11 @@ def test_file_input_caps_reject_without_raw_values() -> None:
     raw_data_url = "data:application/pdf;base64,c2VjcmV0"
 
     with pytest.raises(RequestPolicyError) as url_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_URL_BYTES=16)).apply(
+        _policy(Settings(RESPONSES_MAX_FILE_URL_BYTES=16)).apply(
             _body(input=[{"role": "user", "content": [{"type": "input_file", "file_url": raw_url}]}])
         )
     with pytest.raises(RequestPolicyError) as data_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_DATA_URL_BYTES=16)).apply(
+        _policy(Settings(RESPONSES_MAX_FILE_DATA_URL_BYTES=16)).apply(
             _body(
                 input=[
                     {
@@ -1040,7 +1043,7 @@ def test_file_input_caps_reject_without_raw_values() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as total_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=32)).apply(
+        _policy(Settings(RESPONSES_MAX_TOTAL_FILE_DATA_URL_BYTES=32)).apply(
             _body(
                 input=[
                     {
@@ -1062,7 +1065,7 @@ def test_file_input_caps_reject_without_raw_values() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as count_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_PARTS_PER_REQUEST=1)).apply(
+        _policy(Settings(RESPONSES_MAX_FILE_PARTS_PER_REQUEST=1)).apply(
             _body(
                 input=[
                     {
@@ -1076,7 +1079,7 @@ def test_file_input_caps_reject_without_raw_values() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as name_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FILE_NAME_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_FILE_NAME_BYTES=4)).apply(
             _body(
                 input=[
                     {
@@ -1103,10 +1106,10 @@ def test_file_input_caps_reject_without_raw_values() -> None:
 
 
 def test_file_input_material_contributes_to_admission_estimate() -> None:
-    text_only = ResponsesRequestPolicy(Settings()).apply(
+    text_only = _policy(Settings()).apply(
         _body(input=[{"role": "user", "content": [{"type": "input_text", "text": "summarize"}]}])
     )
-    with_file = ResponsesRequestPolicy(Settings()).apply(
+    with_file = _policy(Settings()).apply(
         _body(
             input=[
                 {
@@ -1129,7 +1132,7 @@ def test_file_input_material_contributes_to_admission_estimate() -> None:
 
 def test_function_call_output_cap_rejects_without_raw_output() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES=4)).apply(
             _body(
                 input=[
                     {
@@ -1147,7 +1150,7 @@ def test_function_call_output_cap_rejects_without_raw_output() -> None:
 
 def test_custom_tool_call_output_cap_rejects_without_raw_output() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)).apply(
             _body(
                 input=[
                     {
@@ -1166,9 +1169,9 @@ def test_custom_tool_call_output_cap_rejects_without_raw_output() -> None:
 def test_oversized_input_and_instructions_reject_without_raw_text() -> None:
     settings = Settings(RESPONSES_MAX_INPUT_TEXT_BYTES=4, RESPONSES_MAX_INSTRUCTIONS_BYTES=4)
     with pytest.raises(RequestPolicyError) as input_exc:
-        ResponsesRequestPolicy(settings).apply(_body(input="secret prompt text"))
+        _policy(settings).apply(_body(input="secret prompt text"))
     with pytest.raises(RequestPolicyError) as instructions_exc:
-        ResponsesRequestPolicy(settings).apply(_body(instructions="secret instructions"))
+        _policy(settings).apply(_body(instructions="secret instructions"))
 
     assert input_exc.value.error_code == "responses_field_too_large"
     assert "secret" not in input_exc.value.safe_message
@@ -1182,7 +1185,7 @@ def test_oversized_input_and_instructions_reject_without_raw_text() -> None:
 )
 def test_scalar_controls_reject_invalid_types(field: str) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(**{field: True}))
+        _policy(Settings()).apply(_body(**{field: True}))
 
     assert exc_info.value.error_code == "responses_field_invalid_type"
     assert exc_info.value.param == field
@@ -1191,7 +1194,7 @@ def test_scalar_controls_reject_invalid_types(field: str) -> None:
 @pytest.mark.parametrize("value", ["true", 1, {}, []])
 def test_stream_rejects_non_bool_values(value: object) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(stream=value))
+        _policy(Settings()).apply(_body(stream=value))
 
     assert exc_info.value.error_code == "responses_field_invalid_type"
     assert exc_info.value.param == "stream"
@@ -1201,14 +1204,14 @@ def test_metadata_must_be_bounded_object_without_leaking_values() -> None:
     settings = Settings(RESPONSES_MAX_METADATA_BYTES=10)
 
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(settings).apply(_body(metadata={"token": "sk-secret"}))
+        _policy(settings).apply(_body(metadata={"token": "sk-secret"}))
 
     assert exc_info.value.error_code == "responses_field_too_large"
     assert "sk-secret" not in exc_info.value.safe_message
 
 
 def test_json_object_text_format_passes() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(text={"format": {"type": "json_object"}})
     )
 
@@ -1224,7 +1227,7 @@ def test_json_schema_text_format_passes() -> None:
         "additionalProperties": False,
     }
 
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             text={
                 "format": {
@@ -1290,7 +1293,7 @@ def test_text_format_validation_rejects_invalid_shapes_without_schema_leakage(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(text=text))
+        _policy(Settings()).apply(_body(text=text))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == param
@@ -1307,7 +1310,7 @@ def test_text_format_size_caps_reject_without_raw_schema() -> None:
     schema = {"type": "object", "description": "secret schema marker"}
 
     with pytest.raises(RequestPolicyError) as schema_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(
                 text={
                     "format": {
@@ -1319,7 +1322,7 @@ def test_text_format_size_caps_reject_without_raw_schema() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as name_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(
                 text={
                     "format": {
@@ -1331,7 +1334,7 @@ def test_text_format_size_caps_reject_without_raw_schema() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as description_exc:
-        ResponsesRequestPolicy(settings).apply(
+        _policy(settings).apply(
             _body(
                 text={
                     "format": {
@@ -1353,7 +1356,7 @@ def test_text_format_size_caps_reject_without_raw_schema() -> None:
 
 def test_streaming_structured_text_format_rejected_before_forwarding() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(stream=True, text={"format": {"type": "json_object"}})
         )
 
@@ -1369,7 +1372,7 @@ def test_function_tool_request_passes_and_canonicalizes_tool_choice() -> None:
         "additionalProperties": False,
     }
 
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             tools=[
                 {
@@ -1399,7 +1402,7 @@ def test_function_tool_request_passes_and_canonicalizes_tool_choice() -> None:
 
 @pytest.mark.parametrize("tool_choice", ["auto", "none", "required"])
 def test_function_tool_choice_string_options_pass(tool_choice: str) -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             tools=[
                 {
@@ -1433,7 +1436,7 @@ def test_function_tool_validation_rejects_invalid_shapes_without_schema_leakage(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(tools=tools))
+        _policy(Settings()).apply(_body(tools=tools))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == param
@@ -1444,15 +1447,15 @@ def test_function_tool_caps_reject_without_schema_leakage() -> None:
     schema = {"type": "object", "description": "secret schema marker"}
 
     with pytest.raises(RequestPolicyError) as schema_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES=16)).apply(
+        _policy(Settings(RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES=16)).apply(
             _body(tools=[{"type": "function", "name": "lookup", "parameters": schema}])
         )
     with pytest.raises(RequestPolicyError) as name_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES=4)).apply(
             _body(tools=[{"type": "function", "name": "lookup", "parameters": {}}])
         )
     with pytest.raises(RequestPolicyError) as description_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=4)).apply(
             _body(
                 tools=[
                     {
@@ -1473,7 +1476,7 @@ def test_function_tool_caps_reject_without_schema_leakage() -> None:
 
 
 def test_custom_tools_pass_with_omitted_text_and_grammar_formats() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         _body(
             tools=[
                 {"type": "custom", "name": "freeform", "description": "Local custom intent."},
@@ -1541,7 +1544,7 @@ def test_custom_tool_validation_rejects_invalid_shapes_without_payload_leakage(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(tools=[tool]))
+        _policy(Settings()).apply(_body(tools=[tool]))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == param
@@ -1551,15 +1554,15 @@ def test_custom_tool_validation_rejects_invalid_shapes_without_payload_leakage(
 
 def test_custom_tool_caps_reject_without_definition_leakage() -> None:
     with pytest.raises(RequestPolicyError) as name_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES=4)).apply(
             _body(tools=[{"type": "custom", "name": "lookup"}])
         )
     with pytest.raises(RequestPolicyError) as description_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES=4)).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_DESCRIPTION_BYTES=4)).apply(
             _body(tools=[{"type": "custom", "name": "run", "description": "secret description"}])
         )
     with pytest.raises(RequestPolicyError) as definition_exc:
-        ResponsesRequestPolicy(
+        _policy(
             Settings(RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=4)
         ).apply(
             _body(
@@ -1577,7 +1580,7 @@ def test_custom_tool_caps_reject_without_definition_leakage() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as count_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_CUSTOM_TOOLS_PER_REQUEST=1)).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOLS_PER_REQUEST=1)).apply(
             _body(
                 tools=[
                     {"type": "custom", "name": "one"},
@@ -1586,7 +1589,7 @@ def test_custom_tool_caps_reject_without_definition_leakage() -> None:
             )
         )
     with pytest.raises(RequestPolicyError) as total_exc:
-        ResponsesRequestPolicy(Settings(RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=64)).apply(
+        _policy(Settings(RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=64)).apply(
             _body(
                 tools=[
                     {
@@ -1623,7 +1626,7 @@ def test_custom_tool_caps_reject_without_definition_leakage() -> None:
 
 def test_duplicate_tool_names_across_function_and_custom_reject() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(
                 tools=[
                     {"type": "function", "name": "lookup", "parameters": {}},
@@ -1653,7 +1656,7 @@ def test_function_tool_choice_rejects_invalid_shapes(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(
                 tools=[
                     {
@@ -1672,7 +1675,7 @@ def test_function_tool_choice_rejects_invalid_shapes(
 
 def test_tool_choice_without_tools_rejects() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_body(tool_choice="none"))
+        _policy(Settings()).apply(_body(tool_choice="none"))
 
     assert exc_info.value.error_code == "responses_tool_choice_invalid"
     assert exc_info.value.param == "tool_choice"
@@ -1680,7 +1683,7 @@ def test_tool_choice_without_tools_rejects() -> None:
 
 def test_streaming_function_tools_rejected_before_forwarding() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(
                 stream=True,
                 tools=[
@@ -1699,7 +1702,7 @@ def test_streaming_function_tools_rejected_before_forwarding() -> None:
 
 def test_streaming_custom_tools_rejected_before_forwarding() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(
                 stream=True,
                 tools=[{"type": "custom", "name": "emit_text"}],
@@ -1712,7 +1715,7 @@ def test_streaming_custom_tools_rejected_before_forwarding() -> None:
 
 def test_streaming_custom_tool_output_rejected_before_forwarding() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(
                 stream=True,
                 input=[
@@ -1731,7 +1734,7 @@ def test_streaming_custom_tool_output_rejected_before_forwarding() -> None:
 
 
 def test_json_output_is_secret_safe_for_policy_result() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(_body(metadata={"safe": "value"}))
+    result = _policy(Settings()).apply(_body(metadata={"safe": "value"}))
     payload = json.dumps(result.model_dump(mode="json"), sort_keys=True)
 
     assert "sk-" not in payload

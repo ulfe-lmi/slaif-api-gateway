@@ -11,6 +11,7 @@ from starlette.requests import Request
 
 from slaif_gateway.api.openai_compat import _reject_non_identity_content_encoding
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
@@ -35,12 +36,15 @@ from scripts.verify_codex_context_compaction import (
     VerificationError,
     _validate_captured_compact_policy,
 )
+from scripts import verify_codex_context_compaction as context_compaction
 
 
 _INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
 _PRIVATE_METADATA_CANARY = "PRIVATE-EXECUTED-TOOL-ARGUMENT-CANARY"
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _compact_body() -> dict[str, object]:
     return {
         "model": "gpt-5.6-sol",
@@ -198,12 +202,12 @@ def _metadata_object_with_canonical_bytes(size: int) -> dict[str, str]:
 
 def test_codex_compact_requires_independent_key_gate() -> None:
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(_compact_body())
+        _policy(Settings()).apply_compact(_compact_body())
     assert getattr(exc_info.value, "error_code", None) == ("responses_codex_compaction_not_allowed")
 
 
 def test_codex_compact_canonicalizes_pinned_v1_fields_and_composite_candidate() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         _compact_body(),
         allow_codex_compaction=True,
     )
@@ -227,7 +231,7 @@ def test_codex_compact_accepts_pinned_18_137_byte_child_description() -> None:
     assert isinstance(input_items, list)
     input_items.insert(0, _pinned_compact_additional_tools(18_137))
 
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         body,
         allow_codex_compaction=True,
     )
@@ -252,7 +256,7 @@ def test_compact_preserves_bounded_output_ids_without_creating_replay_candidates
     custom_output["id"] = custom_output_id
     original = copy.deepcopy(body)
 
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         body,
         allow_codex_compaction=True,
     )
@@ -280,11 +284,11 @@ def test_fully_gated_codex_history_drops_internal_chat_metadata_from_every_surfa
     original = copy.deepcopy(body)
     clean_body = _fully_gated_history_body(include_metadata=False)
 
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         body,
         allow_codex_compaction=True,
     )
-    clean_result = ResponsesRequestPolicy(Settings()).apply_compact(
+    clean_result = _policy(Settings()).apply_compact(
         clean_body,
         allow_codex_compaction=True,
     )
@@ -339,12 +343,12 @@ def test_internal_chat_metadata_canonical_object_cap_is_exact_and_zero_metered()
     assert isinstance(at_limit_items, list)
     assert isinstance(at_limit_items[0], dict)
     at_limit_items[0][_INTERNAL_CHAT_METADATA_FIELD] = _metadata_object_with_canonical_bytes(32_768)
-    clean_result = ResponsesRequestPolicy(Settings()).apply_compact(
+    clean_result = _policy(Settings()).apply_compact(
         _compact_body(),
         allow_codex_compaction=True,
     )
 
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         at_limit,
         allow_codex_compaction=True,
     )
@@ -360,7 +364,7 @@ def test_internal_chat_metadata_canonical_object_cap_is_exact_and_zero_metered()
         32_769
     )
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             over_limit,
             allow_codex_compaction=True,
         )
@@ -379,7 +383,7 @@ def test_internal_chat_metadata_null_passes_and_drops() -> None:
     assert isinstance(input_items[0], dict)
     input_items[0][_INTERNAL_CHAT_METADATA_FIELD] = None
 
-    result = ResponsesRequestPolicy(Settings()).apply_compact(
+    result = _policy(Settings()).apply_compact(
         body,
         allow_codex_compaction=True,
     )
@@ -407,7 +411,7 @@ def test_internal_chat_metadata_rejects_non_object_or_non_json_without_echo(
     input_items[0][_INTERNAL_CHAT_METADATA_FIELD] = metadata
 
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             body,
             allow_codex_compaction=True,
         )
@@ -454,7 +458,7 @@ def test_internal_chat_metadata_requires_every_codex_gate(missing_gate: str) -> 
     gates[missing_gate] = False
 
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(body, **gates)
+        _policy(Settings()).apply(body, **gates)
     assert getattr(exc_info.value, "error_code", None) == "responses_input_item_invalid"
     assert getattr(exc_info.value, "param", None) == (
         "input[0].internal_chat_message_metadata_passthrough"
@@ -474,7 +478,7 @@ def test_internal_chat_metadata_ordinary_request_remains_strict() -> None:
         "max_output_tokens": 16,
     }
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(body)
+        _policy(Settings()).apply(body)
     assert getattr(exc_info.value, "error_code", None) == "responses_input_item_invalid"
     assert getattr(exc_info.value, "param", None) == (
         "input[0].internal_chat_message_metadata_passthrough"
@@ -490,7 +494,7 @@ def test_internal_chat_metadata_additional_tools_item_remains_strict() -> None:
     input_items.insert(0, declarations)
 
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             body,
             allow_codex_compaction=True,
         )
@@ -523,7 +527,7 @@ def test_internal_chat_metadata_hosted_and_unknown_item_types_remain_denied(
     )
 
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             body,
             allow_codex_compaction=True,
         )
@@ -551,7 +555,7 @@ def test_codex_compact_keeps_ordinary_only_and_v2_fields_closed(
     body = _compact_body()
     body[field] = value
     with pytest.raises(Exception) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply_compact(
+        _policy(Settings()).apply_compact(
             body,
             allow_codex_compaction=True,
         )
@@ -712,7 +716,15 @@ def test_codex_compact_provider_response_rejects_unknown_or_malformed_envelope(
     assert "plaintext" not in str(exc_info.value)
 
 
-def test_captured_compact_body_runs_through_gateway_policy_without_echo() -> None:
+def test_captured_compact_body_runs_through_gateway_policy_without_echo(monkeypatch) -> None:
+    monkeypatch.setattr(
+        context_compaction,
+        "ResponsesRequestPolicy",
+        lambda settings: ResponsesRequestPolicy(
+            settings,
+            client_spec=CODEX_0147_POLICY_SPEC,
+        ),
+    )
     assert _validate_captured_compact_policy(_compact_body()) is True
     invalid = _compact_body()
     invalid["private_canary"] = "do-not-echo-this"
@@ -842,6 +854,11 @@ def _compact_authenticated_key() -> SimpleNamespace:
                 "codex_encrypted_reasoning_replay",
                 "codex_compaction",
             ],
+            "client_module": {
+                "id": "codex-0.147-responses-v1",
+                "version": "1",
+                "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+            },
         },
     )
 
