@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import math
 import secrets
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -49,16 +50,22 @@ def derive_request_identity(
 ) -> LocalCodingRequestIdentity | None:
     if route.identity_mode == "static":
         return None
-    if derivation_secret is None:
+    if not isinstance(derivation_secret, bytes) or not 32 <= len(derivation_secret) <= 4096:
         raise ValueError("Local Coding identity derivation secret is unavailable")
+    if any(not 0x21 <= value <= 0x7E for value in derivation_secret):
+        raise ValueError("Local Coding identity derivation secret is invalid")
+    if not isinstance(identity_hints, Mapping):
+        raise TypeError("Local Coding session context is unavailable or ambiguous")
     repository_scope = _bounded_identity_input(repository_scope, "repository binding")
     session_values = [
         _bounded_identity_input(identity_hints[key], "session hint")
         for key in _SESSION_KEYS
         if identity_hints.get(key)
     ]
-    if not session_values or len(set(session_values)) != 1:
+    if len(session_values) != 1:
         raise ValueError("Local Coding session context is unavailable or ambiguous")
+    if not isinstance(owner_id, uuid.UUID):
+        raise TypeError("Local Coding owner truth is unavailable")
     owner_truth = _bounded_identity_input(str(owner_id), "owner truth")
     principal = _opaque_hmac(derivation_secret, "slaif-local-coding:principal:v1", owner_truth)
     session = _opaque_hmac(

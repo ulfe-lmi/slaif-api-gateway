@@ -28,7 +28,12 @@ foundation. It is default-denied unless the resolved route has the complete
 versioned Local Coding contract and provider kind `openai_compatible`. Its
 signed identity is bound to exact method/path/raw-query/body bytes and is
 verified by the pinned Local Coding contract. No Codex 0.149 pair or hosted
-tool execution is authorized in this objective.
+tool execution is authorized in this objective. The Local Coding adapter is
+Responses-create-only: non-streaming create and typed Responses streaming are
+the only transport operations; every other ProviderAdapter operation fails
+closed before HTTP. Core identity derivation is boundary-tested from
+authenticated owner/session/repository/route facts, while adapter and pinned
+application conformance remains separate from any Codex-composed E2E claim.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and

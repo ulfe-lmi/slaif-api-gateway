@@ -72,7 +72,10 @@ another. Signed identity contains only derived opaque principal/session/
 repository values; raw owner, key, email, workspace, and client hints remain
 transient. Signed v1 replay protection is process-local TTL/LRU and the route
 must declare single-worker deployment; overlapping key rotation and
-multi-worker/restart-persistent replay protection are not claimed.
+multi-worker/restart-persistent replay protection are not claimed. The service
+role is also rejected when it equals a known Gateway/admin/one-time/provider
+secret. The core derivation boundary is tested independently of adapter and
+pinned-app conformance, and no Codex-composed E2E authority is implied.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

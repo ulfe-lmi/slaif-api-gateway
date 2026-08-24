@@ -67,7 +67,9 @@ Codex 0.149 client syntax is structurally captured and registered, but has no
 qualification, provider/model E2E, or compatible Codex pair. The static
 `local-coding-v1` server module is now implemented for an exact
 `openai_compatible` route contract with deterministic/mock-conformance only;
-it does not authorize the Codex 0.149 pair. OpenCode remains planned follow-on work. The 0.149
+its adapter owns only Responses create and Responses streaming and rejects
+every other ProviderAdapter operation before HTTP. It does not authorize the
+Codex 0.149 pair. OpenCode remains planned follow-on work. The 0.149
 module may return only bounded candidate facts for the observed adapter-managed
 `web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
 accounting, routing, or provider forwarding.
@@ -77,6 +79,9 @@ private service Bearer and signed-identity-v1 headers. It receives only the
 core-resolved provider request and opaque derived identity facts; it cannot
 authenticate public keys, select routes, reserve quota, or persist identity.
 Its signed mode is explicitly single-worker/process-local replay protection.
+The core identity boundary is tested with authenticated owner UUID, transient
+session hint, server-side repository scope, exact resolved route contract, and
+dedicated derivation secret; this is not a Codex-composed E2E qualification.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient

@@ -63,6 +63,12 @@ The provider row's `api_key_env_var` supplies the Local Coding service Bearer;
 it is distinct from both Local Coding secrets and from the public Gateway
 Bearer. Do not reuse `TOKEN_HMAC_SECRET`, `ADMIN_SESSION_SECRET`,
 `ONE_TIME_SECRET_ENCRYPTION_KEY`, a provider credential, or a client key.
+The service Bearer and configured Local Coding secrets must be printable ASCII
+values of 32–4096 bytes. Adapter construction compares roles in constant time
+and rejects equality with either identity secret or a known core/provider
+secret as `local_coding_secret_roles_not_separate`; secret values are never
+included in that error. Static mode does not require identity secrets, but
+configured optional values are still checked for role separation.
 The route contract selects `identity_mode=static` or
 `identity_mode=signed_identity_v1`, declares the signed replay bounds, and
 requires `deployment_mode=single_worker` for signed mode. Version 1 supports a

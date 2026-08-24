@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding.contract import (
@@ -20,11 +25,15 @@ from slaif_gateway.modules.servers.local_coding.identity import (
 )
 from slaif_gateway.modules.servers.registry import resolve_server_module
 from slaif_gateway.providers.errors import ProviderConfigurationError
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.providers import ProviderRequest
+from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.responses_gateway import _build_local_coding_server_context
 
 FIXTURE = Path("tests/fixtures/local_coding/signed_identity_v1_vectors.json")
 SIGNING_SECRET = "local-coding-signing-secret-012345678901"
 DERIVATION_SECRET = "local-coding-derivation-secret-0123456789"
+SERVICE_SECRET = "local-coding-service-bearer-secret-0123456789"
 ROUTE_CAPABILITIES = {
     "local_coding": {
         "contract_version": "local-coding-v1",
@@ -33,6 +42,12 @@ ROUTE_CAPABILITIES = {
         "identity_mode": "signed_identity_v1",
         "replay_mode": "process_local_ttl_lru",
         "deployment_mode": "single_worker",
+    }
+}
+STATIC_ROUTE_CAPABILITIES = {
+    "local_coding": {
+        **ROUTE_CAPABILITIES["local_coding"],
+        "identity_mode": "static",
     }
 }
 
@@ -102,7 +117,7 @@ def test_identity_derivation_is_opaque_and_requires_trusted_repository_and_sessi
     contract = parse_local_coding_route_contract(ROUTE_CAPABILITIES)
     assert contract is not None
     identity = derive_request_identity(
-        owner_id="owner-uuid",
+        owner_id=uuid.uuid4(),
         identity_hints={"session_id": "thread-private"},
         repository_scope="repo-scope",
         route=contract,
@@ -157,8 +172,8 @@ async def test_local_coding_adapter_sends_exact_bytes_and_separate_signed_header
     ) as client:
         adapter = LocalCodingAdapter(
             settings,
-            provider_name="local-coding",
-            api_key="service-bearer-secret",
+                provider_name="local-coding",
+                api_key=SERVICE_SECRET,
             base_url="http://local-coding.test/v1",
             timeout_seconds=10,
             max_retries=0,
@@ -186,7 +201,7 @@ async def test_local_coding_adapter_sends_exact_bytes_and_separate_signed_header
     assert response.status_code == 200
     assert len(observed) == 1
     request = observed[0]
-    assert request.headers["authorization"] == "Bearer service-bearer-secret"
+    assert request.headers["authorization"] == f"Bearer {SERVICE_SECRET}"
     assert request.headers["content-type"] == "application/json"
     assert request.headers["x-slaif-principal"] == identity.principal
     assert request.headers["x-slaif-session"] == identity.session
@@ -199,3 +214,321 @@ async def test_local_coding_adapter_sends_exact_bytes_and_separate_signed_header
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "kwargs"),
+    [
+        ("forward_chat_completion", {}),
+        ("create_speech", {}),
+        ("create_transcription", {}),
+        ("create_translation", {}),
+        ("create_embedding", {}),
+        ("create_realtime_client_secret", {}),
+        ("forward_response_input_tokens", {}),
+        ("compact_response", {}),
+        ("retrieve_response", {"response_id": "response-id"}),
+        ("delete_response", {"response_id": "response-id"}),
+        ("list_response_input_items", {"response_id": "response-id"}),
+        ("create_conversation", {}),
+        ("retrieve_conversation", {"conversation_id": "conversation-id"}),
+        ("update_conversation", {"conversation_id": "conversation-id"}),
+        ("delete_conversation", {"conversation_id": "conversation-id"}),
+        ("create_conversation_items", {"conversation_id": "conversation-id"}),
+        ("list_conversation_items", {"conversation_id": "conversation-id"}),
+        (
+            "retrieve_conversation_item",
+            {"conversation_id": "conversation-id", "item_id": "item-id"},
+        ),
+        (
+            "delete_conversation_item",
+            {"conversation_id": "conversation-id", "item_id": "item-id"},
+        ),
+        ("stream_chat_completion", {}),
+    ],
+)
+async def test_local_coding_adapter_rejects_every_non_responses_create_operation(
+    operation: str,
+    kwargs: dict[str, str],
+) -> None:
+    observed = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed
+        observed = True
+        return httpx.Response(500, request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://local-coding.test/v1",
+    ) as client:
+        adapter = LocalCodingAdapter(
+            Settings(),
+            provider_name="local-coding",
+            api_key=SERVICE_SECRET,
+            base_url="http://local-coding.test/v1",
+            http_client=client,
+            route_capabilities=STATIC_ROUTE_CAPABILITIES,
+        )
+        request = ProviderRequest(
+            provider="local-coding",
+            upstream_model="qwen",
+            endpoint="/v1/responses",
+            body={"input": "synthetic"},
+        )
+        method = getattr(adapter, operation)
+        result = method(request, **kwargs)
+        with pytest.raises(ProviderConfigurationError) as exc_info:
+            if operation.startswith("stream_"):
+                await anext(result)
+            else:
+                await result
+
+    assert exc_info.value.error_code == "unsupported_provider_endpoint"
+    assert observed is False
+
+
+@pytest.mark.parametrize(
+    ("service", "signing", "derivation"),
+    [
+        (SIGNING_SECRET, SIGNING_SECRET, DERIVATION_SECRET),
+        (DERIVATION_SECRET, SIGNING_SECRET, DERIVATION_SECRET),
+    ],
+)
+def test_local_coding_service_credential_cannot_equal_identity_secret_roles(
+    service: str,
+    signing: str,
+    derivation: str,
+) -> None:
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        LocalCodingAdapter(
+            Settings(
+                LOCAL_CODING_SIGNING_SECRET_V1=signing,
+                LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=derivation,
+            ),
+            provider_name="local-coding",
+            api_key=service,
+            route_capabilities=ROUTE_CAPABILITIES,
+        )
+    assert exc_info.value.error_code == "local_coding_secret_roles_not_separate"
+
+
+def test_local_coding_secret_roles_cover_known_core_secrets_and_malformed_service() -> None:
+    with pytest.raises(ValueError, match="separate"):
+        Settings(
+            LOCAL_CODING_SIGNING_SECRET_V1=SIGNING_SECRET,
+            LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=SIGNING_SECRET,
+        )
+
+    with pytest.raises(ValueError, match="separate"):
+        Settings(
+            TOKEN_HMAC_SECRET_V1=SIGNING_SECRET,
+            LOCAL_CODING_SIGNING_SECRET_V1=SIGNING_SECRET,
+            LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET,
+        )
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        LocalCodingAdapter(
+            Settings(),
+            provider_name="local-coding",
+            api_key="short-service",
+            route_capabilities=STATIC_ROUTE_CAPABILITIES,
+        )
+    assert exc_info.value.error_code == "local_coding_service_credential_invalid"
+
+
+def test_local_coding_static_adapter_allows_distinct_optional_identity_secrets() -> None:
+    adapter = LocalCodingAdapter(
+        Settings(
+            LOCAL_CODING_SIGNING_SECRET_V1=SIGNING_SECRET,
+            LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET,
+        ),
+        provider_name="local-coding",
+        api_key=SERVICE_SECRET,
+        route_capabilities=STATIC_ROUTE_CAPABILITIES,
+    )
+    assert adapter.provider_name == "local-coding"
+
+
+def _authenticated_key(
+    *,
+    owner_id: uuid.UUID,
+    repository_scope: str | None = "server-repository-scope",
+) -> AuthenticatedGatewayKey:
+    return AuthenticatedGatewayKey(
+        gateway_key_id=uuid.uuid4(),
+        owner_id=owner_id,
+        cohort_id=None,
+        public_key_id="pk-local-coding",
+        status="active",
+        valid_from=datetime.now(UTC),
+        valid_until=datetime.now(UTC),
+        allow_all_models=True,
+        allowed_models=(),
+        allow_all_endpoints=True,
+        allowed_endpoints=(),
+        allowed_providers=None,
+        cost_limit_eur=None,
+        token_limit_total=None,
+        request_limit_total=None,
+        rate_limit_policy={},
+        responses_policy=(
+            {"local_coding_repository_scope": repository_scope}
+            if repository_scope is not None
+            else {}
+        ),
+    )
+
+
+def _local_route(*, route_name: str = "vision", identity_mode: str = "signed_identity_v1") -> RouteResolutionResult:
+    capabilities = {
+        "local_coding": {
+            **ROUTE_CAPABILITIES["local_coding"],
+            "route_name": route_name,
+            "identity_mode": identity_mode,
+        }
+    }
+    return RouteResolutionResult(
+        requested_model="qwen-local",
+        resolved_model="qwen-local",
+        provider="local-model",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern="qwen-local",
+        priority=1,
+        provider_kind="openai_compatible",
+        capabilities=capabilities,
+    )
+
+
+def test_core_local_coding_identity_context_is_opaque_stable_and_isolated() -> None:
+    owner_id = uuid.uuid4()
+    client_request = SimpleNamespace(identity_hints={"session_id": "transient-session"})
+    route = _local_route()
+    settings = Settings(LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET)
+    context = _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=owner_id),
+        route=route,
+        settings=settings,
+    )
+    assert context is not None
+    assert set(context) == {"identity_mode", "principal", "session", "repository", "route"}
+    assert context["identity_mode"] == "signed_identity_v1"
+    assert context["route"] == "vision"
+    assert str(owner_id) not in str(context)
+    assert "transient-session" not in str(context)
+    assert "server-repository-scope" not in str(context)
+    assert context == _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=owner_id),
+        route=route,
+        settings=settings,
+    )
+
+    changed_owner = _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=uuid.uuid4()),
+        route=route,
+        settings=settings,
+    )
+    changed_session = _build_local_coding_server_context(
+        client_request=SimpleNamespace(identity_hints={"session_id": "other-session"}),
+        authenticated_key=_authenticated_key(owner_id=owner_id),
+        route=route,
+        settings=settings,
+    )
+    changed_repository = _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=owner_id, repository_scope="other-repo"),
+        route=route,
+        settings=settings,
+    )
+    changed_route = _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=owner_id),
+        route=_local_route(route_name="other-route"),
+        settings=settings,
+    )
+    assert changed_owner is not None and changed_owner["principal"] != context["principal"]
+    assert changed_session is not None and changed_session["session"] != context["session"]
+    assert changed_repository is not None and changed_repository["repository"] != context["repository"]
+    assert changed_route is not None and changed_route["route"] != context["route"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_session", "ambiguous_session", "missing_repository"],
+)
+def test_core_local_coding_identity_context_fails_closed_for_missing_or_ambiguous_inputs(
+    case: str,
+) -> None:
+    owner_id = uuid.uuid4()
+    key = _authenticated_key(owner_id=owner_id)
+    request = SimpleNamespace(identity_hints={"session_id": "session"})
+    if case == "missing_session":
+        request = SimpleNamespace(identity_hints={})
+    elif case == "ambiguous_session":
+        request = SimpleNamespace(identity_hints={"session_id": "a", "thread_id": "b"})
+    else:
+        key = _authenticated_key(owner_id=owner_id, repository_scope=None)
+    route = _local_route()
+    settings = Settings(LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET)
+    with pytest.raises(OpenAICompatibleError):
+        _build_local_coding_server_context(
+            client_request=request,
+            authenticated_key=key,
+            route=route,
+            settings=settings,
+        )
+
+
+def test_core_local_coding_identity_context_fails_without_secret_or_for_malformed_route() -> None:
+    owner_id = uuid.uuid4()
+    request = SimpleNamespace(identity_hints={"session_id": "session"})
+    key = _authenticated_key(owner_id=owner_id)
+    with pytest.raises(OpenAICompatibleError):
+        _build_local_coding_server_context(
+            client_request=request,
+            authenticated_key=key,
+            route=_local_route(),
+            settings=Settings(),
+        )
+    malformed = replace(_local_route(), capabilities={"local_coding": {}})
+    with pytest.raises(OpenAICompatibleError):
+        _build_local_coding_server_context(
+            client_request=request,
+            authenticated_key=key,
+            route=malformed,
+            settings=Settings(LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET),
+        )
+
+
+def test_core_local_coding_identity_context_returns_none_for_non_local_route_and_static_is_safe() -> None:
+    owner_id = uuid.uuid4()
+    key = _authenticated_key(owner_id=owner_id, repository_scope=None)
+    non_local = RouteResolutionResult(
+        requested_model="gpt-test",
+        resolved_model="gpt-test",
+        provider="openai",
+        route_id=uuid.uuid4(),
+        route_match_type="exact",
+        route_pattern="gpt-test",
+        priority=1,
+        provider_kind="openai",
+        capabilities=None,
+    )
+    assert _build_local_coding_server_context(
+        client_request=SimpleNamespace(identity_hints={}),
+        authenticated_key=key,
+        route=non_local,
+        settings=Settings(),
+    ) is None
+    static_context = _build_local_coding_server_context(
+        client_request=SimpleNamespace(identity_hints={}),
+        authenticated_key=key,
+        route=_local_route(identity_mode="static"),
+        settings=Settings(),
+    )
+    assert static_context == {"identity_mode": "static", "route": "vision"}

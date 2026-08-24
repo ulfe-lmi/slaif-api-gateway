@@ -29,7 +29,15 @@ route uses signed identity v1, and sends the same bytes with `content=...`.
 It constructs a separate Local Coding service Bearer from the provider row and
 never forwards caller Authorization, cookies, `X-SLAIF-*`, or other internal
 headers. It does not add a global header allowlist or create a provider/accounting
-path for Codex 0.149.
+path for Codex 0.149. The adapter is Responses-create-only: both non-streaming
+`/v1/responses` and Responses SSE are supported, while Chat, input-token,
+compact, stored-response, Conversations, Audio, Embeddings, Realtime, and all
+other ProviderAdapter operations fail before HTTP. Construction rejects a
+service Bearer that equals a signing, derivation, or known core secret using
+the bounded `local_coding_secret_roles_not_separate` configuration error.
+Core-derived signed identity is boundary-tested from authenticated owner truth,
+transient session hints, server-side repository scope, and resolved route facts;
+it is not yet a Codex-composed E2E claim.
 
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured

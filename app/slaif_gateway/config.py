@@ -26,9 +26,9 @@ _PLACEHOLDER_SECRET_SUBSTRINGS = (
 )
 
 
-def _validate_local_coding_secret(value: str, label: str) -> bytes:
+def validate_local_coding_secret(value: str, label: str) -> bytes:
     if not isinstance(value, str):
-        raise ValueError(f"Local Coding {label} secret is invalid")
+        raise TypeError(f"Local Coding {label} secret is invalid")
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError as exc:
@@ -36,6 +36,9 @@ def _validate_local_coding_secret(value: str, label: str) -> bytes:
     if not 32 <= len(encoded) <= 4096 or any(not 0x21 <= byte <= 0x7E for byte in encoded):
         raise ValueError(f"Local Coding {label} secret is invalid")
     return encoded
+
+
+_validate_local_coding_secret = validate_local_coding_secret
 _SUPPORTED_CHAT_AUDIO_INPUT_FORMATS = frozenset({"wav", "mp3"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS = frozenset({"wav", "aac", "mp3", "flac", "opus", "pcm16"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES = frozenset(
@@ -444,12 +447,12 @@ class Settings(BaseSettings):
         if self.LOCAL_CODING_IDENTITY_KEY_VERSION.strip() != "1":
             raise ValueError("LOCAL_CODING_IDENTITY_KEY_VERSION must be 1")
         signing = (
-            _validate_local_coding_secret(self.LOCAL_CODING_SIGNING_SECRET_V1, "signing")
+            validate_local_coding_secret(self.LOCAL_CODING_SIGNING_SECRET_V1, "signing")
             if self.LOCAL_CODING_SIGNING_SECRET_V1
             else None
         )
         derivation = (
-            _validate_local_coding_secret(
+            validate_local_coding_secret(
                 self.LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1,
                 "identity derivation",
             )

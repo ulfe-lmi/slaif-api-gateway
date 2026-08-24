@@ -317,14 +317,14 @@ def _build_local_coding_server_context(
     route: RouteResolutionResult,
     settings: Settings,
 ) -> dict[str, object] | None:
-    descriptor = resolve_server_module(
-        route.provider,
-        getattr(route, "provider_kind", None),
-        getattr(route, "capabilities", None),
-    )
-    if descriptor.module_id != LOCAL_CODING_SERVER_MODULE_ID:
-        return None
     try:
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
+        if descriptor.module_id != LOCAL_CODING_SERVER_MODULE_ID:
+            return None
         contract = parse_local_coding_route_contract(route.capabilities)
         if contract is None:
             raise ValueError("Local Coding route contract is unavailable")
@@ -341,7 +341,7 @@ def _build_local_coding_server_context(
                 else None
             ),
         )
-    except (TypeError, ValueError) as exc:
+    except (ProviderConfigurationError, TypeError, ValueError) as exc:
         raise OpenAICompatibleError(
             "The Local Coding identity contract is unavailable for this request.",
             status_code=503,
