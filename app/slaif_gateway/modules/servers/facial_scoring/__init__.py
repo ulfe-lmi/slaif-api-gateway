@@ -1,4 +1,4 @@
-"""Compatibility re-exports for the facial-scoring server module."""
+"""Bounded facial-scoring native server module."""
 
 from slaif_gateway.modules.servers.facial_scoring.adapter import (
     FACIAL_SCORING_DEFAULT_SCORE_TYPE,

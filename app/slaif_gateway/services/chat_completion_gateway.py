@@ -37,6 +37,7 @@ from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderHTTPError
 from slaif_gateway.providers.factory import get_provider_adapter
+from slaif_gateway.modules.clients.registry import normalize_default_client_request
 from slaif_gateway.metrics import (
     add_cost_eur,
     add_tokens,
@@ -153,7 +154,10 @@ async def handle_chat_completion(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = payload.model_dump(mode="python", exclude_none=True)
+    body = normalize_default_client_request(
+        "/v1/chat/completions",
+        payload.model_dump(mode="python", exclude_none=True),
+    ).body
 
     if not body.get("model"):
         raise OpenAICompatibleError(

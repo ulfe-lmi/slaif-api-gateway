@@ -189,6 +189,12 @@ validation.
 Both models used `exec_command` to create a file through SLAIF with the
 workspace-write sandbox.
 
+Static client/server module architecture is implemented for the ordinary
+OpenAI-compatible Chat and Responses create paths and for the existing built-in,
+generic, and facial-scoring server descriptors. Codex 0.149, Local Coding, and
+OpenCode modules remain planned follow-on work; this module foundation does not
+add their protocols or authority.
+
 ## Historical real-provider transport evidence — Objective 140
 
 Objective 140 recorded bounded, opt-in, secret-safe real-provider evidence

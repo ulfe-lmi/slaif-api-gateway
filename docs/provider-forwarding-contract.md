@@ -812,6 +812,17 @@ headers must not receive live-burn counters, margins, internal quota state,
 Redis keys, or gateway diagnostics, and the gateway must not store raw streamed
 content while estimating live burn.
 
+### Static module ownership
+
+Production provider construction resolves a literal server-module descriptor
+through the static registry under `app/slaif_gateway/modules/servers/` before
+building an adapter. The default OpenAI-compatible Chat and Responses create
+handlers first pass their ingress mapping through the literal `openai-default`
+client module. These modules only normalize or translate safe request facts;
+the Gateway core retains provider selection, credential replacement, policy,
+quota, accounting, and privacy ownership. The [module architecture contract](module-architecture.md)
+defines the unequal trust boundary and finite pair compatibility rules.
+
 ### Reconciliation
 
 Manual quota reconciliation supports:
