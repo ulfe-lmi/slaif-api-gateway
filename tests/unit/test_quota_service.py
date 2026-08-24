@@ -52,6 +52,9 @@ class FakeReservationRow:
     status: str
     expires_at: datetime
     released_at: datetime | None = None
+    provider: str | None = None
+    resolved_model: str | None = None
+    streaming: bool | None = None
 
 
 class FakeGatewayKeysRepository:
@@ -170,9 +173,14 @@ def _route(*, provider_kind: str | None = None) -> RouteResolutionResult:
     )
 
 
-def _policy(input_tokens: int = 30, output_tokens: int = 40) -> ChatCompletionPolicyResult:
+def _policy(input_tokens: int = 30, output_tokens: int = 40, *, stream: bool = False) -> ChatCompletionPolicyResult:
     return ChatCompletionPolicyResult(
-        effective_body={"model": "classroom-cheap", "messages": [], "max_completion_tokens": output_tokens},
+        effective_body={
+            "model": "classroom-cheap",
+            "messages": [],
+            "max_completion_tokens": output_tokens,
+            "stream": stream,
+        },
         requested_output_tokens=output_tokens,
         effective_output_tokens=output_tokens,
         estimated_input_tokens=input_tokens,
@@ -241,9 +249,29 @@ async def test_successful_reservation_creates_pending_row_and_updates_reserved_c
     assert key.tokens_reserved_total == 270
     assert key.requests_reserved_total == 3
     assert quota_repo.create_calls == 1
+    stored = quota_repo.rows[result.reservation_id]
+    assert stored.provider == "openai"
+    assert stored.resolved_model == "gpt-4.1-mini"
+    assert stored.streaming is False
     assert key_repo.lock_calls == [key.id]
     assert key_repo.commits == 0
     assert quota_repo.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_policy_fact_is_snapshotted_before_forwarding() -> None:
+    key = FakeGatewayKeyRow(id=uuid.uuid4())
+    service, _, quota_repo = _service(key)
+
+    result = await service.reserve_for_chat_completion(
+        authenticated_key=_authenticated_key(key.id),
+        route=_route(),
+        policy=_policy(stream=True),
+        cost_estimate=_estimate(),
+        request_id="req_stream",
+    )
+
+    assert quota_repo.rows[result.reservation_id].streaming is True
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,9 @@ class QuotaService:
             request_id=request_id,
             endpoint=_normalize_endpoint(endpoint),
             requested_model=route.requested_model,
+            provider=route.provider,
+            resolved_model=route.resolved_model,
+            streaming=_policy_streaming(policy),
             reserved_cost_eur=reserved_cost_eur,
             reserved_tokens=reserved_tokens,
             reserved_requests=1,
@@ -233,6 +236,13 @@ def _validate_tokens(value: int) -> int:
     if value < 0:
         raise InvalidQuotaEstimateError("Estimated tokens must be non-negative", param="estimated_tokens")
     return value
+
+
+def _policy_streaming(policy: object) -> bool:
+    """Return the normalized request stream flag without trusting raw input."""
+    effective_body = getattr(policy, "effective_body", {})
+    value = effective_body.get("stream", False) if isinstance(effective_body, dict) else False
+    return value if isinstance(value, bool) else False
 
 
 def _normalize_endpoint(value: str) -> str:

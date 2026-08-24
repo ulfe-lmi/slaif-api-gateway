@@ -1,0 +1,65 @@
+services:
+  provider-double:
+    build:
+      context: .
+      target: runtime
+    entrypoint: ["python", "/qualification/provider_double.py"]
+    environment:
+      PROVIDER_DOUBLE_KEY: ${QUALIFICATION_PROVIDER_KEY}
+      PROVIDER_DOUBLE_MODEL: ${QUALIFICATION_MODEL:-qualification-model}
+      PROVIDER_DOUBLE_PORT: "8090"
+      GATEWAY_KEY_CANARY: ${QUALIFICATION_GATEWAY_KEY_CANARY}
+      UPSTREAM_KEY_CANARY: ${QUALIFICATION_UPSTREAM_KEY_CANARY}
+      PROMPT_CANARY: ${QUALIFICATION_PROMPT_CANARY}
+      COMPLETION_CANARY: ${QUALIFICATION_COMPLETION_CANARY}
+      MEDIA_CANARY: ${QUALIFICATION_MEDIA_CANARY}
+      MALFORMED_CANARY: ${QUALIFICATION_MALFORMED_CANARY}
+      AUTHORIZATION_CANARY: ${QUALIFICATION_AUTHORIZATION_CANARY}
+    volumes:
+      - ./scripts/production-qualification/provider_double.py:/qualification/provider_double.py:ro
+    ports:
+      - "127.0.0.1:${QUALIFICATION_PROVIDER_PORT:-18090}:8090"
+    networks: [egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    depends_on:
+      provider-double:
+        condition: service_healthy
+    environment:
+      METRICS_REQUIRE_AUTH: "true"
+      METRICS_ALLOWED_IPS: "127.0.0.1"
+
+  backup-adapter:
+    image: postgres:16-alpine
+    profiles: [qualification]
+    volumes:
+      - ./scripts/backup.sh:/qualification/backup.sh:ro
+      - ./scripts/restore.sh:/qualification/restore.sh:ro
+      - ./scripts/verify_restore.py:/qualification/verify_restore.py:ro
+      - ${QUALIFICATION_RUNTIME_DIR:-./.qualification-runtime}:/qualification-runtime
+      - ${SLAIF_POSTGRES_PASSWORD_FILE:-./.qualification-runtime/postgres_password}:/run/secrets/postgres_password:ro
+      - ${QUALIFICATION_BACKUP_DATABASE_URL_FILE:-./.qualification-runtime/backup_database_url}:/run/secrets/backup_database_url:ro
+      - ${QUALIFICATION_RESTORE_DATABASE_URL_FILE:-./.qualification-runtime/restore_database_url}:/run/secrets/restore_database_url:ro
+      - ${QUALIFICATION_RESTORE_ASYNC_DATABASE_URL_FILE:-./.qualification-runtime/restore_async_database_url}:/run/secrets/restore_async_database_url:ro
+    networks: [internal]
+
+  verify-adapter:
+    build:
+      context: .
+      target: runtime
+    profiles: [qualification]
+    user: root
+    entrypoint: []
+    volumes:
+      - ./scripts/verify_restore.py:/qualification/verify_restore.py:ro
+      - ${QUALIFICATION_RESTORE_ASYNC_DATABASE_URL_FILE:-./.qualification-runtime/restore_async_database_url}:/run/secrets/restore_async_database_url:ro
+    networks: [internal]
+
+networks:
+  egress:
+    name: ${QUALIFICATION_PROJECT_NAME:-slaif-qualification}_egress

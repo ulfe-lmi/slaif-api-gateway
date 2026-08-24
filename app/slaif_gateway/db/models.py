@@ -217,6 +217,11 @@ class QuotaReservation(Base):
     request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     endpoint: Mapped[str] = mapped_column(Text, nullable=False)
     requested_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Safe route facts captured before forwarding.  Nullable values preserve
+    # honest uncertainty for rows created before this snapshot was introduced.
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    streaming: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     quota_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="strict_bounded", server_default=text("'strict_bounded'")
     )
