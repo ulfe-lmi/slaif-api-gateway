@@ -866,7 +866,18 @@ class Runner:
     def exercise_dashboard(self) -> None:
         context = ssl.create_default_context(cafile=str(self.tls / "fullchain.pem"))
         jar = CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), urllib.request.HTTPCookieProcessor(jar))
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            """Keep qualification redirects on the generated HTTPS port."""
+
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                return None
+
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=context),
+            urllib.request.HTTPCookieProcessor(jar),
+            _NoRedirect(),
+        )
 
         def fetch(path: str, *, form: dict[str, str] | None = None) -> tuple[int, str, dict[str, str]]:
             request = urllib.request.Request(
@@ -893,7 +904,7 @@ class Runner:
             "/admin/login",
             form={"email": "qualification-admin@example.invalid", "password": self.admin_password, "csrf_token": csrf_match.group(1)},
         )
-        if status != 200 or not any(cookie.name == "slaif_admin_session" for cookie in jar):
+        if status not in {200, 303} or not any(cookie.name == "slaif_admin_session" for cookie in jar):
             raise QualificationError(f"dashboard authenticated session was not established: {status}")
         if "Secure" not in login_headers.get("Set-Cookie", "") and not any(cookie.name == "slaif_admin_session" and cookie.secure for cookie in jar):
             raise QualificationError("dashboard session cookie was not Secure")
@@ -981,12 +992,16 @@ class Runner:
         if not rows:
             raise QualificationError("primary gateway key disappeared before quota qualification")
         used_requests, used_tokens, used_cost = rows[0]
-        overrun_limit = int(used_tokens) + 2
+        # The provider double's quota-overrun response reports 32 authoritative
+        # tokens; reserve 20 for this tiny request and leave a bounded 24-token
+        # remainder so admission succeeds while returned usage crosses the cap.
+        overrun_limit = int(used_tokens) + 24
         self.sql(
             "UPDATE gateway_keys SET request_limit_total = " + str(int(used_requests) + 20) + ", "
             "token_limit_total = " + str(overrun_limit) + ", cost_limit_eur = 20, valid_until = now() + interval '1 day' "
             "WHERE id = '" + self.key_id.replace("'", "''") + "'"
         )
+        self.provider_control({"mode": "quota_overrun"})
         provider_before_overrun = self.provider_state()["requests"]
         status, _, _ = self.api(
             "/v1/chat/completions",
@@ -999,6 +1014,7 @@ class Runner:
         if not overrun_request:
             raise QualificationError("bounded admitted overrun request did not expose request ID")
         overrun_evidence = self.wait_request_terminal(str(overrun_request))
+        self.provider_control({"mode": "normal", "completion": self.canaries[3]})
         after_overrun_rows = self.sql(
             "SELECT requests_used_total, tokens_used_total, cost_used_eur FROM gateway_keys WHERE id = '" + self.key_id + "'"
         )
@@ -1135,6 +1151,12 @@ class Runner:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{self.ports['api']}/metrics", timeout=10) as response:
                 metrics = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 403:
+                raise QualificationError(f"metrics privacy scan could not read /metrics: HTTP Error {exc.code}") from exc
+            # The production appliance deliberately denies metrics without an
+            # explicit allowlist; the bounded denial body is safe to scan.
+            metrics = exc.read().decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001
             raise QualificationError(f"metrics privacy scan could not read /metrics: {exc}") from exc
         provider_text = json.dumps(self.provider_state(), sort_keys=True)

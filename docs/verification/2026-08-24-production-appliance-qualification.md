@@ -2,18 +2,19 @@
 
 Date: 2026-08-24 (Europe/Ljubljana)
 
-Status: **BLOCKED — no production-appliance qualification claim**
+Status: **COMPLETE — disposable qualification passed; no production-certification claim**
 
-This document supersedes the earlier 151-a verification text. The earlier
-`--keep` run and its `91ebb924`/`00c591f` references were not valid final
-qualification evidence: they did not prove the required boundaries and this
-document is not an OAP report. It must not claim `Report publication commit:
-SELF`.
+This document records the fresh 151-c no-keep qualification after the restore
+verifier and interrupted-accounting repairs. It is qualification evidence for
+the RC-beta appliance surface only. It does not certify production readiness,
+security, compliance, SLA performance, provider-invoice accuracy, or any real
+upstream deployment.
 
-The fresh 151-b no-keep run reached the repository's documented restore
-verifier and exposed a pre-existing out-of-scope defect. Therefore the run did
-not qualify the appliance, and no RC-beta production certification, security,
-compliance, SLA, or provider-invoice claim follows.
+The earlier 151-b run remains historical evidence: it reached restore
+verification but failed because the verifier sent SQLite `PRAGMA
+integrity_check` through PostgreSQL. The 151-c run repaired that defect and
+also proved that interrupted ordinary reservations retain provider, resolved
+model, and streaming facts. The prior report was not rewritten.
 
 ## Fresh run evidence
 
@@ -23,7 +24,9 @@ Command:
 .venv/bin/python scripts/production-qualification/run.py
 ```
 
-Project: `slaif-151-3605141-179932`
+Project: `slaif-151-3781840-2fba2a`
+
+Result: `RESULT=OK`
 
 | Phase | Result |
 | --- | --- |
@@ -38,40 +41,36 @@ Project: `slaif-151-3605141-179932`
 | Redis concurrency | OK |
 | API termination and CLI reconciliation | OK |
 | PostgreSQL persistence | OK |
-| documented backup/restore/verification | **FAIL** |
-| later privacy/quota/dashboard phases | NOT RUN after blocking failure |
+| documented backup/restore/verification | OK |
+| privacy input boundaries | OK |
+| quota and key controls | OK |
+| admin dashboard session | OK |
+| privacy | OK |
 
-The interrupted Responses request was retained in the sanitized evidence by
-its exact gateway request ID, but its reconciled ledger row reported
-`provider=unknown` and `streaming=false`. That accounting metadata limitation
-also prevents a complete qualification claim and must remain visible to the
-follow-up review.
+The run used disposable PostgreSQL state, the isolated qualification provider
+double, generated credentials and canaries, and disabled email delivery. The
+restore verifier emitted bounded table counts and those counts matched the
+source snapshot. The interrupted streamed request reconciled with the saved
+`qualification-double` provider, `qualification-model` resolved model, and
+`streaming=true` reservation facts.
 
-The run's automatic no-keep cleanup passed all independent checks:
+The quota phase admitted one bounded request with a 24-token remaining cap,
+received 32 authoritative provider-reported tokens, finalized that usage, and
+verified that the next request was denied before provider forwarding. Expiry,
+revocation, token, cost, and request denials were each checked against their
+own provider-request baseline. The privacy phase also confirmed the expected
+production metrics denial (`403`) without exposing generated values.
+
+Automatic no-keep cleanup passed all independent checks:
 
 ```text
 containers_by_compose_label=true
 networks=true
+remaining_networks=[]
 volumes=true
+remaining_volumes=[]
 runtime=true
 ```
 
-## Blocking defect
-
-The harness successfully invoked the repository's `scripts/backup.sh` and
-`scripts/restore.sh` against disposable PostgreSQL state, then invoked
-`scripts/verify_restore.py`. The verifier executes the SQLite-only statement
-`PRAGMA integrity_check` through the PostgreSQL `asyncpg` dialect at line 40,
-which fails with:
-
-```text
-asyncpg.exceptions.PostgresSyntaxError: syntax error at or near "PRAGMA"
-[SQL: PRAGMA integrity_check]
-```
-
-`scripts/verify_restore.py` is outside the 151-b allowed-path set. It was not
-modified. A 151-c continuation is required to repair or replace that verifier
-before a fresh no-keep qualification can proceed beyond this boundary.
-
-The run used only the isolated provider double, no real provider credentials,
-no real email, no production/staging database, and no production systems.
+No real OpenAI/OpenRouter request, real email delivery, production/staging
+database, or production system was used.

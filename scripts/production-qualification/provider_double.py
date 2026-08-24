@@ -51,6 +51,7 @@ class State:
         mode = payload.get("mode", "normal")
         if mode not in {
             "normal",
+            "quota_overrun",
             "http_error",
             "timeout",
             "malformed_json",
@@ -110,7 +111,13 @@ def json_bytes(payload: object) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
-def chat_response(model: str, completion: str) -> dict[str, object]:
+def chat_response(
+    model: str,
+    completion: str,
+    *,
+    usage: tuple[int, int, int] = (5, 7, 12),
+) -> dict[str, object]:
+    prompt_tokens, completion_tokens, total_tokens = usage
     return {
         "id": "chatcmpl-qualification",
         "object": "chat.completion",
@@ -123,7 +130,11 @@ def chat_response(model: str, completion: str) -> dict[str, object]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        },
     }
 
 
@@ -264,7 +275,10 @@ class Handler(BaseHTTPRequestHandler):
         if mode in {"malformed_sse", "incomplete_sse", "client_abort"} or streaming:
             self._send_sse(self.path, model, mode, completion)
             return
-        payload = responses_response(model, completion) if self.path.endswith("/responses") else chat_response(model, completion)
+        if mode == "quota_overrun" and not self.path.endswith("/responses"):
+            payload = chat_response(model, completion, usage=(24, 8, 32))
+        else:
+            payload = responses_response(model, completion) if self.path.endswith("/responses") else chat_response(model, completion)
         self._send(200, payload)
 
     def _send_sse(self, path: str, model: str, mode: str, completion: str) -> None:
