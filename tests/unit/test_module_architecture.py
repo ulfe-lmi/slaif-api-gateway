@@ -115,32 +115,89 @@ def _is_module_or_child(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(prefix + ".")
 
 
-def test_server_modules_have_no_gateway_authority_imports_or_dynamic_loading() -> None:
-    forbidden_prefixes = (
-        "importlib",
-        "pkg_resources",
-        "setuptools",
-        "slaif_gateway.api.auth",
-        "slaif_gateway.api.dependencies",
-        "slaif_gateway.db",
-        "slaif_gateway.cache",
-        "slaif_gateway.services.accounting",
-        "slaif_gateway.services.audit",
-        "slaif_gateway.services.external_tool",
-        "slaif_gateway.services.key",
-        "slaif_gateway.services.pricing",
-        "slaif_gateway.services.quota",
-        "slaif_gateway.services.reconciliation",
-        "slaif_gateway.services.route_resolution",
+FORBIDDEN_SERVER_IMPORT_PREFIXES = (
+    "importlib",
+    "pkg_resources",
+    "setuptools",
+    "redis",
+    "slaif_gateway.api.auth",
+    "slaif_gateway.api.dependencies",
+    "slaif_gateway.db",
+    "slaif_gateway.cache",
+    "slaif_gateway.services.accounting",
+    "slaif_gateway.services.admin_session_service",
+    "slaif_gateway.services.audit",
+    "slaif_gateway.services.audit_service",
+    "slaif_gateway.services.auth_service",
+    "slaif_gateway.services.external_tool",
+    "slaif_gateway.services.external_tool_fence",
+    "slaif_gateway.services.external_tool_hold",
+    "slaif_gateway.services.fx_service",
+    "slaif_gateway.services.key",
+    "slaif_gateway.services.key_service",
+    "slaif_gateway.services.pricing",
+    "slaif_gateway.services.quota",
+    "slaif_gateway.services.quota_service",
+    "slaif_gateway.services.rate_limit_service",
+    "slaif_gateway.services.reconciliation",
+    "slaif_gateway.services.reservation_reconciliation",
+    "slaif_gateway.services.route_resolution",
+)
+FORBIDDEN_SERVER_DYNAMIC_CALLS = frozenset(
+    {"__import__", "entry_points", "find_spec", "import_module"}
+)
+
+
+def _server_import_is_forbidden(module: str) -> bool:
+    return any(
+        _is_module_or_child(module, prefix)
+        for prefix in FORBIDDEN_SERVER_IMPORT_PREFIXES
     )
-    dynamic_calls = {"__import__", "entry_points", "find_spec", "import_module"}
+
+
+@pytest.mark.parametrize(
+    ("module", "forbidden"),
+    [
+        ("redis", True),
+        ("redis.asyncio", True),
+        ("slaif_gateway.api.dependencies", True),
+        ("slaif_gateway.db", True),
+        ("slaif_gateway.db.repositories.keys", True),
+        ("slaif_gateway.services.auth_service", True),
+        ("slaif_gateway.services.admin_session_service", True),
+        ("slaif_gateway.services.accounting", True),
+        ("slaif_gateway.services.quota_service", True),
+        ("slaif_gateway.services.rate_limit_service", True),
+        ("slaif_gateway.services.reservation_reconciliation", True),
+        ("slaif_gateway.services.external_tool_fence", True),
+        ("slaif_gateway.services.external_tool_hold", True),
+        ("slaif_gateway.services.key_service", True),
+        ("slaif_gateway.services.pricing", True),
+        ("slaif_gateway.services.fx_service", True),
+        ("slaif_gateway.services.audit_service", True),
+        ("importlib", True),
+        ("importlib.util", True),
+        ("pkg_resources", True),
+        ("httpx", False),
+        ("slaif_gateway.providers.errors", False),
+        ("slaif_gateway.providers.streaming", False),
+        ("slaif_gateway.schemas.providers", False),
+        ("slaif_gateway.config", False),
+        ("slaif_gateway.modules.contracts", False),
+        ("collections.abc", False),
+    ],
+)
+def test_server_import_authority_predicate(module: str, forbidden: bool) -> None:
+    assert _server_import_is_forbidden(module) is forbidden
+
+
+def test_server_modules_have_no_gateway_authority_imports_or_dynamic_loading() -> None:
     server_root = ROOT / "app/slaif_gateway/modules/servers"
     for path in server_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         assert not any(
-            _is_module_or_child(module, prefix)
+            _server_import_is_forbidden(module)
             for module in _imported_modules(path)
-            for prefix in forbidden_prefixes
         ), path
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -152,7 +209,7 @@ def test_server_modules_have_no_gateway_authority_imports_or_dynamic_loading() -
                 if isinstance(node.func, ast.Attribute)
                 else None
             )
-            assert function_name not in dynamic_calls, path
+            assert function_name not in FORBIDDEN_SERVER_DYNAMIC_CALLS, path
 
 
 def test_default_client_helper_uses_registry_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
