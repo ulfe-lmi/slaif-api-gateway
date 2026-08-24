@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -41,6 +42,14 @@ AUTHORIZATION_FIELDS = frozenset(
     {"candidate_commit", "max_requests", "providers", "max_total_cost_eur", "expires_at"}
 )
 PROVIDERS = ("openai", "openrouter")
+COST_CONFIDENCES = frozenset(
+    {
+        "slaif_calculated",
+        "slaif_calculated_with_fallbacks",
+        "slaif_calculated_provider_cost_untrusted",
+        "provider_reported_with_slaif_comparison",
+    }
+)
 PROVIDER_DIRECT_HOSTS = frozenset(
     {"api.openai.com", "api.openrouter.ai", "openrouter.ai", "openrouter.ai."}
 )
@@ -65,10 +74,19 @@ REJECTED_ENVIRONMENT_SECRETS = (
 class VerificationError(Exception):
     """An error whose code is safe to expose to an operator."""
 
-    def __init__(self, code: str, *, attempted_requests: int = 0) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        attempted_requests: int = 0,
+        correlated_completed_count: int = 0,
+        real_provider_call_proven: bool = False,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.attempted_requests = attempted_requests
+        self.correlated_completed_count = correlated_completed_count
+        self.real_provider_call_proven = real_provider_call_proven
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +132,7 @@ class CorrelationEvidence:
     cost_source: str
     cost_confidence: str
     actual_cost_eur: Decimal
+    stored_usage: Usage
     pending_reservations: int
     counters_zero: bool
 
@@ -122,6 +141,7 @@ class CorrelationEvidence:
 class LiveConfiguration:
     gateway_base_url: str
     gateway_key: str
+    gateway_key_id: str
     database_target: DatabaseTarget
     authorization: Authorization
     ca_file: str | None
@@ -165,6 +185,8 @@ def _protected_file_path(raw_path: str, *, name: str) -> Path:
     if not raw_path or "\x00" in raw_path:
         raise VerificationError(f"{name}_path_invalid")
     path = Path(raw_path)
+    if not path.is_absolute():
+        raise VerificationError(f"{name}_path_not_absolute")
     try:
         resolved = path.resolve(strict=True)
         metadata = resolved.stat()
@@ -172,6 +194,8 @@ def _protected_file_path(raw_path: str, *, name: str) -> Path:
         raise VerificationError(f"{name}_file_invalid") from None
     if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
         raise VerificationError(f"{name}_file_invalid")
+    if os.path.normpath(os.path.abspath(raw_path)) != str(resolved):
+        raise VerificationError(f"{name}_path_resolved")
     if metadata.st_uid != os.getuid():
         raise VerificationError(f"{name}_file_owner_invalid")
     if stat.S_IMODE(metadata.st_mode) & 0o077:
@@ -276,6 +300,18 @@ def _validate_model(model: str, *, provider: str) -> str:
     return model
 
 
+def validate_gateway_key_id(raw_value: str) -> str:
+    if not isinstance(raw_value, str):
+        raise VerificationError("gateway_key_id_invalid")
+    try:
+        parsed = uuid.UUID(raw_value)
+    except (ValueError, AttributeError):
+        raise VerificationError("gateway_key_id_invalid") from None
+    if str(parsed) != raw_value:
+        raise VerificationError("gateway_key_id_invalid")
+    return raw_value
+
+
 def validate_gateway_base_url(raw_url: str) -> str:
     if not raw_url:
         raise VerificationError("gateway_base_url_missing")
@@ -371,6 +407,7 @@ def load_live_configuration(arguments: argparse.Namespace) -> LiveConfiguration:
     required = (
         ("gateway_base_url", arguments.gateway_base_url),
         ("gateway_key_file", arguments.gateway_key_file),
+        ("gateway_key_id", arguments.gateway_key_id),
         ("database_url_file", arguments.database_url_file),
         ("authorization_file", arguments.authorization_file),
         ("openai_model", arguments.openai_model),
@@ -380,6 +417,7 @@ def load_live_configuration(arguments: argparse.Namespace) -> LiveConfiguration:
         raise VerificationError("live_argument_missing")
 
     gateway_base_url = validate_gateway_base_url(arguments.gateway_base_url)
+    gateway_key_id = validate_gateway_key_id(arguments.gateway_key_id)
     gateway_key_path = _protected_file_path(arguments.gateway_key_file, name="gateway_key")
     database_path = _protected_file_path(arguments.database_url_file, name="database_url")
     authorization_path = _protected_file_path(
@@ -423,6 +461,7 @@ def load_live_configuration(arguments: argparse.Namespace) -> LiveConfiguration:
     return LiveConfiguration(
         gateway_base_url=gateway_base_url,
         gateway_key=gateway_key,
+        gateway_key_id=gateway_key_id,
         database_target=database_target,
         authorization=authorization,
         ca_file=ca_file,
@@ -737,6 +776,8 @@ def _metadata_cost_labels(metadata: object) -> tuple[str, str]:
         raise VerificationError("correlation_cost_metadata_missing")
     if source not in {"slaif_calculated", "provider_reported"}:
         raise VerificationError("correlation_cost_source_invalid")
+    if confidence not in COST_CONFIDENCES:
+        raise VerificationError("correlation_cost_confidence_invalid")
     if source == "provider_reported" and not (
         "provider_reported_cost_eur" in metadata
         or "provider_reported_cost_native" in metadata
@@ -752,6 +793,7 @@ def validate_correlation(
     key_rows: Sequence[Mapping[str, Any]],
     pending_reservations: int,
     expected_key: str,
+    expected_gateway_key_id: str,
     flow: Flow,
     expected_usage: Usage,
     prompt_marker: str = PROMPT_MARKER,
@@ -769,6 +811,8 @@ def validate_correlation(
         raise VerificationError("correlation_reservation_relationship_invalid")
     if gateway_key_id != str(_row_value(ledger, "gateway_key_id") or ""):
         raise VerificationError("correlation_key_relationship_invalid")
+    if gateway_key_id != expected_gateway_key_id:
+        raise VerificationError("correlation_selected_key_mismatch")
     if gateway_key_id != str(_row_value(key, "id") or "") or not gateway_key_id:
         raise VerificationError("correlation_key_missing")
     if _row_value(reservation, "endpoint") != flow.endpoint:
@@ -878,9 +922,146 @@ def validate_correlation(
         cost_source=source,
         cost_confidence=confidence,
         actual_cost_eur=actual_cost_eur,
+        stored_usage=ledger_usage,
         pending_reservations=pending_reservations,
         counters_zero=counters_zero,
     )
+
+
+_FRESH_KEY_FIELDS = frozenset(
+    {
+        "id",
+        "public_key_id",
+        "key_prefix",
+        "key_hint",
+        "token_hash",
+        "status",
+        "valid_from",
+        "valid_until",
+        "cost_limit_eur",
+        "token_limit_total",
+        "request_limit_total",
+        "cost_used_eur",
+        "tokens_used_total",
+        "requests_used_total",
+        "cost_reserved_eur",
+        "tokens_reserved_total",
+        "requests_reserved_total",
+        "external_tool_fence_state",
+        "external_tool_fence_reservation_id",
+        "external_tool_fence_request_id",
+        "external_tool_fence_acquired_at",
+        "external_tool_fence_expires_at",
+        "allow_all_models",
+        "allowed_models",
+        "allow_all_endpoints",
+        "allowed_endpoints",
+        "key_purpose",
+        "capability_policy_mode",
+        "calibration_metadata",
+        "metadata",
+    }
+)
+
+
+def _require_zero_key_counters(key: Mapping[str, Any], *, reserved_only: bool = False) -> None:
+    fields = (
+        ("cost_reserved_eur", "decimal"),
+        ("tokens_reserved_total", "integer"),
+        ("requests_reserved_total", "integer"),
+    )
+    if not reserved_only:
+        fields += (
+            ("cost_used_eur", "decimal"),
+            ("tokens_used_total", "integer"),
+            ("requests_used_total", "integer"),
+        )
+    for field, kind in fields:
+        value = _row_value(key, field)
+        if kind == "decimal":
+            parsed = _as_nonnegative_decimal(value, field=field)
+            if parsed != 0:
+                raise VerificationError("fresh_key_counters_nonzero")
+        else:
+            if _as_nonnegative_int(value, field=field) != 0:
+                raise VerificationError("fresh_key_counters_nonzero")
+
+
+def _scan_complete_key_row(key: Mapping[str, Any], gateway_key: str) -> None:
+    if not _FRESH_KEY_FIELDS.issubset(key.keys()):
+        raise VerificationError("fresh_key_row_incomplete")
+    serialized = json.dumps(dict(key), sort_keys=True, default=str)
+    if gateway_key in serialized:
+        raise VerificationError("fresh_key_plaintext_canary_found")
+
+
+def validate_fresh_key(
+    *,
+    key_rows: Sequence[Mapping[str, Any]],
+    gateway_key_id: str,
+    gateway_key: str,
+    reservation_count: int,
+    ledger_count: int,
+    now: dt.datetime | None = None,
+) -> None:
+    if len(key_rows) != 1:
+        raise VerificationError("fresh_key_cardinality_invalid")
+    key = key_rows[0]
+    if str(_row_value(key, "id") or "") != gateway_key_id:
+        raise VerificationError("fresh_key_id_mismatch")
+    if _row_value(key, "status") != "active" or _row_value(key, "revoked_at") is not None:
+        raise VerificationError("fresh_key_state_invalid")
+    valid_until = _row_value(key, "valid_until")
+    current_time = now or dt.datetime.now(dt.UTC)
+    if not isinstance(valid_until, dt.datetime) or valid_until <= current_time:
+        raise VerificationError("fresh_key_expired")
+    _require_zero_key_counters(key)
+    if _row_value(key, "external_tool_fence_state") != "none":
+        raise VerificationError("fresh_key_fence_state_invalid")
+    if any(
+        _row_value(key, field) is not None
+        for field in (
+            "external_tool_fence_reservation_id",
+            "external_tool_fence_request_id",
+            "external_tool_fence_acquired_at",
+            "external_tool_fence_expires_at",
+        )
+    ):
+        raise VerificationError("fresh_key_fence_state_invalid")
+    if reservation_count != 0 or ledger_count != 0:
+        raise VerificationError("fresh_key_has_history")
+    _scan_complete_key_row(key, gateway_key)
+
+
+def validate_ordinal_run_isolation(
+    *,
+    reservation_ids: Sequence[str],
+    ledger_ids: Sequence[str],
+    seen_request_ids: Sequence[str],
+    ordinal: int,
+) -> None:
+    seen = set(seen_request_ids)
+    if ordinal != len(seen_request_ids) or len(seen) != ordinal:
+        raise VerificationError("run_seen_id_cardinality_invalid")
+    if len(reservation_ids) != ordinal or len(ledger_ids) != ordinal:
+        raise VerificationError("run_ordinal_cardinality_invalid")
+    if set(reservation_ids) != seen or set(ledger_ids) != seen:
+        raise VerificationError("run_ordinal_uncorrelated_rows")
+
+
+def validate_final_key_state(
+    *,
+    key_rows: Sequence[Mapping[str, Any]],
+    gateway_key_id: str,
+    pending_reservations: int,
+) -> None:
+    if len(key_rows) != 1 or str(_row_value(key_rows[0], "id") or "") != gateway_key_id:
+        raise VerificationError("final_key_cardinality_invalid")
+    if _row_value(key_rows[0], "status") != "active":
+        raise VerificationError("final_key_state_invalid")
+    _require_zero_key_counters(key_rows[0], reserved_only=True)
+    if pending_reservations != 0:
+        raise VerificationError("final_key_pending_reservations")
 
 
 class PostgresProbe:
@@ -911,6 +1092,39 @@ class PostgresProbe:
             await self.close()
             raise VerificationError("database_connection_failure") from None
 
+    async def prepare_fresh_key(self, *, gateway_key_id: str, gateway_key: str) -> None:
+        connection = self._connection_or_fail()
+        try:
+            key_rows = await connection.fetch(
+                "SELECT * FROM gateway_keys WHERE id = $1::uuid",
+                gateway_key_id,
+            )
+            reservation_count = await connection.fetchval(
+                """
+                SELECT count(*)::int
+                FROM quota_reservations
+                WHERE gateway_key_id = $1::uuid
+                """,
+                gateway_key_id,
+            )
+            ledger_count = await connection.fetchval(
+                """
+                SELECT count(*)::int
+                FROM usage_ledger
+                WHERE gateway_key_id = $1::uuid
+                """,
+                gateway_key_id,
+            )
+        except (asyncpg.PostgresError, OSError, TimeoutError):
+            raise VerificationError("database_fresh_key_query_failure") from None
+        validate_fresh_key(
+            key_rows=key_rows,
+            gateway_key_id=gateway_key_id,
+            gateway_key=gateway_key,
+            reservation_count=int(reservation_count or 0),
+            ledger_count=int(ledger_count or 0),
+        )
+
     def _connection_or_fail(self) -> asyncpg.Connection:
         if self._connection is None:
             raise VerificationError("database_not_connected")
@@ -920,6 +1134,7 @@ class PostgresProbe:
         self,
         *,
         gateway_request_id: str,
+        gateway_key_id: str,
         gateway_key: str,
         flow: Flow,
         expected_usage: Usage,
@@ -955,15 +1170,9 @@ class PostgresProbe:
                     gateway_request_id,
                 )
                 if len(reservation_rows) == 1:
-                    key_id = str(reservation_rows[0]["gateway_key_id"])
                     key_rows = await connection.fetch(
-                        """
-                        SELECT id::text, token_hash, cost_reserved_eur,
-                               tokens_reserved_total, requests_reserved_total
-                        FROM gateway_keys
-                        WHERE id = $1::uuid
-                        """,
-                        key_id,
+                        "SELECT * FROM gateway_keys WHERE id = $1::uuid",
+                        gateway_key_id,
                     )
                     pending = await connection.fetchval(
                         """
@@ -971,7 +1180,7 @@ class PostgresProbe:
                         FROM quota_reservations
                         WHERE gateway_key_id = $1::uuid AND status = 'pending'
                         """,
-                        key_id,
+                        gateway_key_id,
                     )
                     if len(ledger_rows) == 1 and len(key_rows) == 1:
                         return validate_correlation(
@@ -980,6 +1189,7 @@ class PostgresProbe:
                             key_rows=key_rows,
                             pending_reservations=int(pending or 0),
                             expected_key=gateway_key,
+                            expected_gateway_key_id=gateway_key_id,
                             flow=flow,
                             expected_usage=expected_usage,
                         )
@@ -991,37 +1201,87 @@ class PostgresProbe:
                 raise VerificationError("accounting_correlation_timeout")
             await asyncio.sleep(interval_seconds)
 
-    async def final_run_check(self, *, request_ids: Sequence[str], gateway_key_id: str) -> None:
-        if len(request_ids) != MAX_REQUESTS or len(set(request_ids)) != MAX_REQUESTS:
-            raise VerificationError("run_request_cardinality_invalid")
+    async def _all_key_request_ids(self, *, gateway_key_id: str) -> tuple[list[str], list[str]]:
         connection = self._connection_or_fail()
         try:
             reservations = await connection.fetch(
                 """
                 SELECT request_id
                 FROM quota_reservations
-                WHERE gateway_key_id = $1::uuid AND request_id = ANY($2::text[])
+                WHERE gateway_key_id = $1::uuid
                 """,
                 gateway_key_id,
-                list(request_ids),
             )
             ledgers = await connection.fetch(
                 """
                 SELECT request_id
                 FROM usage_ledger
-                WHERE gateway_key_id = $1::uuid AND request_id = ANY($2::text[])
+                WHERE gateway_key_id = $1::uuid
                 """,
                 gateway_key_id,
-                list(request_ids),
+            )
+        except (asyncpg.PostgresError, OSError, TimeoutError):
+            raise VerificationError("database_run_isolation_query_failure") from None
+        return (
+            [str(row["request_id"]) for row in reservations],
+            [str(row["request_id"]) for row in ledgers],
+        )
+
+    async def check_ordinal_isolation(
+        self,
+        *,
+        gateway_key_id: str,
+        seen_request_ids: Sequence[str],
+        ordinal: int,
+    ) -> None:
+        reservation_ids, ledger_ids = await self._all_key_request_ids(
+            gateway_key_id=gateway_key_id
+        )
+        validate_ordinal_run_isolation(
+            reservation_ids=reservation_ids,
+            ledger_ids=ledger_ids,
+            seen_request_ids=seen_request_ids,
+            ordinal=ordinal,
+        )
+
+    async def final_run_check(
+        self,
+        *,
+        gateway_key_id: str,
+        request_ids: Sequence[str],
+    ) -> None:
+        if len(request_ids) != MAX_REQUESTS or len(set(request_ids)) != MAX_REQUESTS:
+            raise VerificationError("run_request_cardinality_invalid")
+        reservation_ids, ledger_ids = await self._all_key_request_ids(
+            gateway_key_id=gateway_key_id
+        )
+        validate_ordinal_run_isolation(
+            reservation_ids=reservation_ids,
+            ledger_ids=ledger_ids,
+            seen_request_ids=request_ids,
+            ordinal=MAX_REQUESTS,
+        )
+        connection = self._connection_or_fail()
+        try:
+            key_rows = await connection.fetch(
+                "SELECT * FROM gateway_keys WHERE id = $1::uuid",
+                gateway_key_id,
+            )
+            pending = await connection.fetchval(
+                """
+                SELECT count(*)::int
+                FROM quota_reservations
+                WHERE gateway_key_id = $1::uuid AND status = 'pending'
+                """,
+                gateway_key_id,
             )
         except (asyncpg.PostgresError, OSError, TimeoutError):
             raise VerificationError("database_final_query_failure") from None
-        if len(reservations) != MAX_REQUESTS or len(ledgers) != MAX_REQUESTS:
-            raise VerificationError("run_accounting_cardinality_invalid")
-        if {row["request_id"] for row in reservations} != set(request_ids):
-            raise VerificationError("run_reservation_correlation_invalid")
-        if {row["request_id"] for row in ledgers} != set(request_ids):
-            raise VerificationError("run_ledger_correlation_invalid")
+        validate_final_key_state(
+            key_rows=key_rows,
+            gateway_key_id=gateway_key_id,
+            pending_reservations=int(pending or 0),
+        )
 
     async def close(self) -> None:
         if self._connection is not None:
@@ -1039,14 +1299,18 @@ async def run_live(configuration: LiveConfiguration) -> dict[str, object]:
         timeout_seconds=configuration.poll_timeout_seconds,
     )
     attempted = 0
+    correlated_completed_count = 0
     request_ids: list[str] = []
     seen_diagnostic_ids: set[str] = set()
     correlations: list[dict[str, object]] = []
-    key_id: str | None = None
     total_actual_cost_eur = Decimal("0")
     last_started: float | None = None
     try:
         await database.connect_and_check()
+        await database.prepare_fresh_key(
+            gateway_key_id=configuration.gateway_key_id,
+            gateway_key=configuration.gateway_key,
+        )
         timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient(
             verify=configuration.ca_file or True,
@@ -1071,31 +1335,41 @@ async def run_live(configuration: LiveConfiguration) -> dict[str, object]:
                 seen_diagnostic_ids.add(diagnostic_id)
                 correlation = await database.correlate(
                     gateway_request_id=diagnostic_id,
+                    gateway_key_id=configuration.gateway_key_id,
                     gateway_key=configuration.gateway_key,
                     flow=flow,
                     expected_usage=terminal.usage,
                     timeout_seconds=configuration.poll_timeout_seconds,
                     interval_seconds=configuration.poll_interval_seconds,
                 )
-                if key_id is None:
-                    key_id = correlation.gateway_key_id
-                elif key_id != correlation.gateway_key_id:
-                    raise VerificationError("gateway_key_changed", attempted_requests=attempted)
+                correlated_completed_count += 1
+                request_ids.append(diagnostic_id)
+                await database.check_ordinal_isolation(
+                    gateway_key_id=configuration.gateway_key_id,
+                    seen_request_ids=request_ids,
+                    ordinal=correlated_completed_count,
+                )
                 total_actual_cost_eur += correlation.actual_cost_eur
                 if total_actual_cost_eur > configuration.authorization.max_total_cost_eur:
                     raise VerificationError(
                         "authorized_cost_bound_exceeded",
                         attempted_requests=attempted,
                     )
-                request_ids.append(diagnostic_id)
                 correlations.append(
                     {
                         "provider": flow.provider,
                         "endpoint": flow.endpoint,
+                        "model": flow.model,
                         "streaming": flow.streaming,
                         "http_status": terminal.http_status,
                         "terminal_shape_valid": terminal.terminal_shape_valid,
                         "usage_valid": True,
+                        "response_input_tokens": terminal.usage.input_tokens,
+                        "response_output_tokens": terminal.usage.output_tokens,
+                        "response_total_tokens": terminal.usage.total_tokens,
+                        "stored_input_tokens": correlation.stored_usage.input_tokens,
+                        "stored_output_tokens": correlation.stored_usage.output_tokens,
+                        "stored_total_tokens": correlation.stored_usage.total_tokens,
                         "gateway_request_id_present": True,
                         "reservation_status": "finalized",
                         "accounting_status": "finalized",
@@ -1104,13 +1378,19 @@ async def run_live(configuration: LiveConfiguration) -> dict[str, object]:
                         "correlated": True,
                     }
                 )
-        if key_id is None:
-            raise VerificationError("run_key_missing", attempted_requests=attempted)
-        await database.final_run_check(request_ids=request_ids, gateway_key_id=key_id)
+        if correlated_completed_count != MAX_REQUESTS:
+            raise VerificationError("run_correlated_count_invalid")
+        await database.final_run_check(
+            request_ids=request_ids,
+            gateway_key_id=configuration.gateway_key_id,
+        )
         return {
             "result": "ok",
             "real_provider_called": True,
+            "real_provider_call_proven": True,
             "attempted_requests": attempted,
+            "gateway_requests_attempted": attempted,
+            "correlated_completed_count": correlated_completed_count,
             "max_requests": MAX_REQUESTS,
             "providers": list(PROVIDERS),
             "flows": correlations,
@@ -1120,7 +1400,12 @@ async def run_live(configuration: LiveConfiguration) -> dict[str, object]:
             "live_evidence_scope": "bounded_eight_flow_gateway_and_postgresql_correlation",
         }
     except VerificationError as exc:
-        raise VerificationError(exc.code, attempted_requests=attempted) from None
+        raise VerificationError(
+            exc.code,
+            attempted_requests=attempted,
+            correlated_completed_count=correlated_completed_count,
+            real_provider_call_proven=correlated_completed_count > 0,
+        ) from None
     finally:
         await database.close()
 
@@ -1131,6 +1416,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--gateway-base-url")
     parser.add_argument("--gateway-key-file")
+    parser.add_argument("--gateway-key-id")
     parser.add_argument("--database-url-file")
     parser.add_argument("--authorization-file")
     parser.add_argument("--openai-model")
@@ -1147,8 +1433,11 @@ def _emit_failure(error: VerificationError) -> int:
         json.dumps(
             {
                 "result": "fail",
-                "real_provider_called": error.attempted_requests > 0,
+                "real_provider_called": error.real_provider_call_proven,
+                "real_provider_call_proven": error.real_provider_call_proven,
                 "attempted_requests": error.attempted_requests,
+                "gateway_requests_attempted": error.attempted_requests,
+                "correlated_completed_count": error.correlated_completed_count,
                 "max_requests": MAX_REQUESTS,
                 "error_code": error.code,
             },

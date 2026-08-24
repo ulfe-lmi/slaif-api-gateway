@@ -105,10 +105,36 @@ def _base_rows(flow: object | None = None) -> tuple[list[dict], list[dict], list
     }
     key = {
         "id": "key-id",
+        "public_key_id": "public-key-id",
+        "key_prefix": "sk-slaif-",
+        "key_hint": "hint",
         "token_hash": "digest-only",
+        "status": "active",
+        "valid_from": dt.datetime.now(dt.UTC) - dt.timedelta(minutes=1),
+        "valid_until": dt.datetime.now(dt.UTC) + dt.timedelta(hours=1),
+        "cost_limit_eur": Decimal("1"),
+        "token_limit_total": 1000,
+        "request_limit_total": 8,
+        "cost_used_eur": Decimal("0"),
+        "tokens_used_total": 0,
+        "requests_used_total": 0,
         "cost_reserved_eur": Decimal("0"),
         "tokens_reserved_total": 0,
         "requests_reserved_total": 0,
+        "external_tool_fence_state": "none",
+        "external_tool_fence_reservation_id": None,
+        "external_tool_fence_request_id": None,
+        "external_tool_fence_acquired_at": None,
+        "external_tool_fence_expires_at": None,
+        "allow_all_models": False,
+        "allowed_models": [],
+        "allow_all_endpoints": False,
+        "allowed_endpoints": [],
+        "key_purpose": "standard",
+        "capability_policy_mode": "standard",
+        "calibration_metadata": {},
+        "metadata": {},
+        "revoked_at": None,
     }
     return [reservation], [ledger], [key]
 
@@ -203,6 +229,33 @@ def test_protected_secret_files_reject_permissions_symlinks_and_repository_paths
         VERIFIER._protected_file_path, str(repository_file), name="authorization"
     ) in {"authorization_file_permissions_invalid", "authorization_file_in_repository"}
 
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent_file = _protected_file(parent / "parent-secret", "secret")
+    parent_link = tmp_path / "parent-link"
+    parent_link.symlink_to(parent, target_is_directory=True)
+    assert _error_code(
+        VERIFIER._protected_file_path,
+        str(parent_link / parent_file.name),
+        name="gateway_key",
+    ) == "gateway_key_path_resolved"
+
+
+@pytest.mark.parametrize(
+    ("value", "valid"),
+    [
+        ("11111111-1111-4111-8111-111111111111", True),
+        ("11111111111141118111111111111111", False),
+        ("11111111-1111-4111-8111-11111111111Z", False),
+        ("not-a-uuid", False),
+    ],
+)
+def test_gateway_key_id_requires_canonical_uuid(value: str, valid: bool) -> None:
+    if valid:
+        assert VERIFIER.validate_gateway_key_id(value) == value
+    else:
+        assert _error_code(VERIFIER.validate_gateway_key_id, value) == "gateway_key_id_invalid"
+
 
 def test_authorization_requires_exact_eight_both_providers_cost_and_future_expiry(
     tmp_path: Path,
@@ -260,6 +313,8 @@ def test_live_configuration_reads_only_protected_files_and_builds_exact_eight_fl
             "https://gateway.example/v1",
             "--gateway-key-file",
             str(key_file),
+            "--gateway-key-id",
+            "11111111-1111-4111-8111-111111111111",
             "--database-url-file",
             str(database_file),
             "--authorization-file",
@@ -407,6 +462,204 @@ def test_exact_flow_order_and_bounded_request_payloads() -> None:
     assert all("tools" not in VERIFIER._request_body(flow) for flow in flows)
 
 
+def test_fresh_key_baseline_rejects_history_state_and_complete_row_canary() -> None:
+    key = _base_rows()[2][0]
+    VERIFIER.validate_fresh_key(
+        key_rows=[key],
+        gateway_key_id="key-id",
+        gateway_key="gateway-test-token",
+        reservation_count=0,
+        ledger_count=0,
+    )
+    key["requests_used_total"] = 1
+    assert _error_code(
+        VERIFIER.validate_fresh_key,
+        key_rows=[key],
+        gateway_key_id="key-id",
+        gateway_key="gateway-test-token",
+        reservation_count=0,
+        ledger_count=0,
+    ) == "fresh_key_counters_nonzero"
+    key["requests_used_total"] = 0
+    key["metadata"] = {"gateway_key": "gateway-test-token"}
+    assert _error_code(
+        VERIFIER.validate_fresh_key,
+        key_rows=[key],
+        gateway_key_id="key-id",
+        gateway_key="gateway-test-token",
+        reservation_count=0,
+        ledger_count=0,
+    ) == "fresh_key_plaintext_canary_found"
+
+
+def test_fresh_key_baseline_rejects_old_reservation_and_ledger_totals() -> None:
+    key = _base_rows()[2][0]
+    assert _error_code(
+        VERIFIER.validate_fresh_key,
+        key_rows=[key],
+        gateway_key_id="key-id",
+        gateway_key="gateway-test-token",
+        reservation_count=1,
+        ledger_count=0,
+    ) == "fresh_key_has_history"
+    assert _error_code(
+        VERIFIER.validate_fresh_key,
+        key_rows=[key],
+        gateway_key_id="key-id",
+        gateway_key="gateway-test-token",
+        reservation_count=0,
+        ledger_count=1,
+    ) == "fresh_key_has_history"
+
+
+def test_ordinal_isolation_rejects_old_or_concurrent_uncorrelated_rows() -> None:
+    seen = ["gw-1", "gw-2"]
+    VERIFIER.validate_ordinal_run_isolation(
+        reservation_ids=seen,
+        ledger_ids=seen,
+        seen_request_ids=seen,
+        ordinal=2,
+    )
+    assert _error_code(
+        VERIFIER.validate_ordinal_run_isolation,
+        reservation_ids=["gw-old", *seen],
+        ledger_ids=seen,
+        seen_request_ids=seen,
+        ordinal=2,
+    ) == "run_ordinal_cardinality_invalid"
+    assert _error_code(
+        VERIFIER.validate_ordinal_run_isolation,
+        reservation_ids=seen,
+        ledger_ids=["gw-foreign", "gw-2"],
+        seen_request_ids=seen,
+        ordinal=2,
+    ) == "run_ordinal_uncorrelated_rows"
+
+
+def test_final_key_state_requires_zero_reserved_and_pending_state() -> None:
+    key = _base_rows()[2][0]
+    VERIFIER.validate_final_key_state(
+        key_rows=[key],
+        gateway_key_id="key-id",
+        pending_reservations=0,
+    )
+    key["requests_reserved_total"] = 1
+    assert _error_code(
+        VERIFIER.validate_final_key_state,
+        key_rows=[key],
+        gateway_key_id="key-id",
+        pending_reservations=0,
+    ) == "fresh_key_counters_nonzero"
+
+
+def test_cost_confidence_output_is_allowlisted() -> None:
+    for confidence in sorted(VERIFIER.COST_CONFIDENCES):
+        assert VERIFIER._metadata_cost_labels(
+            {"cost_source": "slaif_calculated", "cost_confidence": confidence}
+        ) == ("slaif_calculated", confidence)
+    assert _error_code(
+        VERIFIER._metadata_cost_labels,
+        {"cost_source": "slaif_calculated", "cost_confidence": "operator-claimed"},
+    ) == "correlation_cost_confidence_invalid"
+
+
+def test_failed_attempt_does_not_prove_provider_execution(capsys: pytest.CaptureFixture[str]) -> None:
+    error = VERIFIER.VerificationError("gateway_transport_failure", attempted_requests=1)
+    assert VERIFIER._emit_failure(error) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["gateway_requests_attempted"] == 1
+    assert output["correlated_completed_count"] == 0
+    assert output["real_provider_call_proven"] is False
+
+
+def test_success_summary_is_bounded_and_includes_model_and_token_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeDatabase:
+        def __init__(self, target, *, timeout_seconds):
+            self.correlated = 0
+
+        async def connect_and_check(self):
+            return None
+
+        async def prepare_fresh_key(self, *, gateway_key_id, gateway_key):
+            assert gateway_key_id == "11111111-1111-4111-8111-111111111111"
+
+        async def correlate(self, **kwargs):
+            self.correlated += 1
+            return VERIFIER.CorrelationEvidence(
+                gateway_key_id="11111111-1111-4111-8111-111111111111",
+                cost_source="slaif_calculated",
+                cost_confidence="slaif_calculated",
+                actual_cost_eur=Decimal("0"),
+                stored_usage=VERIFIER.Usage(2, 3, 5),
+                pending_reservations=0,
+                counters_zero=True,
+            )
+
+        async def check_ordinal_isolation(self, **kwargs):
+            return None
+
+        async def final_run_check(self, **kwargs):
+            assert len(kwargs["request_ids"]) == 8
+
+        async def close(self):
+            return None
+
+    call_count = 0
+
+    async def fake_execute(client, *, base_url, gateway_key, flow):
+        nonlocal call_count
+        call_count += 1
+        return (
+            f"gw-{call_count:08d}-1234-4123-8123-123456789abc",
+            VERIFIER.TerminalEvidence(200, True, VERIFIER.Usage(2, 3, 5)),
+        )
+
+    async def no_sleep(delay):
+        return None
+
+    monkeypatch.setattr(VERIFIER, "PostgresProbe", FakeDatabase)
+    monkeypatch.setattr(VERIFIER, "execute_flow", fake_execute)
+    monkeypatch.setattr(VERIFIER.asyncio, "sleep", no_sleep)
+    authorization = VERIFIER.Authorization(
+        candidate_commit="0" * 40,
+        max_requests=8,
+        providers=frozenset({"openai", "openrouter"}),
+        max_total_cost_eur=Decimal("0.05"),
+        expires_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=1),
+    )
+    config = VERIFIER.LiveConfiguration(
+        gateway_base_url="https://gateway.example/v1",
+        gateway_key="gateway-test-token",
+        gateway_key_id="11111111-1111-4111-8111-111111111111",
+        database_target=VERIFIER.DatabaseTarget(
+            connect_url="postgresql://loopback/slaif_real_provider_qualification_a1",
+            database_name="slaif_real_provider_qualification_a1",
+        ),
+        authorization=authorization,
+        ca_file=None,
+        min_gap_seconds=15,
+        poll_timeout_seconds=1,
+        poll_interval_seconds=0.01,
+        flows=VERIFIER._build_flows("openai/model", "openrouter/model"),
+    )
+    result = asyncio.run(VERIFIER.run_live(config))
+    assert result["gateway_requests_attempted"] == 8
+    assert result["correlated_completed_count"] == 8
+    assert result["real_provider_call_proven"] is True
+    assert all(
+        flow["model"] in {"openai/model", "openrouter/model"}
+        and flow["response_input_tokens"] == 2
+        and flow["response_output_tokens"] == 3
+        and flow["response_total_tokens"] == 5
+        and flow["stored_input_tokens"] == 2
+        and flow["stored_output_tokens"] == 3
+        and flow["stored_total_tokens"] == 5
+        for flow in result["flows"]
+    )
+
+
 def test_correlation_requires_exact_reservation_ledger_relationship_and_zero_pending() -> None:
     flow = VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a")
     reservation, ledger, key = _base_rows(flow)
@@ -416,6 +669,7 @@ def test_correlation_requires_exact_reservation_ledger_relationship_and_zero_pen
         key_rows=key,
         pending_reservations=0,
         expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
         flow=flow,
         expected_usage=VERIFIER.Usage(2, 3, 5),
     )
@@ -429,9 +683,27 @@ def test_correlation_requires_exact_reservation_ledger_relationship_and_zero_pen
         key_rows=key,
         pending_reservations=0,
         expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
         flow=flow,
         expected_usage=VERIFIER.Usage(2, 3, 5),
     ) == "correlation_reservation_relationship_invalid"
+
+
+def test_correlation_rejects_wrong_selected_gateway_key() -> None:
+    reservation, ledger, key = _base_rows()
+    reservation[0]["gateway_key_id"] = "foreign-key-id"
+    ledger[0]["gateway_key_id"] = "foreign-key-id"
+    assert _error_code(
+        VERIFIER.validate_correlation,
+        reservation_rows=reservation,
+        ledger_rows=ledger,
+        key_rows=key,
+        pending_reservations=0,
+        expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
+        flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
+        expected_usage=VERIFIER.Usage(2, 3, 5),
+    ) == "correlation_selected_key_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -445,11 +717,18 @@ def test_correlation_requires_exact_reservation_ledger_relationship_and_zero_pen
          "correlation_cost_metadata_missing"),
         (lambda reservation, ledger, key: ledger.__setitem__(
             "response_metadata",
-            {"cost_source": "provider_reported", "cost_confidence": "x"},
+            {
+                "cost_source": "provider_reported",
+                "cost_confidence": "provider_reported_with_slaif_comparison",
+            },
         ), "correlation_provider_cost_unsubstantiated"),
         (lambda reservation, ledger, key: ledger.__setitem__(
             "response_metadata",
-            {"cost_source": "slaif_calculated", "cost_confidence": "x", "canary": "SLAIF-152A-PROBE"},
+            {
+                "cost_source": "slaif_calculated",
+                "cost_confidence": "slaif_calculated",
+                "canary": "SLAIF-152A-PROBE",
+            },
         ), "correlation_privacy_canary_found"),
     ],
 )
@@ -463,6 +742,7 @@ def test_correlation_rejects_nonterminal_cost_privacy_and_metadata_failures(muta
         key_rows=key,
         pending_reservations=0,
         expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
         flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
         expected_usage=VERIFIER.Usage(2, 3, 5),
     ) == code
@@ -478,6 +758,7 @@ def test_correlation_rejects_pending_reservations_and_reserved_counters() -> Non
         key_rows=key,
         pending_reservations=0,
         expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
         flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
         expected_usage=VERIFIER.Usage(2, 3, 5),
     ) == "correlation_pending_or_reserved_state"
@@ -489,6 +770,7 @@ def test_correlation_rejects_pending_reservations_and_reserved_counters() -> Non
         key_rows=key,
         pending_reservations=1,
         expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
         flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
         expected_usage=VERIFIER.Usage(2, 3, 5),
     ) == "correlation_pending_or_reserved_state"

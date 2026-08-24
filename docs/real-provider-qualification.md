@@ -99,3 +99,34 @@ inputs and explicit bounded authorization before it may make the single
 eight-flow live qualification. No release, deployment, production
 certification, provider-invoice audit, benchmark, or compliance claim follows
 from this implementation round.
+
+## Objective 152-b review hardening
+
+Objective 152-b remains implementation-only and live qualification remains
+**NOT RUN**. It closes the independent review defects found in 152-a:
+
+- the operator must select one canonical Gateway-key UUID, and the verifier
+  checks that the key is active, unexpired, unused, unfenced, and has zero
+  total quota-reservation and usage-ledger history before any Gateway request;
+- every ordinal 1 through 8 reads all reservation and ledger request IDs for
+  that selected key and requires the complete set to equal only the verifier's
+  already-correlated IDs, so old, concurrent, foreign, or uncorrelated rows
+  cannot be filtered away;
+- the complete serialized selected key row is scanned for the plaintext
+  Gateway key, and protected paths whose normalized absolute spelling differs
+  from their resolved path are rejected to close parent-symlink bypasses;
+- successful output includes only the allowlisted provider/endpoint/streaming
+  facts, operator-selected model, exact response and stored input/output/
+  total token integers, terminal/accounting facts, and allowlisted
+  cost-source/confidence values;
+- failed output distinguishes Gateway requests attempted from correlated
+  completed flows and proves real-provider execution only after a valid
+  terminal and exact PostgreSQL correlation. A failed first Gateway attempt
+  therefore reports attempted=1, correlated=0, and provider proof=false.
+
+The authorization cost check is post-response SLAIF accounting evidence. It
+cannot guarantee provider-invoice totals or prevent one individual request
+from crossing the cap. The 32-token bound, selected low-cost models, fresh
+zero-history key, and explicit human authorization remain the pre-call
+controls. No provider credential, Gateway request, PostgreSQL connection, or
+live qualification was used in 152-b verification.
