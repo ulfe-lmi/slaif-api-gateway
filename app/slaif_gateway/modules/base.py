@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from slaif_gateway.config import Settings
@@ -59,9 +60,9 @@ class ModuleAdapter(ProviderAdapter, ABC):
 
 ModuleAdapterFactory = Callable[..., ModuleAdapter]
 
-# This mapping is intentionally empty until a separately reviewed module is
-# implemented. Do not populate it from configuration or dynamic imports.
-MODULE_ADAPTER_REGISTRY: dict[str, ModuleAdapterFactory] = {}
+# The production allowlist is owned by ``modules.servers.registry``. This
+# immutable empty map remains only for code that imports the legacy base symbol.
+MODULE_ADAPTER_REGISTRY = MappingProxyType({})
 
 
 def get_module_adapter(
@@ -75,13 +76,15 @@ def get_module_adapter(
 ) -> ModuleAdapter:
     """Build a statically registered module adapter or fail closed."""
     _ = settings
-    factory = MODULE_ADAPTER_REGISTRY.get(provider)
-    if factory is None:
+    if provider != "facial_scoring":
         raise ProviderConfigurationError(
             "The configured native module is not registered",
             provider=provider,
             error_code="unsupported_module",
         )
+    from slaif_gateway.modules.servers.facial_scoring import FacialScoringAdapter
+
+    factory = FacialScoringAdapter
     # The provider factory resolves the configured environment variable before
     # dispatch. The client Authorization token is never passed here.
     return factory(

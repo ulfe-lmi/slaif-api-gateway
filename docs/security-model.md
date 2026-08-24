@@ -1261,6 +1261,16 @@ never recover or send old plaintext keys.
 
 ## Current Limitations
 
+### Static module trust boundary
+
+Client and server modules are statically registered under the common
+`modules/` root but have unequal trust. Client modules cannot authenticate,
+select routes, use databases or Redis, perform HTTP, or grant authority.
+Server modules cannot receive the public bearer or directly mutate key, policy,
+quota, or accounting state. Unknown identifiers and unsupported client/server
+pairs fail closed before provider construction. The [module architecture
+contract](module-architecture.md) is the current contributor boundary.
+
 - Arbitrary old-key dashboard email resend actions are not implemented.
   Bulk key send-now execution is not implemented; bulk dashboard execution
   currently supports `none`, `pending`, and `enqueue`.

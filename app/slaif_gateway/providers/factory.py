@@ -7,12 +7,14 @@ import re
 from urllib.parse import urlsplit
 
 from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
-from slaif_gateway.modules import get_module_adapter
+from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID
+from slaif_gateway.modules.servers.registry import (
+    build_server_adapter,
+    ensure_client_server_pair,
+    resolve_server_module,
+)
 from slaif_gateway.providers.base import ProviderAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
-from slaif_gateway.providers.openai import OpenAIProviderAdapter
-from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
-from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 
 _DEFAULT_OPENAI_API_KEY_ENV_VAR = "OPENAI_UPSTREAM_API_KEY"
 _DEFAULT_OPENROUTER_API_KEY_ENV_VAR = "OPENROUTER_API_KEY"
@@ -22,19 +24,12 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
     """Return an adapter for a configured provider or resolved route."""
     normalized = _provider_name(provider)
     provider_kind = _provider_kind(provider)
-    if normalized not in {"openai", "openrouter"} and provider_kind not in {
-        "openai_compatible",
-        "module",
-    }:
-        raise ProviderConfigurationError(
-            "Unsupported provider configured for route",
-            provider=normalized,
-            error_code="unsupported_provider",
-        )
+    descriptor = resolve_server_module(normalized, provider_kind)
+    ensure_client_server_pair(DEFAULT_CLIENT_MODULE_ID, descriptor.module_id)
 
     base_url = _provider_base_url(provider)
     api_key_env_var = _provider_api_key_env_var(provider) or _default_api_key_env_var(normalized)
-    if normalized == "facial_scoring" and api_key_env_var != "FACIAL_SCORING_API_KEY":
+    if descriptor.module_id == "facial_scoring" and api_key_env_var != "FACIAL_SCORING_API_KEY":
         raise ProviderConfigurationError(
             "Facial scoring requires the FACIAL_SCORING_API_KEY environment variable",
             provider=normalized,
@@ -44,41 +39,15 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
     timeout_seconds = _provider_timeout_seconds(provider)
     max_retries = _provider_max_retries(provider)
 
-    if normalized == "openai":
-        kwargs: dict[str, object] = {
-            "api_key": api_key,
-            "timeout_seconds": timeout_seconds,
-            "max_retries": max_retries or 0,
-        }
-        if base_url:
-            kwargs["base_url"] = base_url
-        return OpenAIProviderAdapter(settings, **kwargs)
-    if normalized == "openrouter":
-        kwargs = {
-            "api_key": api_key,
-            "timeout_seconds": timeout_seconds,
-            "max_retries": max_retries or 0,
-        }
-        if base_url:
-            kwargs["base_url"] = base_url
-        return OpenRouterProviderAdapter(settings, **kwargs)
-    if provider_kind == "module":
+    if descriptor.module_id == "facial_scoring":
         if not base_url:
             raise ProviderConfigurationError(
                 "Native module provider requires a base URL",
-                provider=normalized,
-                error_code="invalid_provider_configuration",
-            )
-        _validate_module_base_url(base_url)
-        return get_module_adapter(
-            normalized,
-            settings,
-            base_url=base_url,
-            api_key=api_key,
-            timeout_seconds=timeout_seconds or 300,
-            max_retries=max_retries or 0,
+            provider=normalized,
+            error_code="invalid_provider_configuration",
         )
-    if provider_kind == "openai_compatible":
+        _validate_module_base_url(base_url)
+    elif descriptor.module_id == "openai-compatible":
         if not base_url:
             raise ProviderConfigurationError(
                 "Generic OpenAI-compatible provider requires a base URL",
@@ -86,14 +55,20 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
                 error_code="invalid_provider_configuration",
             )
         _validate_generic_base_url(base_url)
-        kwargs = {
-            "api_key": api_key,
-            "timeout_seconds": timeout_seconds,
-            "max_retries": max_retries or 0,
-        }
-        kwargs["base_url"] = base_url
-        return OpenAICompatibleProviderAdapter(settings, provider_name=normalized, **kwargs)
-    raise ProviderConfigurationError("Unsupported provider configured for route", provider=normalized)
+    elif base_url:
+        # The built-in provider descriptors accept an operator-selected base
+        # URL; their adapters retain the existing URL validation/behavior.
+        pass
+
+    return build_server_adapter(
+        descriptor,
+        settings,
+        provider_name=normalized,
+        api_key=api_key,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries or 0,
+    )
 
 
 def _provider_name(provider: object) -> str:

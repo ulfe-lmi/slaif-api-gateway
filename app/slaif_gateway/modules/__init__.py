@@ -1,16 +1,17 @@
-"""Statically registered downstream module adapter contracts."""
+"""Compatibility imports for the static client/server module architecture."""
+
+from types import MappingProxyType
 
 from slaif_gateway.modules.base import (
-    MODULE_ADAPTER_REGISTRY,
     ModuleAdapter,
     ModuleAdapterFactory,
     get_module_adapter,
 )
 from slaif_gateway.modules.facial_scoring import FacialScoringAdapter
 
-# Native modules are explicit reviewed source-code registrations.  Configuration
-# selects this stable identifier but never an import path or user-supplied class.
-MODULE_ADAPTER_REGISTRY["facial_scoring"] = FacialScoringAdapter
+# Legacy callers receive an immutable compatibility view. Production dispatch
+# is owned by modules.servers.registry.
+MODULE_ADAPTER_REGISTRY = MappingProxyType({"facial_scoring": FacialScoringAdapter})
 
 __all__ = [
     "MODULE_ADAPTER_REGISTRY",

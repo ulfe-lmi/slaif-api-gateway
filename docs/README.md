@@ -72,6 +72,7 @@ domain. Merged code remains implementation truth.
 - [OpenAI compatibility](openai-compatibility.md)
 - [Responses compatibility](responses-compatibility.md)
 - [Provider forwarding contract](provider-forwarding-contract.md)
+- [Static client/server module architecture](module-architecture.md)
 - [Codex compatibility](codex-compatibility.md)
 - [Real-provider qualification boundary](real-provider-qualification.md)
 - [Provider catalog proposals](provider-catalog-proposals.md)

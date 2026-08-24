@@ -6,11 +6,8 @@ import pytest
 
 from slaif_gateway.api import admin as admin_module
 from slaif_gateway.config import Settings
-from slaif_gateway.modules import MODULE_ADAPTER_REGISTRY
-from slaif_gateway.modules.base import ModuleAdapter
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
-from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
@@ -18,20 +15,6 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     default_chat_completion_capabilities,
     enforce_chat_completion_route_capabilities,
 )
-
-
-class _FakeModuleAdapter(ModuleAdapter):
-    @property
-    def module_id(self) -> str:
-        return "test-module"
-
-    async def forward_chat_completion(self, request: ProviderRequest) -> ProviderResponse:
-        return ProviderResponse(
-            provider=request.provider,
-            upstream_model=request.upstream_model,
-            status_code=200,
-            json_body={"id": "module-response"},
-        )
 
 
 def _module_route() -> RouteResolutionResult:
@@ -57,20 +40,6 @@ def test_unregistered_module_fails_closed_without_dynamic_import(monkeypatch) ->
 
     assert exc_info.value.error_code == "unsupported_module"
     assert "module-secret" not in str(exc_info.value)
-
-
-def test_static_module_registry_uses_configured_environment_secret(monkeypatch) -> None:
-    monkeypatch.setenv("MODULE_UPSTREAM_KEY", "module-secret")
-    MODULE_ADAPTER_REGISTRY["test-module"] = _FakeModuleAdapter
-    try:
-        adapter = get_provider_adapter(_module_route(), Settings())
-    finally:
-        MODULE_ADAPTER_REGISTRY.pop("test-module", None)
-
-    assert isinstance(adapter, _FakeModuleAdapter)
-    assert adapter.provider_name == "test-module"
-    assert adapter._api_key == "module-secret"
-    assert adapter._base_url == "https://module.example/score"
 
 
 def test_admin_validation_accepts_module_url_without_hardcoded_v1_path() -> None:

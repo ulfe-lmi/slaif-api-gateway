@@ -54,6 +54,7 @@ from slaif_gateway.metrics import (
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
+from slaif_gateway.modules.clients.registry import normalize_default_client_request
 from slaif_gateway.providers.streaming import (
     CodexReplayStreamCandidate,
     RESPONSES_PROVIDER_FAILURE_EVENT_TYPES,
@@ -794,7 +795,10 @@ async def handle_response_create(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
+    body = normalize_default_client_request(
+        "/v1/responses",
+        payload.model_dump(mode="python", exclude_none=True, exclude_unset=True),
+    ).body
     for field in (
         "client_metadata",
         "include",
