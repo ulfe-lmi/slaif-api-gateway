@@ -180,8 +180,8 @@ services:
       - openrouter_api_key
       - openai_upstream_api_key
       - redis_url
-    command: ["celery", "-A", "slaif_gateway.workers.celery_app:celery_app", "worker", "--loglevel=INFO"]
-    networks: [internal]
+    command: ["celery", "-A", "slaif_gateway.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--max-tasks-per-child=20"]
+    networks: [internal, egress]
     deploy:
       resources:
         limits:

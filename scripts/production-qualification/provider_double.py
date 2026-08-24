@@ -38,6 +38,8 @@ class State:
         self.lock = threading.Lock()
         self.mode = "normal"
         self.delay_seconds = 0.0
+        self.stream_pause_seconds = 0.0
+        self.completion = "qualification-output"
         self.canaries = set(CANARIES)
         self.requests = 0
         self.auth_ok = 0
@@ -60,9 +62,18 @@ class State:
         delay = float(payload.get("delay_seconds", 0.0))
         if delay < 0 or delay > 600:
             raise ValueError("delay_seconds out of bounds")
+        pause = float(payload.get("stream_pause_seconds", 0.0))
+        if pause < 0 or pause > 600:
+            raise ValueError("stream_pause_seconds out of bounds")
+        completion = payload.get("completion")
+        if completion is not None and (not isinstance(completion, str) or len(completion) > 512):
+            raise ValueError("completion must be a short string")
         with self.lock:
             self.mode = mode
             self.delay_seconds = delay
+            self.stream_pause_seconds = pause
+            if isinstance(completion, str) and completion:
+                self.completion = completion
             extra_canaries = payload.get("canaries", [])
             if isinstance(extra_canaries, list):
                 self.canaries.update(value for value in extra_canaries if isinstance(value, str) and value)
@@ -88,6 +99,7 @@ class State:
                 "auth_bad": self.auth_bad,
                 "canary_seen": self.canary_seen,
                 "paths": dict(self.paths),
+                "stream_pause_seconds": self.stream_pause_seconds,
             }
 
 
@@ -98,7 +110,7 @@ def json_bytes(payload: object) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
-def chat_response(model: str) -> dict[str, object]:
+def chat_response(model: str, completion: str) -> dict[str, object]:
     return {
         "id": "chatcmpl-qualification",
         "object": "chat.completion",
@@ -107,7 +119,7 @@ def chat_response(model: str) -> dict[str, object]:
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": "qualification-output"},
+                "message": {"role": "assistant", "content": completion},
                 "finish_reason": "stop",
             }
         ],
@@ -115,7 +127,7 @@ def chat_response(model: str) -> dict[str, object]:
     }
 
 
-def chat_chunks(model: str) -> list[dict[str, object]]:
+def chat_chunks(model: str, completion: str) -> list[dict[str, object]]:
     return [
         {
             "id": "chatcmpl-qualification",
@@ -123,7 +135,7 @@ def chat_chunks(model: str) -> list[dict[str, object]]:
             "created": 1,
             "model": model,
             "choices": [
-                {"index": 0, "delta": {"role": "assistant", "content": "qualification-output"}, "finish_reason": None}
+                {"index": 0, "delta": {"role": "assistant", "content": completion}, "finish_reason": None}
             ],
         },
         {
@@ -137,7 +149,7 @@ def chat_chunks(model: str) -> list[dict[str, object]]:
     ]
 
 
-def responses_response(model: str) -> dict[str, object]:
+def responses_response(model: str, completion: str) -> dict[str, object]:
     return {
         "id": "resp-qualification",
         "object": "response",
@@ -150,7 +162,7 @@ def responses_response(model: str) -> dict[str, object]:
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "qualification-output", "annotations": []}],
+                "content": [{"type": "output_text", "text": completion, "annotations": []}],
             }
         ],
         "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
@@ -158,8 +170,8 @@ def responses_response(model: str) -> dict[str, object]:
     }
 
 
-def responses_events(model: str) -> list[dict[str, object]]:
-    completed = responses_response(model)
+def responses_events(model: str, completion: str) -> list[dict[str, object]]:
+    completed = responses_response(model, completion)
     return [
         {
             "type": "response.created",
@@ -230,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
         with STATE.lock:
             mode = STATE.mode
             delay = STATE.delay_seconds
+            completion = STATE.completion
         if mode == "timeout":
             time.sleep(delay or 301.0)
         elif delay:
@@ -246,22 +259,22 @@ class Handler(BaseHTTPRequestHandler):
         model = model if isinstance(model, str) else MODEL
         streaming = bool(request.get("stream")) if isinstance(request, dict) else False
         if mode == "malformed_json" and not streaming:
-            self._send(200, "{qualification-malformed-json")
+            self._send(200, "{" + (os.environ.get("MALFORMED_CANARY") or "qualification-malformed-json"))
             return
         if mode in {"malformed_sse", "incomplete_sse", "client_abort"} or streaming:
-            self._send_sse(self.path, model, mode)
+            self._send_sse(self.path, model, mode, completion)
             return
-        payload = responses_response(model) if self.path.endswith("/responses") else chat_response(model)
+        payload = responses_response(model, completion) if self.path.endswith("/responses") else chat_response(model, completion)
         self._send(200, payload)
 
-    def _send_sse(self, path: str, model: str, mode: str) -> None:
+    def _send_sse(self, path: str, model: str, mode: str, completion: str) -> None:
         events: list[object]
         if mode == "malformed_sse":
-            events = ["data: {qualification-malformed-sse\n\n"]
+            events = ["data: {" + (os.environ.get("MALFORMED_CANARY") or "qualification-malformed-sse") + "\n\n"]
         elif path.endswith("/responses"):
-            events = [f"data: {json.dumps(event, separators=(',', ':'))}\n\n" for event in responses_events(model)]
+            events = [f"data: {json.dumps(event, separators=(',', ':'))}\n\n" for event in responses_events(model, completion)]
         else:
-            events = [f"data: {json.dumps(event, separators=(',', ':'))}\n\n" for event in chat_chunks(model)]
+            events = [f"data: {json.dumps(event, separators=(',', ':'))}\n\n" for event in chat_chunks(model, completion)]
         if mode == "incomplete_sse":
             events = events[:1]
         if mode == "client_abort":
@@ -283,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if mode == "client_abort":
                 time.sleep(0.2)
+            elif STATE.stream_pause_seconds and event is events[0]:
+                time.sleep(STATE.stream_pause_seconds)
             else:
                 time.sleep(0.03)
         if mode not in {"incomplete_sse", "client_abort", "malformed_sse"}:

@@ -31,6 +31,32 @@ services:
       provider-double:
         condition: service_healthy
 
+  backup-adapter:
+    image: postgres:16-alpine
+    profiles: [qualification]
+    volumes:
+      - ./scripts/backup.sh:/qualification/backup.sh:ro
+      - ./scripts/restore.sh:/qualification/restore.sh:ro
+      - ./scripts/verify_restore.py:/qualification/verify_restore.py:ro
+      - ${QUALIFICATION_RUNTIME_DIR:-./.qualification-runtime}:/qualification-runtime
+      - ${SLAIF_POSTGRES_PASSWORD_FILE:-./.qualification-runtime/postgres_password}:/run/secrets/postgres_password:ro
+      - ${QUALIFICATION_BACKUP_DATABASE_URL_FILE:-./.qualification-runtime/backup_database_url}:/run/secrets/backup_database_url:ro
+      - ${QUALIFICATION_RESTORE_DATABASE_URL_FILE:-./.qualification-runtime/restore_database_url}:/run/secrets/restore_database_url:ro
+      - ${QUALIFICATION_RESTORE_ASYNC_DATABASE_URL_FILE:-./.qualification-runtime/restore_async_database_url}:/run/secrets/restore_async_database_url:ro
+    networks: [internal]
+
+  verify-adapter:
+    build:
+      context: .
+      target: runtime
+    profiles: [qualification]
+    user: root
+    entrypoint: []
+    volumes:
+      - ./scripts/verify_restore.py:/qualification/verify_restore.py:ro
+      - ${QUALIFICATION_RESTORE_ASYNC_DATABASE_URL_FILE:-./.qualification-runtime/restore_async_database_url}:/run/secrets/restore_async_database_url:ro
+    networks: [internal]
+
 networks:
   egress:
     name: ${QUALIFICATION_PROJECT_NAME:-slaif-qualification}_egress
