@@ -83,6 +83,120 @@ class QualificationError(RuntimeError):
     pass
 
 
+def active_stream_is_valid(
+    *,
+    status: int,
+    request_id_present: bool,
+    thread_alive: bool,
+    provider_forward_delta: int,
+    redis_slots: int,
+    reservation: dict[str, Any] | None,
+) -> bool:
+    """Return whether all independently observed first-stream facts agree."""
+    return (
+        status == 200
+        and request_id_present
+        and thread_alive
+        and provider_forward_delta == 1
+        and redis_slots == 1
+        and reservation is not None
+        and reservation.get("endpoint") == "/v1/chat/completions"
+        and reservation.get("reservation_provider") == "qualification-double"
+        and reservation.get("reservation_resolved_model") == "qualification-model"
+        and reservation.get("reservation_streaming") == "true"
+        and reservation.get("reservation_status") == "pending"
+        and reservation.get("accounting_status") == "pending"
+    )
+
+
+def recovery_503_is_safe(
+    *,
+    status: int,
+    error_code: str,
+    thread_alive: bool,
+    provider_forward_delta: int,
+    redis_slots: int,
+    accounting_unchanged: bool,
+) -> bool:
+    """Return whether a single fail-closed Redis recovery retry is justified."""
+    return (
+        status == 503
+        and error_code == "redis_rate_limit_unavailable"
+        and not thread_alive
+        and provider_forward_delta == 0
+        and redis_slots == 0
+        and accounting_unchanged
+    )
+
+
+def overlap_evidence_is_valid(
+    *,
+    status: int,
+    error_code: str,
+    provider_forward_delta: int,
+    accounting_unchanged: bool,
+    original_reservation_pending: bool,
+    redis_slots: int,
+    first_thread_alive: bool,
+) -> bool:
+    """Return whether the overlap was denied by the concurrency fence."""
+    return (
+        status == 429
+        and error_code == "concurrency_rate_limit_exceeded"
+        and provider_forward_delta == 0
+        and accounting_unchanged
+        and original_reservation_pending
+        and redis_slots == 1
+        and first_thread_alive
+    )
+
+
+def bounded_concurrency_evidence(
+    *,
+    recovery_503_count: int,
+    overlap_status: int,
+    overlap_error_code: str,
+    overlap_provider_forward_delta: int,
+    overlap_accounting_unchanged: bool,
+    original_reservation_pending: bool,
+    original_thread_alive: bool,
+    active_slot: bool,
+    released_slot: bool,
+    following_status: int,
+) -> dict[str, Any]:
+    """Build only bounded, non-content concurrency evidence for final JSON."""
+    return {
+        "recovery_503_count": recovery_503_count,
+        "active_stream": active_slot and original_reservation_pending,
+        "active_slot": active_slot,
+        "overlap_status": overlap_status,
+        "overlap_error_code": overlap_error_code,
+        "overlap_provider_forward_delta": overlap_provider_forward_delta,
+        "overlap_accounting_unchanged": overlap_accounting_unchanged,
+        "original_reservation_pending": original_reservation_pending,
+        "original_thread_alive": original_thread_alive,
+        "released_slot": released_slot,
+        "following_status": following_status,
+    }
+
+
+def openai_error_code(payload: dict[str, Any] | str) -> str:
+    """Extract only the bounded OpenAI error code from a decoded response."""
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return ""
+        payload = decoded
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return ""
+    code = error.get("code")
+    return code if isinstance(code, str) else ""
+
+
 class Runner:
     def __init__(self, *, keep: bool = False) -> None:
         self.keep = keep
@@ -126,6 +240,7 @@ class Runner:
         self.metrics_body = ""
         self.dashboard_evidence: dict[str, Any] = {}
         self.metrics_evidence: dict[str, Any] = {}
+        self.concurrency_evidence: dict[str, Any] = {}
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
@@ -539,18 +654,44 @@ class Runner:
             time.sleep(1)
         raise QualificationError(f"request {request_id} did not reach terminal accounting: {last}")
 
-    def accounting_snapshot(self) -> tuple[str, ...]:
+    def accounting_snapshot(self, *, key_id: str | None = None) -> tuple[str, ...]:
+        selected_key_id = key_id or self.key_id
         rows = self.sql(
             "SELECT (SELECT COUNT(*) FROM quota_reservations), "
             "(SELECT COUNT(*) FROM quota_reservations WHERE status = 'pending'), "
             "(SELECT COUNT(*) FROM usage_ledger), "
             "(SELECT COUNT(*) FROM usage_ledger WHERE accounting_status = 'pending'), "
             "(SELECT COALESCE(tokens_reserved_total,0)::text || ':' || COALESCE(requests_reserved_total,0)::text || ':' || COALESCE(cost_reserved_eur,0)::text "
-            "FROM gateway_keys WHERE id = '" + self.key_id.replace("'", "''") + "')"
+            "FROM gateway_keys WHERE id = '" + selected_key_id.replace("'", "''") + "')"
         )
         if not rows or len(rows[0]) != 5:
             raise QualificationError("could not capture PostgreSQL accounting snapshot")
         return tuple(rows[0])
+
+    def concurrency_slot_count(self) -> int:
+        """Read only the active Redis sorted-set cardinality for the test key."""
+        if not re.fullmatch(r"[0-9a-f-]{36}", self.concurrency_key_id):
+            raise QualificationError("concurrency key identifier was not a UUID")
+        result = self.compose_command(
+            [
+                "exec",
+                "-T",
+                "redis",
+                "sh",
+                "-c",
+                "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" "
+                f"ZCARD 'rate:{self.concurrency_key_id}:concurrency'",
+            ],
+            name="concurrency-slot-count",
+        )
+        values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        try:
+            count = int(values[-1])
+        except (IndexError, ValueError) as exc:
+            raise QualificationError("Redis concurrency slot probe was not numeric") from exc
+        if count < 0:
+            raise QualificationError("Redis concurrency slot probe was negative")
+        return count
 
     def request_ids_for(self, path: str) -> list[str]:
         return [str(row["request_id"]) for row in self.requests if row["path"] == path and row.get("request_id")]
@@ -765,58 +906,151 @@ class Runner:
 
     def exercise_concurrency(self) -> None:
         self.provider_control({"mode": "normal", "stream_pause_seconds": 8, "completion": self.canaries[3]})
-        capture: dict[str, Any] = {}
-        result: dict[str, Any] = {}
+        recovery_503_count = 0
+        active_context: tuple[threading.Thread, dict[str, Any], dict[str, Any], dict[str, Any]] | None = None
+        for attempt in range(2):
+            baseline_provider_requests = self.provider_state()["requests"]
+            baseline_accounting = self.accounting_snapshot(key_id=self.concurrency_key_id)
+            baseline_slots = self.concurrency_slot_count()
+            if baseline_slots != 0:
+                raise QualificationError("concurrency key had an active Redis slot before the attempt")
+            capture: dict[str, Any] = {}
+            result: dict[str, Any] = {}
 
-        def run_first() -> None:
-            try:
-                result["response"] = self.stream_api(
-                    "/v1/chat/completions",
-                    {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "stream": True, "max_tokens": 16},
-                    key=self.concurrency_key,
-                    capture=capture,
-                    timeout=30,
-                )
-            except Exception as exc:  # noqa: BLE001
-                result["error"] = str(exc)
+            def run_first() -> None:
+                try:
+                    result["response"] = self.stream_api(
+                        "/v1/chat/completions",
+                        {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "stream": True, "max_tokens": 16},
+                        key=self.concurrency_key,
+                        capture=capture,
+                        timeout=30,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result["error"] = str(exc)
 
-        thread = threading.Thread(target=run_first, name="qualification-slow-stream")
-        thread.start()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and "request_id" not in capture:
-            time.sleep(0.1)
-        if not capture.get("request_id"):
-            thread.join(timeout=1)
-            raise QualificationError(f"slow stream did not expose a gateway request ID: {capture} {result}")
-        status, _, _ = self.api(
+            thread = threading.Thread(target=run_first, name="qualification-slow-stream")
+            thread.start()
+            deadline = time.monotonic() + 15
+            candidate: dict[str, Any] | None = None
+            while time.monotonic() < deadline:
+                request_id = capture.get("request_id")
+                if request_id:
+                    candidate = self.request_evidence(str(request_id))
+                    if active_stream_is_valid(
+                        status=int(capture.get("status") or 0),
+                        request_id_present=True,
+                        thread_alive=thread.is_alive(),
+                        provider_forward_delta=self.provider_state()["requests"] - baseline_provider_requests,
+                        redis_slots=self.concurrency_slot_count(),
+                        reservation=candidate,
+                    ):
+                        active_context = (thread, capture, result, candidate)
+                        break
+                if not thread.is_alive():
+                    break
+                time.sleep(0.25)
+            if active_context is not None:
+                break
+
+            thread.join(timeout=2)
+            response = result.get("response")
+            response_status = int(response[0]) if isinstance(response, tuple) and response else int(capture.get("status") or 0)
+            response_body = response[1] if isinstance(response, tuple) and len(response) > 1 else ""
+            recovery_safe = recovery_503_is_safe(
+                status=response_status,
+                error_code=openai_error_code(response_body),
+                thread_alive=thread.is_alive(),
+                provider_forward_delta=self.provider_state()["requests"] - baseline_provider_requests,
+                redis_slots=self.concurrency_slot_count(),
+                accounting_unchanged=self.accounting_snapshot(key_id=self.concurrency_key_id) == baseline_accounting,
+            )
+            if attempt == 0 and recovery_safe:
+                recovery_503_count += 1
+                continue
+            self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
+            raise QualificationError(
+                "could not establish active first concurrency stream: "
+                f"status={response_status} thread_alive={thread.is_alive()} "
+                f"provider_delta={self.provider_state()['requests'] - baseline_provider_requests} "
+                f"redis_slots={self.concurrency_slot_count()} reservation={candidate is not None}"
+            )
+
+        if active_context is None:
+            raise QualificationError("bounded concurrency attempts did not establish an active first stream")
+
+        thread, capture, result, _ = active_context
+        request_id = str(capture["request_id"])
+        overlap_provider_before = self.provider_state()["requests"]
+        overlap_accounting_before = self.accounting_snapshot(key_id=self.concurrency_key_id)
+        overlap_status, overlap_body, _ = self.api(
             "/v1/chat/completions",
             {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8},
             key=self.concurrency_key,
-            expect={429, 503},
+            expect={200, 429, 503},
             timeout=20,
         )
-        if status not in {429, 503}:
-            raise QualificationError("overlapping request was not rejected by Redis concurrency")
-        thread.join(timeout=20)
-        if thread.is_alive() or "error" in result:
-            raise QualificationError(f"slow stream did not release concurrency slot: {result}")
-        evidence = self.wait_request_terminal(str(capture["request_id"]))
-        if evidence["accounting_status"] not in {"finalized", "estimated"} or evidence["reservation_status"] != "finalized":
-            raise QualificationError(f"slow stream accounting was not terminal: {evidence}")
-        self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
-        status = 503
-        for _ in range(20):
-            status, _, _ = self.api(
-                "/v1/chat/completions",
-                {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8},
-                key=self.concurrency_key,
-                expect={200, 429, 503},
+        overlap_provider_delta = self.provider_state()["requests"] - overlap_provider_before
+        overlap_accounting_unchanged = self.accounting_snapshot(key_id=self.concurrency_key_id) == overlap_accounting_before
+        original_evidence = self.request_evidence(request_id)
+        overlap_slots = self.concurrency_slot_count()
+        overlap_valid = overlap_evidence_is_valid(
+            status=overlap_status,
+            error_code=openai_error_code(overlap_body),
+            provider_forward_delta=overlap_provider_delta,
+            accounting_unchanged=overlap_accounting_unchanged,
+            original_reservation_pending=bool(
+                original_evidence
+                and original_evidence.get("reservation_status") == "pending"
+                and original_evidence.get("accounting_status") == "pending"
+            ),
+            redis_slots=overlap_slots,
+            first_thread_alive=thread.is_alive(),
+        )
+        if not overlap_valid:
+            self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
+            raise QualificationError(
+                "overlap concurrency evidence invalid: "
+                f"status={overlap_status} code={openai_error_code(overlap_body)} "
+                f"provider_delta={overlap_provider_delta} accounting_unchanged={overlap_accounting_unchanged} "
+                f"reservation_pending={bool(original_evidence and original_evidence.get('reservation_status') == 'pending')} "
+                f"redis_slots={overlap_slots} thread_alive={thread.is_alive()}"
             )
-            if status == 200:
+
+        thread.join(timeout=20)
+        first_response = result.get("response")
+        if thread.is_alive() or "error" in result or not isinstance(first_response, tuple) or first_response[0] != 200:
+            raise QualificationError("active first concurrency stream did not terminate with HTTP 200")
+        evidence = self.wait_request_terminal(request_id)
+        if evidence["accounting_status"] != "finalized" or evidence["reservation_status"] != "finalized":
+            raise QualificationError("active first concurrency stream did not finalize accounting")
+        self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
+        released_slot = False
+        for _ in range(30):
+            if self.concurrency_slot_count() == 0:
+                released_slot = True
                 break
-            time.sleep(1)
-        if status != 200:
-            raise QualificationError("released Redis concurrency slot did not admit a following request")
+            time.sleep(0.5)
+        if not released_slot:
+            raise QualificationError("active first concurrency stream did not release its Redis slot")
+        following_status, _, _ = self.api(
+            "/v1/chat/completions",
+            {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8},
+            key=self.concurrency_key,
+            expect={200},
+        )
+        self.concurrency_evidence = bounded_concurrency_evidence(
+            recovery_503_count=recovery_503_count,
+            overlap_status=overlap_status,
+            overlap_error_code=openai_error_code(overlap_body),
+            overlap_provider_forward_delta=overlap_provider_delta,
+            overlap_accounting_unchanged=overlap_accounting_unchanged,
+            original_reservation_pending=True,
+            original_thread_alive=True,
+            active_slot=True,
+            released_slot=released_slot,
+            following_status=following_status,
+        )
 
     def exercise_api_termination_reconciliation(self) -> None:
         self.provider_control({"mode": "normal", "stream_pause_seconds": 20, "completion": self.canaries[3]})
@@ -1335,10 +1569,10 @@ def main() -> int:
             failure = f"{failure}; cleanup: {cleanup_error}" if failure else f"cleanup: {cleanup_error}"
     if failure:
         print(f"RESULT=FAIL\nERROR={failure}", file=sys.stderr)
-        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence}, sort_keys=True))
+        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence}, sort_keys=True))
         return 1
     print("RESULT=OK")
-    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence}, sort_keys=True))
+    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence}, sort_keys=True))
     return 0
 
 

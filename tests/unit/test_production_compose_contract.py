@@ -102,6 +102,104 @@ unrelated_metric 500
     )["gateway_tokens_total"] == 1
 
 
+def test_concurrency_validation_requires_correlated_active_stream_facts() -> None:
+    reservation = {
+        "endpoint": "/v1/chat/completions",
+        "reservation_provider": "qualification-double",
+        "reservation_resolved_model": "qualification-model",
+        "reservation_streaming": "true",
+        "reservation_status": "pending",
+        "accounting_status": "pending",
+    }
+    valid = {
+        "status": 200,
+        "request_id_present": True,
+        "thread_alive": True,
+        "provider_forward_delta": 1,
+        "redis_slots": 1,
+        "reservation": reservation,
+    }
+    assert _RUN_MODULE.active_stream_is_valid(**valid) is True
+    for field, value in (
+        ("status", 503),
+        ("request_id_present", False),
+        ("thread_alive", False),
+        ("provider_forward_delta", 0),
+        ("redis_slots", 0),
+        ("reservation", None),
+    ):
+        candidate = {**valid, field: value}
+        assert _RUN_MODULE.active_stream_is_valid(**candidate) is False
+
+
+def test_concurrency_validation_bounds_recovery_overlap_and_final_evidence() -> None:
+    assert _RUN_MODULE.recovery_503_is_safe(
+        status=503,
+        error_code="redis_rate_limit_unavailable",
+        thread_alive=False,
+        provider_forward_delta=0,
+        redis_slots=0,
+        accounting_unchanged=True,
+    )
+    for field, value in (
+        ("status", 200),
+        ("error_code", "other"),
+        ("thread_alive", True),
+        ("provider_forward_delta", 1),
+        ("redis_slots", 1),
+        ("accounting_unchanged", False),
+    ):
+        values = {
+            "status": 503,
+            "error_code": "redis_rate_limit_unavailable",
+            "thread_alive": False,
+            "provider_forward_delta": 0,
+            "redis_slots": 0,
+            "accounting_unchanged": True,
+        }
+        values[field] = value
+        assert _RUN_MODULE.recovery_503_is_safe(**values) is False
+
+    valid_overlap = {
+        "status": 429,
+        "error_code": "concurrency_rate_limit_exceeded",
+        "provider_forward_delta": 0,
+        "accounting_unchanged": True,
+        "original_reservation_pending": True,
+        "redis_slots": 1,
+        "first_thread_alive": True,
+    }
+    assert _RUN_MODULE.overlap_evidence_is_valid(**valid_overlap) is True
+    for field, value in (
+        ("status", 200),
+        ("error_code", "redis_rate_limit_unavailable"),
+        ("provider_forward_delta", 1),
+        ("accounting_unchanged", False),
+        ("original_reservation_pending", False),
+        ("redis_slots", 0),
+        ("first_thread_alive", False),
+    ):
+        candidate = {**valid_overlap, field: value}
+        assert _RUN_MODULE.overlap_evidence_is_valid(**candidate) is False
+
+    evidence = _RUN_MODULE.bounded_concurrency_evidence(
+        recovery_503_count=0,
+        overlap_status=429,
+        overlap_error_code="concurrency_rate_limit_exceeded",
+        overlap_provider_forward_delta=0,
+        overlap_accounting_unchanged=True,
+        original_reservation_pending=True,
+        original_thread_alive=True,
+        active_slot=True,
+        released_slot=True,
+        following_status=200,
+    )
+    serialized = json.dumps(evidence)
+    assert "body" not in serialized
+    assert "secret" not in serialized
+    assert "request_id" not in evidence
+
+
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:
     env = os.environ.copy()
     for name in (

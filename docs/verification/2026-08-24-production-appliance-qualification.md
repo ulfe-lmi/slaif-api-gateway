@@ -113,3 +113,17 @@ Objective 151-e preserves the accepted 151-d behavior and closes only these
 evidence-correlation defects. It remains disposable qualification evidence,
 not a production certification, security certification, compliance claim, or
 provider-invoice qualification.
+
+## 151-f evidence review
+
+Objective 151-e closed the positive-metrics and privacy-body implementation
+gaps, but its first final-matrix attempt exposed that the Redis-concurrency
+phase accepted a request ID without proving a live HTTP-200 stream, provider
+forward, Redis slot, or pending PostgreSQL reservation. The run was then
+rerun without repairing that synchronization defect. Its report also
+truncated the project identifier used for the independent cleanup claim.
+
+Objective 151-f makes the concurrency overlap evidence deterministic and
+mechanically correlates the exact final project token through the report and
+cleanup audit. It remains disposable qualification evidence, not a production
+certification, release, provider-invoice qualification, or SLA claim.
