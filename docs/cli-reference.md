@@ -1,7 +1,7 @@
 # CLI reference
 
-> **Status:** Current command index  
-> **Audience:** Gateway operators and maintainers  
+> **Status:** Current command index
+> **Audience:** Gateway operators and maintainers
 > **Authority:** Typer command registration in `app/slaif_gateway/cli/`
 
 The `slaif-gateway` CLI manages local Gateway metadata and operator workflows.

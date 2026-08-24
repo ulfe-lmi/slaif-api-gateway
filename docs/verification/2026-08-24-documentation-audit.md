@@ -1,8 +1,8 @@
 # 2026-08-24 documentation architecture and truth audit
 
-> **Status:** Baseline audit for the documentation-modernization PR  
-> **Code baseline:** `8f2813bf745b90221da33a7cfaf40726c5b1b480` (`origin/main`)  
-> **Purpose:** Record discrepancies before prose and navigation are changed.  
+> **Status:** Baseline audit for the documentation-modernization PR
+> **Code baseline:** `8f2813bf745b90221da33a7cfaf40726c5b1b480` (`origin/main`)
+> **Purpose:** Record discrepancies before prose and navigation are changed.
 > **Evidence boundary:** Repository documentation and merged code only; unmerged PRs are excluded.
 
 ## Method

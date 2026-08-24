@@ -1,7 +1,7 @@
 # SLAIF API Gateway documentation
 
-> **Status:** Current documentation home  
-> **Audience:** Evaluators, operators, API integrators, security reviewers, and maintainers  
+> **Status:** Current documentation home
+> **Audience:** Evaluators, operators, API integrators, security reviewers, and maintainers
 > **Product boundary:** RC-beta, one organization per deployment, not production-certified
 
 This page is the entry point for current SLAIF API Gateway documentation.
