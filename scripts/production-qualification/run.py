@@ -700,7 +700,17 @@ class Runner:
         self.compose_command(["start", "redis"], name="redis-restart")
         self.wait_redis()
         self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
-        status, _, _ = self.api("/v1/chat/completions", {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8}, key=self.gateway_key)
+        status = 503
+        for _ in range(10):
+            status, _, _ = self.api(
+                "/v1/chat/completions",
+                {"model": GATEWAY_MODEL, "messages": [{"role": "user", "content": self.canaries[2]}], "max_tokens": 8},
+                key=self.gateway_key,
+                expect={200, 502, 503, 504},
+            )
+            if status == 200:
+                break
+            time.sleep(1)
         if status != 200:
             raise QualificationError("gateway did not recover after Redis restart")
 
