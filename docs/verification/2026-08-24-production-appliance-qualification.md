@@ -2,7 +2,7 @@
 
 Date: 2026-08-24 (Europe/Ljubljana)
 
-Status: **COMPLETE — disposable qualification passed; no production-certification claim**
+Status: **HISTORICAL — the apparent 151-c pass was rejected by 151-d boundary review**
 
 This document records the fresh 151-c no-keep qualification after the restore
 verifier and interrupted-accounting repairs. It is qualification evidence for
@@ -75,3 +75,26 @@ runtime=true
 
 No real OpenAI/OpenRouter request, real email delivery, production/staging
 database, or production system was used.
+
+## 151-d boundary review
+
+The 151-c result above remains immutable historical evidence, but it is not
+accepted as production-appliance closure. Its qualification boundaries were
+too weak in four material ways:
+
+- the dashboard phase disabled redirect handling and accepted the intermediate
+  `303`, so it did not prove that a normal HTTPS client could follow login to
+  the exact `/admin` landing page through Nginx;
+- the privacy phase treated an unallowlisted `403` response body as metrics
+  evidence instead of reading the real Prometheus exposition through an
+  explicitly authorized in-container loopback path;
+- the restore verifier accepted deceptive database names containing a safe
+  substring, checked table existence without fixing the `public` schema, and
+  did not execute a read-only query against every required table;
+- the 151-c test/fixture scope exceeded its exact change boundary and lacked a
+  focused upgrade/downgrade contract for migration `0024`.
+
+Objective 151-d repairs these boundaries and records the fresh no-keep result
+in its immutable report. It does not convert this historical 151-c record into
+a production certification, security certification, compliance claim, or
+provider-invoice qualification.

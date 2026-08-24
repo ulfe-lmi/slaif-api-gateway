@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -17,6 +18,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 TARGET_REVISION_0004 = "0004_email_secrets_and_background_jobs"
 TARGET_HEAD_0005 = "0005_fix_gateway_key_prefix_default"
 CURRENT_HEAD = "0024_quota_reservation_accounting_facts"
+SAFE_TEST_DATABASE_NAME = re.compile(
+    r"^(?:restore_test|restore_local_[a-z0-9]+|test_slaif_gateway|slaif_gateway_test|slaif_test)$"
+)
 
 
 
@@ -27,12 +31,10 @@ def _safe_test_database_url_from_env() -> str:
 
     parsed = urlparse(database_url)
     db_name = (parsed.path or "").lstrip("/").lower()
-    if parsed.scheme not in {"postgresql+asyncpg", "postgresql", "postgres"} or not any(
-        marker in db_name for marker in ("test", "dev", "local")
-    ):
+    if parsed.scheme not in {"postgresql+asyncpg", "postgresql"} or not SAFE_TEST_DATABASE_NAME.fullmatch(db_name):
         pytest.skip(
-            "TEST_DATABASE_URL does not look like a safe PostgreSQL test URL "
-            "(must use postgres scheme and include test/dev/local in DB name)."
+            "TEST_DATABASE_URL is not an explicitly disposable PostgreSQL URL "
+            "(use restore_test, restore_local_<suffix>, or a documented test name)."
         )
 
     return database_url

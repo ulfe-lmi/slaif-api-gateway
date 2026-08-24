@@ -60,6 +60,11 @@ API is healthy.
 Only Nginx ports 80/443 are exposed. PostgreSQL, Redis, migrations, and the API
 remain on the internal network; the API itself is loopback-bound.
 
+The production Nginx configuration proxies the exact `/admin` landing path and
+the `/admin/` subtree without canonical-slash redirects between Nginx and
+FastAPI. It does not publish `/metrics`; the qualification-only Compose
+override permits metrics solely from the API container's `127.0.0.1` loopback.
+
 The default production profile runs API + PostgreSQL + Redis + Nginx only.
 
 Async operations such as email delivery and scheduled reconciliation require the

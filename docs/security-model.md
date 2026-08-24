@@ -22,6 +22,12 @@ email delivery, and admin access runbooks.
 - Avoid placing plaintext gateway keys in PostgreSQL, audit rows, logs,
   email-delivery metadata, or Celery/Redis payloads.
 
+The Prometheus `/metrics` endpoint is not a public production route. When
+enabled, it requires the configured explicit client-IP allowlist; the
+production Nginx boundary has no `/metrics` location. The disposable appliance
+qualification grants only API-container loopback access so it can inspect the
+real exposition and scan it for generated secrets and canaries.
+
 ## Gateway Key Lifecycle
 
 The gateway generates OpenAI-looking bearer keys with a configurable prefix,

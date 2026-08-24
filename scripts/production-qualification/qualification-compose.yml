@@ -30,6 +30,9 @@ services:
     depends_on:
       provider-double:
         condition: service_healthy
+    environment:
+      METRICS_REQUIRE_AUTH: "true"
+      METRICS_ALLOWED_IPS: "127.0.0.1"
 
   backup-adapter:
     image: postgres:16-alpine

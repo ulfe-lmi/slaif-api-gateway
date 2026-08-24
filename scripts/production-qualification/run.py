@@ -27,7 +27,7 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +80,7 @@ class Runner:
         self.provider_requests_before = 0
         self.requests: list[dict[str, Any]] = []
         self.dashboard_bodies: list[str] = []
+        self.metrics_body = ""
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
@@ -867,20 +868,12 @@ class Runner:
     def exercise_dashboard(self) -> None:
         context = ssl.create_default_context(cafile=str(self.tls / "fullchain.pem"))
         jar = CookieJar()
-
-        class _NoRedirect(urllib.request.HTTPRedirectHandler):
-            """Keep qualification redirects on the generated HTTPS port."""
-
-            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-                return None
-
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=context),
             urllib.request.HTTPCookieProcessor(jar),
-            _NoRedirect(),
         )
 
-        def fetch(path: str, *, form: dict[str, str] | None = None) -> tuple[int, str, dict[str, str]]:
+        def fetch(path: str, *, form: dict[str, str] | None = None) -> tuple[int, str, dict[str, str], str]:
             request = urllib.request.Request(
                 self.api_url(path),
                 data=urlencode(form).encode("utf-8") if form is not None else None,
@@ -889,30 +882,50 @@ class Runner:
             )
             try:
                 with opener.open(request, timeout=20) as response:
-                    return response.status, response.read().decode("utf-8", errors="replace"), dict(response.headers.items())
+                    return (
+                        response.status,
+                        response.read().decode("utf-8", errors="replace"),
+                        dict(response.headers.items()),
+                        response.geturl(),
+                    )
             except urllib.error.HTTPError as exc:
-                return exc.code, exc.read().decode("utf-8", errors="replace"), dict(exc.headers.items())
+                return (
+                    exc.code,
+                    exc.read().decode("utf-8", errors="replace"),
+                    dict(exc.headers.items()),
+                    exc.geturl(),
+                )
 
-        status, login_html, _ = fetch("/admin/login")
+        status, login_html, _, login_url = fetch("/admin/login")
         if status != 200:
             raise QualificationError(f"dashboard login page returned {status}")
+        if urlsplit(login_url).path != "/admin/login":
+            raise QualificationError(f"dashboard login landed at unexpected path: {urlsplit(login_url).path}")
         csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', login_html)
         if csrf_match is None:
             raise QualificationError("dashboard login page did not expose CSRF form token")
         if not any(cookie.name == "slaif_admin_login_csrf" and cookie.secure for cookie in jar):
             raise QualificationError("dashboard login CSRF cookie was not Secure over HTTPS")
-        status, _, login_headers = fetch(
+        status, landing_html, login_headers, landing_url = fetch(
             "/admin/login",
             form={"email": "qualification-admin@example.invalid", "password": self.admin_password, "csrf_token": csrf_match.group(1)},
         )
-        if status not in {200, 303} or not any(cookie.name == "slaif_admin_session" for cookie in jar):
-            raise QualificationError(f"dashboard authenticated session was not established: {status}")
+        if status != 200 or urlsplit(landing_url).path != "/admin":
+            raise QualificationError(
+                f"dashboard login did not follow to the exact landing page: status={status} path={urlsplit(landing_url).path}"
+            )
+        if "Dashboard" not in landing_html:
+            raise QualificationError("dashboard authenticated landing page did not expose its marker")
+        if not any(cookie.name == "slaif_admin_session" for cookie in jar):
+            raise QualificationError("dashboard authenticated session was not established")
         if "Secure" not in login_headers.get("Set-Cookie", "") and not any(cookie.name == "slaif_admin_session" and cookie.secure for cookie in jar):
             raise QualificationError("dashboard session cookie was not Secure")
         for path, marker in (("/admin/usage", "Usage Ledger"), ("/admin/audit", "Audit Log")):
-            status, body, _ = fetch(path)
+            status, body, _, final_url = fetch(path)
             if status != 200 or marker not in body:
                 raise QualificationError(f"dashboard page {path} returned {status} without expected content")
+            if urlsplit(final_url).path != path:
+                raise QualificationError(f"dashboard page {path} followed to unexpected path: {urlsplit(final_url).path}")
             self.dashboard_bodies.append(body)
 
     def exercise_async_liveness(self) -> None:
@@ -1161,15 +1174,50 @@ class Runner:
         metrics = ""
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{self.ports['api']}/metrics", timeout=10) as response:
-                metrics = response.read().decode("utf-8", errors="replace")
+                raise QualificationError(f"unallowlisted host metrics unexpectedly returned HTTP {response.status}")
         except urllib.error.HTTPError as exc:
             if exc.code != 403:
-                raise QualificationError(f"metrics privacy scan could not read /metrics: HTTP Error {exc.code}") from exc
-            # The production appliance deliberately denies metrics without an
-            # explicit allowlist; the bounded denial body is safe to scan.
-            metrics = exc.read().decode("utf-8", errors="replace")
+                raise QualificationError(f"metrics unallowlisted access returned HTTP {exc.code}, expected 403") from exc
         except Exception as exc:  # noqa: BLE001
-            raise QualificationError(f"metrics privacy scan could not read /metrics: {exc}") from exc
+            if isinstance(exc, QualificationError):
+                raise
+            raise QualificationError(f"metrics unallowlisted access failed: {exc}") from exc
+
+        public_metrics_url = self.api_url("/metrics")
+        try:
+            with urllib.request.urlopen(public_metrics_url, context=ssl.create_default_context(cafile=str(self.tls / "fullchain.pem")), timeout=10) as response:
+                raise QualificationError(f"public NGINX metrics unexpectedly returned HTTP {response.status}")
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {403, 404}:
+                raise QualificationError(f"public NGINX /metrics returned HTTP {exc.code}, expected denial") from exc
+        except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, QualificationError):
+                raise
+            raise QualificationError(f"public NGINX metrics access failed: {exc}") from exc
+
+        authorized = self.compose_command(
+            [
+                "exec",
+                "-T",
+                "api",
+                "python",
+                "-c",
+                "import urllib.request; response=urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=10); print(response.status); print(response.read().decode('utf-8', errors='replace'))",
+            ],
+            name="authorized-metrics",
+        ).stdout
+        if not authorized.startswith("200\n"):
+            raise QualificationError("authorized in-container /metrics did not return HTTP 200")
+        metrics = authorized.split("\n", 1)[1]
+        expected_families = (
+            "# HELP gateway_http_requests_total",
+            "# HELP gateway_provider_requests_total",
+            "# HELP gateway_tokens_total",
+            "# HELP gateway_cost_eur_total",
+        )
+        if "# TYPE gateway_http_requests_total counter" not in metrics or any(marker not in metrics for marker in expected_families):
+            raise QualificationError("authorized /metrics did not expose the expected exercised Prometheus families")
+        self.metrics_body = metrics
         provider_text = json.dumps(self.provider_state(), sort_keys=True)
         database_text = "\n".join("|".join(row) for row in self.sql("SELECT endpoint, provider, requested_model, success, accounting_status FROM usage_ledger"))
         joined = "\n".join([logs, metrics, provider_text, database_text, *self.dashboard_bodies])

@@ -40,6 +40,31 @@ def test_production_compose_contract_is_self_consistent() -> None:
     assert "RESULT=OK" in result.stdout
 
 
+def test_production_nginx_keeps_admin_landing_exact_and_metrics_private() -> None:
+    source = (ROOT / "nginx/production.conf").read_text(encoding="utf-8")
+
+    exact_admin = source.index("location = /admin {")
+    admin_prefix = source.index("location /admin/ {")
+    assert exact_admin < admin_prefix
+    assert "proxy_pass http://api:8000;" in source[exact_admin:admin_prefix]
+    assert "return 301" not in source[exact_admin:]
+    assert "location /metrics" not in source
+    assert "location = /metrics" not in source
+
+
+def test_production_qualification_requires_real_redirect_following_and_authorized_metrics() -> None:
+    source = (ROOT / "scripts/production-qualification/run.py").read_text(encoding="utf-8")
+
+    assert "class _NoRedirect" not in source
+    assert "urlsplit(landing_url).path != \"/admin\"" in source
+    assert "status != 200" in source
+    assert '"# HELP gateway_http_requests_total"' in source
+    assert '"# HELP gateway_provider_requests_total"' in source
+    assert '"# HELP gateway_tokens_total"' in source
+    assert '"# HELP gateway_cost_eur_total"' in source
+    assert "exec\",\n                \"-T\",\n                \"api\"" in source
+
+
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:
     env = os.environ.copy()
     for name in (
