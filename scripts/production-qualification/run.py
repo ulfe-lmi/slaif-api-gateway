@@ -209,6 +209,8 @@ def bounded_api_termination_evidence(
     terminal_accounting_status: str,
     counters_cleared: bool,
     audit_present: bool,
+    client_thread_terminated_after_kill: bool = False,
+    provider_count_stable_after_kill: bool = False,
 ) -> dict[str, Any]:
     """Build bounded termination evidence without request content or IDs."""
     return {
@@ -226,6 +228,8 @@ def bounded_api_termination_evidence(
         "terminal_accounting_status": terminal_accounting_status,
         "counters_cleared": counters_cleared,
         "audit_present": audit_present,
+        "client_thread_terminated_after_kill": client_thread_terminated_after_kill,
+        "provider_count_stable_after_kill": provider_count_stable_after_kill,
     }
 
 
@@ -244,6 +248,75 @@ def openai_error_code(payload: dict[str, Any] | str) -> str:
         return ""
     code = error.get("code")
     return code if isinstance(code, str) else ""
+
+
+def parse_readyz_observation(status: int, payload: object) -> dict[str, Any]:
+    """Reduce one diagnostic readiness response to safe low-cardinality facts."""
+    if not isinstance(payload, dict):
+        return {
+            "status": status,
+            "state": "invalid",
+            "database": "invalid",
+            "schema": "invalid",
+            "redis": "invalid",
+            "provider_secrets_ok": False,
+            "ready": False,
+            "redis_outage": False,
+        }
+
+    def state_value(name: str) -> str:
+        value = payload.get(name)
+        return value if isinstance(value, str) and value in {"ok", "not_ready", "error", "invalid", "not_configured", "not_initialized", "not_required", "not_checked", "missing"} else "invalid"
+
+    state = state_value("status")
+    database = state_value("database")
+    schema = state_value("schema")
+    redis = state_value("redis")
+    provider_secrets = payload.get("provider_secrets")
+    provider_secrets_ok = provider_secrets is None or (
+        isinstance(provider_secrets, str) and provider_secrets != "missing"
+    )
+    ready = (
+        status == 200
+        and state == "ok"
+        and database == "ok"
+        and schema == "ok"
+        and redis == "ok"
+        and provider_secrets_ok
+    )
+    return {
+        "status": status,
+        "state": state,
+        "database": database,
+        "schema": schema,
+        "redis": redis,
+        "provider_secrets_ok": provider_secrets_ok,
+        "ready": ready,
+        "redis_outage": status == 503 and state == "not_ready" and redis == "error",
+    }
+
+
+def bounded_readiness_evidence(observation: dict[str, Any], *, consecutive_successes: int) -> dict[str, Any]:
+    """Return only bounded readiness fields suitable for final qualification JSON."""
+    return {
+        "status": int(observation.get("status") or 0),
+        "state": str(observation.get("state") or "invalid"),
+        "database": str(observation.get("database") or "invalid"),
+        "schema": str(observation.get("schema") or "invalid"),
+        "redis": str(observation.get("redis") or "invalid"),
+        "provider_secrets_ok": bool(observation.get("provider_secrets_ok")),
+        "consecutive_successes": int(consecutive_successes),
+    }
+
+
+def readiness_consecutive_count(previous: int, ready: bool) -> int:
+    """Advance the bounded readiness stability counter, resetting on failure."""
+    return previous + 1 if ready else 0
+
+
+def public_readyz_denial_is_valid(status: int) -> bool:
+    """Accept only an exact bounded denial from the public HTTPS NGINX path."""
+    return status in {403, 404}
 
 
 class Runner:
@@ -291,6 +364,7 @@ class Runner:
         self.metrics_evidence: dict[str, Any] = {}
         self.concurrency_evidence: dict[str, Any] = {}
         self.api_termination_evidence: dict[str, Any] = {}
+        self.readiness_evidence: dict[str, Any] = {}
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
@@ -602,6 +676,137 @@ class Runner:
     def api_url(self, path: str) -> str:
         return f"https://localhost:{self.ports['https']}{path}"
 
+    def diagnostic_readyz(self) -> dict[str, Any]:
+        """Read loopback API readiness and retain only safe bounded fields."""
+        request = urllib.request.Request(f"http://127.0.0.1:{self.ports['api']}/readyz", method="GET")
+        status = 0
+        payload: object = None
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                status = response.status
+                raw = response.read()
+                try:
+                    payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    payload = None
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            try:
+                payload = json.loads(exc.read().decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = None
+        except (OSError, urllib.error.URLError):
+            payload = None
+        return parse_readyz_observation(status, payload)
+
+    def require_readyz_sequence(self, name: str, *, timeout: float = 180.0) -> None:
+        """Require four consecutive exact ready observations after one event."""
+        deadline = time.monotonic() + timeout
+        consecutive = 0
+        last = parse_readyz_observation(0, None)
+        while time.monotonic() < deadline:
+            last = self.diagnostic_readyz()
+            consecutive = readiness_consecutive_count(consecutive, bool(last["ready"]))
+            if consecutive >= 4:
+                self.readiness_evidence[name] = bounded_readiness_evidence(
+                    last,
+                    consecutive_successes=consecutive,
+                )
+                return
+            time.sleep(1)
+        self.readiness_evidence[name] = bounded_readiness_evidence(
+            last,
+            consecutive_successes=consecutive,
+        )
+        raise QualificationError(
+            f"{name} readiness did not reach four consecutive exact observations: "
+            f"status={last['status']} state={last['state']} redis={last['redis']} consecutive={consecutive}"
+        )
+
+    def require_redis_outage_readyz(self, *, timeout: float = 30.0) -> None:
+        """Require bounded 503/not_ready/redis=error during a real Redis stop."""
+        deadline = time.monotonic() + timeout
+        last = parse_readyz_observation(0, None)
+        while time.monotonic() < deadline:
+            last = self.diagnostic_readyz()
+            if last["redis_outage"]:
+                self.readiness_evidence["redis_outage"] = bounded_readiness_evidence(
+                    last,
+                    consecutive_successes=0,
+                )
+                return
+            time.sleep(1)
+        self.readiness_evidence["redis_outage"] = bounded_readiness_evidence(
+            last,
+            consecutive_successes=0,
+        )
+        raise QualificationError(
+            "Redis outage did not produce bounded API readiness denial: "
+            f"status={last['status']} state={last['state']} redis={last['redis']}"
+        )
+
+    def verify_public_readyz_denied(self) -> None:
+        """Probe HTTPS NGINX from a non-allowlisted disposable network source."""
+        probe_network = f"{self.project}_readyz_probe"
+        nginx_rows = self.compose_command(["ps", "-q", "nginx"], name="readyz-nginx-id").stdout.splitlines()
+        nginx_container = next((row.strip() for row in nginx_rows if row.strip()), "")
+        if not nginx_container:
+            raise QualificationError("could not identify NGINX container for public readiness denial")
+        created = False
+        connected = False
+        status = 0
+        try:
+            self.command(
+                [*self.docker, "network", "create", "--driver", "bridge", "--subnet", "198.18.0.0/15", probe_network],
+                name="readyz-probe-network-create",
+            )
+            created = True
+            self.command(
+                [*self.docker, "network", "connect", "--alias", "nginx", probe_network, nginx_container],
+                name="readyz-probe-network-connect",
+            )
+            connected = True
+            probe_script = (
+                "import ssl, urllib.error, urllib.request\n"
+                "request = urllib.request.Request('https://nginx/readyz')\n"
+                "context = ssl._create_unverified_context()\n"
+                "try:\n"
+                "    response = urllib.request.urlopen(request, context=context, timeout=5)\n"
+                "    print(response.status)\n"
+                "except urllib.error.HTTPError as exc:\n"
+                "    print(exc.code)\n"
+                "except Exception:\n"
+                "    print(0)\n"
+            )
+            result = self.compose_command(
+                [
+                    "run", "--rm", "--no-deps", "--network", probe_network,
+                    "--entrypoint", "python", "provider-double", "-c", probe_script,
+                ],
+                name="public-readyz-denial",
+            )
+            values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            try:
+                status = int(values[-1])
+            except (IndexError, ValueError) as exc:
+                raise QualificationError("public readiness denial probe was not numeric") from exc
+        finally:
+            if connected:
+                self.command(
+                    [*self.docker, "network", "disconnect", probe_network, nginx_container],
+                    check=False,
+                    name="readyz-probe-network-disconnect",
+                )
+            if created:
+                self.command(
+                    [*self.docker, "network", "rm", probe_network],
+                    check=False,
+                    name="readyz-probe-network-remove",
+                )
+        if not public_readyz_denial_is_valid(status):
+            raise QualificationError(f"public readiness endpoint was not denied with 403/404: status={status}")
+        self.readiness_evidence["public_denied"] = True
+
     def api(
         self,
         path: str,
@@ -814,6 +1019,8 @@ class Runner:
         self.compose_command(["--profile", "async", "up", "-d"], name="compose-up")
         self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
         self.wait_url(f"http://127.0.0.1:{self.ports['provider']}/healthz")
+        self.require_readyz_sequence("initial_startup")
+        self.verify_public_readyz_denied()
 
     def configure(self) -> None:
         self.admin_password = secrets.token_urlsafe(24)
@@ -947,9 +1154,10 @@ class Runner:
         after_accounting = self.accounting_snapshot()
         if after_accounting != before_accounting:
             raise QualificationError(f"Redis outage changed PostgreSQL accounting: before={before_accounting} after={after_accounting}")
+        self.require_redis_outage_readyz()
         self.compose_command(["start", "redis"], name="redis-restart")
         self.wait_redis()
-        self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
+        self.require_readyz_sequence("redis_recovery")
         status = 503
         for _ in range(10):
             status, _, _ = self.api(
@@ -1128,6 +1336,8 @@ class Runner:
             "terminal_accounting_status": "",
             "counters_cleared": False,
             "audit_present": False,
+            "client_thread_terminated_after_kill": False,
+            "provider_count_stable_after_kill": False,
         }
 
         def publish_evidence() -> None:
@@ -1264,9 +1474,21 @@ class Runner:
 
             self.compose_command(["kill", "api"], name="api-terminate")
             thread.join(timeout=15)
+            client_thread_terminated = not thread.is_alive()
+            provider_count_stable = self.provider_state()["requests"] == baseline_provider_requests + 1
+            state.update(
+                client_thread_terminated_after_kill=client_thread_terminated,
+                provider_count_stable_after_kill=provider_count_stable,
+            )
+            if not client_thread_terminated or not provider_count_stable:
+                publish_evidence()
+                raise QualificationError("interrupted client did not terminate cleanly or provider count changed after API kill")
             self.compose_command(["up", "-d", "api", "nginx"], name="api-restart-after-termination")
-            self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
-            self.wait_redis()
+            self.require_readyz_sequence("api_restart")
+            state["provider_count_stable_after_kill"] = self.provider_state()["requests"] == baseline_provider_requests + 1
+            if not state["provider_count_stable_after_kill"]:
+                publish_evidence()
+                raise QualificationError("provider count changed during API restart")
             state["restart_ready"] = True
 
             evidence = None
@@ -1592,13 +1814,13 @@ class Runner:
     def exercise_persistence(self) -> None:
         expected = self.sql("SELECT COUNT(*) FROM usage_ledger")[0][0]
         self.compose_command(["up", "-d", "--force-recreate", "api", "nginx"], name="api-recreate")
-        self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
+        self.require_readyz_sequence("api_recreation")
         if self.sql("SELECT COUNT(*) FROM usage_ledger")[0][0] != expected:
             raise QualificationError("usage ledger changed across API recreation")
         if not self.sql("SELECT 1 FROM gateway_keys WHERE id = '" + self.key_id + "'"):
             raise QualificationError("gateway key identity did not survive API recreation")
         self.compose_command(["up", "-d", "--force-recreate", "postgres", "api", "nginx"], name="postgres-recreate")
-        self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
+        self.require_readyz_sequence("postgres_api_recreation")
         if self.sql("SELECT COUNT(*) FROM usage_ledger")[0][0] != expected:
             raise QualificationError("named Postgres volume did not preserve usage ledger")
 
@@ -1772,10 +1994,10 @@ def main() -> int:
             failure = f"{failure}; cleanup: {cleanup_error}" if failure else f"cleanup: {cleanup_error}"
     if failure:
         print(f"RESULT=FAIL\nERROR={failure}", file=sys.stderr)
-        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence}, sort_keys=True))
+        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence, "readiness": runner.readiness_evidence}, sort_keys=True))
         return 1
     print("RESULT=OK")
-    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence}, sort_keys=True))
+    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence, "readiness": runner.readiness_evidence}, sort_keys=True))
     return 0
 
 

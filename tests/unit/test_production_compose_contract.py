@@ -268,11 +268,15 @@ def test_gateway_key_uuid_validation_and_bounded_termination_evidence() -> None:
         terminal_accounting_status="failed",
         counters_cleared=True,
         audit_present=True,
+        client_thread_terminated_after_kill=True,
+        provider_count_stable_after_kill=True,
     )
     serialized = json.dumps(evidence)
     assert "body" not in serialized
     assert "secret" not in serialized
     assert "url" not in serialized
+    assert evidence["client_thread_terminated_after_kill"] is True
+    assert evidence["provider_count_stable_after_kill"] is True
     assert set(evidence) == {
         "recovery_503_count",
         "active_status",
@@ -288,7 +292,65 @@ def test_gateway_key_uuid_validation_and_bounded_termination_evidence() -> None:
         "terminal_accounting_status",
         "counters_cleared",
         "audit_present",
+        "client_thread_terminated_after_kill",
+        "provider_count_stable_after_kill",
     }
+
+
+def test_readyz_parser_requires_exact_ready_facts_and_bounds_not_ready() -> None:
+    ready_payload = {
+        "status": "ok",
+        "database": "ok",
+        "schema": "ok",
+        "redis": "ok",
+        "provider_secrets": "ok",
+        "missing_provider_secret_env_vars": "must-not-be-emitted",
+    }
+    ready = _RUN_MODULE.parse_readyz_observation(200, ready_payload)
+    assert ready["ready"] is True
+    assert ready["redis_outage"] is False
+    assert _RUN_MODULE.parse_readyz_observation(503, ready_payload)["ready"] is False
+    assert _RUN_MODULE.parse_readyz_observation(
+        200,
+        {**ready_payload, "schema": "not_ready"},
+    )["ready"] is False
+    assert _RUN_MODULE.parse_readyz_observation(
+        200,
+        {**ready_payload, "provider_secrets": "missing"},
+    )["ready"] is False
+    assert _RUN_MODULE.parse_readyz_observation(
+        503,
+        {"status": "not_ready", "database": "ok", "redis": "error"},
+    )["redis_outage"] is True
+    assert _RUN_MODULE.parse_readyz_observation(200, ["not", "an", "object"])["state"] == "invalid"
+    assert _RUN_MODULE.parse_readyz_observation(200, "malformed")["ready"] is False
+
+
+def test_readyz_stability_counter_resets_and_bounded_evidence_is_content_free() -> None:
+    count = 0
+    count = _RUN_MODULE.readiness_consecutive_count(count, True)
+    count = _RUN_MODULE.readiness_consecutive_count(count, True)
+    assert count == 2
+    assert _RUN_MODULE.readiness_consecutive_count(count, False) == 0
+    observation = _RUN_MODULE.parse_readyz_observation(
+        200,
+        {"status": "ok", "database": "ok", "schema": "ok", "redis": "ok"},
+    )
+    evidence = _RUN_MODULE.bounded_readiness_evidence(observation, consecutive_successes=4)
+    assert evidence == {
+        "status": 200,
+        "state": "ok",
+        "database": "ok",
+        "schema": "ok",
+        "redis": "ok",
+        "provider_secrets_ok": True,
+        "consecutive_successes": 4,
+    }
+    assert "url" not in json.dumps(evidence)
+    assert "missing_provider_secret_env_vars" not in json.dumps(evidence)
+    assert _RUN_MODULE.public_readyz_denial_is_valid(403) is True
+    assert _RUN_MODULE.public_readyz_denial_is_valid(404) is True
+    assert _RUN_MODULE.public_readyz_denial_is_valid(200) is False
 
 
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:

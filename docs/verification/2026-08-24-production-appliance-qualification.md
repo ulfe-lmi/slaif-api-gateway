@@ -141,3 +141,16 @@ adds bounded termination evidence, and requires one fresh no-keep run. A
 failed fresh phase remains a failed qualification result; it is not converted
 to a production certification, release, provider-invoice qualification, or SLA
 claim.
+
+## 151-h evidence review
+
+Objective 151-g passed the complete matrix and proved the active Responses
+termination correlation, including the live HTTP-200 stream, provider forward,
+Redis slot, pending PostgreSQL reservation, API interruption, and documented
+CLI reconciliation. Strategic review rejected its public HTTPS `/healthz` plus
+direct Redis ping as proof that the API process itself had current database
+schema and Redis readiness, and found no assertion that the interrupted client
+thread had terminated after the API container kill. Objective 151-h strengthens
+only those qualification-harness evidence boundaries. It remains disposable
+evidence, not a production certification, release, provider-invoice
+qualification, or SLA claim.
