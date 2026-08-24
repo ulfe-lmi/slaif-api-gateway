@@ -1,16 +1,23 @@
-# SME onboarding
+# SME onboarding foundation
 
-The admin dashboard provides a guided, server-rendered setup path:
+> **Status:** Standalone readiness state machine; no wired onboarding page or CLI
+> **Audience:** Maintainers and operators planning manual setup
 
-1. Create the deployment's single organization.
-2. Configure OIDC for human sign-in; local admin fallback remains documented.
-3. Add provider metadata and its server-side API-key environment name.
-4. Import a reviewed catalog into an approved policy-bundle revision.
-5. Preview and confirm the exact policy before assignment.
-6. Define a PostgreSQL recurring budget period.
-7. Prepare a service account for automated workloads.
-8. Issue a strict-mode gateway key.
+`services/onboarding.py` can classify prerequisite facts for organization,
+OIDC, providers, policy bundles, budgets, service accounts, and key issuance as
+implemented or blocked. No current API, dashboard route, template, or CLI
+command renders that state machine as a guided wizard.
 
-Every dangerous action requires confirmation and an audit reason. Statuses are
-reported honestly as implemented, blocked, held, or deferred. Provider secrets
-are never displayed or logged.
+Use the current manual operator sequence instead:
+
+1. Follow the [quickstart](quickstart.md) and create a local administrator.
+2. Configure server-side provider secrets and safe provider metadata.
+3. Create or import reviewed routes, pricing, and required FX rows.
+4. Create owners/institutions/cohorts needed by the current key workflow.
+5. Create a key with explicit endpoint/model/quota/rate limits.
+6. Verify `/readyz`, `/v1/models`, one bounded request, usage metadata, and
+   revocation before broader use.
+
+Organization/team/project, OIDC, recurring-budget, policy-bundle, and service-
+account modules are post-MVP extensions or foundations. Their presence does not
+turn the one-organization SME MVP into an enterprise identity/tenancy product.

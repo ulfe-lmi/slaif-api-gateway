@@ -1,5 +1,8 @@
 # Chat Completions Custom Tools Investigation
 
+> **Status:** Design/investigation reference
+> **Current behavior:** See [OpenAI compatibility](openai-compatibility.md)
+
 Checked on 2026-05-18.
 
 This note answers whether OpenAI upstream appears to support
@@ -15,7 +18,7 @@ OpenAI API reference:
   custom variant as a tool with `custom` metadata and `type: "custom"`.
 - The same reference lists `ChatCompletionNamedToolChoiceCustom`, allowing
   `tool_choice` to force a specific custom tool by name.
-- Source: [OpenAI Chat Completions API reference](https://platform.openai.com/docs/api-reference/chat/create?lang=curl).
+- Source: [OpenAI Chat Completions API reference](https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions).
 
 OpenAI function-calling guide:
 

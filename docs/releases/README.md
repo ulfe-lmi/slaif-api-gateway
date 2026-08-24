@@ -18,3 +18,6 @@ Release notes for tagged SLAIF API Gateway release candidates and releases.
   checks successfully and PR #226 merged as
   `adaefdc45ddd13e172955c14e02cb6c97d49b629`; this does not change the original
   `RESULT=FAIL` classification or the still-NOT-RUN 128-worker qualification.
+- [`2026-08-24 production-appliance qualification`](../verification/2026-08-24-production-appliance-qualification.md)
+  — later disposable production-path evidence. It does not create a release,
+  update the historical `v0.1.0-rc.1` tag, or certify production use.

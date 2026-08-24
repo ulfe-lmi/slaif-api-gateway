@@ -1,5 +1,8 @@
 # Operator Runbooks
 
+> **Status:** Current operational procedures for supported Gateway boundaries
+> **Safety:** Resolve exact targets and preserve PostgreSQL evidence before mutation
+
 These runbooks are for RC-beta, pre-production, and production-like SLAIF API
 Gateway deployments. They are practical operator guides for responding to
 incidents and maintenance events in the current implemented system.
@@ -33,6 +36,7 @@ Runbooks:
 - [Database backup and restore](database-backup-restore.md)
 - [Stale reservation reconciliation](stale-reservation-reconciliation.md)
 - [Provider-completed finalization recovery](provider-completed-reconciliation.md)
+- [External-tool hold reconciliation](external-tool-hold-reconciliation.md)
 - [Ambiguous email delivery handling](ambiguous-email-delivery.md)
 - [Redis outage and rate-limit degradation](redis-outage.md)
 - [PostgreSQL pool exhaustion and readiness failure](postgresql-pool-readiness.md)

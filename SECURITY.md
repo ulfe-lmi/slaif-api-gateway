@@ -41,9 +41,10 @@ screenshots:
 
 ## Supported Versions
 
-This project is pre-release. No production release versions are supported yet
-unless a release tag exists. The `main` branch is under active development, and
-security-relevant pull requests are reviewed as part of normal development.
+This project is pre-release. `v0.1.0-rc.1` is the only published release
+candidate; it is not a supported production series. The `main` branch contains
+later work under active development. Report security issues against the exact
+tag or commit you tested.
 
 ## Security Model References
 

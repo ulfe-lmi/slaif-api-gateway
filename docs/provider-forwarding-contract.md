@@ -1,5 +1,7 @@
 # Provider Forwarding Contract
 
+> **Authority:** Current upstream endpoint, header, body, model, and credential-mutation rules
+
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
 and the current `/v1/responses` subset are forwarded to upstream providers. It
@@ -857,7 +859,7 @@ end-to-end qualification, model accuracy, authenticity, calibration,
 certification, production readiness, or an SLA. A fixed zero-EUR request price
 still leaves request, rate, concurrency, quota, revocation, expiry, audit, and
 failed-attempt controls active.
-# External-tool accounting boundary
+## External-tool accounting boundary
 
 The external-tool accounting hold/reconciliation foundation is implemented, but
 provider forwarding is not enabled by this capability. Unknown or ambiguous

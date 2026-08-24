@@ -1,5 +1,10 @@
 # Independent SME audit matrix
 
+> **Status:** Historical audit snapshot; not the current implementation contract
+> **Reading rule:** Findings and code references may be stale. Use the
+> [documentation audit](verification/2026-08-24-documentation-audit.md) and
+> current domain contracts for present behavior.
+
 | Domain | Finding | Severity | Evidence | Remediation requirement |
 |---|---|---|---|---|
 | Architecture | Implementation follows documented OpenAI-compatible ingress, provider isolation, PostgreSQL accounting, and admin/CLI boundaries. No material contract drift found in reviewed paths. | Info | `docs/openai-compatibility.md`; `docs/provider-forwarding-contract.md`; CI E2E checks | Continue contract tests on every future endpoint change |

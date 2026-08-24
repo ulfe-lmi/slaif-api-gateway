@@ -1,8 +1,11 @@
 # OpenAI Compatibility
 
+> **Authority:** Current OpenAI-shaped request, response, SSE, and error contract
+> **Boundary:** Compatibility applies only to explicitly supported endpoints and fields
+
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
-### Generic backend conformance status
+## Generic backend conformance status
 
 Objective 020 records generic `openai_compatible` Chat Completions and
 stateless Responses coverage as `mocked_conformance`. The evidence uses
@@ -683,9 +686,7 @@ exclusive-fence, single-request-overrun, following-block, and unresolved-cost
 hold obligations. Client-provided MCP URLs/connector IDs/authorization are never
 approved destinations, and local/client tools do not imply provider authority.
 
-## What Is Not Implemented
-
-### Operator-defined OpenAI-compatible backends
+## Bounded Generic Backend Seam
 
 The gateway has a generic runtime foundation for an operator-defined provider
 config with `kind=openai_compatible`, such as a LAN vLLM endpoint. The config
@@ -696,12 +697,15 @@ requires an explicit confirmation and non-empty audit reason because bearer
 credentials and request content traverse that network unencrypted; firewall
 and reverse-proxy ownership remains an operator responsibility.
 
-This is runtime plumbing, not a qualification or compatibility claim for any
+This is implemented runtime plumbing, not a qualification or compatibility claim for any
 specific Qwen, vLLM, or other model. The explicit bounded discovery/setup
 wizard may preview `/v1/models` and create conservative route/pricing metadata,
 but it never performs automatic mutation, health checks, load balancing,
-provider-specific translation, or live model qualification. Objective 020 owns
-`mocked_conformance`; named live targets belong to Objectives 022–023.
+provider-specific translation, or live model qualification. Repository evidence
+classifies this seam as `mocked_conformance`; every named live target requires
+its own bounded qualification.
+
+## What Is Not Implemented
 
 - Responses cancel/list endpoints,
   Responses hosted tools other than exact bounded OpenAI Responses
@@ -722,7 +726,9 @@ provider-specific translation, or live model qualification. Objective 020 owns
 - Files, image-generation, or batch endpoints. The bounded standalone Audio and
   Embeddings endpoint subsets listed in the endpoint table are implemented.
 - Native Anthropic API.
-- New provider types beyond OpenAI and OpenRouter.
+- Native provider-protocol adapters beyond OpenAI and OpenRouter. The generic
+  OpenAI-compatible and reviewed native-module seams above are constrained
+  runtime paths, not a general provider plugin framework.
 - Bulk key send-now execution, owner/institution/cohort delete or anonymization workflows,
   usage/audit mutation pages beyond CSV exports, and MFA remain outside the current admin surface.
   Bulk key import preview/execution and owner/institution/cohort create/edit pages are

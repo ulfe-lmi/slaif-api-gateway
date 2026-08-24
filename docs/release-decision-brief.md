@@ -1,9 +1,17 @@
 # Release decision brief
 
+> **Status:** Superseded draft for an untagged `0.1.0rc2` candidate
+> **Not:** A current GO decision, published release, or production approval
+
+This document preserves a proposal tied to PR #277. The only published GitHub
+release is `v0.1.0-rc.1`. Current release decisions must be made from the latest
+[readiness report](beta-readiness.md), [verification archive](verification/README.md),
+and exact candidate checks.
+
 Candidate commit: see implementation head recorded on PR #277.
 Proposed version: `0.1.0rc2`.
 
-## Recommendation
+## Historical recommendation
 
 Conditioned GO for human review as a **release candidate**, subject to the two
 major audit findings below being explicitly risk-accepted or remediated before

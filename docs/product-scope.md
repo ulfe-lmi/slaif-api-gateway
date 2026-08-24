@@ -1,5 +1,8 @@
 # Product Scope
 
+> **Authority:** Canonical current/target/non-goal product boundary
+> **Current deployment:** One organization per self-hosted deployment
+
 SLAIF API Gateway is an open-source, self-hosted, OpenAI-compatible
 **organizational AI access control plane** for SMEs, institutions, and bounded
 teams. Its initial commercial and operational focus is European SMEs and

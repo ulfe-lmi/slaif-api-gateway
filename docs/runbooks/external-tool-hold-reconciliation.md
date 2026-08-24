@@ -1,5 +1,8 @@
 # External-tool accounting hold reconciliation
 
+> **Status:** Current bounded reconciliation runbook
+> **Safety:** A hold is PostgreSQL accounting truth and is never cleared from expiry alone
+
 This runbook covers the bounded external-tool accounting boundary used by the
 OpenAI Responses web-search contract. It does not enable remote MCP,
 connectors, or any other provider-hosted tool family.

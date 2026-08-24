@@ -1,6 +1,39 @@
 # RC-Beta Readiness Report
 
-Date: 2026-05-01
+> **Authority:** Current verification/readiness summary for merged code
+> **Not:** Release, production, security, compliance, or SLA approval
+
+Current review date: 2026-08-24
+
+## Current merged-main summary
+
+At `main` commit `8f2813bf745b90221da33a7cfaf40726c5b1b480`, the
+declared SME Gateway remains an RC-beta foundation for one organization per
+deployment.
+
+- The production-style PostgreSQL/Redis/API/NGINX topology, real entrypoints,
+  migrations, worker/scheduler liveness, key/operator journey, Chat/Responses
+  provider-double transport, PostgreSQL accounting, Redis failure/concurrency,
+  process interruption/reconciliation, persistence, backup/restore, metrics,
+  dashboard, privacy canaries, and exact cleanup passed the bounded
+  [2026-08-24 production-appliance qualification](verification/2026-08-24-production-appliance-qualification.md).
+- That evidence used a provider double. It is not real-provider, scale,
+  performance, penetration-test, compliance, or production certification.
+- Historical Objective 140 made six real-provider calls, but its committed
+  verifier cannot independently reproduce the claimed PostgreSQL/streaming
+  correlation. Current complete real-provider accounting qualification is
+  therefore not established; see [real-provider qualification](real-provider-qualification.md).
+- Post-MVP organization/identity/budget/DLP/governance/observability modules do
+  not redefine the original current MVP. Individual foundation docs state their
+  actual wiring boundary.
+- The only published release remains `v0.1.0-rc.1`; `0.1.0rc2` documents are
+  untagged drafts, not a release decision.
+
+The current recommendation is suitable for continued bounded self-hosted beta
+evaluation within the documented scope. It is not approval for an unreviewed
+internet-facing production deployment.
+
+## Historical 2026-05-01 baseline
 
 Historical status (2026-05-01): RC-beta readiness candidate after verification
 fixes.

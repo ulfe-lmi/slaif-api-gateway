@@ -1,23 +1,16 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README_FILE = REPO_ROOT / "README.md"
 PRODUCT_SCOPE_FILE = REPO_ROOT / "docs" / "product-scope.md"
-README_BRAND_BLOCK = """<div style="text-align: center;">
-  <a href="https://www.slaif.si">
-    <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="400" height="400">
-  </a>
-</div>
-
-"""
-
-
 def test_product_scope_exists_and_readme_preserves_brand_and_link() -> None:
     assert PRODUCT_SCOPE_FILE.is_file()
 
     readme = README_FILE.read_text(encoding="utf-8")
-    assert readme.startswith(README_BRAND_BLOCK)
+    assert readme.startswith('<div align="center">')
+    assert 'href="https://www.slaif.si"' in readme
+    assert 'src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg"' in readme
+    assert 'alt="SLAIF"' in readme
     assert "docs/product-scope.md" in readme
 
 

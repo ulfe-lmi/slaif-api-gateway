@@ -1,5 +1,8 @@
 # Admin Access And Lockout
 
+> **Status:** Current operator runbook
+> **Safety:** Treat every active admin as highly privileged
+
 ## Current Admin Model
 
 Every active admin is a full operator. `superadmin` is metadata/future-proofing

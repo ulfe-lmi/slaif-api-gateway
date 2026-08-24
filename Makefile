@@ -1,4 +1,4 @@
-.PHONY: install test test-unit-parallel test-parallel-safe lint alembic-heads run docker-build docker-up docker-down docker-logs docker-migrate docker-create-admin-help
+.PHONY: install test test-unit-parallel test-parallel-safe lint docs-check alembic-heads run docker-build docker-up docker-down docker-logs docker-migrate docker-create-admin-help
 
 install:
 	python -m pip install --upgrade pip
@@ -15,6 +15,9 @@ test-parallel-safe:
 
 lint:
 	python -m ruff check app tests
+
+docs-check:
+	python scripts/check_documentation.py
 
 alembic-heads:
 	alembic heads

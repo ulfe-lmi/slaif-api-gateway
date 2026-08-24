@@ -1,14 +1,10 @@
 # Database Schema for `slaif-api-gateway`
 
-Authoritative schema design for the SLAIF OpenAI-compatible API gateway.
+> **Authority:** Current SQLAlchemy/Alembic schema contract
+> **Migration head:** `0024_quota_reservation_accounting_facts`
 
-This document should be committed at:
-
-```text
-docs/database-schema.md
-```
-
-Codex/agents should implement this design using:
+This reference describes the schema at the named Alembic head. The runtime
+stack is:
 
 ```text
 PostgreSQL 16+
@@ -17,7 +13,10 @@ asyncpg
 Alembic migrations
 ```
 
-The schema is designed for an open-source, Dockerized API gateway that exposes an OpenAI-compatible `/v1` API, authenticates gateway-issued API keys, enforces hard per-key quotas, routes requests to OpenAI/OpenRouter, accounts for token/cost usage, supports email delivery of keys, and provides an admin dashboard plus CLI.
+The schema supports the Dockerized OpenAI-compatible Gateway, gateway-key
+authentication, PostgreSQL quota/accounting, provider routing, one-time key
+delivery, and operator CLI/dashboard paths. Some later tables are explicitly
+classified as post-MVP foundations; a table alone is not runtime wiring.
 
 The generic OpenAI-compatible setup workflow uses the existing
 `provider_configs`, `model_routes`, `pricing_rules`, and `audit_log` tables.
@@ -53,9 +52,10 @@ The database must support:
 
 ---
 
-## 2. Important corrections from the first draft
+## 2. Design rationale retained in the current schema
 
-The earlier draft was directionally correct, but this version fixes several important omissions:
+The following decisions explain security and accounting fields that can
+otherwise look redundant:
 
 1. **Asynchronous key email delivery needs special handling.**
    If a plaintext key is sent to a Celery worker, it may be stored in Redis. This schema adds `one_time_secrets` for short-lived encrypted delivery secrets.
@@ -339,7 +339,7 @@ institutions.organization_id UUID null references organizations(id) on delete se
 teams.organization_id UUID not null references organizations(id)
 ```
 
-### 5.3b `teams`
+## 5.3b `teams`
 
 Team/department within an organization.
 
@@ -370,7 +370,7 @@ projects.team_id UUID not null references teams(id) on delete cascade
 team_members.team_id UUID not null references teams(id) on delete cascade
 ```
 
-### 5.3c `projects`
+## 5.3c `projects`
 
 Project/cohort within a team. Replaces the legacy `cohorts` concept for new records.
 
@@ -403,7 +403,7 @@ gateway_keys.project_id UUID null references projects(id) on delete set null
 usage_ledger.project_id UUID null references projects(id) on delete set null
 ```
 
-### 5.3d `team_members`
+## 5.3d `team_members`
 
 Junction table mapping owners to teams with roles.
 
@@ -431,7 +431,40 @@ Constraints:
 ck_team_members_role role in ('member', 'lead', 'admin')
 ```
 
-### One-organization-per-deployment
+## 5.3e `oidc_identities`
+
+Post-MVP foundation linking one external OIDC issuer/subject identity to an
+existing owner. The table does not by itself wire OIDC into admin login.
+
+Columns:
+
+```text
+id UUID primary key
+owner_id UUID not null references owners(id) on delete cascade
+issuer_url text not null
+subject text not null
+email text not null
+created_at timestamptz not null
+```
+
+Constraints/indexes:
+
+```text
+unique(issuer_url, subject)
+index(owner_id)
+index(email)
+```
+
+Rules:
+
+- `subject` is meaningful only within its exact issuer.
+- The table stores no access token, refresh token, ID token, client secret,
+  nonce, PKCE verifier, or session token.
+- Owner deletion cascades to linked OIDC identities.
+- OIDC service classes and settings remain an unwired foundation until a
+  current authentication entrypoint explicitly consumes them.
+
+## One-organization deployment invariant
 
 Each deployment serves exactly one organization. The `organizations` table
 is expected to contain at most one row in production. This is enforced by
@@ -1475,7 +1508,7 @@ checks for `compaction`; it adds no raw-content column and does not rewrite
 
 ---
 
-## 5.13 `provider_configs`
+## 5.14 `provider_configs`
 
 Configuration metadata for upstream providers.
 
@@ -1531,7 +1564,7 @@ Rules:
 
 ---
 
-## 5.14 `model_routes`
+## 5.15 `model_routes`
 
 Maps user-requested model names to provider/upstream model names.
 
@@ -1787,7 +1820,7 @@ Rules:
 
 ---
 
-## 5.15 `pricing_rules`
+## 5.16 `pricing_rules`
 
 Approved pricing table used for cost estimation and final accounting.
 
@@ -1874,7 +1907,7 @@ Rules:
 
 ---
 
-## 5.16 `fx_rates`
+## 5.17 `fx_rates`
 
 Currency conversion table for converting native upstream costs to EUR limits.
 
@@ -1915,7 +1948,7 @@ Rules:
 
 ---
 
-## 5.17 `one_time_secrets`
+## 5.18 `one_time_secrets`
 
 Short-lived encrypted secrets used for workflows that temporarily need recoverable plaintext, especially email delivery of newly generated or rotated gateway keys.
 
@@ -1963,7 +1996,7 @@ Rules:
 
 ---
 
-## 5.18 `email_deliveries`
+## 5.19 `email_deliveries`
 
 Tracks outbound key emails and other administrative emails.
 
@@ -2018,7 +2051,7 @@ Rules:
 
 ---
 
-## 5.19 `audit_log`
+## 5.20 `audit_log`
 
 Security-relevant administrative action log.
 
@@ -2080,9 +2113,9 @@ Rules:
 
 ---
 
-## 5.20 `background_jobs`
+## 5.21 `background_jobs`
 
-Optional but recommended table for tracking Celery jobs visible from the admin dashboard.
+Durable metadata table intended for tracking Celery jobs.
 
 Columns:
 
@@ -2123,6 +2156,71 @@ Rules:
 
 - `payload_summary` must be redacted.
 - Do not store plaintext secrets in job payload summaries.
+- The model and repository exist, but no current API, dashboard, CLI, worker, or
+  scheduler workflow consumes this repository. Do not describe it as a visible
+  job-management product until that wiring exists.
+
+---
+
+## 5.22 `budget_periods`
+
+Hierarchical recurring budget periods linked to the organizational hierarchy
+or service identity. PostgreSQL remains the sole accounting truth source.
+
+Columns:
+
+```text
+id UUID primary key
+organization_id UUID null references organizations(id) on delete cascade
+team_id UUID null references teams(id) on delete cascade
+project_id UUID null references projects(id) on delete cascade
+owner_id UUID null references owners(id) on delete cascade
+service_account_id UUID null references owners(id) on delete cascade
+name text not null
+period_type text not null default 'fixed'
+period_start timestamptz not null
+period_end timestamptz not null
+cost_limit_eur numeric(18,9) null
+token_limit_total bigint null
+request_limit_total bigint null
+cost_used_eur numeric(18,9) not null default 0
+tokens_used_total bigint not null default 0
+requests_used_total bigint not null default 0
+cost_reserved_eur numeric(18,9) not null default 0
+tokens_reserved_total bigint not null default 0
+requests_reserved_total bigint not null default 0
+carryover_policy text not null default 'none'
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Constraints:
+
+```text
+period_type in ('fixed','rolling')
+period_end > period_start
+all limits non-negative when present
+at least one limit present
+```
+
+These rows are a post-MVP accounting foundation. Their existence does not make
+them part of ordinary gateway-key quota admission unless a current service path
+explicitly consumes them.
+
+## 5.23 `policy_bundles`, `policy_bundle_revisions`, and `approved_catalog_entries`
+
+Versioned SME policy-package foundations with immutable revision provenance.
+
+- `policy_bundles`: `id`, `organization_id`, `team_id`, `project_id`, `name`,
+  and `created_at`.
+- `policy_bundle_revisions`: `id`, `bundle_id`, `revision`, `policy_json`, and
+  `created_at`; unique on `(bundle_id, revision)`.
+- `approved_catalog_entries`: `id`, `revision_id`, `entry_kind`, `provider`,
+  `name`, `metadata_json`, and `created_at`; unique on
+  `(revision_id, entry_kind, provider, name)`.
+
+These tables do not replace the current gateway-key, route, capability, or
+pricing checks until a reviewed runtime path explicitly adopts a bundle.
 
 ---
 
@@ -2213,17 +2311,19 @@ PostgreSQL remains the source of truth. Redis is only fast operational state.
 
 ---
 
-## 8. Initial seed data
+## 8. Initial configuration
 
-Initial migrations or seed scripts should create:
+Alembic migrations create schema; they do not create a usable provider, route,
+pricing catalog, gateway key, or administrator. Operators must explicitly:
 
-1. Provider configs for `openai` and `openrouter`.
-2. Basic model routes for supported OpenAI models.
-3. Optional OpenRouter route patterns.
-4. Pricing rules for explicitly supported models.
-5. First admin user through CLI, not a hardcoded migration.
+1. create the first administrator through the CLI;
+2. configure server-side provider secret inputs;
+3. create or import reviewed provider, route, pricing, and FX metadata; and
+4. create owners and gateway keys with explicit policy and quota.
 
-Do not seed secrets.
+The local test seed script is disposable test setup, not production seed data.
+No migration or seed path may persist provider secrets or plaintext gateway
+keys.
 
 ---
 
@@ -2242,34 +2342,39 @@ Do not seed secrets.
 
 ---
 
-## 10. Tables summary
+## 10. Current table inventory
 
-Required core tables:
+Migration head `0024_quota_reservation_accounting_facts` contains 31 tables.
+
+Current Gateway and operator-path tables:
 
 ```text
-institutions
-owners
-cohorts
-admin_users
-admin_sessions
-gateway_keys
-quota_reservations
-usage_ledger
-usage_profiles
-provider_configs
-model_routes
-pricing_rules
-fx_rates
-one_time_secrets
+institutions                 cohorts
+owners                       admin_users
+admin_sessions               gateway_keys
+quota_reservations           usage_ledger
+usage_profiles               provider_configs
+model_routes                 pricing_rules
+fx_rates                     audit_log
+key_templates                key_template_revisions
+response_references           conversation_references
+codex_replay_references       one_time_secrets
 email_deliveries
-audit_log
 ```
 
-Recommended operational table:
+Schema or repository foundations whose product wiring is partial or absent:
 
 ```text
-background_jobs
+background_jobs               organizations
+teams                         projects
+team_members                  oidc_identities
+budget_periods                policy_bundles
+policy_bundle_revisions       approved_catalog_entries
 ```
+
+Presence in this inventory proves migration/model existence only. Consult the
+product and compatibility contracts before treating a foundation table as an
+implemented authentication, tenancy, budget, policy, or job workflow.
 
 ---
 
@@ -2297,101 +2402,15 @@ These belong in environment variables, Docker secrets, ephemeral process memory,
 
 ---
 
-## 12. Minimal MVP subset
+## 12. Wiring and authority boundary
 
-If implementation needs to start smaller, the minimum viable schema is:
-
-```text
-institutions
-owners
-cohorts
-admin_users
-admin_sessions
-gateway_keys
-quota_reservations
-usage_ledger
-usage_profiles
-provider_configs
-model_routes
-pricing_rules
-fx_rates
-one_time_secrets
-email_deliveries
-audit_log
-```
-
-`background_jobs` can be added after the first admin dashboard version, but it is recommended if the dashboard will expose long-running imports/exports.
-
----
-
-## 13. Agent implementation rule
-
-When implementing this schema:
-
-```text
-Do not silently simplify away quota_reservations, one_time_secrets, audit_log,
-provider_configs, or pricing_rules. Those tables address concrete correctness,
-security, and accounting risks.
-```
-
-Any simplification must be documented as a deliberate MVP decision in both:
-
-```text
-docs/database-schema.md
-AGENTS.md
-```
+This document describes database shape. It does not by itself prove that a
+table is reachable from the Gateway, dashboard, CLI, worker, or scheduler.
+Current behavior is established by the relevant service/entrypoint plus
+boundary tests and is summarized in the [compatibility matrix](compatibility-matrix.md).
 
 Provider configuration metadata for operator-defined `openai_compatible`
-backends is runtime configuration, not a provider-secret store: the database
+backends is runtime configuration, not a provider-secret store: PostgreSQL
 keeps the canonical provider slug, exact base URL, and secret environment
-variable name, never the bearer value. The runtime foundation has no migration
-or qualification claim and preserves PostgreSQL as the accounting authority.
-
-## 5.30 `budget_periods`
-
-Hierarchical recurring budget periods linked to the organizational hierarchy
-or service identity. PostgreSQL remains the sole accounting truth source.
-
-Columns:
-
-```text
-id UUID primary key
-organization_id UUID null references organizations(id) on delete cascade
-team_id UUID null references teams(id) on delete cascade
-project_id UUID null references projects(id) on delete cascade
-owner_id UUID null references owners(id) on delete cascade
-service_account_id UUID null references owners(id) on delete cascade
-name text not null
-period_type text not null default 'fixed'
-period_start timestamptz not null
-period_end timestamptz not null
-cost_limit_eur numeric(18,9) null
-token_limit_total bigint null
-request_limit_total bigint null
-cost_used_eur numeric(18,9) not null default 0
-tokens_used_total bigint not null default 0
-requests_used_total bigint not null default 0
-cost_reserved_eur numeric(18,9) not null default 0
-tokens_reserved_total bigint not null default 0
-requests_reserved_total bigint not null default 0
-carryover_policy text not null default 'none'
-created_at timestamptz not null
-updated_at timestamptz not null
-```
-
-Constraints:
-
-```text
-period_type in ('fixed','rolling')
-period_end > period_start
-all limits non-negative when present
-at least one limit present
-```
-
-## 5.31 `policy_bundles`, `policy_bundle_revisions`, `approved_catalog_entries`
-
-Versioned SME policy packages with immutable revision provenance.
-
-- `policy_bundles`: id, organization_id, team_id, project_id, name, created_at
-- `policy_bundle_revisions`: id, bundle_id, revision, policy_json, created_at; unique(bundle_id, revision)
-- `approved_catalog_entries`: id, revision_id, entry_kind, provider, name, metadata_json, created_at; unique(revision_id, entry_kind, provider, name)
+variable name, never the bearer value. PostgreSQL remains authoritative for
+quota reservation, terminal accounting, and reconciliation.

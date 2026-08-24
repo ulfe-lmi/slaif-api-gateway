@@ -1,5 +1,8 @@
 # Configuration
 
+> **Authority:** Current Settings and operator configuration reference
+> **Template:** `.env.example` is a curated local baseline, not an exhaustive catalog
+
 For first-time local setup, see [`quickstart.md`](quickstart.md). For RC-beta
 release scope and the verification checklist, see [`rc-beta.md`](rc-beta.md)
 and [`beta-readiness.md`](beta-readiness.md). For the canonical RC2 target and
@@ -38,6 +41,9 @@ Production requires strong, non-placeholder values for:
 - `SMTP_PASSWORD` when the configured SMTP server requires authentication
 
 `ONE_TIME_SECRET_ENCRYPTION_KEY` must be base64url-encoded 32-byte key material.
+`ONE_TIME_SECRET_KEY_VERSION` labels newly encrypted one-time-secret rows and
+defaults to `v1`; it is metadata, not replacement key material. Operators must
+retain every encryption key version needed by unconsumed rows during rotation.
 Rotate any provider or SMTP secret that is accidentally committed, logged, or
 shared.
 
@@ -144,6 +150,28 @@ Admins can edit this policy from a key detail page with **Update Request
 Policy**. The same validation is used by service and CLI workflows: endpoint
 values must be implemented `/v1` paths, explicit model values must not be
 endpoint paths, and explicit models must match existing enabled routes.
+
+## OIDC identity foundation
+
+The repository contains an OIDC authorization-code/PKCE service and
+`oidc_identities` persistence foundation, but no current API, admin route,
+template, or CLI command wires it into login. Local admin sessions remain the
+implemented authentication path. These settings are therefore disabled
+foundation inputs, not a deployment-ready SSO contract:
+
+- `OIDC_ENABLED=false` keeps the service disabled.
+- `OIDC_ISSUER_URL` is the expected issuer and discovery base URL.
+- `OIDC_CLIENT_ID` is the configured client/audience identifier.
+- `OIDC_CLIENT_SECRET` is environment-sourced secret material and must never be
+  persisted or logged.
+- `OIDC_REDIRECT_URI` is the registered callback URI for a future wired flow.
+- `OIDC_SCOPES` defaults to `openid profile email`.
+- `LOCAL_ADMIN_FALLBACK=true` is reserved for the intended fallback policy;
+  changing it does not currently replace or disable local admin login.
+
+Do not enable or advertise OIDC/SSO from these settings alone. Runtime wiring,
+state/nonce storage, identity linking, session creation, operator UX, failure
+handling, and integration/browser evidence are required first.
 
 ## Database Configuration
 

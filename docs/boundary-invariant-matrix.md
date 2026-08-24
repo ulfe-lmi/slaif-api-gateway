@@ -1,5 +1,8 @@
 # Boundary invariant matrix
 
+> **Status:** Focused post-MVP extension snapshot
+> **Boundary:** These tests do not redefine the original one-organization SME MVP
+
 | Boundary | Negative test | Code reference |
 |---|---|---|
 | Cross-unit catalog access | `test_cross_unit_policy_drift_fails_closed` | `PolicyBundleService.check_drift` |

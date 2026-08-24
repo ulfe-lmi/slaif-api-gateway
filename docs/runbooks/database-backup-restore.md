@@ -1,5 +1,8 @@
 # Database Backup And Restore
 
+> **Status:** Current operator runbook
+> **Safety:** Restore only into an explicitly disposable target before production decisions
+
 ## Source Of Truth
 
 PostgreSQL is authoritative for key metadata, HMAC digests, quotas,

@@ -1,10 +1,17 @@
-# Provider governance, residency, retention, and destinations
+# Provider-governance foundation
 
-Provider governance records reviewed metadata: residency region, retention
-policy, training-use flag, zero-data-retention claim, approved tool
-destinations, evidence date, and reviewer. Routing can be constrained by these
-attributes through policy bundles.
+> **Status:** Standalone validation foundation; not part of ordinary route resolution
+> **Audience:** Maintainers evaluating post-MVP governance integration
 
-Stale or invalid evidence fails closed with a clear reapproval requirement.
-This is organizational governance metadata only; it does not interpret provider
-terms and grants no legal warranty. Provider secrets are never stored here.
+The provider-governance model can validate reviewed metadata such as residency,
+retention/training claims, approved destinations, evidence dates, and reviewers.
+Its validation rejects missing, invalid, or stale evidence.
+
+The current OpenAI/OpenRouter route resolver and provider-forwarding pipeline do
+not consume this service. Ordinary runtime policy remains the key/route/provider
+contract documented in [provider forwarding](provider-forwarding-contract.md).
+Provider-governance metadata must not be described as an enforced residency or
+retention control until it is wired and proven at that boundary.
+
+This foundation stores no provider secret and offers no interpretation or
+warranty concerning provider terms, residency, retention, or legal compliance.
