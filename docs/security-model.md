@@ -56,6 +56,14 @@ display provider key values.
 Admin key policy selectors use only local provider-config metadata and local
 route metadata. They do not display provider key values, plaintext gateway
 keys, token hashes, prompts, completions, or raw request/response bodies.
+Versioned client modules are also trust-limited. Module ID/version/fixture
+digest are reviewed server-side facts; malformed or mismatched metadata fails
+closed. Codex 0.149 identity hints remain transient and untrusted, while its
+search declaration candidates cannot select a route, provider, hosted-tool
+fence, pricing rule, quota reservation, accounting category, or external
+authority. No raw Codex installation, session, thread, turn, workspace, or
+request-content metadata is stored, logged, audited, exported, hashed, or
+forwarded.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

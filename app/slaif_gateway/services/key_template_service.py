@@ -9,7 +9,8 @@ from decimal import Decimal
 from typing import Protocol
 
 from slaif_gateway.db.models import AuditLog, KeyTemplate, KeyTemplateRevision
-from slaif_gateway.schemas.keys import CreateGatewayKeyInput, CreatedGatewayKey
+from slaif_gateway.modules.clients.registry import CODEX_0147_CLIENT_MODULE, client_module_metadata
+from slaif_gateway.schemas.keys import CreatedGatewayKey, CreateGatewayKeyInput
 from slaif_gateway.services.calibration_summary_service import CalibrationPreviewResult
 from slaif_gateway.services.chat_streaming_live_burn import (
     CHAT_STREAMING_LIVE_BURN_METADATA_KEY,
@@ -31,12 +32,12 @@ from slaif_gateway.services.key_policy_validation import (
     RESPONSES_ENDPOINT,
 )
 from slaif_gateway.services.responses_route_capabilities import (
-    RESPONSES_CAPABILITY_COMPACT,
     RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
     RESPONSES_CAPABILITY_CODEX_COMPACTION,
     RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+    RESPONSES_CAPABILITY_COMPACT,
     RESPONSES_CAPABILITY_CONVERSATION_ITEMS,
     RESPONSES_CAPABILITY_CONVERSATIONS,
     RESPONSES_CAPABILITY_CUSTOM_TOOLS,
@@ -74,6 +75,7 @@ _RESPONSES_POLICY_ALLOWED_KEYS = frozenset(
         "background",
         "multimodal",
         "notes",
+        "client_module",
     }
 )
 _RESPONSES_POLICY_ALLOWED_CAPABILITIES = frozenset(
@@ -842,6 +844,18 @@ def _normalize_responses_template_policy(raw_policy: object) -> dict[str, object
         "background": False,
         "multimodal": False,
     }
+    if {
+        RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
+        RESPONSES_CAPABILITY_CODEX_CLIENT_TOOLS,
+        RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+        RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
+        RESPONSES_CAPABILITY_CODEX_COMPACTION,
+    }.issubset(capabilities):
+        raw_module = raw_policy.get("client_module")
+        expected_module = client_module_metadata(CODEX_0147_CLIENT_MODULE)
+        if raw_module is not None and raw_module != expected_module:
+            raise KeyTemplateError("Only the qualified Codex client module may be bound to this policy.")
+        policy["client_module"] = expected_module
     notes = raw_policy.get("notes")
     if notes is not None:
         cleaned_notes = _clean_optional_text(str(notes))

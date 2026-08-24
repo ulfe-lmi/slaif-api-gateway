@@ -6,8 +6,8 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
 from slaif_gateway.modules.contracts import (
-    ClientServerPair,
     DEFAULT_CLIENT_MODULE_ID,
+    ClientServerPair,
     ModuleSelectionError,
     ServerModuleDescriptor,
 )
@@ -83,8 +83,13 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
 )
 
 CLIENT_SERVER_COMPATIBILITY = frozenset(
-    ClientServerPair(DEFAULT_CLIENT_MODULE_ID, module_id)
-    for module_id in SERVER_MODULE_REGISTRY
+    {
+        *(
+            ClientServerPair(DEFAULT_CLIENT_MODULE_ID, module_id)
+            for module_id in SERVER_MODULE_REGISTRY
+        ),
+        ClientServerPair("codex-0.147-responses-v1", OPENAI_SERVER_MODULE_ID),
+    }
 )
 
 
@@ -128,6 +133,15 @@ def ensure_client_server_pair(client_module_id: str, server_module_id: str) -> N
         raise ProviderConfigurationError(
             "The selected client and server modules are incompatible",
             provider=server_module_id,
+            error_code="incompatible_module_pair",
+        )
+
+
+def ensure_client_module_has_server_pair(client_module_id: str) -> None:
+    """Reject a client dialect that has no reviewed server implementation."""
+    if not any(pair.client_module_id == client_module_id for pair in CLIENT_SERVER_COMPATIBILITY):
+        raise ProviderConfigurationError(
+            "The selected client module has no compatible server module",
             error_code="incompatible_module_pair",
         )
 

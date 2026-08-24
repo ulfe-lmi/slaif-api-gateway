@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 DEFAULT_CLIENT_MODULE_ID = "openai-default"
 DEFAULT_CLIENT_MODULE_VERSION = "1"
@@ -26,6 +26,9 @@ class CanonicalClientRequest:
     endpoint: str
     body: Mapping[str, object]
     capability_intents: tuple[str, ...] = ()
+    adapter_managed_declaration_candidates: tuple[str, ...] = ()
+    stream_profile: str | None = None
+    profile_facts: Mapping[str, str] = field(default_factory=dict)
     identity_hints: Mapping[str, str] = field(default_factory=dict)
 
 

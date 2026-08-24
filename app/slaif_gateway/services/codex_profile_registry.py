@@ -15,6 +15,12 @@ from datetime import date
 from types import MappingProxyType
 from typing import Mapping
 
+from slaif_gateway.modules.clients.codex_0147 import (
+    CODEX_0147_CLIENT_MODULE_ID,
+    CODEX_0147_CLIENT_MODULE_VERSION,
+    CODEX_0147_FIXTURE_SHA256,
+)
+
 PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
@@ -155,10 +161,24 @@ class CodexQualificationProfile:
     profile_name: str
     provider_display_name: str
     catalog_source: str = "bundled"
+    client_module_id: str | None = None
+    client_module_version: str | None = None
 
     def __post_init__(self) -> None:
         if not _SAFE_ID.fullmatch(self.profile_id):
             raise ValueError("Codex profile ID is not safely bounded.")
+        if (self.client_module_id is None) != (self.client_module_version is None):
+            raise ValueError("Codex client module metadata must be complete.")
+        if self.client_module_id is not None and (
+            not _SAFE_ID.fullmatch(self.client_module_id)
+            or not _SAFE_TOKEN.fullmatch(self.client_module_version or "")
+        ):
+            raise ValueError("Codex client module metadata is unsafe.")
+        if self.client_module_id == CODEX_0147_CLIENT_MODULE_ID and (
+            self.client_module_version != CODEX_0147_CLIENT_MODULE_VERSION
+            or self.fixture_sha256 != CODEX_0147_FIXTURE_SHA256
+        ):
+            raise ValueError("Codex 0.147 client module metadata does not match its fixture.")
         for name, value in {
             "cli_version": self.cli_version,
             "public_model": self.public_model,
@@ -370,6 +390,8 @@ OPENAI_CODEX_PROFILE = _profile(
     live_qualification=False,
     profile_name="slaif",
     provider_display_name="OpenAI",
+    client_module_id=CODEX_0147_CLIENT_MODULE_ID,
+    client_module_version=CODEX_0147_CLIENT_MODULE_VERSION,
 )
 
 

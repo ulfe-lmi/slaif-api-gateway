@@ -47,6 +47,7 @@
         <dt>Codex profile ID</dt><dd>{{ route.codex_profile_id or "None" }}</dd>
         <dt>Codex metadata version</dt><dd>{{ route.codex_metadata_version or "None" }}</dd>
         <dt>Codex CLI version</dt><dd>{{ route.codex_cli_version or "None" }}</dd>
+        <dt>Client module</dt><dd>{{ codex_profile_artifacts.client_module_id if codex_profile_artifacts else "None" }}{% if codex_profile_artifacts and codex_profile_artifacts.client_module_version %} / {{ codex_profile_artifacts.client_module_version }}{% endif %}</dd>
         <dt>Codex provider identity</dt><dd>{{ route.codex_provider_display_name or route.codex_provider_kind or "None" }}</dd>
         <dt>Codex wire API</dt><dd>{{ route.codex_wire_api or "None" }}</dd>
         <dt>Codex paired route</dt><dd>{% if route.codex_paired_route_id %}<a href="/admin/routes/{{ route.codex_paired_route_id }}">{{ route.codex_paired_route_id }}</a>{% else %}None{% endif %}</dd>

@@ -13,6 +13,7 @@ class ClientModule(Protocol):
 
     module_id: str
     module_version: str
+    fixture_sha256: str | None
 
     def normalize(
         self,
@@ -20,3 +21,12 @@ class ClientModule(Protocol):
         body: Mapping[str, object],
     ) -> CanonicalClientRequest:
         """Return fresh canonical facts without side effects or retention."""
+
+    def normalize_responses(
+        self,
+        body: Mapping[str, object],
+    ) -> CanonicalClientRequest:
+        """Classify a Responses request using pure client-dialect logic."""
+
+    def stream_profile(self, body: Mapping[str, object]) -> str | None:
+        """Return a bounded client stream-profile fact, never authority."""

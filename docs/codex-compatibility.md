@@ -46,6 +46,45 @@ without a remote refresh. Codex also supports `model_catalog_json` to replace
 the startup catalog; using a replacement would be a different profile and
 requires a distinct fixture and review.
 
+## Versioned client-module boundary
+
+The qualified 0.147 profile is registered as client module
+`codex-0.147-responses-v1`, version `1`, with the exact fixture digest above.
+Existing fully qualified Codex keys bind to it automatically; legacy keys
+without an explicit module declaration use only that complete server-side
+profile/gate shape as the compatibility path.
+
+Codex CLI 0.149.0 is a separate structural-capture module, not a qualified
+profile:
+
+| Property | Pinned value |
+| --- | --- |
+| Official source distribution | npm `@openai/codex@0.149.0` |
+| Verified raw version | `codex-cli 0.149.0` |
+| Tarball SHA-512 | `8b876bca3d98d63fb4d0c6f99fed27ef51189d32bdfca0dcd9c745a3f7570f4775a13a20d9b854b2c2831083a72a69c47f9d4fd19fc72535af4cac3f507c8ebd` |
+| Client module | `codex-0.149-responses-v1` / version `1` |
+| Structural fixture | `tests/fixtures/codex/0.149.0/responses-structural.json` |
+| Fixture SHA-256 | `a93a08766d2f3d3cd702425b52120fc28c9154012dc68e05467536b821ed1ae2` |
+| Runtime status | default-denied; no compatible server pair; no qualification or provider/model E2E |
+
+The capture used a private disposable `CODEX_HOME`, an empty workspace, a
+synthetic token, and a fake numeric-loopback Responses server. No provider key,
+model call, network tool, plugin, MCP server, user state, or raw request/body
+material was retained. The fixture records only structural field/type/count
+facts and fixed safe findings. A search flag did not change the captured
+shape.
+
+The 0.149 module validates the bounded envelope and classifies exact
+`web_search` and `tool_search` declarations as
+`adapter_managed_codex_search` candidates. They do not activate SLAIF hosted
+tool policy or external-tool accounting, and the Gateway does not strip or
+rewrite them. Explicit search choices, preview aliases, MCP/connectors, file
+search, code execution, computer/shell/patch authority, provider URLs,
+headers, credentials, and unknown shapes fail closed. OpenAI documents
+built-in Responses tools separately from caller-provided function/custom
+tools; that authority-class distinction is descriptive and does not authorize
+Gateway forwarding ([Responses create reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)).
+
 ## Protocol qualification and profile-v2 configuration
 
 Qualification profiles are immutable server-defined registry entries. The
@@ -161,8 +200,9 @@ standard-key-only. It requires exactly one ready provider, model
 `gpt-5.6-sol`, endpoints `/v1/models`, `/v1/responses`, and
 `/v1/responses/compact`, no allow-all policy, positive finite request/token/EUR
 cost limits, and an audit reason. A fresh readiness check happens before key
-mutation. The resulting Responses policy contains only the five canonical
-Codex gates and local `function`/`custom` tool types. This does not enable
+mutation. The resulting Responses policy contains the five canonical Codex
+gates, local `function`/`custom` tool types, and the automatically bound
+reviewed `codex-0.147-responses-v1` module identity/digest. This does not enable
 hosted tools, MCP, background work, provider state, trusted calibration, or
 external execution. The plaintext-once and direct email-delivery creation
 results show only those fixed capability/tool names when the policy exists;

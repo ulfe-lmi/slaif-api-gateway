@@ -793,6 +793,7 @@ async def create_admin_key(
                     "allowed_local_tool_types": list(
                         CODEX_RESPONSES_POLICY["allowed_local_tool_types"]
                     ),
+                    "client_module": dict(CODEX_RESPONSES_POLICY["client_module"]),
                 },
             )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)

@@ -13,21 +13,22 @@ from fnmatch import fnmatchcase
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-from slaif_gateway.services.responses_route_capabilities import (
-    RESPONSES_CAPABILITY_IMAGE_INPUT,
-    ResponsesRouteCapabilityError,
-    enforce_responses_route_capabilities,
-    parse_codex_compaction_compatible_route_ids,
-    parse_codex_route_limits,
-)
+from slaif_gateway.modules.clients.registry import CODEX_0147_CLIENT_MODULE, client_module_metadata
 from slaif_gateway.services.codex_profile_registry import (
     CODEX_PROFILE_REGISTRY,
     OPENAI_CODEX_PROFILE,
     PROFILE_ID,
     PROFILE_METADATA_VERSION,
     CodexQualificationProfile,
-    validate_codex_profile_registry,
     validate_codex_profile_declaration,
+    validate_codex_profile_registry,
+)
+from slaif_gateway.services.responses_route_capabilities import (
+    RESPONSES_CAPABILITY_IMAGE_INPUT,
+    ResponsesRouteCapabilityError,
+    enforce_responses_route_capabilities,
+    parse_codex_compaction_compatible_route_ids,
+    parse_codex_route_limits,
 )
 from slaif_gateway.utils.redaction import redact_text
 
@@ -68,6 +69,7 @@ CODEX_RESPONSES_POLICY: dict[str, object] = {
         "codex_compaction",
     ],
     "allowed_local_tool_types": ["function", "custom"],
+    "client_module": client_module_metadata(CODEX_0147_CLIENT_MODULE),
 }
 
 _CODEX_GATES = (
@@ -145,6 +147,9 @@ class CodexQualificationResult:
     metadata_version: int | None = None
     provider_kind: str | None = None
     provider_display_name: str | None = None
+    client_module_id: str | None = None
+    client_module_version: str | None = None
+    client_module_fixture_sha256: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -192,6 +197,9 @@ class CodexProfileArtifacts:
     qualification_profile_id: str = CODEX_PROFILE_ID
     model_catalog_json: str | None = None
     model_catalog_target: str | None = None
+    client_module_id: str | None = None
+    client_module_version: str | None = None
+    client_module_fixture_sha256: str | None = None
 
     def to_safe_dict(self) -> dict[str, object]:
         return {
@@ -208,6 +216,9 @@ class CodexProfileArtifacts:
             "qualification_profile_id": self.qualification_profile_id,
             "model_catalog_json": self.model_catalog_json,
             "model_catalog_target": self.model_catalog_target,
+            "client_module_id": self.client_module_id,
+            "client_module_version": self.client_module_version,
+            "client_module_fixture_sha256": self.client_module_fixture_sha256,
         }
 
 
@@ -595,6 +606,9 @@ def render_codex_profile_artifacts(
         ),
         model_catalog_json=profile.model_catalog_artifact,
         model_catalog_target=profile.model_catalog_target,
+        client_module_id=profile.client_module_id,
+        client_module_version=profile.client_module_version,
+        client_module_fixture_sha256=profile.fixture_sha256,
     )
 
 
@@ -953,6 +967,9 @@ def _result(
         ),
         provider_kind=resolved_profile.provider_kind if resolved_profile else None,
         provider_display_name=resolved_profile.provider_display_name if resolved_profile else None,
+        client_module_id=resolved_profile.client_module_id if resolved_profile else None,
+        client_module_version=resolved_profile.client_module_version if resolved_profile else None,
+        client_module_fixture_sha256=resolved_profile.fixture_sha256 if resolved_profile else None,
     )
 
 
