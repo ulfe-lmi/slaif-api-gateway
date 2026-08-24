@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from slaif_gateway.modules.contracts import CanonicalClientRequest
+from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 
 
 class ClientModule(Protocol):
@@ -14,6 +15,7 @@ class ClientModule(Protocol):
     module_id: str
     module_version: str
     fixture_sha256: str | None
+    policy_spec: ResponsesClientPolicySpec | None
 
     def normalize(
         self,
@@ -30,3 +32,6 @@ class ClientModule(Protocol):
 
     def stream_profile(self, body: Mapping[str, object]) -> str | None:
         """Return a bounded client stream-profile fact, never authority."""
+
+    def encrypted_reasoning_output_requested(self, body: Mapping[str, object]) -> bool:
+        """Classify client-specific encrypted-reasoning intent without authority."""

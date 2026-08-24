@@ -10,6 +10,11 @@ from slaif_gateway.modules.contracts import (
     CanonicalClientRequest,
     ModuleSelectionError,
 )
+from slaif_gateway.modules.clients.codex_0148 import CODEX_0148_CLIENT_TOOL_TAXONOMY
+from slaif_gateway.modules.clients.codex_support import (
+    CODEX_0147_INCLUDE_VALUE,
+    build_codex_0147_policy_spec,
+)
 
 CODEX_0147_CLIENT_MODULE_ID = "codex-0.147-responses-v1"
 CODEX_0147_CLIENT_MODULE_VERSION = "1"
@@ -26,6 +31,9 @@ _PROFILE_FACTS = MappingProxyType(
         "fixture_sha256": CODEX_0147_FIXTURE_SHA256,
     }
 )
+CODEX_0147_POLICY_SPEC = build_codex_0147_policy_spec(
+    taxonomy_0148=CODEX_0148_CLIENT_TOOL_TAXONOMY,
+)
 
 
 class Codex0147ResponsesClientModule:
@@ -34,6 +42,7 @@ class Codex0147ResponsesClientModule:
     module_id = CODEX_0147_CLIENT_MODULE_ID
     module_version = CODEX_0147_CLIENT_MODULE_VERSION
     fixture_sha256 = CODEX_0147_FIXTURE_SHA256
+    policy_spec = CODEX_0147_POLICY_SPEC
 
     def normalize(
         self,
@@ -68,3 +77,7 @@ class Codex0147ResponsesClientModule:
     def stream_profile(self, body: Mapping[str, object]) -> str:
         _ = body
         return self.module_id
+
+    def encrypted_reasoning_output_requested(self, body: Mapping[str, object]) -> bool:
+        include = body.get("include")
+        return isinstance(include, list) and CODEX_0147_INCLUDE_VALUE in include

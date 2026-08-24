@@ -66,8 +66,8 @@ privacy, retry, and error behavior are unchanged.
 Codex 0.149 client syntax is structurally captured and registered, but has no
 qualification, provider/model E2E, Local Coding server module, or compatible
 pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
-module may return only bounded candidate facts for adapter-managed
-`web_search`/`tool_search` declarations; it cannot enter hosted-tool policy,
+module may return only bounded candidate facts for the observed adapter-managed
+`web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
 accounting, routing, or provider forwarding.
 
 Client-module profile facts are limited to the reviewed module ID, version,

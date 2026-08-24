@@ -98,7 +98,6 @@
   },
   "findings": {
     "adapter_managed_candidate_types": [
-      "tool_search",
       "web_search"
     ],
     "built_in_search_is_not_gateway_authority": true,

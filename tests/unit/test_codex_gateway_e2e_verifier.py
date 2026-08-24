@@ -64,6 +64,23 @@ def test_argument_parser_has_no_mutating_or_secret_interface() -> None:
         assert exc_info.value.code == verifier.SAFE_ARGUMENT_ERROR
 
 
+def test_codex_binary_override_requires_absolute_owner_only_non_symlink(tmp_path: Path) -> None:
+    binary = tmp_path / "codex"
+    binary.write_bytes(b"synthetic")
+    binary.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+    assert verifier._resolve_codex_binary(str(binary)) == binary
+    with pytest.raises(verifier.VerificationError) as relative:
+        verifier._resolve_codex_binary("relative/codex")
+    assert relative.value.code == "unsafe_codex_binary"
+
+    symlink = tmp_path / "codex-link"
+    symlink.symlink_to(binary)
+    with pytest.raises(verifier.VerificationError) as linked:
+        verifier._resolve_codex_binary(str(symlink))
+    assert linked.value.code == "unsafe_codex_binary"
+
+
 def test_fixed_failure_output_never_reflects_unknown_value() -> None:
     output = verifier.fixed_error_output("private operator value")
 

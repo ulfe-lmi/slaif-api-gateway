@@ -17,9 +17,9 @@ Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
 explicit OpenAI server pair. `codex-0.149-responses-v1` has no compatible
 server pair and therefore cannot reach this forwarding contract. Its
-adapter-managed `web_search`/`tool_search` candidate facts are never converted
-into hosted-tool admission, external-tool pricing, or provider payload
-authority by the Gateway.
+The observed adapter-managed `web_search` candidate is never converted into
+hosted-tool admission, external-tool pricing, or provider payload authority by
+the Gateway; unobserved `tool_search` remains rejected.
 
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured

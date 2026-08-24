@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
@@ -56,6 +57,8 @@ DECLARATIONS = frozenset(
 )
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -123,7 +126,7 @@ def _body(*, stream: bool = True, input_items: list[object] | None = None) -> di
 
 
 def _apply(body: dict[str, object]):
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
@@ -303,12 +306,12 @@ def test_streaming_client_tools_require_three_independent_key_gates(
         "allow_codex_streaming_tool_events": stream_events,
     }
     if allowed:
-        assert ResponsesRequestPolicy(Settings()).apply(_body(), **kwargs).effective_body[
+        assert _policy(Settings()).apply(_body(), **kwargs).effective_body[
             "stream"
         ] is True
     else:
         with pytest.raises(RequestPolicyError):
-            ResponsesRequestPolicy(Settings()).apply(_body(), **kwargs)
+            _policy(Settings()).apply(_body(), **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -726,7 +729,7 @@ def test_event_and_replay_size_caps_fail_closed_without_echoing_content() -> Non
         {"type": "custom_tool_call_output", "call_id": "call_1", "output": "x"},
     ]
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(
+        _policy(
             Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)
         ).apply(
             _body(input_items=items),
@@ -747,7 +750,7 @@ def test_codex_outputs_without_all_gates_are_rejected_before_replay() -> None:
     )
 
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             body,
             allow_codex_request_envelope=True,
             allow_codex_client_tools=True,

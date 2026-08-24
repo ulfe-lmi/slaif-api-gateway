@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
-from slaif_gateway.modules.clients.codex_support import (
-    _SUPPORTED_CODEX_COMPACT_FIELDS,
+from slaif_gateway.modules.clients.responses_support import (
     TEXT_FORMAT_TEXT,
     TEXT_FORMAT_JSON_OBJECT,
     TEXT_FORMAT_JSON_SCHEMA as _TEXT_FORMAT_JSON_SCHEMA,
@@ -29,22 +28,12 @@ from slaif_gateway.modules.clients.codex_support import (
     _SUPPORTED_INPUT_FILE_PART_FIELDS,
     _SUPPORTED_FUNCTION_CALL_OUTPUT_FIELDS,
     _SUPPORTED_CUSTOM_TOOL_CALL_OUTPUT_FIELDS,
-    _SUPPORTED_CODEX_FUNCTION_CALL_OUTPUT_FIELDS,
-    _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_OUTPUT_FIELDS,
-    _SUPPORTED_CODEX_TOOL_OUTPUT_CONTENT_FIELDS,
-    _SUPPORTED_CODEX_FUNCTION_CALL_FIELDS,
-    _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS,
-    _SUPPORTED_CODEX_REASONING_REPLAY_FIELDS,
-    _SUPPORTED_CODEX_COMPACTION_REPLAY_FIELDS,
-    _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS,
     _SUPPORTED_FUNCTION_TOOL_FIELDS,
     _SUPPORTED_CUSTOM_TOOL_FIELDS,
     _SUPPORTED_FUNCTION_TOOL_CHOICE_FIELDS,
     _SUPPORTED_CUSTOM_TOOL_CHOICE_FIELDS,
     _SUPPORTED_CUSTOM_TOOL_TEXT_FORMAT_FIELDS,
     _SUPPORTED_CUSTOM_TOOL_GRAMMAR_FORMAT_FIELDS,
-    _SUPPORTED_CODEX_ADDITIONAL_TOOLS_FIELDS,
-    _SUPPORTED_CODEX_NAMESPACE_FIELDS,
     _SUPPORTED_CONVERSATION_ITEM_CREATE_FIELDS,
     _SUPPORTED_CONVERSATION_UPDATE_FIELDS,
     _CONVERSATION_UPDATE_MAX_METADATA_KEYS,
@@ -63,40 +52,8 @@ from slaif_gateway.modules.clients.codex_support import (
     _FILE_DATA_URL_PREFIX,
     _FILE_DATA_URL_BASE64_SUFFIX,
     _BASE64_CHARS_RE,
-    _CODEX_INCLUDE_VALUE,
-    _CODEX_REASONING_EFFORTS,
-    _CODEX_REASONING_CONTEXT,
-    _CODEX_TEXT_VERBOSITIES,
-    _CODEX_MESSAGE_ID_RE,
-    _CODEX_TOOL_CALL_ID_RE,
-    _CODEX_TOOL_CALL_STATUSES,
-    _CODEX_CLIENT_METADATA_KEYS,
-    _CODEX_MAX_INCLUDE_ITEMS,
-    _CODEX_MAX_PROMPT_CACHE_KEY_BYTES,
-    _CODEX_MAX_REASONING_BYTES,
-    _CODEX_MAX_CLIENT_METADATA_KEYS,
-    _CODEX_MAX_CLIENT_METADATA_KEY_BYTES,
-    _CODEX_MAX_CLIENT_METADATA_VALUE_BYTES,
-    _CODEX_MAX_CLIENT_METADATA_BYTES,
-    _CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH,
-    _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES,
-    _CODEX_MAX_CLIENT_TOOL_DESCRIPTION_BYTES,
-    _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES,
-    _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES,
-    _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS,
-    _CODEX_EXEC_COMMAND_ALLOWED_AUTHORITY_KEY_PATHS,
-    _CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES,
-    _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES,
-    _CODEX_MAX_REASONING_SUMMARY_BYTES,
-    _CODEX_MAX_REASONING_SUMMARY_PARTS,
-    _CODEX_MAX_COMPACTION_ITEM_BYTES,
-    _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD,
-    _CODEX_MAX_INTERNAL_CHAT_MESSAGE_METADATA_BYTES,
-    _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_ITEM_TYPES,
-    _CODEX_CLIENT_TOOL_TAXONOMY_0148,
-    _codex_client_tool_taxonomy_for,
-    codex_client_tool_taxonomy_id as _codex_client_tool_taxonomy_id,
 )
+from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
@@ -161,7 +118,9 @@ TEXT_FORMAT_JSON_SCHEMA = _TEXT_FORMAT_JSON_SCHEMA
 
 def codex_client_tool_taxonomy_id(policy: object) -> str | None:
     """Compatibility export for the pure client-taxonomy helper."""
-    return _codex_client_tool_taxonomy_id(policy)
+    if isinstance(policy, Mapping) and isinstance(policy.get("codex_client_tool_taxonomy"), str):
+        return policy["codex_client_tool_taxonomy"]
+    return None
 
 
 class ResponsesRequestPolicyError(RequestPolicyError):
@@ -198,8 +157,14 @@ class CodexCompactionReplayCandidate:
 class ResponsesRequestPolicy:
     """Apply narrow Responses guardrails before route/rate/quota/provider work."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        client_spec: ResponsesClientPolicySpec | None = None,
+    ) -> None:
         self._settings = settings
+        self._codex_spec = client_spec
 
     def apply(
         self,
@@ -483,7 +448,7 @@ class ResponsesRequestPolicy:
         self._reject_unknown_fields(
             effective_body,
             allowed_fields=(
-                _SUPPORTED_CODEX_COMPACT_FIELDS if codex_requested else _SUPPORTED_COMPACT_FIELDS
+                self._codex_spec.compact_fields if codex_requested else _SUPPORTED_COMPACT_FIELDS
             ),
         )
 
@@ -920,7 +885,7 @@ class ResponsesRequestPolicy:
                 encrypted_value = canonical_item["encrypted_content"]
                 assert isinstance(encrypted_value, str)
                 encrypted_reasoning_bytes += len(encrypted_value.encode("utf-8"))
-                if encrypted_reasoning_bytes > _CODEX_MAX_ENCRYPTED_REASONING_REQUEST_BYTES:
+                if encrypted_reasoning_bytes > self._codex_spec.max_encrypted_reasoning_request_bytes:
                     _raise(
                         "input",
                         "responses_codex_encrypted_reasoning_replay_too_large",
@@ -1147,7 +1112,9 @@ class ResponsesRequestPolicy:
         allow_codex_compaction_replay: bool,
     ) -> dict[str, Any]:
         copied_item = dict(item)
-        if _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD not in copied_item:
+        if self._codex_spec is None:
+            return copied_item
+        if self._codex_spec.internal_chat_message_metadata_field not in copied_item:
             return copied_item
 
         fully_gated = all(
@@ -1162,12 +1129,12 @@ class ResponsesRequestPolicy:
         if (
             not fully_gated
             or copied_item.get("type")
-            not in _CODEX_INTERNAL_CHAT_MESSAGE_METADATA_ITEM_TYPES
+            not in self._codex_spec.internal_chat_message_metadata_item_types
         ):
             return copied_item
 
-        metadata_param = f"{param}.{_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD}"
-        metadata = copied_item[_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD]
+        metadata_param = f"{param}.{self._codex_spec.internal_chat_message_metadata_field}"
+        metadata = copied_item[self._codex_spec.internal_chat_message_metadata_field]
         if metadata is not None:
             if not isinstance(metadata, Mapping):
                 raise ResponsesRequestPolicyError(
@@ -1183,14 +1150,14 @@ class ResponsesRequestPolicy:
                     param=metadata_param,
                     error_code="responses_codex_internal_chat_metadata_invalid",
                 ) from exc
-            if metadata_bytes > _CODEX_MAX_INTERNAL_CHAT_MESSAGE_METADATA_BYTES:
+            if metadata_bytes > self._codex_spec.max_internal_chat_message_metadata_bytes:
                 raise ResponsesRequestPolicyError(
                     "Codex internal chat metadata must be a bounded JSON object or null.",
                     param=metadata_param,
                     error_code="responses_codex_internal_chat_metadata_invalid",
                 )
 
-        del copied_item[_CODEX_INTERNAL_CHAT_MESSAGE_METADATA_FIELD]
+        del copied_item[self._codex_spec.internal_chat_message_metadata_field]
         return copied_item
 
     def _validate_codex_additional_tools_item(
@@ -1200,7 +1167,7 @@ class ResponsesRequestPolicy:
         param: str,
         codex_client_tool_taxonomy: str | None = None,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
-        unknown = set(item) - _SUPPORTED_CODEX_ADDITIONAL_TOOLS_FIELDS
+        unknown = set(item) - self._codex_spec.additional_tools_fields
         if unknown:
             _raise(
                 f"{param}.{sorted(unknown)[0]}",
@@ -1215,9 +1182,9 @@ class ResponsesRequestPolicy:
             )
         namespaces = item.get("tools")
         taxonomy = (
-            _CODEX_CLIENT_TOOL_TAXONOMY_0148
-            if codex_client_tool_taxonomy == "codex_0_148"
-            else _codex_client_tool_taxonomy_for(namespaces)
+            self._codex_spec.taxonomy_0148
+            if codex_client_tool_taxonomy == self._codex_spec.taxonomy_id_0148
+            else self._codex_spec.taxonomy_for(namespaces)
         )
         if taxonomy is None:
             _raise(
@@ -1240,7 +1207,7 @@ class ResponsesRequestPolicy:
                     "responses_codex_client_tools_invalid",
                     "Codex client tool namespaces must be objects.",
                 )
-            unknown_namespace_fields = set(namespace) - _SUPPORTED_CODEX_NAMESPACE_FIELDS
+            unknown_namespace_fields = set(namespace) - self._codex_spec.namespace_fields
             if unknown_namespace_fields:
                 _raise(
                     f"{namespace_param}.{sorted(unknown_namespace_fields)[0]}",
@@ -1319,9 +1286,9 @@ class ResponsesRequestPolicy:
                         "This Codex client tool has an invalid declaration type.",
                     )
                 if namespace_name == "functions" and tool_name == "request_user_input":
-                    allowed_authority_key_paths = _CODEX_REQUEST_USER_INPUT_ALLOWED_AUTHORITY_KEY_PATHS
+                    allowed_authority_key_paths = self._codex_spec.request_user_input_allowed_authority_key_paths
                 elif namespace_name == "functions" and tool_name == "exec_command":
-                    allowed_authority_key_paths = _CODEX_EXEC_COMMAND_ALLOWED_AUTHORITY_KEY_PATHS
+                    allowed_authority_key_paths = self._codex_spec.exec_command_allowed_authority_key_paths
                 else:
                     allowed_authority_key_paths = frozenset()
                 if _contains_recursive_codex_authority_marker(
@@ -1335,14 +1302,15 @@ class ResponsesRequestPolicy:
                 canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
                     tool,
                     param=tool_param,
-                    description_max_bytes=_CODEX_MAX_CLIENT_TOOL_DESCRIPTION_BYTES,
+                    description_max_bytes=self._codex_spec.max_client_tool_description_bytes,
                 )
                 if canonical_tool["type"] == "function":
                     total_schema_properties += _validate_codex_schema_complexity(
                         canonical_tool["parameters"],
                         param=f"{tool_param}.parameters",
+                        client_spec=self._codex_spec,
                     )
-                    if total_schema_properties > _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES:
+                    if total_schema_properties > self._codex_spec.max_client_tool_schema_properties:
                         _raise(
                             f"{param}.tools",
                             "responses_codex_client_tools_property_count_exceeded",
@@ -1396,7 +1364,7 @@ class ResponsesRequestPolicy:
                 "responses_custom_tool_format_too_large",
                 "The total Codex client custom format size exceeds the gateway limit.",
             )
-        if total_description_bytes > _CODEX_MAX_CLIENT_TOOL_TOTAL_DESCRIPTION_BYTES:
+        if total_description_bytes > self._codex_spec.max_client_tool_total_description_bytes:
             _raise(
                 f"{param}.tools",
                 "responses_codex_client_tools_too_large",
@@ -1410,7 +1378,7 @@ class ResponsesRequestPolicy:
                 for namespace_name, _tools in taxonomy
             ],
         }
-        if len(canonical_json_bytes(canonical_item)) > _CODEX_MAX_CLIENT_TOOL_DECLARATION_BYTES:
+        if len(canonical_json_bytes(canonical_item)) > self._codex_spec.max_client_tool_declaration_bytes:
             _raise(
                 param,
                 "responses_codex_client_tools_too_large",
@@ -1435,7 +1403,7 @@ class ResponsesRequestPolicy:
         *,
         param: str,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
-        unknown = set(item) - _SUPPORTED_CODEX_REASONING_REPLAY_FIELDS
+        unknown = set(item) - self._codex_spec.reasoning_replay_fields
         if unknown:
             _raise(
                 f"{param}.{sorted(unknown)[0]}",
@@ -1466,7 +1434,7 @@ class ResponsesRequestPolicy:
         self._validate_string_bytes(
             encrypted_content,
             param=f"{param}.encrypted_content",
-            max_bytes=_CODEX_MAX_ENCRYPTED_REASONING_ITEM_BYTES,
+            max_bytes=self._codex_spec.max_encrypted_reasoning_item_bytes,
             code="responses_codex_encrypted_reasoning_replay_too_large",
         )
         if "content" in item and item.get("content") is not None:
@@ -1478,7 +1446,7 @@ class ResponsesRequestPolicy:
         summary_value = item.get("summary", [])
         if (
             not isinstance(summary_value, list)
-            or len(summary_value) > _CODEX_MAX_REASONING_SUMMARY_PARTS
+            or len(summary_value) > self._codex_spec.max_reasoning_summary_parts
         ):
             _raise(
                 f"{param}.summary",
@@ -1491,7 +1459,7 @@ class ResponsesRequestPolicy:
             part_param = f"{param}.summary[{summary_index}]"
             if (
                 not isinstance(part, Mapping)
-                or set(part) != _SUPPORTED_CODEX_REASONING_SUMMARY_FIELDS
+                or set(part) != self._codex_spec.reasoning_summary_fields
             ):
                 _raise(
                     part_param,
@@ -1506,7 +1474,7 @@ class ResponsesRequestPolicy:
                 )
             text_value = str(part["text"])
             summary_bytes += len(text_value.encode("utf-8"))
-            if summary_bytes > _CODEX_MAX_REASONING_SUMMARY_BYTES:
+            if summary_bytes > self._codex_spec.max_reasoning_summary_bytes:
                 _raise(
                     f"{param}.summary",
                     "responses_codex_encrypted_reasoning_replay_too_large",
@@ -1531,7 +1499,7 @@ class ResponsesRequestPolicy:
         *,
         param: str,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
-        if set(item) != _SUPPORTED_CODEX_COMPACTION_REPLAY_FIELDS:
+        if set(item) != self._codex_spec.compaction_replay_fields:
             _raise(
                 param,
                 "responses_codex_compaction_replay_invalid",
@@ -1548,7 +1516,7 @@ class ResponsesRequestPolicy:
         self._validate_string_bytes(
             encrypted_content,
             param=f"{param}.encrypted_content",
-            max_bytes=_CODEX_MAX_COMPACTION_ITEM_BYTES,
+            max_bytes=self._codex_spec.max_compaction_item_bytes,
             code="responses_codex_compaction_replay_too_large",
         )
         canonical = {
@@ -1567,9 +1535,9 @@ class ResponsesRequestPolicy:
         custom: bool,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         allowed_fields = (
-            _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_FIELDS
+            self._codex_spec.custom_tool_call_fields
             if custom
-            else _SUPPORTED_CODEX_FUNCTION_CALL_FIELDS
+            else self._codex_spec.function_call_fields
         )
         unknown = set(item) - allowed_fields
         if unknown:
@@ -1586,7 +1554,7 @@ class ResponsesRequestPolicy:
                 "This Codex tool-call continuation type is invalid.",
             )
         call_id = item.get("call_id")
-        if not isinstance(call_id, str) or _CODEX_TOOL_CALL_ID_RE.fullmatch(call_id) is None:
+        if not isinstance(call_id, str) or self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None:
             _raise(
                 f"{param}.call_id",
                 "responses_codex_tool_roundtrip_invalid",
@@ -1624,7 +1592,7 @@ class ResponsesRequestPolicy:
                 code="responses_codex_tool_roundtrip_invalid",
             )
         status = item.get("status")
-        if status is not None and status not in _CODEX_TOOL_CALL_STATUSES:
+        if status is not None and status not in self._codex_spec.tool_call_statuses:
             _raise(
                 f"{param}.status",
                 "responses_codex_tool_roundtrip_invalid",
@@ -1803,9 +1771,9 @@ class ResponsesRequestPolicy:
         custom: bool,
     ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
         allowed_fields = (
-            _SUPPORTED_CODEX_CUSTOM_TOOL_CALL_OUTPUT_FIELDS
+            self._codex_spec.custom_tool_call_output_fields
             if custom
-            else _SUPPORTED_CODEX_FUNCTION_CALL_OUTPUT_FIELDS
+            else self._codex_spec.function_call_output_fields
         )
         unknown = set(item) - allowed_fields
         if unknown:
@@ -1822,7 +1790,7 @@ class ResponsesRequestPolicy:
                 "responses_codex_tool_roundtrip_invalid",
                 "Codex tool outputs require the matching bounded call ID.",
             )
-        if _CODEX_TOOL_CALL_ID_RE.fullmatch(call_id) is None:
+        if self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None:
             _raise(
                 f"{param}.call_id",
                 "responses_codex_tool_roundtrip_invalid",
@@ -1854,7 +1822,7 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex custom tool output parts must be bounded text objects.",
                     )
-                unknown_part_fields = set(part) - _SUPPORTED_CODEX_TOOL_OUTPUT_CONTENT_FIELDS
+                unknown_part_fields = set(part) - self._codex_spec.tool_output_content_fields
                 text = part.get("text")
                 if (
                     unknown_part_fields
@@ -2680,7 +2648,7 @@ class ResponsesRequestPolicy:
             )
         if "verbosity" in value:
             verbosity = value.get("verbosity")
-            if verbosity not in _CODEX_TEXT_VERBOSITIES:
+            if verbosity not in self._codex_spec.text_verbosities:
                 _raise(
                     "text.verbosity",
                     "responses_codex_envelope_invalid",
@@ -2832,19 +2800,19 @@ class ResponsesRequestPolicy:
                     "responses_codex_envelope_invalid",
                     "The Codex include field must contain the supported value.",
                 )
-            if len(include) > _CODEX_MAX_INCLUDE_ITEMS:
+            if len(include) > self._codex_spec.max_include_items:
                 _raise(
                     "include",
                     "responses_codex_envelope_invalid",
                     "The Codex include field contains too many values.",
                 )
-            if any(item != _CODEX_INCLUDE_VALUE for item in include):
+            if any(item != self._codex_spec.include_value for item in include):
                 _raise(
                     "include",
                     "responses_codex_envelope_invalid",
                     "The Codex include field contains an unsupported value.",
                 )
-            body["include"] = [_CODEX_INCLUDE_VALUE]
+            body["include"] = [self._codex_spec.include_value]
 
         if "parallel_tool_calls" in body and not isinstance(body.get("parallel_tool_calls"), bool):
             _raise(
@@ -2870,7 +2838,7 @@ class ResponsesRequestPolicy:
             self._validate_string_bytes(
                 prompt_cache_key,
                 param="prompt_cache_key",
-                max_bytes=_CODEX_MAX_PROMPT_CACHE_KEY_BYTES,
+                max_bytes=self._codex_spec.max_prompt_cache_key_bytes,
                 code="responses_codex_envelope_invalid",
             )
 
@@ -2903,7 +2871,7 @@ class ResponsesRequestPolicy:
                 )
             canonical_reasoning: dict[str, str] = {}
             effort = reasoning.get("effort")
-            if effort not in _CODEX_REASONING_EFFORTS:
+            if effort not in self._codex_spec.reasoning_efforts:
                 _raise(
                     "reasoning.effort",
                     "responses_codex_envelope_invalid",
@@ -2912,14 +2880,14 @@ class ResponsesRequestPolicy:
             canonical_reasoning["effort"] = str(effort)
             if "context" in reasoning:
                 context = reasoning.get("context")
-                if context != _CODEX_REASONING_CONTEXT:
+                if context != self._codex_spec.reasoning_context:
                     _raise(
                         "reasoning.context",
                         "responses_codex_envelope_invalid",
                         "The Codex reasoning context is not supported.",
                     )
-                canonical_reasoning["context"] = _CODEX_REASONING_CONTEXT
-            if len(canonical_json_bytes(canonical_reasoning)) > _CODEX_MAX_REASONING_BYTES:
+                canonical_reasoning["context"] = self._codex_spec.reasoning_context
+            if len(canonical_json_bytes(canonical_reasoning)) > self._codex_spec.max_reasoning_bytes:
                 _raise(
                     "reasoning",
                     "responses_codex_envelope_invalid",
@@ -2946,20 +2914,20 @@ class ResponsesRequestPolicy:
                 "responses_codex_envelope_invalid",
                 "The Codex client_metadata field must be an object.",
             )
-        if len(metadata) > _CODEX_MAX_CLIENT_METADATA_KEYS:
+        if len(metadata) > self._codex_spec.max_client_metadata_keys:
             _raise(
                 "client_metadata",
                 "responses_codex_envelope_invalid",
                 "The Codex client_metadata field contains too many keys.",
             )
         for key, value in metadata.items():
-            if not isinstance(key, str) or key not in _CODEX_CLIENT_METADATA_KEYS:
+            if not isinstance(key, str) or key not in self._codex_spec.client_metadata_keys:
                 _raise(
                     "client_metadata",
                     "responses_codex_envelope_invalid",
                     "The Codex client_metadata field contains an unsupported key.",
                 )
-            if len(key.encode("utf-8")) > _CODEX_MAX_CLIENT_METADATA_KEY_BYTES:
+            if len(key.encode("utf-8")) > self._codex_spec.max_client_metadata_key_bytes:
                 _raise(
                     "client_metadata",
                     "responses_codex_envelope_invalid",
@@ -2977,13 +2945,13 @@ class ResponsesRequestPolicy:
                     "responses_codex_envelope_invalid",
                     "A Codex client_metadata value contains unsupported characters.",
                 )
-            if len(value.encode("utf-8")) > _CODEX_MAX_CLIENT_METADATA_VALUE_BYTES:
+            if len(value.encode("utf-8")) > self._codex_spec.max_client_metadata_value_bytes:
                 _raise(
                     f"client_metadata.{key}",
                     "responses_codex_envelope_invalid",
                     "A Codex client_metadata value exceeds the gateway size limit.",
                 )
-        if len(canonical_json_bytes(dict(metadata))) > _CODEX_MAX_CLIENT_METADATA_BYTES:
+        if len(canonical_json_bytes(dict(metadata))) > self._codex_spec.max_client_metadata_bytes:
             _raise(
                 "client_metadata",
                 "responses_codex_envelope_invalid",
@@ -2998,7 +2966,7 @@ class ResponsesRequestPolicy:
                 "responses_codex_envelope_invalid",
                 "The Codex message item ID is invalid.",
             )
-        if not value.isascii() or not _CODEX_MESSAGE_ID_RE.fullmatch(value):
+        if not value.isascii() or not self._codex_spec.message_id_pattern.fullmatch(value):
             _raise(
                 param,
                 "responses_codex_envelope_invalid",
@@ -3826,11 +3794,19 @@ def responses_codex_encrypted_reasoning_replay_requested(body: Mapping[str, Any]
     )
 
 
-def responses_codex_encrypted_reasoning_output_requested(body: Mapping[str, Any]) -> bool:
+def responses_codex_encrypted_reasoning_output_requested(
+    body: Mapping[str, Any],
+    *,
+    client_spec: ResponsesClientPolicySpec | None = None,
+) -> bool:
     """Detect the legacy envelope request for provider encrypted reasoning output."""
 
     include = body.get("include")
-    return isinstance(include, list) and _CODEX_INCLUDE_VALUE in include
+    return (
+        client_spec is not None
+        and isinstance(include, list)
+        and client_spec.include_value in include
+    )
 
 
 def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
@@ -4482,12 +4458,23 @@ def _contains_recursive_codex_authority_marker(
     return False
 
 
-def _validate_codex_schema_complexity(value: Any, *, param: str) -> int:
+def _validate_codex_schema_complexity(
+    value: Any,
+    *,
+    param: str,
+    client_spec: ResponsesClientPolicySpec | None,
+) -> int:
+    if client_spec is None:
+        _raise(
+            param,
+            "responses_codex_client_tools_invalid",
+            "The selected client policy specification is unavailable.",
+        )
     property_count = 0
 
     def visit(node: Any, *, depth: int) -> None:
         nonlocal property_count
-        if depth > _CODEX_MAX_CLIENT_TOOL_SCHEMA_DEPTH:
+        if depth > client_spec.max_client_tool_schema_depth:
             _raise(
                 param,
                 "responses_codex_client_tools_schema_too_deep",
@@ -4503,7 +4490,7 @@ def _validate_codex_schema_complexity(value: Any, *, param: str) -> int:
                         "Codex client function schema properties must be an object.",
                     )
                 property_count += len(properties)
-                if property_count > _CODEX_MAX_CLIENT_TOOL_SCHEMA_PROPERTIES:
+                if property_count > client_spec.max_client_tool_schema_properties:
                     _raise(
                         param,
                         "responses_codex_client_tools_property_count_exceeded",

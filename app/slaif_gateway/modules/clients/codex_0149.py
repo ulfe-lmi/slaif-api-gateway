@@ -15,7 +15,7 @@ from slaif_gateway.modules.contracts import (
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
 CODEX_0149_CLIENT_MODULE_VERSION = "1"
 CODEX_0149_CLI_VERSION = "0.149.0"
-CODEX_0149_FIXTURE_SHA256 = "a93a08766d2f3d3cd702425b52120fc28c9154012dc68e05467536b821ed1ae2"
+CODEX_0149_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 CODEX_0149_PROFILE_ID = "responses-structural-capture"
 
 _PROFILE_FACTS = MappingProxyType(
@@ -55,10 +55,13 @@ _FUNCTION_FIELDS = frozenset({"type", "name", "description", "parameters", "stri
 _CUSTOM_FIELDS = frozenset({"type", "name", "description", "format"})
 _NAMESPACE_FIELDS = frozenset({"type", "name", "description", "tools"})
 _WEB_SEARCH_FIELDS = frozenset({"type", "external_web_access"})
-_TOOL_SEARCH_FIELDS = frozenset({"type"})
 _TOOL_CHOICE_FIELDS = frozenset({"type", "name"})
-_CANDIDATE_TYPES = frozenset({"web_search", "tool_search"})
-_ALLOWED_TOOL_TYPES = frozenset({"function", "custom", "namespace", *_CANDIDATE_TYPES})
+CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES = frozenset({"web_search"})
+CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES = MappingProxyType(
+    {"web_search": frozenset({"type", "external_web_access"})}
+)
+_CANDIDATE_TYPES = CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES
+_ALLOWED_TOOL_TYPES = frozenset({"function", "custom", "namespace", "web_search"})
 _FORBIDDEN_AUTHORITY_TYPES = frozenset(
     {
         "web_search_preview",
@@ -131,7 +134,6 @@ def _validate_tool(value: object) -> str | None:
         "custom": _CUSTOM_FIELDS,
         "namespace": _NAMESPACE_FIELDS,
         "web_search": _WEB_SEARCH_FIELDS,
-        "tool_search": _TOOL_SEARCH_FIELDS,
     }[tool_type]
     _safe_shape_fields(value, allowed, label="tool")
     _walk_forbidden_keys(value)
@@ -181,6 +183,7 @@ class Codex0149ResponsesClientModule:
     module_id = CODEX_0149_CLIENT_MODULE_ID
     module_version = CODEX_0149_CLIENT_MODULE_VERSION
     fixture_sha256 = CODEX_0149_FIXTURE_SHA256
+    policy_spec = None
 
     def normalize(
         self,
@@ -225,6 +228,10 @@ class Codex0149ResponsesClientModule:
     def stream_profile(self, body: Mapping[str, object]) -> str:
         _ = body
         return self.module_id
+
+    def encrypted_reasoning_output_requested(self, body: Mapping[str, object]) -> bool:
+        _ = body
+        return False
 
 
 def _transient_identity_hints(value: object) -> Mapping[str, str]:

@@ -12,6 +12,7 @@ import pytest
 
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.services.policy_errors import RequestPolicyError
@@ -62,6 +63,8 @@ TAXONOMY_0148 = {
 }
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _function_tool(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -170,7 +173,7 @@ def _body(**overrides: object) -> dict[str, object]:
 
 
 def _apply(body: dict[str, object] | None = None, *, settings: Settings | None = None):
-    return ResponsesRequestPolicy(settings or Settings()).apply(
+    return _policy(settings or Settings()).apply(
         body or _body(),
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
@@ -209,7 +212,7 @@ def _additional_tools_item_0148() -> dict[str, object]:
 def _apply_0148(item: dict[str, object]):
     body = _body()
     body["input"][0] = item
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
@@ -222,6 +225,11 @@ def _key_policy(*capabilities: str) -> dict[str, object]:
     return {
         "version": 1,
         "allowed_capabilities": ["text", "stateless", *capabilities],
+        "client_module": {
+            "id": "codex-0.147-responses-v1",
+            "version": "1",
+            "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+        },
     }
 
 
@@ -298,7 +306,7 @@ def test_additional_tools_requires_both_independent_key_gates(
     allow_client_tools: bool,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body(),
             allow_codex_request_envelope=allow_envelope,
             allow_codex_client_tools=allow_client_tools,
@@ -697,7 +705,7 @@ def test_ordinary_tool_description_still_rejects_4_097_bytes(tool_type: str) -> 
         tool["parameters"] = {"type": "object", "properties": {}}
 
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             {
                 "model": "ordinary",
                 "input": "bounded",
@@ -910,7 +918,7 @@ def test_ui_header_exception_keeps_every_sibling_authority_denial(
 
 
 def test_ordinary_request_user_input_schema_behavior_is_unchanged() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         {
             "model": "ordinary",
             "input": "bounded",

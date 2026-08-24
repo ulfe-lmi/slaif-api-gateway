@@ -64,7 +64,7 @@ profile:
 | Tarball SHA-512 | `8b876bca3d98d63fb4d0c6f99fed27ef51189d32bdfca0dcd9c745a3f7570f4775a13a20d9b854b2c2831083a72a69c47f9d4fd19fc72535af4cac3f507c8ebd` |
 | Client module | `codex-0.149-responses-v1` / version `1` |
 | Structural fixture | `tests/fixtures/codex/0.149.0/responses-structural.json` |
-| Fixture SHA-256 | `a93a08766d2f3d3cd702425b52120fc28c9154012dc68e05467536b821ed1ae2` |
+| Fixture SHA-256 | `0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d` |
 | Runtime status | default-denied; no compatible server pair; no qualification or provider/model E2E |
 
 The capture used a private disposable `CODEX_HOME`, an empty workspace, a
@@ -74,9 +74,10 @@ material was retained. The fixture records only structural field/type/count
 facts and fixed safe findings. A search flag did not change the captured
 shape.
 
-The 0.149 module validates the bounded envelope and classifies exact
-`web_search` and `tool_search` declarations as
-`adapter_managed_codex_search` candidates. They do not activate SLAIF hosted
+The 0.149 module validates the bounded envelope and classifies the exact
+observed `web_search` declaration as an `adapter_managed_codex_search`
+candidate. The retained capture observes no `tool_search` declaration, so
+that unobserved shape is rejected. Candidates do not activate SLAIF hosted
 tool policy or external-tool accounting, and the Gateway does not strip or
 rewrite them. Explicit search choices, preview aliases, MCP/connectors, file
 search, code execution, computer/shell/patch authority, provider URLs,

@@ -14,6 +14,7 @@ import pytest
 from scripts import capture_codex_protocol as capture
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
@@ -44,6 +45,8 @@ PROMPT_CACHE_CANARY = "prompt-cache-private-canary"
 MESSAGE_ID_CANARY = "msg-private-canary-123"
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _ordinary_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "model": "classroom-codex",
@@ -90,6 +93,11 @@ def _key_policy() -> dict[str, object]:
     return {
         "version": 1,
         "allowed_capabilities": ["text", "stateless", "codex_request_envelope"],
+        "client_module": {
+            "id": "codex-0.147-responses-v1",
+            "version": "1",
+            "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+        },
     }
 
 
@@ -134,7 +142,7 @@ def _route(*, codex_request_envelope: bool) -> RouteResolutionResult:
 
 
 def _apply_envelope(body: dict[str, object] | None = None):
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body or _envelope_body(stream=False),
         allow_codex_request_envelope=True,
     )
@@ -143,8 +151,8 @@ def _apply_envelope(body: dict[str, object] | None = None):
 def test_ordinary_responses_are_unchanged_and_do_not_request_codex_capability() -> None:
     body = _ordinary_body()
 
-    default_result = ResponsesRequestPolicy(Settings()).apply(body)
-    enabled_result = ResponsesRequestPolicy(Settings()).apply(
+    default_result = _policy(Settings()).apply(body)
+    enabled_result = _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
     )
@@ -172,7 +180,7 @@ def test_ordinary_responses_are_unchanged_and_do_not_request_codex_capability() 
 )
 def test_each_envelope_signal_is_default_denied_by_key(extra: dict[str, object]) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(_ordinary_body(**extra))
+        _policy(Settings()).apply(_ordinary_body(**extra))
 
     assert exc_info.value.error_code == "responses_codex_envelope_not_allowed"
     assert responses_codex_request_envelope_requested(_ordinary_body(**extra)) is True
@@ -469,7 +477,7 @@ def test_route_capability_is_default_false_and_explicit_true_only() -> None:
 
 
 def test_envelope_and_message_ids_increase_estimate_without_exposing_values() -> None:
-    ordinary = ResponsesRequestPolicy(Settings()).apply(_ordinary_body())
+    ordinary = _policy(Settings()).apply(_ordinary_body())
     envelope = _apply_envelope(_envelope_body(stream=False))
 
     assert envelope.estimated_input_tokens > ordinary.estimated_input_tokens

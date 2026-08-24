@@ -80,9 +80,22 @@ except ModuleNotFoundError:  # Imported as a namespace package by unit tests.
     from scripts import capture_codex_protocol as capture
     from scripts import verify_codex_context_compaction as context_fixture
 
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+
+_CONTEXT_POLICY_CLASS = context_fixture.ResponsesRequestPolicy
+
+
+def _context_policy(settings: Settings):
+    """Keep the evidence helper on the exact selected 0.147 policy spec."""
+    return _CONTEXT_POLICY_CLASS(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+context_fixture.ResponsesRequestPolicy = _context_policy
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_BINARY = Path("/usr/bin/codex")
+CODEX_BINARY_ENV = "SLAIF_CODEX_BINARY"
 PROFILE_NAME = "slaif"
 UPSTREAM_KEY_ENV = "SLAIF_OAP011_UPSTREAM_KEY"
 DUMMY_UPSTREAM_KEY = "oap011-fixed-loopback-provider-key"
@@ -122,6 +135,7 @@ SAFE_ERROR_CODES = frozenset(
         SAFE_DATABASE_ERROR,
         SAFE_STAGE_ERROR,
         "cli_preflight_failed",
+        "unsafe_codex_binary",
         "migration_failed",
         "redis_start_failed",
         "seed_failed",
@@ -2251,6 +2265,8 @@ def verify(target: SafeDatabaseTarget) -> VerificationFacts:
 def main(arguments: Sequence[str] | None = None) -> int:
     try:
         parse_arguments(sys.argv[1:] if arguments is None else arguments)
+        global CODEX_BINARY
+        CODEX_BINARY = _resolve_codex_binary(os.environ.get(CODEX_BINARY_ENV))
         target = validate_test_database_url(os.environ.get("TEST_DATABASE_URL"))
         if os.environ.get("DATABASE_URL"):
             raise VerificationError(SAFE_DATABASE_ERROR)
@@ -2281,6 +2297,28 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 1
     sys.stdout.write(fixed_success_output(summary))
     return 0
+
+
+def _resolve_codex_binary(raw_value: str | None) -> Path:
+    """Resolve an optional exact binary without accepting symlinks or unsafe files."""
+    if raw_value is None or not raw_value:
+        return Path("/usr/bin/codex")
+    if any(character.isspace() or ord(character) < 32 for character in raw_value):
+        raise VerificationError("unsafe_codex_binary")
+    path = Path(raw_value)
+    if not path.is_absolute() or path.is_symlink():
+        raise VerificationError("unsafe_codex_binary")
+    try:
+        stat_result = path.stat()
+    except OSError as exc:
+        raise VerificationError("unsafe_codex_binary") from exc
+    if (
+        not stat.S_ISREG(stat_result.st_mode)
+        or stat_result.st_uid != os.getuid()
+        or stat_result.st_mode & 0o022
+    ):
+        raise VerificationError("unsafe_codex_binary")
+    return path
 
 
 if __name__ == "__main__":

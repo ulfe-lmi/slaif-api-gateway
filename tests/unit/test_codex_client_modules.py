@@ -13,6 +13,8 @@ from slaif_gateway.modules.clients.codex_0147 import (
 )
 from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_CLIENT_MODULE_ID,
+    CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+    CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
     CODEX_0149_FIXTURE_SHA256,
 )
 from slaif_gateway.modules.clients.registry import (
@@ -39,7 +41,6 @@ def _body(**overrides: object) -> dict[str, object]:
         "tools": [
             {"type": "function", "name": "safe", "parameters": {}, "strict": True},
             {"type": "web_search", "external_web_access": False},
-            {"type": "tool_search"},
         ],
         "tool_choice": "auto",
     }
@@ -57,6 +58,21 @@ def test_0149_fixture_is_canonical_structural_only() -> None:
     assert fixture["identity"]["cli_version"] == "0.149.0"
     assert fixture["capture"]["subprocess"]["model_call"] == "not_performed"
     assert fixture["gateway_compatibility"]["compatible_server_pairs"] == []
+    observed_types = {
+        shape["type"]
+        for variant in fixture["capture"]["variants"]
+        for shape in variant.get("request", {}).get("tool_declarations", {}).get("shapes", [])
+    }
+    observed_candidates = {tool_type for tool_type in observed_types if tool_type in {"web_search", "tool_search"}}
+    assert observed_candidates == set(CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES)
+    assert set(fixture["findings"]["adapter_managed_candidate_types"]) == observed_candidates
+    observed_shapes = {
+        shape["type"]: frozenset(shape["field_names"])
+        for variant in fixture["capture"]["variants"]
+        for shape in variant.get("request", {}).get("tool_declarations", {}).get("shapes", [])
+        if shape["type"] in observed_candidates
+    }
+    assert observed_shapes == CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES
     for forbidden in (
         "/home/",
         "session.jsonl",
@@ -80,7 +96,7 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
     request = CODEX_0149_CLIENT_MODULE.normalize_responses(body)
 
     assert request.body == body
-    assert request.adapter_managed_declaration_candidates == ("web_search", "tool_search")
+    assert request.adapter_managed_declaration_candidates == ("web_search",)
     assert request.capability_intents == ("adapter_managed_codex_search",)
     assert request.profile_facts == {
         "client_module_id": CODEX_0149_CLIENT_MODULE_ID,
@@ -91,26 +107,33 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
 
 @pytest.mark.parametrize(
     "tool_type",
-    sorted(_HOSTED_TOOL_TYPES - {"web_search", "tool_search", "namespace"}),
+    sorted(_HOSTED_TOOL_TYPES - {"web_search", "namespace"}),
 )
 def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
     with pytest.raises(ModuleSelectionError, match="authority|unknown") as exc_info:
         CODEX_0149_CLIENT_MODULE.normalize_responses(
             _body(tools=[{"type": tool_type}])
         )
-    assert exc_info.value.error_code == "codex_0149_authority_shape"
+    assert exc_info.value.error_code == (
+        "codex_0149_request_invalid" if tool_type == "tool_search" else "codex_0149_authority_shape"
+    )
 
 
 @pytest.mark.parametrize(
-    "tool_choice",
-    ["web_search", "tool_search", {"type": "web_search"}, {"type": "tool_search"}],
+    ("tool_choice", "code"),
+    [
+        ("web_search", "codex_0149_authority_shape"),
+        ("tool_search", "codex_0149_request_invalid"),
+        ({"type": "web_search"}, "codex_0149_authority_shape"),
+        ({"type": "tool_search"}, "codex_0149_request_invalid"),
+    ],
 )
-def test_0149_rejects_explicit_search_choices(tool_choice: object) -> None:
+def test_0149_rejects_explicit_search_choices(tool_choice: object, code: str) -> None:
     with pytest.raises(ModuleSelectionError) as exc_info:
         CODEX_0149_CLIENT_MODULE.normalize_responses(
             _body(tools=[{"type": "web_search"}], tool_choice=tool_choice)
         )
-    assert exc_info.value.error_code == "codex_0149_authority_shape"
+    assert exc_info.value.error_code == code
 
 
 def test_0149_rejects_unknown_and_provider_authority_fields() -> None:
@@ -188,6 +211,27 @@ def test_codex_client_modules_have_no_gateway_authority_imports() -> None:
         source = path.read_text(encoding="utf-8")
         assert "codex-0.149-responses-v1" not in source
         assert "adapter_managed_codex_search" not in source
+
+
+def test_generic_responses_primitives_are_neutral_and_policy_receives_a_spec() -> None:
+    policy_source = Path(
+        "app/slaif_gateway/services/responses_request_policy.py"
+    ).read_text(encoding="utf-8")
+    codex_support_source = Path(
+        "app/slaif_gateway/modules/clients/codex_support.py"
+    ).read_text(encoding="utf-8")
+    responses_support_source = Path(
+        "app/slaif_gateway/modules/clients/responses_support.py"
+    ).read_text(encoding="utf-8")
+
+    assert "codex_support" not in policy_source
+    assert "_SUPPORTED_CODEX" not in policy_source
+    assert "codex_0_148" not in policy_source
+    assert "_HOSTED_TOOL_TYPES" in responses_support_source
+    assert "_SUPPORTED_FUNCTION_TOOL_FIELDS" in responses_support_source
+    assert "_HOSTED_TOOL_TYPES" not in codex_support_source
+    assert "_SUPPORTED_FUNCTION_TOOL_FIELDS" not in codex_support_source
+    assert "client_spec: ResponsesClientPolicySpec | None" in policy_source
 
 
 def test_responses_handler_denies_0149_before_policy_or_provider_work(monkeypatch) -> None:

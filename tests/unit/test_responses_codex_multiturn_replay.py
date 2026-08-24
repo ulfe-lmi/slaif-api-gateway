@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.services.codex_replay_service import (
@@ -28,6 +29,8 @@ _INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
 _PRIVATE_METADATA_CANARY = "PRIVATE-REPLAY-METADATA-CANARY"
 
 
+def _policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -99,7 +102,7 @@ def _reasoning(
 
 
 def _apply_reasoning(body: dict[str, object]):
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_encrypted_reasoning_replay=True,
@@ -107,7 +110,7 @@ def _apply_reasoning(body: dict[str, object]):
 
 
 def _apply_tools(body: dict[str, object]):
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
@@ -117,7 +120,7 @@ def _apply_tools(body: dict[str, object]):
 
 
 def _apply_fully_gated(body: dict[str, object]):
-    return ResponsesRequestPolicy(Settings()).apply(
+    return _policy(Settings()).apply(
         body,
         allow_codex_request_envelope=True,
         allow_codex_client_tools=True,
@@ -219,7 +222,7 @@ def test_pinned_reasoning_replay_accepts_only_exact_null_content() -> None:
 
 def test_encrypted_reasoning_requires_independent_key_gate() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             _body([_reasoning()]),
             allow_codex_request_envelope=True,
         )
@@ -283,7 +286,7 @@ def test_duplicate_reasoning_and_provider_state_combinations_are_rejected() -> N
 
 
 def test_encrypted_reasoning_request_cumulative_cap_is_exact() -> None:
-    policy = ResponsesRequestPolicy(
+    policy = _policy(
         Settings(
             RESPONSES_MAX_INPUT_TEXT_BYTES=2_000_000,
             RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=2_000_000,
@@ -381,7 +384,7 @@ def test_output_item_id_bytes_are_canonical_metered_and_not_hmac_authority() -> 
         canonical_json_bytes(without_output)
     )
     id_field_bytes = len(canonical_json_bytes({"id": output_id}))
-    policy = ResponsesRequestPolicy(Settings())
+    policy = _policy(Settings())
     _, with_material_bytes = policy._validate_input(
         with_id.effective_body["input"],
         allow_codex_request_envelope=True,
@@ -529,7 +532,7 @@ def test_ordinary_non_codex_outputs_continue_to_reject_id(
     expected_code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        ResponsesRequestPolicy(Settings()).apply(
+        _policy(Settings()).apply(
             {
                 "model": "classroom",
                 "input": [
@@ -551,7 +554,7 @@ def test_ordinary_non_codex_outputs_continue_to_reject_id(
 
 
 def test_ordinary_non_codex_function_output_remains_separate() -> None:
-    result = ResponsesRequestPolicy(Settings()).apply(
+    result = _policy(Settings()).apply(
         {
             "model": "classroom",
             "input": [
@@ -575,6 +578,11 @@ def _replay_key() -> SimpleNamespace:
                 "codex_request_envelope",
                 "codex_encrypted_reasoning_replay",
             ],
+            "client_module": {
+                "id": "codex-0.147-responses-v1",
+                "version": "1",
+                "fixture_sha256": "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432",
+            },
         },
     )
 

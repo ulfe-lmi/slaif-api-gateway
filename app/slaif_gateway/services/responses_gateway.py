@@ -147,7 +147,6 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_compaction_allowed,
     responses_codex_compaction_replay_requested,
     responses_codex_compaction_requested,
-    responses_codex_encrypted_reasoning_output_requested,
     responses_codex_encrypted_reasoning_replay_allowed,
     responses_codex_encrypted_reasoning_replay_requested,
     responses_codex_extended_limits_allowed,
@@ -572,7 +571,10 @@ async def handle_response_input_tokens_count(
     client_module = _resolve_responses_client_module(authenticated_key)
     _ensure_client_module_pair_exists(client_module.module_id)
     body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply_input_token_count(body)
     except RequestPolicyError as exc:
@@ -646,7 +648,10 @@ async def handle_response_compact(
             body[field] = None
     codex_compaction_requested = responses_codex_compaction_requested(body)
     allow_codex_compaction = responses_codex_compaction_allowed(authenticated_key.responses_policy)
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply_compact(
             body,
@@ -879,9 +884,12 @@ async def handle_response_create(
     )
     codex_encrypted_reasoning_event_requested = codex_encrypted_reasoning_replay_requested or (
         allow_codex_encrypted_reasoning_replay
-        and responses_codex_encrypted_reasoning_output_requested(body)
+        and client_module.encrypted_reasoning_output_requested(body)
     )
-    policy = ResponsesRequestPolicy(settings=settings)
+    policy = ResponsesRequestPolicy(
+        settings=settings,
+        client_spec=client_module.policy_spec,
+    )
     try:
         policy_result = policy.apply(
             body,
