@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -97,6 +98,123 @@ def test_client_modules_have_no_gateway_authority_imports() -> None:
             any(fragment in module.lower() for fragment in forbidden_fragments)
             for module in imported
         ), path
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    return imported
+
+
+def _is_module_or_child(module: str, prefix: str) -> bool:
+    return module == prefix or module.startswith(prefix + ".")
+
+
+def test_server_modules_have_no_gateway_authority_imports_or_dynamic_loading() -> None:
+    forbidden_prefixes = (
+        "importlib",
+        "pkg_resources",
+        "setuptools",
+        "slaif_gateway.api.auth",
+        "slaif_gateway.api.dependencies",
+        "slaif_gateway.db",
+        "slaif_gateway.cache",
+        "slaif_gateway.services.accounting",
+        "slaif_gateway.services.audit",
+        "slaif_gateway.services.external_tool",
+        "slaif_gateway.services.key",
+        "slaif_gateway.services.pricing",
+        "slaif_gateway.services.quota",
+        "slaif_gateway.services.reconciliation",
+        "slaif_gateway.services.route_resolution",
+    )
+    dynamic_calls = {"__import__", "entry_points", "find_spec", "import_module"}
+    server_root = ROOT / "app/slaif_gateway/modules/servers"
+    for path in server_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assert not any(
+            _is_module_or_child(module, prefix)
+            for module in _imported_modules(path)
+            for prefix in forbidden_prefixes
+        ), path
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            assert function_name not in dynamic_calls, path
+
+
+def test_default_client_helper_uses_registry_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    import slaif_gateway.modules.clients.registry as registry
+
+    calls: list[str] = []
+
+    class _ObservedModule:
+        def normalize(self, endpoint: str, body: dict[str, object]) -> SimpleNamespace:
+            return SimpleNamespace(module_id="observed", endpoint=endpoint, body=body)
+
+    def resolve(module_id: str) -> _ObservedModule:
+        calls.append(module_id)
+        return _ObservedModule()
+
+    monkeypatch.setattr(registry, "get_client_module", resolve)
+    result = registry.normalize_default_client_request("/v1/responses", {"input": "x"})
+
+    assert calls == ["openai-default"]
+    assert result.module_id == "observed"
+
+
+def test_provider_factory_owns_server_registry_callsite() -> None:
+    path = ROOT / "app/slaif_gateway/providers/factory.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported_modules = _imported_modules(path)
+    assert "slaif_gateway.modules.servers.registry" in imported_modules
+    imported_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "slaif_gateway.modules.servers.registry"
+        for alias in node.names
+    }
+    assert {"resolve_server_module", "ensure_client_server_pair", "build_server_adapter"}.issubset(
+        imported_names
+    )
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {"resolve_server_module", "ensure_client_server_pair", "build_server_adapter"}.issubset(
+        called_names
+    )
+    forbidden_direct_construction = {
+        "OpenAIProviderAdapter",
+        "OpenRouterProviderAdapter",
+        "OpenAICompatibleProviderAdapter",
+        "FacialScoringAdapter",
+        "get_module_adapter",
+    }
+    assert called_names.isdisjoint(forbidden_direct_construction)
+
+
+def test_ignored_cache_files_are_absent_from_git_diff() -> None:
+    output = subprocess.check_output(
+        ["git", "diff", "--name-only", "origin/main...HEAD"],
+        cwd=ROOT,
+        text=True,
+    )
+    assert "__pycache__" not in output
 
 
 def test_facial_compatibility_path_is_only_a_reexport() -> None:

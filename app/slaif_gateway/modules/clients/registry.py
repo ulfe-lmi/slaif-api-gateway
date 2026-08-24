@@ -37,4 +37,4 @@ def normalize_default_client_request(
     body: Mapping[str, object],
 ) -> CanonicalClientRequest:
     """Normalize a request through the core-owned default module."""
-    return DEFAULT_CLIENT_MODULE.normalize(endpoint, body)
+    return get_client_module(DEFAULT_CLIENT_MODULE_ID).normalize(endpoint, body)
