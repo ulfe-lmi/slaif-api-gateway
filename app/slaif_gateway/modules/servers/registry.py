@@ -12,6 +12,12 @@ from slaif_gateway.modules.contracts import (
     ServerModuleDescriptor,
 )
 from slaif_gateway.modules.servers.facial_scoring import FacialScoringAdapter
+from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
+from slaif_gateway.modules.servers.local_coding.contract import (
+    LOCAL_CODING_ROUTE_CAPABILITY_KEY,
+    LOCAL_CODING_SERVER_MODULE_ID,
+    parse_local_coding_route_contract,
+)
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
 from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
@@ -39,6 +45,10 @@ def _openai_compatible_factory(settings: object, **kwargs: object) -> object:
 def _facial_scoring_factory(settings: object, **kwargs: object) -> object:
     _ = settings
     return FacialScoringAdapter(**kwargs)
+
+
+def _local_coding_factory(settings: object, **kwargs: object) -> object:
+    return LocalCodingAdapter(settings, **kwargs)
 
 
 SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[..., object]]] = MappingProxyType(
@@ -79,6 +89,15 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
             ),
             _facial_scoring_factory,
         ),
+        LOCAL_CODING_SERVER_MODULE_ID: (
+            ServerModuleDescriptor(
+                module_id=LOCAL_CODING_SERVER_MODULE_ID,
+                module_version="1",
+                provider_slugs=frozenset(),
+                provider_kinds=frozenset({"openai_compatible"}),
+            ),
+            _local_coding_factory,
+        ),
     }
 )
 
@@ -89,6 +108,7 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
             for module_id in SERVER_MODULE_REGISTRY
         ),
         ClientServerPair("codex-0.147-responses-v1", OPENAI_SERVER_MODULE_ID),
+        ClientServerPair(DEFAULT_CLIENT_MODULE_ID, LOCAL_CODING_SERVER_MODULE_ID),
     }
 )
 
@@ -101,10 +121,35 @@ def get_server_module(module_id: str) -> ServerModuleDescriptor:
     return entry[0]
 
 
-def resolve_server_module(provider: str, provider_kind: str | None) -> ServerModuleDescriptor:
+def resolve_server_module(
+    provider: str,
+    provider_kind: str | None,
+    route_capabilities: Mapping[str, object] | None = None,
+) -> ServerModuleDescriptor:
     """Resolve provider configuration to one static server descriptor."""
     normalized_provider = provider.strip().lower() if isinstance(provider, str) else ""
     normalized_kind = provider_kind.strip() if isinstance(provider_kind, str) else ""
+    local_contract_present = (
+        isinstance(route_capabilities, Mapping)
+        and LOCAL_CODING_ROUTE_CAPABILITY_KEY in route_capabilities
+    )
+    if local_contract_present:
+        if normalized_kind != "openai_compatible":
+            raise ProviderConfigurationError(
+                "Local Coding contract requires an openai_compatible provider kind",
+                provider=normalized_provider or None,
+                error_code="local_coding_provider_kind_invalid",
+            )
+        try:
+            contract = parse_local_coding_route_contract(route_capabilities)
+        except ValueError as exc:
+            raise ProviderConfigurationError(
+                "Local Coding route contract is invalid",
+                provider=normalized_provider or None,
+                error_code="local_coding_route_contract_invalid",
+            ) from exc
+        if contract is not None:
+            return SERVER_MODULE_REGISTRY[LOCAL_CODING_SERVER_MODULE_ID][0]
     for descriptor, _factory in SERVER_MODULE_REGISTRY.values():
         built_in_provider = descriptor.module_id in {OPENAI_SERVER_MODULE_ID, OPENROUTER_SERVER_MODULE_ID}
         if normalized_provider in descriptor.provider_slugs and (
@@ -155,6 +200,7 @@ def build_server_adapter(
     base_url: str | None,
     timeout_seconds: int | None,
     max_retries: int,
+    route_capabilities: Mapping[str, object] | None = None,
 ) -> object:
     """Build an adapter through the descriptor's single static factory."""
     entry = SERVER_MODULE_REGISTRY.get(descriptor.module_id)
@@ -173,4 +219,6 @@ def build_server_adapter(
     }
     if base_url is not None:
         kwargs["base_url"] = base_url
+    if descriptor.module_id == LOCAL_CODING_SERVER_MODULE_ID:
+        kwargs["route_capabilities"] = route_capabilities
     return factory(settings, **kwargs)

@@ -48,8 +48,10 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "openrouter",
         "openai-compatible",
         "facial_scoring",
+        "local-coding-v1",
     }
     assert ClientServerPair("openai-default", FACIAL_SCORING_SERVER_MODULE_ID) in CLIENT_SERVER_COMPATIBILITY
+    assert ClientServerPair("openai-default", "local-coding-v1") in CLIENT_SERVER_COMPATIBILITY
     with pytest.raises(TypeError):
         CLIENT_MODULE_REGISTRY["dynamic"] = DEFAULT_CLIENT_MODULE  # type: ignore[index]
     with pytest.raises(ModuleSelectionError):

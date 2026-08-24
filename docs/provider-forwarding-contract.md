@@ -21,6 +21,16 @@ The observed adapter-managed `web_search` candidate is never converted into
 hosted-tool admission, external-tool pricing, or provider payload authority by
 the Gateway; unobserved `tool_search` remains rejected.
 
+`local-coding-v1` is a distinct static server module selected only for an exact
+top-level `local_coding` route contract and provider kind
+`openai_compatible`. It serializes the final canonical Responses mapping once
+as deterministic UTF-8 JSON, signs the SHA-256 of those exact bytes when the
+route uses signed identity v1, and sends the same bytes with `content=...`.
+It constructs a separate Local Coding service Bearer from the provider row and
+never forwards caller Authorization, cookies, `X-SLAIF-*`, or other internal
+headers. It does not add a global header allowlist or create a provider/accounting
+path for Codex 0.149.
+
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured
 server-side bearer secret, with redirects and retries disabled, and retains

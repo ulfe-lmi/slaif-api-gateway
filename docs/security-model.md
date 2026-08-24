@@ -64,6 +64,15 @@ fence, pricing rule, quota reservation, accounting category, or external
 authority. No raw Codex installation, session, thread, turn, workspace, or
 request-content metadata is stored, logged, audited, exported, hashed, or
 forwarded.
+Local Coding adds three separate roles: the public Gateway bearer, the
+configured Local Coding service Bearer, and dedicated versioned identity
+derivation/signing secrets. The roles are validated as distinct and are never
+logged, persisted, forwarded as a client credential, or reused for one
+another. Signed identity contains only derived opaque principal/session/
+repository values; raw owner, key, email, workspace, and client hints remain
+transient. Signed v1 replay protection is process-local TTL/LRU and the route
+must declare single-worker deployment; overlapping key rotation and
+multi-worker/restart-persistent replay protection are not claimed.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

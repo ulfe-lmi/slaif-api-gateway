@@ -36,6 +36,7 @@ class ProviderRequest:
     files: Mapping[str, "ProviderFileUpload"] | None = None
     request_id: str | None = None
     extra_headers: Mapping[str, str] | None = None
+    server_context: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

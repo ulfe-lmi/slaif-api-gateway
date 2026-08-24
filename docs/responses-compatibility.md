@@ -23,6 +23,13 @@ only; unobserved `tool_search` remains rejected. It never
 set the hosted web-search admission path, external-tool fence, pricing, or
 accounting state. No raw Codex identity/session/workspace metadata is retained.
 
+The `local-coding-v1` server module is a separate exact-route transport
+foundation. It is default-denied unless the resolved route has the complete
+versioned Local Coding contract and provider kind `openai_compatible`. Its
+signed identity is bound to exact method/path/raw-query/body bytes and is
+verified by the pinned Local Coding contract. No Codex 0.149 pair or hosted
+tool execution is authorized in this objective.
+
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
 `POST /v1/embeddings` are implemented separately, while the bounded Realtime

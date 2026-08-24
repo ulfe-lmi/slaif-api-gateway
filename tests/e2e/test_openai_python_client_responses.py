@@ -16,8 +16,8 @@ from tests.e2e.test_openai_python_client_chat import (
     FAKE_OPENAI_UPSTREAM_KEY,
     _configure_runtime_environment,
     _free_port,
-    _load_accounting_state,
     _load_accounting_side_effect_counts,
+    _load_accounting_state,
     _run_uvicorn_server,
     _test_database_url,
 )
@@ -65,11 +65,18 @@ async def _create_responses_test_data(
     compact: bool = False,
     conversations: bool = False,
     external_web_search: bool = False,
+    local_coding_contract: dict[str, object] | None = None,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
     from slaif_gateway.config import Settings
-    from slaif_gateway.db.models import GatewayKey, ModelRoute, PricingRule, QuotaReservation, UsageLedger
+    from slaif_gateway.db.models import (
+        GatewayKey,
+        ModelRoute,
+        PricingRule,
+        QuotaReservation,
+        UsageLedger,
+    )
     from slaif_gateway.db.repositories.audit import AuditRepository
     from slaif_gateway.db.repositories.cohorts import CohortsRepository
     from slaif_gateway.db.repositories.institutions import InstitutionsRepository
@@ -210,6 +217,7 @@ async def _create_responses_test_data(
                 supports_streaming=streaming,
                 capabilities={
                     "responses": capabilities,
+                    **({"local_coding": local_coding_contract} if local_coding_contract else {}),
                     **(
                         {"external_tools": external_tool_route_policy}
                         if external_web_search
@@ -277,6 +285,94 @@ async def _create_responses_test_data(
             return created_key
     finally:
         await engine.dispose()
+
+
+@pytest.mark.e2e
+def test_openai_python_client_local_coding_server_module_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    local_model = "local-coding-responses-test"
+    local_port = _free_port()
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=False,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "static",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "local-coding-response",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "qwen3.8-27b",
+        "output": [],
+        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        "store": False,
+    }
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "local-coding-response-request"},
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            response = OpenAI().responses.create(
+                model=local_model,
+                input="synthetic local coding request",
+                max_output_tokens=32,
+            )
+
+    assert response.id == "local-coding-response"
+    assert len(local_route.calls) == 1
+    request = local_route.calls[0].request
+    assert request.headers["authorization"] == "Bearer synthetic-local-coding-service-bearer"
+    assert request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    body = json.loads(request.content)
+    assert body["model"] == "qwen3.8-27b"
+    assert body["input"] == "synthetic local coding request"
+    assert "x-slaif-principal" not in {name.lower() for name in request.headers}
+    state = asyncio.run(
+        _load_accounting_state(
+            database_url,
+            created.gateway_key_id,
+            provider="local-coding",
+        )
+    )
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 5
 
 
 @pytest.mark.e2e

@@ -64,11 +64,19 @@ manifest provenance, zero-EUR request pricing, authentication, accounting,
 privacy, retry, and error behavior are unchanged.
 
 Codex 0.149 client syntax is structurally captured and registered, but has no
-qualification, provider/model E2E, Local Coding server module, or compatible
-pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
+qualification, provider/model E2E, or compatible Codex pair. The static
+`local-coding-v1` server module is now implemented for an exact
+`openai_compatible` route contract with deterministic/mock-conformance only;
+it does not authorize the Codex 0.149 pair. OpenCode remains planned follow-on work. The 0.149
 module may return only bounded candidate facts for the observed adapter-managed
 `web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
 accounting, routing, or provider forwarding.
+
+Local Coding is the only server module permitted to construct the reviewed
+private service Bearer and signed-identity-v1 headers. It receives only the
+core-resolved provider request and opaque derived identity facts; it cannot
+authenticate public keys, select routes, reserve quota, or persist identity.
+Its signed mode is explicitly single-worker/process-local replay protection.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient

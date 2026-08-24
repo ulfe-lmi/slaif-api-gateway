@@ -25,6 +25,17 @@ Current authoritative contracts:
 
 Core invariants:
 
+- A Local Coding request is one public Gateway reservation and one terminal
+  ledger outcome. Local Coding compiler/governance calls are internal service
+  capacity and never create additional Gateway rows.
+- Local Coding service-auth, signed-identity, timestamp, replay, HTTP, parse,
+  and stream failures use the existing provider failure law; no pending
+  reservation may remain. Provider usage returned by Local Coding remains
+  authoritative for finalization.
+- Local Coding signed identity and exact-byte hashes are transient transport
+  facts only; they are not stored in ledger, audit, request metadata, or
+  metrics. Hosted-tool fence/hold accounting is not used by Objective 155.
+
 - PostgreSQL is authoritative for hard quota, reservations, usage counters,
   ledger rows, and reconciliation state.
 - Redis is temporary operational state only. Redis must not become the only
