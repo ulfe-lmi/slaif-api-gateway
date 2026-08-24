@@ -101,9 +101,12 @@ def resolve_server_module(provider: str, provider_kind: str | None) -> ServerMod
     normalized_provider = provider.strip().lower() if isinstance(provider, str) else ""
     normalized_kind = provider_kind.strip() if isinstance(provider_kind, str) else ""
     for descriptor, _factory in SERVER_MODULE_REGISTRY.values():
-        if normalized_kind in descriptor.provider_kinds and (
-            not descriptor.provider_slugs or normalized_provider in descriptor.provider_slugs
+        built_in_provider = descriptor.module_id in {OPENAI_SERVER_MODULE_ID, OPENROUTER_SERVER_MODULE_ID}
+        if normalized_provider in descriptor.provider_slugs and (
+            normalized_kind in descriptor.provider_kinds or built_in_provider
         ):
+            return descriptor
+        if not descriptor.provider_slugs and normalized_kind in descriptor.provider_kinds:
             return descriptor
     if normalized_kind == "module":
         raise ProviderConfigurationError(
