@@ -563,6 +563,179 @@ def test_cost_confidence_output_is_allowlisted() -> None:
     ) == "correlation_cost_confidence_invalid"
 
 
+def test_correlation_normalizes_asyncpg_jsonb_text_values() -> None:
+    reservation, ledger, key = _base_rows()
+    ledger[0]["usage_raw"] = json.dumps(
+        {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+        separators=(",", ":"),
+    )
+    ledger[0]["response_metadata"] = json.dumps(
+        {
+            "cost_source": "slaif_calculated",
+            "cost_confidence": "slaif_calculated",
+        },
+        separators=(",", ":"),
+    )
+    result = VERIFIER.validate_correlation(
+        reservation_rows=reservation,
+        ledger_rows=ledger,
+        key_rows=key,
+        pending_reservations=0,
+        expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
+        flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
+        expected_usage=VERIFIER.Usage(2, 3, 5),
+    )
+    assert result.stored_usage == VERIFIER.Usage(2, 3, 5)
+    assert result.cost_source == "slaif_calculated"
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ("not-json", "correlation_metadata_json_decode_invalid"),
+        (
+            '{"cost_source":"slaif_calculated","cost_source":"slaif_calculated"}',
+            "correlation_metadata_json_duplicate_key",
+        ),
+        ("[]", "correlation_metadata_json_object_invalid"),
+        ("true", "correlation_metadata_json_object_invalid"),
+        ("null", "correlation_metadata_json_object_invalid"),
+        (
+            '"' + ("x" * VERIFIER.MAX_SAFE_JSON_BYTES) + '"',
+            "correlation_metadata_json_value_too_large",
+        ),
+    ],
+)
+def test_metadata_normalizer_rejects_unsafe_json_text(payload: str, code: str) -> None:
+    assert _error_code(VERIFIER._metadata_cost_labels, payload) == code
+
+
+def test_metadata_normalizer_rejects_invalid_utf8_and_arbitrary_objects() -> None:
+    assert _error_code(VERIFIER._metadata_cost_labels, b"\xff") == (
+        "correlation_metadata_json_invalid_utf8"
+    )
+    assert _error_code(VERIFIER._metadata_cost_labels, object()) == (
+        "correlation_metadata_json_object_invalid"
+    )
+
+
+def test_correlation_rejects_canary_in_asyncpg_jsonb_text() -> None:
+    reservation, ledger, key = _base_rows()
+    ledger[0]["usage_raw"] = json.dumps(
+        {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
+    )
+    ledger[0]["response_metadata"] = json.dumps(
+        {
+            "cost_source": "slaif_calculated",
+            "cost_confidence": "slaif_calculated",
+            "canary": "SLAIF-152A-PROBE",
+        }
+    )
+    assert _error_code(
+        VERIFIER.validate_correlation,
+        reservation_rows=reservation,
+        ledger_rows=ledger,
+        key_rows=key,
+        pending_reservations=0,
+        expected_key="gateway-test-token",
+        expected_gateway_key_id="key-id",
+        flow=VERIFIER.Flow("openai", "/v1/chat/completions", False, "model-a"),
+        expected_usage=VERIFIER.Usage(2, 3, 5),
+    ) == "correlation_privacy_canary_found"
+
+
+def test_postgres_probe_registers_json_codecs_before_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.codec_calls: list[tuple[str, dict[str, object]]] = []
+            self.queries: list[str] = []
+            self.closed = False
+
+        async def set_type_codec(self, typename: str, **kwargs: object) -> None:
+            self.codec_calls.append((typename, kwargs))
+
+        async def fetchval(self, query: str) -> str:
+            assert len(self.codec_calls) == 2
+            self.queries.append(query)
+            return "qualification_db"
+
+        async def fetch(self, query: str) -> list[dict[str, str]]:
+            assert len(self.codec_calls) == 2
+            self.queries.append(query)
+            return [{"version_num": "head"}]
+
+        async def close(self) -> None:
+            self.closed = True
+
+    connection = FakeConnection()
+
+    async def fake_connect(*args: object, **kwargs: object) -> FakeConnection:
+        return connection
+
+    monkeypatch.setattr(VERIFIER.asyncpg, "connect", fake_connect)
+    monkeypatch.setattr(VERIFIER, "_local_alembic_head", lambda: "head")
+    probe = VERIFIER.PostgresProbe(
+        VERIFIER.DatabaseTarget(
+            connect_url="postgresql://loopback/qualification_db",
+            database_name="qualification_db",
+        ),
+        timeout_seconds=1,
+    )
+    asyncio.run(probe.connect_and_check())
+    assert [name for name, _ in connection.codec_calls] == ["json", "jsonb"]
+    assert all(
+        options["schema"] == "pg_catalog"
+        and options["format"] == "text"
+        and options["encoder"] is VERIFIER._encode_json_value
+        and options["decoder"] is VERIFIER._decode_json_value
+        for _, options in connection.codec_calls
+    )
+    assert len(connection.queries) == 2
+
+
+def test_postgres_probe_codec_failure_closes_before_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingConnection:
+        def __init__(self) -> None:
+            self.queries = 0
+            self.closed = False
+
+        async def set_type_codec(self, typename: str, **kwargs: object) -> None:
+            del typename, kwargs
+            raise RuntimeError("synthetic codec setup failure")
+
+        async def fetchval(self, query: str) -> str:
+            del query
+            self.queries += 1
+            raise AssertionError("query occurred before codec setup")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    connection = FailingConnection()
+
+    async def fake_connect(*args: object, **kwargs: object) -> FailingConnection:
+        return connection
+
+    monkeypatch.setattr(VERIFIER.asyncpg, "connect", fake_connect)
+    probe = VERIFIER.PostgresProbe(
+        VERIFIER.DatabaseTarget(
+            connect_url="postgresql://loopback/qualification_db",
+            database_name="qualification_db",
+        ),
+        timeout_seconds=1,
+    )
+    assert _error_code(lambda: asyncio.run(probe.connect_and_check())) == (
+        "database_json_codec_setup_failure"
+    )
+    assert connection.closed is True
+    assert connection.queries == 0
+
+
 def test_failed_attempt_does_not_prove_provider_execution(capsys: pytest.CaptureFixture[str]) -> None:
     error = VERIFIER.VerificationError("gateway_transport_failure", attempted_requests=1)
     assert VERIFIER._emit_failure(error) == 1

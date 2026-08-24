@@ -130,3 +130,47 @@ from crossing the cap. The 32-token bound, selected low-cost models, fresh
 zero-history key, and explicit human authorization remain the pre-call
 controls. No provider credential, Gateway request, PostgreSQL connection, or
 live qualification was used in 152-b verification.
+
+## Objective 152-c live result
+
+Objective 152-c performed one authorized live verifier attempt through a fresh
+production-Compose Gateway. The verifier attempted the first ordered flow only:
+OpenAI Chat Completions, non-streaming. It stopped at the PostgreSQL
+correlation metadata boundary with `correlation_metadata_invalid`, reporting
+`attempted_requests=1`, `correlated_completed_count=0`, and
+`real_provider_call_proven=false`. No second live verifier invocation, provider
+retry, selective rerun, or additional Gateway generation request occurred.
+
+Direct bounded SQL evidence showed one finalized successful HTTP-200
+reservation/ledger pair, 36 total tokens, SLAIF actual cost of
+`0.000005800 EUR`, estimated cost of `0.000012900 EUR`, and both recorded cost
+labels `slaif_calculated`. The fresh key had one used request and 36 used
+tokens with zero pending/reserved state. This is partial failure evidence, not
+real-provider proof or an eight-flow qualification. Privacy scans and exact
+disposable cleanup passed. The report remains immutable at
+`oap/reports/152-c-authorized-live-gateway-accounting-qualification.md`.
+
+## Objective 152-d verifier boundary fix
+
+Objective 152-d fixes only the verifier-side asyncpg JSON/JSONB boundary exposed
+by 152-c. The verifier's private PostgreSQL connection registers explicit text
+codecs for `json` and `jsonb` in `pg_catalog` before its first schema or data
+query. The strict decoder requires valid UTF-8, rejects duplicate object keys,
+non-standard numeric constants, arbitrary values, and JSON values larger than
+64 KiB, and returns ordinary Python structures. Codec setup failure closes the
+connection and emits one bounded failure before any Gateway traffic.
+
+Correlation and privacy validation also normalizes asyncpg-like JSON strings
+and decoded mappings through the same bounded JSON rules. It requires object
+metadata, rejects malformed/list/scalar/boolean/duplicate-key/oversized/canary
+inputs, preserves the allowlisted cost source/confidence vocabulary, and no
+longer relies on `default=str` for metadata validation.
+
+The 152-d regression suite covers valid asyncpg-like JSONB text, malformed,
+oversized, duplicate-key, list/scalar, invalid-UTF-8, and canary inputs, plus
+codec ordering and close-before-query failure behavior. No provider,
+credential, live Gateway request, or SQL connection is used in 152-d
+verification. Replacement live evidence remains **NOT RUN** and requires a
+fresh human authorization for a complete eight-flow matrix. No release,
+deployment, production-certification, invoice-grade billing, or compliance
+claim follows from either the failed 152-c round or the 152-d verifier fix.

@@ -34,6 +34,7 @@ import httpx
 MAX_REQUESTS = 8
 DEFAULT_MIN_GAP_SECONDS = 15.0
 MAX_AUTHORIZED_COST_EUR = Decimal("0.05")
+MAX_SAFE_JSON_BYTES = 64 * 1024
 POLL_TIMEOUT_SECONDS = 30.0
 POLL_INTERVAL_SECONDS = 0.25
 PROMPT_MARKER = "SLAIF-152A-PROBE"
@@ -87,6 +88,106 @@ class VerificationError(Exception):
         self.attempted_requests = attempted_requests
         self.correlated_completed_count = correlated_completed_count
         self.real_provider_call_proven = real_provider_call_proven
+
+
+def _duplicate_json_key_error(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise VerificationError("json_duplicate_key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    del value
+    raise VerificationError("json_nonstandard_number")
+
+
+def _normalize_json_value(value: object) -> object:
+    """Return only bounded, ordinary JSON-compatible Python structures."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8", "strict")
+            except UnicodeError:
+                raise VerificationError("json_invalid_utf8") from None
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise VerificationError("json_nonstandard_number")
+        return value
+    if isinstance(value, Mapping):
+        normalized: dict[str, object] = {}
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise VerificationError("json_object_key_invalid")
+            if key in normalized:
+                raise VerificationError("json_duplicate_key")
+            normalized[key] = _normalize_json_value(nested)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_json_value(item) for item in value]
+    raise VerificationError("json_value_type_invalid")
+
+
+def _bounded_json_text(value: object, *, error_code: str) -> str:
+    try:
+        normalized = _normalize_json_value(value)
+        text = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        size = len(text.encode("utf-8", "strict"))
+    except VerificationError:
+        raise
+    except (TypeError, UnicodeError, ValueError, RecursionError):
+        raise VerificationError(error_code) from None
+    if size > MAX_SAFE_JSON_BYTES:
+        raise VerificationError("json_value_too_large")
+    return text
+
+
+def _decode_json_value(value: object) -> object:
+    """Strict asyncpg JSON decoder with a bounded input and ordinary output."""
+
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        try:
+            text = raw.decode("utf-8", "strict")
+        except UnicodeError:
+            raise VerificationError("json_invalid_utf8") from None
+    elif isinstance(value, str):
+        try:
+            raw = value.encode("utf-8", "strict")
+        except UnicodeError:
+            raise VerificationError("json_invalid_utf8") from None
+        text = value
+    else:
+        raise VerificationError("json_codec_value_invalid")
+    if len(raw) > MAX_SAFE_JSON_BYTES:
+        raise VerificationError("json_value_too_large")
+    try:
+        decoded = json.loads(
+            text,
+            object_pairs_hook=_duplicate_json_key_error,
+            parse_constant=_reject_json_constant,
+        )
+    except VerificationError:
+        raise
+    except (json.JSONDecodeError, RecursionError, UnicodeError):
+        raise VerificationError("json_decode_invalid") from None
+    _bounded_json_text(decoded, error_code="json_decode_invalid")
+    return decoded
+
+
+def _encode_json_value(value: object) -> str:
+    """Standard JSON text encoder paired with the private asyncpg codecs."""
+
+    return _bounded_json_text(value, error_code="json_encode_invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,6 +595,29 @@ def _row_value(row: Mapping[str, Any], key: str) -> Any:
         return None
 
 
+def _normalize_metadata(value: object, *, field: str) -> dict[str, object]:
+    """Normalize asyncpg JSONB mappings or bounded JSON text to a mapping."""
+
+    try:
+        if isinstance(value, (str, bytes, bytearray)):
+            decoded = _decode_json_value(value)
+        elif isinstance(value, Mapping):
+            decoded = _normalize_json_value(value)
+        else:
+            raise VerificationError("json_object_invalid")
+    except VerificationError as exc:
+        raise VerificationError(f"{field}_{exc.code}") from None
+    except RecursionError:
+        raise VerificationError(f"{field}_json_recursion_limit") from None
+    try:
+        _bounded_json_text(decoded, error_code=f"{field}_json_normalization_invalid")
+    except VerificationError as exc:
+        raise VerificationError(f"{field}_{exc.code}") from None
+    if not isinstance(decoded, Mapping) or isinstance(decoded, bool):
+        raise VerificationError(f"{field}_json_object_invalid")
+    return dict(decoded)
+
+
 def _as_nonnegative_decimal(value: object, *, field: str) -> Decimal:
     if isinstance(value, bool) or value is None:
         raise VerificationError(f"correlation_{field}_invalid")
@@ -768,10 +892,9 @@ async def execute_flow(
 
 
 def _metadata_cost_labels(metadata: object) -> tuple[str, str]:
-    if not isinstance(metadata, Mapping):
-        raise VerificationError("correlation_metadata_invalid")
-    source = metadata.get("cost_source")
-    confidence = metadata.get("cost_confidence")
+    normalized = _normalize_metadata(metadata, field="correlation_metadata")
+    source = normalized.get("cost_source")
+    confidence = normalized.get("cost_confidence")
     if not isinstance(source, str) or not isinstance(confidence, str):
         raise VerificationError("correlation_cost_metadata_missing")
     if source not in {"slaif_calculated", "provider_reported"}:
@@ -784,6 +907,51 @@ def _metadata_cost_labels(metadata: object) -> tuple[str, str]:
     ):
         raise VerificationError("correlation_provider_cost_unsubstantiated")
     return source, confidence
+
+
+def _scan_json_value(value: object) -> object:
+    """Convert database scalar types without accepting arbitrary objects."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise VerificationError("privacy_scan_nonstandard_number")
+        return value
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, dt.datetime):
+        return value.isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        scanned: dict[str, object] = {}
+        for key, nested in value.items():
+            if not isinstance(key, str) or key in scanned:
+                raise VerificationError("privacy_scan_object_key_invalid")
+            scanned[key] = _scan_json_value(nested)
+        return scanned
+    if isinstance(value, (list, tuple)):
+        return [_scan_json_value(item) for item in value]
+    raise VerificationError("privacy_scan_value_invalid")
+
+
+def _serialize_scan_value(value: object, *, error_code: str) -> str:
+    try:
+        serialized = json.dumps(
+            _scan_json_value(value),
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except VerificationError:
+        raise VerificationError(error_code) from None
+    except (TypeError, UnicodeError, ValueError, RecursionError):
+        raise VerificationError(error_code) from None
+    return serialized
 
 
 def validate_correlation(
@@ -889,20 +1057,27 @@ def validate_correlation(
                 else:
                     _as_nonnegative_int(value, field=field)
 
-    source, confidence = _metadata_cost_labels(_row_value(ledger, "response_metadata"))
+    usage_raw = _normalize_metadata(
+        _row_value(ledger, "usage_raw"),
+        field="correlation_usage_raw",
+    )
+    response_metadata = _normalize_metadata(
+        _row_value(ledger, "response_metadata"),
+        field="correlation_metadata",
+    )
+    source, confidence = _metadata_cost_labels(response_metadata)
     actual_cost_eur = _as_nonnegative_decimal(
         _row_value(ledger, "actual_cost_eur"),
         field="actual_cost_eur",
     )
-    raw_metadata = json.dumps(
+    raw_metadata = _serialize_scan_value(
         {
-            "usage_raw": _row_value(ledger, "usage_raw"),
-            "response_metadata": _row_value(ledger, "response_metadata"),
+            "usage_raw": usage_raw,
+            "response_metadata": response_metadata,
             "error_message": _row_value(ledger, "error_message"),
             "key_row": dict(key),
         },
-        sort_keys=True,
-        default=str,
+        error_code="correlation_privacy_scan_invalid",
     )
     if prompt_marker in raw_metadata or response_marker in raw_metadata or expected_key in raw_metadata:
         raise VerificationError("correlation_privacy_canary_found")
@@ -990,7 +1165,7 @@ def _require_zero_key_counters(key: Mapping[str, Any], *, reserved_only: bool = 
 def _scan_complete_key_row(key: Mapping[str, Any], gateway_key: str) -> None:
     if not _FRESH_KEY_FIELDS.issubset(key.keys()):
         raise VerificationError("fresh_key_row_incomplete")
-    serialized = json.dumps(dict(key), sort_keys=True, default=str)
+    serialized = _serialize_scan_value(dict(key), error_code="fresh_key_row_serialization_invalid")
     if gateway_key in serialized:
         raise VerificationError("fresh_key_plaintext_canary_found")
 
@@ -1072,6 +1247,22 @@ class PostgresProbe:
         self._timeout_seconds = timeout_seconds
         self._connection: asyncpg.Connection | None = None
 
+    async def _register_json_codecs(self) -> None:
+        connection = self._connection_or_fail()
+        try:
+            for type_name in ("json", "jsonb"):
+                await connection.set_type_codec(
+                    type_name,
+                    schema="pg_catalog",
+                    encoder=_encode_json_value,
+                    decoder=_decode_json_value,
+                    format="text",
+                )
+        except VerificationError:
+            raise
+        except Exception:  # noqa: BLE001
+            raise VerificationError("database_json_codec_setup_failure") from None
+
     async def connect_and_check(self) -> None:
         try:
             self._connection = await asyncpg.connect(
@@ -1079,6 +1270,7 @@ class PostgresProbe:
                 timeout=self._timeout_seconds,
                 command_timeout=self._timeout_seconds,
             )
+            await self._register_json_codecs()
             database_name = await self._connection.fetchval("SELECT current_database()")
             if database_name != self._target.database_name:
                 raise VerificationError("database_name_mismatch")
