@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import re
 import secrets
@@ -34,6 +35,48 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = ROOT / "docker-compose.production.yml"
 QUAL_COMPOSE = ROOT / "scripts/production-qualification/qualification-compose.yml"
 GATEWAY_MODEL = "qualification-double/qualification-model"
+EXERCISED_METRIC_FAMILIES = (
+    "gateway_http_requests_total",
+    "gateway_provider_requests_total",
+    "gateway_tokens_total",
+    "gateway_cost_eur_total",
+)
+_PROMETHEUS_NUMBER = r"(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?Inf|NaN)"
+_PROMETHEUS_SAMPLE = re.compile(
+    rf"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{{[^{{}}\n]+\}})?\s+"
+    rf"(?P<value>{_PROMETHEUS_NUMBER})(?:\s+[+-]?\d+)?$"
+)
+
+
+def positive_prometheus_sample_counts(
+    exposition: str,
+    families: tuple[str, ...] = EXERCISED_METRIC_FAMILIES,
+) -> dict[str, int]:
+    """Count bounded positive samples for exact metric families.
+
+    Prometheus HELP/TYPE metadata, ``_created`` samples, zero values, special
+    non-finite values, malformed lines, and unrelated families are excluded.
+    The cap keeps the evidence safe even if a test fixture has unexpected
+    label cardinality.
+    """
+    counts = {family: 0 for family in families}
+    for raw_line in exposition.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _PROMETHEUS_SAMPLE.fullmatch(line)
+        if match is None:
+            continue
+        name = match.group("name")
+        if name.endswith("_created") or name not in counts:
+            continue
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        if math.isfinite(value) and value > 0 and counts[name] < 1000:
+            counts[name] += 1
+    return counts
 
 
 class QualificationError(RuntimeError):
@@ -81,6 +124,8 @@ class Runner:
         self.requests: list[dict[str, Any]] = []
         self.dashboard_bodies: list[str] = []
         self.metrics_body = ""
+        self.dashboard_evidence: dict[str, Any] = {}
+        self.metrics_evidence: dict[str, Any] = {}
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
@@ -906,13 +951,13 @@ class Runner:
             raise QualificationError("dashboard login page did not expose CSRF form token")
         if not any(cookie.name == "slaif_admin_login_csrf" and cookie.secure for cookie in jar):
             raise QualificationError("dashboard login CSRF cookie was not Secure over HTTPS")
-        status, landing_html, login_headers, landing_url = fetch(
+        landing_status, landing_html, login_headers, landing_url = fetch(
             "/admin/login",
             form={"email": "qualification-admin@example.invalid", "password": self.admin_password, "csrf_token": csrf_match.group(1)},
         )
-        if status != 200 or urlsplit(landing_url).path != "/admin":
+        if landing_status != 200 or urlsplit(landing_url).path != "/admin":
             raise QualificationError(
-                f"dashboard login did not follow to the exact landing page: status={status} path={urlsplit(landing_url).path}"
+                f"dashboard login did not follow to the exact landing page: status={landing_status} path={urlsplit(landing_url).path}"
             )
         if "Dashboard" not in landing_html:
             raise QualificationError("dashboard authenticated landing page did not expose its marker")
@@ -920,6 +965,10 @@ class Runner:
             raise QualificationError("dashboard authenticated session was not established")
         if "Secure" not in login_headers.get("Set-Cookie", "") and not any(cookie.name == "slaif_admin_session" and cookie.secure for cookie in jar):
             raise QualificationError("dashboard session cookie was not Secure")
+        session_secure = "Secure" in login_headers.get("Set-Cookie", "") or any(
+            cookie.name == "slaif_admin_session" and cookie.secure for cookie in jar
+        )
+        self.dashboard_bodies.append(landing_html)
         for path, marker in (("/admin/usage", "Usage Ledger"), ("/admin/audit", "Audit Log")):
             status, body, _, final_url = fetch(path)
             if status != 200 or marker not in body:
@@ -927,6 +976,13 @@ class Runner:
             if urlsplit(final_url).path != path:
                 raise QualificationError(f"dashboard page {path} followed to unexpected path: {urlsplit(final_url).path}")
             self.dashboard_bodies.append(body)
+        self.dashboard_evidence = {
+            "final_path": urlsplit(landing_url).path,
+            "final_status": landing_status,
+            "redirect_followed": landing_url != self.api_url("/admin/login"),
+            "secure_cookie": session_secure,
+            "scanned_body_count": len(self.dashboard_bodies),
+        }
 
     def exercise_async_liveness(self) -> None:
         deadline = time.monotonic() + 45
@@ -1209,15 +1265,17 @@ class Runner:
         if not authorized.startswith("200\n"):
             raise QualificationError("authorized in-container /metrics did not return HTTP 200")
         metrics = authorized.split("\n", 1)[1]
-        expected_families = (
-            "# HELP gateway_http_requests_total",
-            "# HELP gateway_provider_requests_total",
-            "# HELP gateway_tokens_total",
-            "# HELP gateway_cost_eur_total",
-        )
-        if "# TYPE gateway_http_requests_total counter" not in metrics or any(marker not in metrics for marker in expected_families):
-            raise QualificationError("authorized /metrics did not expose the expected exercised Prometheus families")
+        positive_samples = positive_prometheus_sample_counts(metrics)
+        if any(count < 1 for count in positive_samples.values()):
+            raise QualificationError(
+                "authorized /metrics did not expose positive samples for every exercised family"
+            )
         self.metrics_body = metrics
+        self.metrics_evidence = {
+            "positive_sample_present": {
+                family: positive_samples[family] > 0 for family in EXERCISED_METRIC_FAMILIES
+            }
+        }
         provider_text = json.dumps(self.provider_state(), sort_keys=True)
         database_text = "\n".join("|".join(row) for row in self.sql("SELECT endpoint, provider, requested_model, success, accounting_status FROM usage_ledger"))
         joined = "\n".join([logs, metrics, provider_text, database_text, *self.dashboard_bodies])
@@ -1277,10 +1335,10 @@ def main() -> int:
             failure = f"{failure}; cleanup: {cleanup_error}" if failure else f"cleanup: {cleanup_error}"
     if failure:
         print(f"RESULT=FAIL\nERROR={failure}", file=sys.stderr)
-        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks}, sort_keys=True))
+        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence}, sort_keys=True))
         return 1
     print("RESULT=OK")
-    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks}, sort_keys=True))
+    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence}, sort_keys=True))
     return 0
 
 

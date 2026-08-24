@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -8,6 +9,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LOADER = ROOT / "deploy/production/load-secrets.sh"
+_RUN_SPEC = importlib.util.spec_from_file_location("qualification_run", ROOT / "scripts/production-qualification/run.py")
+assert _RUN_SPEC is not None and _RUN_SPEC.loader is not None
+_RUN_MODULE = importlib.util.module_from_spec(_RUN_SPEC)
+_RUN_SPEC.loader.exec_module(_RUN_MODULE)
 
 
 def _loader_env(tmp_path: Path) -> dict[str, str]:
@@ -58,11 +63,43 @@ def test_production_qualification_requires_real_redirect_following_and_authorize
     assert "class _NoRedirect" not in source
     assert "urlsplit(landing_url).path != \"/admin\"" in source
     assert "status != 200" in source
-    assert '"# HELP gateway_http_requests_total"' in source
-    assert '"# HELP gateway_provider_requests_total"' in source
-    assert '"# HELP gateway_tokens_total"' in source
-    assert '"# HELP gateway_cost_eur_total"' in source
+    assert "positive_prometheus_sample_counts" in source
+    assert '"positive_sample_present"' in source
+    assert '"gateway_http_requests_total"' in source
+    assert '"gateway_provider_requests_total"' in source
+    assert '"gateway_tokens_total"' in source
+    assert '"gateway_cost_eur_total"' in source
     assert "exec\",\n                \"-T\",\n                \"api\"" in source
+
+
+def test_positive_prometheus_sample_counts_rejects_metadata_zero_malformed_and_unrelated_lines() -> None:
+    exposition = """\
+# HELP gateway_http_requests_total HTTP requests
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{method=\"GET\"} 4
+gateway_http_requests_total_created{method=\"GET\"} 99
+# HELP gateway_provider_requests_total provider requests
+# TYPE gateway_provider_requests_total counter
+gateway_provider_requests_total{provider=\"qualification-double\"} 0
+# HELP gateway_tokens_total token totals
+# TYPE gateway_tokens_total counter
+# HELP gateway_cost_eur_total cost totals
+# TYPE gateway_cost_eur_total counter
+gateway_cost_eur_total{provider=\"qualification-double\"} NaN
+gateway_http_requests_total{broken 3
+unrelated_metric 500
+"""
+
+    assert _RUN_MODULE.positive_prometheus_sample_counts(exposition) == {
+        "gateway_http_requests_total": 1,
+        "gateway_provider_requests_total": 0,
+        "gateway_tokens_total": 0,
+        "gateway_cost_eur_total": 0,
+    }
+
+    assert _RUN_MODULE.positive_prometheus_sample_counts(
+        "gateway_tokens_total{provider=\"qualification-double\"} 2.5e1\n"
+    )["gateway_tokens_total"] == 1
 
 
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:

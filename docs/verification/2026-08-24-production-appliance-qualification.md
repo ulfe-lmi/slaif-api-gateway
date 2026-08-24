@@ -98,3 +98,18 @@ Objective 151-d repairs these boundaries and records the fresh no-keep result
 in its immutable report. It does not convert this historical 151-c record into
 a production certification, security certification, compliance claim, or
 provider-invoice qualification.
+
+## 151-e evidence review
+
+The 151-d implementation repaired the product boundary, but its immutable
+report was rejected as evidence closure for three reporting defects. The
+recorded qualification project string omitted the final character of the
+actual run's identifier, so the external cleanup audit used a truncated
+label; the metrics assertion checked HELP/TYPE registration metadata rather
+than requiring positive samples from each exercised family; and the
+authenticated landing HTML was not included in the later privacy-body set.
+
+Objective 151-e preserves the accepted 151-d behavior and closes only these
+evidence-correlation defects. It remains disposable qualification evidence,
+not a production certification, security certification, compliance claim, or
+provider-invoice qualification.
