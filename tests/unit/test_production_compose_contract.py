@@ -72,6 +72,9 @@ def test_production_qualification_requires_real_redirect_following_and_authorize
     assert '"gateway_tokens_total"' in source
     assert '"gateway_cost_eur_total"' in source
     assert "exec\",\n                \"-T\",\n                \"api\"" in source
+    assert "--network" not in source
+    assert '"network", "inspect"' in source
+    assert '"exec", provider_container' in source
 
 
 def test_positive_prometheus_sample_counts_rejects_metadata_zero_malformed_and_unrelated_lines() -> None:
@@ -351,6 +354,27 @@ def test_readyz_stability_counter_resets_and_bounded_evidence_is_content_free() 
     assert _RUN_MODULE.public_readyz_denial_is_valid(403) is True
     assert _RUN_MODULE.public_readyz_denial_is_valid(404) is True
     assert _RUN_MODULE.public_readyz_denial_is_valid(200) is False
+
+
+def test_public_readyz_probe_requires_exact_containers_and_inspected_subnet_membership() -> None:
+    assert _RUN_MODULE.single_container_id("nginx-id\n", "nginx") == "nginx-id"
+    for output in ("", "nginx-id\nother-id\n"):
+        with pytest.raises(ValueError):
+            _RUN_MODULE.single_container_id(output, "nginx")
+
+    inspected = {
+        "nginx-id": {"IPv4Address": "198.18.0.2/15"},
+        "provider-id": {"IPv4Address": "198.18.0.3/15"},
+    }
+    assert _RUN_MODULE.inspected_ipv4_for_container(inspected, "nginx-id", "198.18.0.0/15") == "198.18.0.2"
+    assert _RUN_MODULE.inspected_ipv4_for_container(inspected, "provider-id", "198.18.0.0/15") == "198.18.0.3"
+    for container_id, subnet in (
+        ("missing-id", "198.18.0.0/15"),
+        ("nginx-id", "192.168.0.0/16"),
+        ("nginx-id", "not-a-subnet"),
+    ):
+        with pytest.raises(ValueError):
+            _RUN_MODULE.inspected_ipv4_for_container(inspected, container_id, subnet)
 
 
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:

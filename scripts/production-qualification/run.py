@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import math
 import os
@@ -317,6 +318,34 @@ def readiness_consecutive_count(previous: int, ready: bool) -> int:
 def public_readyz_denial_is_valid(status: int) -> bool:
     """Accept only an exact bounded denial from the public HTTPS NGINX path."""
     return status in {403, 404}
+
+
+def single_container_id(output: str, service: str) -> str:
+    """Require exactly one Compose container identity for a named service."""
+    rows = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(rows) != 1:
+        raise ValueError(f"{service} container identity was not singular")
+    return rows[0]
+
+
+def inspected_ipv4_for_container(containers: object, container_id: str, subnet: str) -> str:
+    """Return one inspected IPv4 only when it is assigned inside the subnet."""
+    if not isinstance(containers, dict):
+        raise ValueError("network inspection did not return a container mapping")
+    info = containers.get(container_id)
+    if not isinstance(info, dict):
+        raise ValueError("container was absent from inspected probe network")
+    value = info.get("IPv4Address")
+    if not isinstance(value, str) or not value:
+        raise ValueError("container had no inspected IPv4 address")
+    try:
+        address = ipaddress.ip_interface(value).ip
+        network = ipaddress.ip_network(subnet, strict=True)
+    except ValueError as exc:
+        raise ValueError("inspected container address or subnet was invalid") from exc
+    if address.version != 4 or address not in network:
+        raise ValueError("inspected container IPv4 was outside the probe subnet")
+    return str(address)
 
 
 class Runner:
@@ -746,18 +775,25 @@ class Runner:
         )
 
     def verify_public_readyz_denied(self) -> None:
-        """Probe HTTPS NGINX from a non-allowlisted disposable network source."""
+        """Probe HTTPS NGINX from exact containers on an inspected probe subnet."""
         probe_network = f"{self.project}_readyz_probe"
-        nginx_rows = self.compose_command(["ps", "-q", "nginx"], name="readyz-nginx-id").stdout.splitlines()
-        nginx_container = next((row.strip() for row in nginx_rows if row.strip()), "")
-        if not nginx_container:
-            raise QualificationError("could not identify NGINX container for public readiness denial")
+        subnet = "198.18.0.0/15"
+        nginx_container = single_container_id(
+            self.compose_command(["ps", "-q", "nginx"], name="readyz-nginx-id").stdout,
+            "nginx",
+        )
+        provider_container = single_container_id(
+            self.compose_command(["ps", "-q", "provider-double"], name="readyz-provider-id").stdout,
+            "provider-double",
+        )
+        if nginx_container == provider_container:
+            raise QualificationError("NGINX and provider-double container identities were not distinct")
         created = False
-        connected = False
+        connected: list[str] = []
         status = 0
         try:
             self.command(
-                [*self.docker, "network", "create", "--driver", "bridge", "--subnet", "198.18.0.0/15", probe_network],
+                [*self.docker, "network", "create", "--driver", "bridge", "--subnet", subnet, probe_network],
                 name="readyz-probe-network-create",
             )
             created = True
@@ -765,10 +801,27 @@ class Runner:
                 [*self.docker, "network", "connect", "--alias", "nginx", probe_network, nginx_container],
                 name="readyz-probe-network-connect",
             )
-            connected = True
+            connected.append(nginx_container)
+            self.command(
+                [*self.docker, "network", "connect", "--alias", "provider-double", probe_network, provider_container],
+                name="readyz-probe-network-connect-provider",
+            )
+            connected.append(provider_container)
+            inspected = self.command(
+                [*self.docker, "network", "inspect", "--format", "{{json .Containers}}", probe_network],
+                name="readyz-probe-network-inspect",
+            )
+            try:
+                containers = json.loads(inspected.stdout.strip())
+            except json.JSONDecodeError as exc:
+                raise QualificationError("public readiness probe network inspection was not JSON") from exc
+            nginx_ip = inspected_ipv4_for_container(containers, nginx_container, subnet)
+            provider_ip = inspected_ipv4_for_container(containers, provider_container, subnet)
+            if nginx_ip == provider_ip:
+                raise QualificationError("public readiness probe containers shared an IPv4 address")
             probe_script = (
                 "import ssl, urllib.error, urllib.request\n"
-                "request = urllib.request.Request('https://nginx/readyz')\n"
+                f"request = urllib.request.Request('https://{nginx_ip}/readyz')\n"
                 "context = ssl._create_unverified_context()\n"
                 "try:\n"
                 "    response = urllib.request.urlopen(request, context=context, timeout=5)\n"
@@ -778,11 +831,8 @@ class Runner:
                 "except Exception:\n"
                 "    print(0)\n"
             )
-            result = self.compose_command(
-                [
-                    "run", "--rm", "--no-deps", "--network", probe_network,
-                    "--entrypoint", "python", "provider-double", "-c", probe_script,
-                ],
+            result = self.command(
+                [*self.docker, "exec", provider_container, "python", "-c", probe_script],
                 name="public-readyz-denial",
             )
             values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -791,9 +841,9 @@ class Runner:
             except (IndexError, ValueError) as exc:
                 raise QualificationError("public readiness denial probe was not numeric") from exc
         finally:
-            if connected:
+            for container in reversed(connected):
                 self.command(
-                    [*self.docker, "network", "disconnect", probe_network, nginx_container],
+                    [*self.docker, "network", "disconnect", probe_network, container],
                     check=False,
                     name="readyz-probe-network-disconnect",
                 )

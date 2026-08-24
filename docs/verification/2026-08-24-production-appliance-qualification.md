@@ -142,6 +142,17 @@ failed fresh phase remains a failed qualification result; it is not converted
 to a production certification, release, provider-invoice qualification, or SLA
 claim.
 
+## 151-i evidence review
+
+Objective 151-h stopped before public-denial evidence because the installed
+Compose CLI rejected the qualification probe's `--network` option. Its initial
+loopback readiness observation passed, but that did not qualify the remaining
+lifecycle or public boundary. Objective 151-i replaces only that incompatible
+probe command with inspected raw Docker network operations and retains the
+same one-fresh-run and exact-correlation requirements. It remains disposable
+qualification evidence, not a production certification, release,
+provider-invoice qualification, or SLA claim.
+
 ## 151-h evidence review
 
 Objective 151-g passed the complete matrix and proved the active Responses
