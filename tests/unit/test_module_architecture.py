@@ -210,11 +210,11 @@ def test_provider_factory_owns_server_registry_callsite() -> None:
 
 def test_ignored_cache_files_are_absent_from_git_diff() -> None:
     output = subprocess.check_output(
-        ["git", "diff", "--name-only", "origin/main...HEAD"],
+        ["git", "ls-files", "-z"],
         cwd=ROOT,
         text=True,
     )
-    assert "__pycache__" not in output
+    assert all("__pycache__" not in path for path in output.split("\x00"))
 
 
 def test_facial_compatibility_path_is_only_a_reexport() -> None:
