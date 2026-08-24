@@ -24,7 +24,7 @@ Command:
 .venv/bin/python scripts/production-qualification/run.py
 ```
 
-Project: `slaif-151-3781840-2fba2a`
+Project: `slaif-151-3878414-96a729`
 
 Result: `RESULT=OK`
 
@@ -50,7 +50,8 @@ Result: `RESULT=OK`
 The run used disposable PostgreSQL state, the isolated qualification provider
 double, generated credentials and canaries, and disabled email delivery. The
 restore verifier emitted bounded table counts and those counts matched the
-source snapshot. The interrupted streamed request reconciled with the saved
+source snapshot exactly: `gateway_keys=2` and `usage_ledger=15` in both the
+source and restored databases. The interrupted streamed request reconciled with the saved
 `qualification-double` provider, `qualification-model` resolved model, and
 `streaming=true` reservation facts.
 

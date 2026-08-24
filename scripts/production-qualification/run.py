@@ -83,6 +83,7 @@ class Runner:
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
+        self.restore_counts: dict[str, dict[str, int]] = {}
         self.restore_database_name = ""
         self.implementation_notes: list[str] = []
 
@@ -1144,6 +1145,16 @@ class Runner:
             raise QualificationError(
                 f"restored row counts did not match source snapshot: source={source_rows} restored={restored_rows}"
             )
+        self.restore_counts = {
+            "source": {
+                "gateway_keys": int(source_rows[0]),
+                "usage_ledger": int(source_rows[1]),
+            },
+            "restored": {
+                "gateway_keys": int(restored_rows[0]),
+                "usage_ledger": int(restored_rows[1]),
+            },
+        }
 
     def privacy(self) -> None:
         logs = self.compose_command(["logs", "--no-color", "--tail", "1000"], name="privacy-logs").stdout
@@ -1218,10 +1229,10 @@ def main() -> int:
             failure = f"{failure}; cleanup: {cleanup_error}" if failure else f"cleanup: {cleanup_error}"
     if failure:
         print(f"RESULT=FAIL\nERROR={failure}", file=sys.stderr)
-        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "cleanup": runner.cleanup_checks}, sort_keys=True))
+        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks}, sort_keys=True))
         return 1
     print("RESULT=OK")
-    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "cleanup": runner.cleanup_checks}, sort_keys=True))
+    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks}, sort_keys=True))
     return 0
 
 
