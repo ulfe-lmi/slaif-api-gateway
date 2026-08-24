@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 LOADER = ROOT / "deploy/production/load-secrets.sh"
@@ -120,6 +122,11 @@ def test_concurrency_validation_requires_correlated_active_stream_facts() -> Non
         "reservation": reservation,
     }
     assert _RUN_MODULE.active_stream_is_valid(**valid) is True
+    assert _RUN_MODULE.active_stream_is_valid(**valid, expected_endpoint="/v1/responses") is False
+    assert _RUN_MODULE.active_stream_is_valid(
+        **{**valid, "reservation": {**reservation, "endpoint": "/v1/responses"}},
+        expected_endpoint="/v1/responses",
+    ) is True
     for field, value in (
         ("status", 503),
         ("request_id_present", False),
@@ -198,6 +205,90 @@ def test_concurrency_validation_bounds_recovery_overlap_and_final_evidence() -> 
     assert "body" not in serialized
     assert "secret" not in serialized
     assert "request_id" not in evidence
+
+
+def test_active_stream_rejects_extra_or_mismatched_termination_facts() -> None:
+    reservation = {
+        "endpoint": "/v1/responses",
+        "reservation_provider": "qualification-double",
+        "reservation_resolved_model": "qualification-model",
+        "reservation_streaming": "true",
+        "reservation_status": "pending",
+        "accounting_status": "pending",
+    }
+    valid = {
+        "status": 200,
+        "request_id_present": True,
+        "thread_alive": True,
+        "provider_forward_delta": 1,
+        "redis_slots": 1,
+        "reservation": reservation,
+        "expected_endpoint": "/v1/responses",
+    }
+    assert _RUN_MODULE.active_stream_is_valid(**valid) is True
+    for field, value in (
+        ("status", 201),
+        ("thread_alive", False),
+        ("provider_forward_delta", 0),
+        ("provider_forward_delta", 2),
+        ("redis_slots", 0),
+        ("redis_slots", 2),
+        ("reservation", {**reservation, "reservation_provider": "other"}),
+        ("reservation", {**reservation, "reservation_status": "released"}),
+        ("reservation", {**reservation, "endpoint": "/v1/chat/completions"}),
+    ):
+        candidate = {**valid, field: value}
+        assert _RUN_MODULE.active_stream_is_valid(**candidate) is False
+
+
+def test_gateway_key_uuid_validation_and_bounded_termination_evidence() -> None:
+    valid_uuid = "01234567-89ab-cdef-0123-456789abcdef"
+    assert _RUN_MODULE.validate_gateway_key_id(valid_uuid) == valid_uuid
+    for malformed in (
+        "0123456789ab-cdef-0123-456789abcdef",
+        "01234567-89ab-cdef-0123-456789abcde!",
+        "01234567-89AB-cdef-0123-456789abcdef",
+        "01234567-89ab-cdef-0123-456789abcdef;echo-no",
+    ):
+        with pytest.raises(ValueError):
+            _RUN_MODULE.validate_gateway_key_id(malformed)
+
+    evidence = _RUN_MODULE.bounded_api_termination_evidence(
+        recovery_503_count=1,
+        active_status=200,
+        active_error_code="",
+        active_request_id_present=True,
+        active_thread_alive=True,
+        active_provider_forward_delta=1,
+        active_redis_slots=1,
+        active_reservation_present=True,
+        pending_before_kill=True,
+        restart_ready=True,
+        terminal_reservation_status="released",
+        terminal_accounting_status="failed",
+        counters_cleared=True,
+        audit_present=True,
+    )
+    serialized = json.dumps(evidence)
+    assert "body" not in serialized
+    assert "secret" not in serialized
+    assert "url" not in serialized
+    assert set(evidence) == {
+        "recovery_503_count",
+        "active_status",
+        "active_error_code",
+        "active_request_id_present",
+        "active_thread_alive",
+        "active_provider_forward_delta",
+        "active_redis_slots",
+        "active_reservation_present",
+        "pending_before_kill",
+        "restart_ready",
+        "terminal_reservation_status",
+        "terminal_accounting_status",
+        "counters_cleared",
+        "audit_present",
+    }
 
 
 def test_secret_loader_preserves_secret_bytes_without_logging_values(tmp_path: Path) -> None:

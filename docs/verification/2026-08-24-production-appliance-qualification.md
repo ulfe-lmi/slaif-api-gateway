@@ -127,3 +127,17 @@ Objective 151-f makes the concurrency overlap evidence deterministic and
 mechanically correlates the exact final project token through the report and
 cleanup audit. It remains disposable qualification evidence, not a production
 certification, release, provider-invoice qualification, or SLA claim.
+
+## 151-g evidence review
+
+The single 151-f run proved the deterministic Redis-concurrency boundary, but
+then exposed the same request-ID-only prerequisite in the API-termination
+phase. That phase could proceed to a ten-second PostgreSQL lookup without
+proving that the captured request was an HTTP-200 live stream, had one provider
+forward, held one Redis slot, and had its exact pending Responses reservation.
+Objective 151-g strengthens only that qualification harness boundary. It keeps
+the actual API-container interruption and documented CLI reconciliation proof,
+adds bounded termination evidence, and requires one fresh no-keep run. A
+failed fresh phase remains a failed qualification result; it is not converted
+to a production certification, release, provider-invoice qualification, or SLA
+claim.

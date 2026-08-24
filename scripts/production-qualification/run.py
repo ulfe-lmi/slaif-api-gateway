@@ -83,6 +83,18 @@ class QualificationError(RuntimeError):
     pass
 
 
+_GATEWAY_KEY_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def validate_gateway_key_id(value: str) -> str:
+    """Accept only canonical lowercase UUIDs before shell/SQL interpolation."""
+    if not isinstance(value, str) or _GATEWAY_KEY_UUID.fullmatch(value) is None:
+        raise ValueError("gateway key identifier was not a canonical UUID")
+    return value
+
+
 def active_stream_is_valid(
     *,
     status: int,
@@ -91,6 +103,7 @@ def active_stream_is_valid(
     provider_forward_delta: int,
     redis_slots: int,
     reservation: dict[str, Any] | None,
+    expected_endpoint: str = "/v1/chat/completions",
 ) -> bool:
     """Return whether all independently observed first-stream facts agree."""
     return (
@@ -100,7 +113,7 @@ def active_stream_is_valid(
         and provider_forward_delta == 1
         and redis_slots == 1
         and reservation is not None
-        and reservation.get("endpoint") == "/v1/chat/completions"
+        and reservation.get("endpoint") == expected_endpoint
         and reservation.get("reservation_provider") == "qualification-double"
         and reservation.get("reservation_resolved_model") == "qualification-model"
         and reservation.get("reservation_streaming") == "true"
@@ -180,6 +193,42 @@ def bounded_concurrency_evidence(
     }
 
 
+def bounded_api_termination_evidence(
+    *,
+    recovery_503_count: int,
+    active_status: int,
+    active_error_code: str,
+    active_request_id_present: bool,
+    active_thread_alive: bool,
+    active_provider_forward_delta: int,
+    active_redis_slots: int,
+    active_reservation_present: bool,
+    pending_before_kill: bool,
+    restart_ready: bool,
+    terminal_reservation_status: str,
+    terminal_accounting_status: str,
+    counters_cleared: bool,
+    audit_present: bool,
+) -> dict[str, Any]:
+    """Build bounded termination evidence without request content or IDs."""
+    return {
+        "recovery_503_count": recovery_503_count,
+        "active_status": active_status,
+        "active_error_code": active_error_code,
+        "active_request_id_present": active_request_id_present,
+        "active_thread_alive": active_thread_alive,
+        "active_provider_forward_delta": active_provider_forward_delta,
+        "active_redis_slots": active_redis_slots,
+        "active_reservation_present": active_reservation_present,
+        "pending_before_kill": pending_before_kill,
+        "restart_ready": restart_ready,
+        "terminal_reservation_status": terminal_reservation_status,
+        "terminal_accounting_status": terminal_accounting_status,
+        "counters_cleared": counters_cleared,
+        "audit_present": audit_present,
+    }
+
+
 def openai_error_code(payload: dict[str, Any] | str) -> str:
     """Extract only the bounded OpenAI error code from a decoded response."""
     if isinstance(payload, str):
@@ -241,6 +290,7 @@ class Runner:
         self.dashboard_evidence: dict[str, Any] = {}
         self.metrics_evidence: dict[str, Any] = {}
         self.concurrency_evidence: dict[str, Any] = {}
+        self.api_termination_evidence: dict[str, Any] = {}
         self.cleanup_error = ""
         self.cleanup_checks: dict[str, Any] = {}
         self.final_evidence: list[dict[str, Any]] = []
@@ -656,22 +706,28 @@ class Runner:
 
     def accounting_snapshot(self, *, key_id: str | None = None) -> tuple[str, ...]:
         selected_key_id = key_id or self.key_id
+        try:
+            selected_key_id = validate_gateway_key_id(selected_key_id)
+        except ValueError as exc:
+            raise QualificationError(str(exc)) from exc
         rows = self.sql(
-            "SELECT (SELECT COUNT(*) FROM quota_reservations), "
-            "(SELECT COUNT(*) FROM quota_reservations WHERE status = 'pending'), "
-            "(SELECT COUNT(*) FROM usage_ledger), "
-            "(SELECT COUNT(*) FROM usage_ledger WHERE accounting_status = 'pending'), "
+            "SELECT (SELECT COUNT(*) FROM quota_reservations WHERE gateway_key_id = '" + selected_key_id + "'), "
+            "(SELECT COUNT(*) FROM quota_reservations WHERE gateway_key_id = '" + selected_key_id + "' AND status = 'pending'), "
+            "(SELECT COUNT(*) FROM usage_ledger WHERE gateway_key_id = '" + selected_key_id + "'), "
+            "(SELECT COUNT(*) FROM usage_ledger WHERE gateway_key_id = '" + selected_key_id + "' AND accounting_status = 'pending'), "
             "(SELECT COALESCE(tokens_reserved_total,0)::text || ':' || COALESCE(requests_reserved_total,0)::text || ':' || COALESCE(cost_reserved_eur,0)::text "
-            "FROM gateway_keys WHERE id = '" + selected_key_id.replace("'", "''") + "')"
+            "FROM gateway_keys WHERE id = '" + selected_key_id + "')"
         )
         if not rows or len(rows[0]) != 5:
             raise QualificationError("could not capture PostgreSQL accounting snapshot")
         return tuple(rows[0])
 
-    def concurrency_slot_count(self) -> int:
-        """Read only the active Redis sorted-set cardinality for the test key."""
-        if not re.fullmatch(r"[0-9a-f-]{36}", self.concurrency_key_id):
-            raise QualificationError("concurrency key identifier was not a UUID")
+    def redis_slot_count(self, key_id: str) -> int:
+        """Read one validated gateway key's active Redis sorted-set cardinality."""
+        try:
+            selected_key_id = validate_gateway_key_id(key_id)
+        except ValueError as exc:
+            raise QualificationError(str(exc)) from exc
         result = self.compose_command(
             [
                 "exec",
@@ -680,7 +736,7 @@ class Runner:
                 "sh",
                 "-c",
                 "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" "
-                f"ZCARD 'rate:{self.concurrency_key_id}:concurrency'",
+                f"ZCARD 'rate:{selected_key_id}:concurrency'",
             ],
             name="concurrency-slot-count",
         )
@@ -692,6 +748,10 @@ class Runner:
         if count < 0:
             raise QualificationError("Redis concurrency slot probe was negative")
         return count
+
+    def concurrency_slot_count(self) -> int:
+        """Read the dedicated concurrency key's active Redis slot count."""
+        return self.redis_slot_count(self.concurrency_key_id)
 
     def request_ids_for(self, path: str) -> list[str]:
         return [str(row["request_id"]) for row in self.requests if row["path"] == path and row.get("request_id")]
@@ -1053,96 +1113,239 @@ class Runner:
         )
 
     def exercise_api_termination_reconciliation(self) -> None:
-        self.provider_control({"mode": "normal", "stream_pause_seconds": 20, "completion": self.canaries[3]})
-        capture: dict[str, Any] = {}
-        result: dict[str, Any] = {}
+        recovery_503_count = 0
+        state: dict[str, Any] = {
+            "active_status": 0,
+            "active_error_code": "",
+            "active_request_id_present": False,
+            "active_thread_alive": False,
+            "active_provider_forward_delta": 0,
+            "active_redis_slots": 0,
+            "active_reservation_present": False,
+            "pending_before_kill": False,
+            "restart_ready": False,
+            "terminal_reservation_status": "",
+            "terminal_accounting_status": "",
+            "counters_cleared": False,
+            "audit_present": False,
+        }
 
-        def run_stream() -> None:
-            try:
-                result["response"] = self.stream_api(
-                    "/v1/responses",
-                    {"model": GATEWAY_MODEL, "input": self.canaries[2], "stream": True, "max_output_tokens": 16},
-                    key=self.gateway_key,
-                    capture=capture,
-                    timeout=45,
-                )
-            except Exception as exc:  # noqa: BLE001
-                result["error"] = str(exc)
-
-        thread = threading.Thread(target=run_stream, name="qualification-api-termination")
-        thread.start()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and "request_id" not in capture:
-            time.sleep(0.1)
-        request_id = capture.get("request_id")
-        if not request_id:
-            thread.join(timeout=1)
-            raise QualificationError(f"active stream did not expose request ID before API termination: {capture} {result}")
-        if not any(request.get("request_id") == request_id for request in self.requests):
-            headers = capture.get("headers") or {}
-            self._record_request(
-                path="/v1/responses",
-                status=int(capture.get("status") or 0),
-                headers=headers,
-                streaming=True,
+        def publish_evidence() -> None:
+            self.api_termination_evidence = bounded_api_termination_evidence(
+                recovery_503_count=recovery_503_count,
+                **state,
             )
-        pretermination = None
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            pretermination = self.request_evidence(str(request_id))
-            if pretermination:
-                break
-            time.sleep(0.5)
-        if not pretermination:
-            raise QualificationError(f"active stream had no persisted reservation before API termination: {request_id}")
-        if pretermination["reservation_status"] != "pending":
-            raise QualificationError(f"active stream was not pending before API termination: {pretermination}")
-        self.compose_command(["kill", "api"], name="api-terminate")
-        thread.join(timeout=15)
-        self.compose_command(["up", "-d", "api", "nginx"], name="api-restart-after-termination")
-        self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
-        evidence = None
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            evidence = self.request_evidence(str(request_id))
-            if evidence:
-                break
-            time.sleep(1)
-        if not evidence:
-            raise QualificationError(f"interrupted request was not persisted: {request_id}")
-        if evidence["reservation_status"] != "pending":
-            raise QualificationError(f"termination request was not left pending for reconciliation: {evidence}")
-        escaped = str(request_id).replace("'", "''")
-        self.sql(f"UPDATE quota_reservations SET expires_at = now() - interval '1 second' WHERE request_id = '{escaped}' AND status = 'pending'")
-        self.cli(
-            [
-                "quota", "reconcile-expired-reservations", "--limit", "100", "--execute",
-                "--actor-admin-id", self.admin_id, "--reason", "objective-151 API termination reconciliation", "--json",
-            ],
-            name="documented-reconciliation",
-        )
-        evidence = self.wait_request_terminal(str(request_id), timeout=30)
-        if evidence["reservation_status"] not in {"released", "expired"} or evidence["accounting_status"] == "pending":
-            raise QualificationError(f"documented reconciliation did not repair interrupted request: {evidence}")
-        if (
-            evidence["provider"] != "qualification-double"
-            or evidence["resolved_model"] != "qualification-model"
-            or evidence["streaming"] != "true"
-            or evidence["reservation_provider"] != "qualification-double"
-            or evidence["reservation_resolved_model"] != "qualification-model"
-            or evidence["reservation_streaming"] != "true"
-        ):
-            raise QualificationError(f"interrupted request lost immutable route facts: {evidence}")
-        counters = self.sql("SELECT tokens_reserved_total, requests_reserved_total, cost_reserved_eur FROM gateway_keys WHERE id = '" + self.key_id.replace("'", "''") + "'")
-        if not counters or any(value not in {"0", "0.000000000", "0.0"} for value in counters[0]):
-            raise QualificationError(f"reconciliation left key reservations outstanding: {counters}")
-        audit = self.sql(
-            "SELECT COUNT(*) FROM audit_log WHERE request_id = '" + escaped + "' "
-            "AND action = 'quota_reservation_expired' AND note ILIKE '%objective-151%'"
-        )
-        if not audit or int(audit[0][0]) < 1:
-            raise QualificationError("reconciliation audit metadata was not persisted")
-        self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
+
+        try:
+            self.provider_control({"mode": "normal", "stream_pause_seconds": 20, "completion": self.canaries[3]})
+            active_context: tuple[threading.Thread, dict[str, Any], dict[str, Any], str] | None = None
+            baseline_provider_requests = 0
+            for attempt in range(2):
+                baseline_provider_requests = self.provider_state()["requests"]
+                baseline_accounting = self.accounting_snapshot(key_id=self.key_id)
+                baseline_slots = self.redis_slot_count(self.key_id)
+                if baseline_slots != 0:
+                    state.update(active_redis_slots=baseline_slots)
+                    publish_evidence()
+                    raise QualificationError("termination key had an active Redis slot before the attempt")
+
+                capture: dict[str, Any] = {}
+                result: dict[str, Any] = {}
+
+                def run_stream() -> None:
+                    try:
+                        result["response"] = self.stream_api(
+                            "/v1/responses",
+                            {"model": GATEWAY_MODEL, "input": self.canaries[2], "stream": True, "max_output_tokens": 16},
+                            key=self.gateway_key,
+                            capture=capture,
+                            timeout=45,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        result["error"] = str(exc)
+
+                thread = threading.Thread(target=run_stream, name="qualification-api-termination")
+                thread.start()
+                candidate: dict[str, Any] | None = None
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    request_id = capture.get("request_id")
+                    if request_id:
+                        candidate = self.request_evidence(str(request_id))
+                    provider_delta = self.provider_state()["requests"] - baseline_provider_requests
+                    redis_slots = self.redis_slot_count(self.key_id)
+                    state.update(
+                        active_status=int(capture.get("status") or 0),
+                        active_request_id_present=bool(request_id),
+                        active_thread_alive=thread.is_alive(),
+                        active_provider_forward_delta=provider_delta,
+                        active_redis_slots=redis_slots,
+                        active_reservation_present=candidate is not None,
+                    )
+                    if request_id and active_stream_is_valid(
+                        status=int(capture.get("status") or 0),
+                        request_id_present=True,
+                        thread_alive=thread.is_alive(),
+                        provider_forward_delta=provider_delta,
+                        redis_slots=redis_slots,
+                        reservation=candidate,
+                        expected_endpoint="/v1/responses",
+                    ):
+                        active_context = (thread, capture, result, str(request_id))
+                        break
+                    if not thread.is_alive():
+                        break
+                    time.sleep(0.25)
+                if active_context is not None:
+                    break
+
+                thread.join(timeout=2)
+                response = result.get("response")
+                response_status = int(response[0]) if isinstance(response, tuple) and response else int(capture.get("status") or 0)
+                response_body = response[1] if isinstance(response, tuple) and len(response) > 1 else ""
+                provider_delta = self.provider_state()["requests"] - baseline_provider_requests
+                redis_slots = self.redis_slot_count(self.key_id)
+                state.update(
+                    active_status=response_status,
+                    active_error_code=openai_error_code(response_body),
+                    active_thread_alive=thread.is_alive(),
+                    active_provider_forward_delta=provider_delta,
+                    active_redis_slots=redis_slots,
+                    active_reservation_present=candidate is not None,
+                )
+                recovery_safe = recovery_503_is_safe(
+                    status=response_status,
+                    error_code=state["active_error_code"],
+                    thread_alive=thread.is_alive(),
+                    provider_forward_delta=provider_delta,
+                    redis_slots=redis_slots,
+                    accounting_unchanged=self.accounting_snapshot(key_id=self.key_id) == baseline_accounting,
+                )
+                if attempt == 0 and recovery_safe:
+                    recovery_503_count += 1
+                    continue
+                publish_evidence()
+                raise QualificationError(
+                    "could not establish active Responses stream: "
+                    f"status={response_status} safe_error_code={state['active_error_code']} "
+                    f"thread_alive={thread.is_alive()} provider_delta={provider_delta} "
+                    f"redis_slots={redis_slots} reservation_present={candidate is not None}"
+                )
+
+            if active_context is None:
+                publish_evidence()
+                raise QualificationError("bounded Responses stream attempts did not establish an active stream")
+
+            thread, capture, result, request_id = active_context
+            pretermination = self.request_evidence(request_id)
+            provider_delta = self.provider_state()["requests"] - baseline_provider_requests
+            redis_slots = self.redis_slot_count(self.key_id)
+            pending_before_kill = active_stream_is_valid(
+                status=int(capture.get("status") or 0),
+                request_id_present=bool(capture.get("request_id")),
+                thread_alive=thread.is_alive(),
+                provider_forward_delta=provider_delta,
+                redis_slots=redis_slots,
+                reservation=pretermination,
+                expected_endpoint="/v1/responses",
+            )
+            state.update(
+                active_status=int(capture.get("status") or 0),
+                active_request_id_present=bool(capture.get("request_id")),
+                active_thread_alive=thread.is_alive(),
+                active_provider_forward_delta=provider_delta,
+                active_redis_slots=redis_slots,
+                active_reservation_present=pretermination is not None,
+                pending_before_kill=pending_before_kill,
+            )
+            if not pending_before_kill:
+                publish_evidence()
+                raise QualificationError("active Responses stream prerequisites changed before API termination")
+
+            self.compose_command(["kill", "api"], name="api-terminate")
+            thread.join(timeout=15)
+            self.compose_command(["up", "-d", "api", "nginx"], name="api-restart-after-termination")
+            self.wait_url(f"https://localhost:{self.ports['https']}/healthz", cafile=self.tls / "fullchain.pem")
+            self.wait_redis()
+            state["restart_ready"] = True
+
+            evidence = None
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                evidence = self.request_evidence(request_id)
+                if evidence:
+                    break
+                time.sleep(1)
+            if not evidence:
+                publish_evidence()
+                raise QualificationError("interrupted request was not persisted after API restart")
+            if (
+                evidence["reservation_status"] != "pending"
+                or evidence["accounting_status"] != "pending"
+                or evidence["endpoint"] != "/v1/responses"
+                or evidence["reservation_provider"] != "qualification-double"
+                or evidence["reservation_resolved_model"] != "qualification-model"
+                or evidence["reservation_streaming"] != "true"
+            ):
+                state.update(
+                    terminal_reservation_status=evidence.get("reservation_status", ""),
+                    terminal_accounting_status=evidence.get("accounting_status", ""),
+                )
+                publish_evidence()
+                raise QualificationError("interrupted request lost pending route facts after API restart")
+
+            escaped = request_id.replace("'", "''")
+            self.sql(f"UPDATE quota_reservations SET expires_at = now() - interval '1 second' WHERE request_id = '{escaped}' AND status = 'pending'")
+            self.cli(
+                [
+                    "quota", "reconcile-expired-reservations", "--limit", "100", "--execute",
+                    "--actor-admin-id", self.admin_id, "--reason", "objective-151 API termination reconciliation", "--json",
+                ],
+                name="documented-reconciliation",
+            )
+            evidence = self.wait_request_terminal(request_id, timeout=30)
+            state.update(
+                terminal_reservation_status=evidence["reservation_status"],
+                terminal_accounting_status=evidence["accounting_status"],
+            )
+            if evidence["reservation_status"] not in {"released", "expired"} or evidence["accounting_status"] == "pending":
+                publish_evidence()
+                raise QualificationError("documented reconciliation did not produce terminal accounting")
+            if (
+                evidence["endpoint"] != "/v1/responses"
+                or evidence["provider"] != "qualification-double"
+                or evidence["resolved_model"] != "qualification-model"
+                or evidence["streaming"] != "true"
+                or evidence["reservation_provider"] != "qualification-double"
+                or evidence["reservation_resolved_model"] != "qualification-model"
+                or evidence["reservation_streaming"] != "true"
+            ):
+                publish_evidence()
+                raise QualificationError("interrupted request lost immutable route facts")
+            selected_key_id = validate_gateway_key_id(self.key_id)
+            counters = self.sql(
+                "SELECT tokens_reserved_total, requests_reserved_total, cost_reserved_eur "
+                "FROM gateway_keys WHERE id = '" + selected_key_id + "'"
+            )
+            counters_cleared = bool(counters) and all(value in {"0", "0.000000000", "0.0"} for value in counters[0])
+            state["counters_cleared"] = counters_cleared
+            if not counters_cleared:
+                publish_evidence()
+                raise QualificationError("reconciliation left key reservations outstanding")
+            audit = self.sql(
+                "SELECT COUNT(*) FROM audit_log WHERE request_id = '" + escaped + "' "
+                "AND action = 'quota_reservation_expired' AND note ILIKE '%objective-151%'"
+            )
+            state["audit_present"] = bool(audit) and int(audit[0][0]) >= 1
+            if not state["audit_present"]:
+                publish_evidence()
+                raise QualificationError("reconciliation audit metadata was not persisted")
+            publish_evidence()
+        finally:
+            try:
+                self.provider_control({"mode": "normal", "stream_pause_seconds": 0, "completion": self.canaries[3]})
+            except Exception:  # noqa: BLE001
+                pass
 
     def exercise_dashboard(self) -> None:
         context = ssl.create_default_context(cafile=str(self.tls / "fullchain.pem"))
@@ -1569,10 +1772,10 @@ def main() -> int:
             failure = f"{failure}; cleanup: {cleanup_error}" if failure else f"cleanup: {cleanup_error}"
     if failure:
         print(f"RESULT=FAIL\nERROR={failure}", file=sys.stderr)
-        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence}, sort_keys=True))
+        print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence}, sort_keys=True))
         return 1
     print("RESULT=OK")
-    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence}, sort_keys=True))
+    print(json.dumps({"project": runner.project, "phases": runner.phase_results, "requests": runner.final_evidence, "restore_counts": runner.restore_counts, "cleanup": runner.cleanup_checks, "dashboard": runner.dashboard_evidence, "metrics": runner.metrics_evidence, "concurrency": runner.concurrency_evidence, "api_termination": runner.api_termination_evidence}, sort_keys=True))
     return 0
 
 
