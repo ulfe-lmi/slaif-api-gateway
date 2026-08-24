@@ -785,6 +785,14 @@ class Runner:
         if not request_id:
             thread.join(timeout=1)
             raise QualificationError(f"active stream did not expose request ID before API termination: {capture} {result}")
+        if not any(request.get("request_id") == request_id for request in self.requests):
+            headers = capture.get("headers") or {}
+            self._record_request(
+                path="/v1/responses",
+                status=int(capture.get("status") or 0),
+                headers=headers,
+                streaming=True,
+            )
         pretermination = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
