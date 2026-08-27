@@ -19,7 +19,7 @@ from slaif_gateway.services.responses_gateway import handle_response_create
 
 
 @pytest.mark.asyncio
-async def test_codex_0149_pair_denial_has_no_postgres_reservation_or_ledger_side_effect(
+async def test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect(
     async_test_session: AsyncSession,
 ) -> None:
     before_reservations = await async_test_session.scalar(
@@ -54,7 +54,7 @@ async def test_codex_0149_pair_denial_has_no_postgres_reservation_or_ledger_side
             settings=SimpleNamespace(),
         )
 
-    assert exc_info.value.code == "incompatible_client_server_pair"
+    assert exc_info.value.code == "client_module_fixture_mismatch"
     after_reservations = await async_test_session.scalar(
         select(func.count()).select_from(QuotaReservation)
     )

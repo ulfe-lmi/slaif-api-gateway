@@ -957,6 +957,12 @@ async def handle_response_create(
             allow_codex_compaction_replay=allow_codex_compaction,
             codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             allow_external_tool_request=allow_external_tool_request,
+            adapter_managed_declaration_candidates=frozenset(
+                normalized_client_request.adapter_managed_declaration_candidates
+            ),
+            adapter_managed_declaration_shapes=(
+                normalized_client_request.adapter_managed_declaration_shapes
+            ),
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc

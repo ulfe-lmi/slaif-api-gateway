@@ -66,6 +66,7 @@ async def _create_responses_test_data(
     conversations: bool = False,
     external_web_search: bool = False,
     local_coding_contract: dict[str, object] | None = None,
+    responses_policy: dict[str, object] | None = None,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -278,6 +279,7 @@ async def _create_responses_test_data(
                         else None
                     ),
                     confirm_external_tool_fenced=external_web_search,
+                    responses_policy=responses_policy,
                     note="Responses E2E key",
                 )
             )
@@ -313,6 +315,15 @@ def test_openai_python_client_local_coding_server_module_e2e(
                 "identity_mode": "static",
                 "replay_mode": "process_local_ttl_lru",
                 "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "client_module": {
+                    "id": "codex-0.149-responses-v1",
+                    "version": "2",
+                    "fixture_sha256": (
+                        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+                    ),
+                }
             },
         )
     )
@@ -350,8 +361,27 @@ def test_openai_python_client_local_coding_server_module_e2e(
             router.route(host="127.0.0.1").pass_through()
             response = OpenAI().responses.create(
                 model=local_model,
-                input="synthetic local coding request",
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "synthetic local coding request"}],
+                    }
+                ],
                 max_output_tokens=32,
+                tools=[
+                    {
+                        "type": "tool_search",
+                        "description": "synthetic candidate",
+                        "execution": "client",
+                        "parameters": {},
+                    },
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text", "image"],
+                    },
+                ],
             )
 
     assert response.id == "local-coding-response"
@@ -361,7 +391,20 @@ def test_openai_python_client_local_coding_server_module_e2e(
     assert request.headers["authorization"] != f"Bearer {created.plaintext_key}"
     body = json.loads(request.content)
     assert body["model"] == "qwen3.8-27b"
-    assert body["input"] == "synthetic local coding request"
+    assert body["input"][0]["content"][0]["text"] == "synthetic local coding request"
+    assert body["tools"] == [
+        {
+            "type": "tool_search",
+            "description": "synthetic candidate",
+            "execution": "client",
+            "parameters": {},
+        },
+        {
+            "type": "web_search",
+            "external_web_access": False,
+            "search_content_types": ["text", "image"],
+        },
+    ]
     assert "x-slaif-principal" not in {name.lower() for name in request.headers}
     state = asyncio.run(
         _load_accounting_state(
@@ -373,6 +416,143 @@ def test_openai_python_client_local_coding_server_module_e2e(
     assert state.reservation.status == "finalized"
     assert state.gateway_key.tokens_reserved_total == 0
     assert state.usage_ledger.total_tokens == 5
+
+
+@pytest.mark.e2e
+def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    local_model = "codex-0149-local-coding-stream-test"
+    local_port = _free_port()
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=True,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "static",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "client_module": {
+                    "id": "codex-0.149-responses-v1",
+                    "version": "2",
+                    "fixture_sha256": (
+                        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+                    ),
+                }
+            },
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    completed = {
+        "id": "codex-0149-stream-response",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "qwen3.8-27b",
+        "output": [],
+        "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+        "store": False,
+    }
+    sse = (
+        _sse(
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": completed["id"],
+                    "object": "response",
+                    "created_at": 123,
+                    "status": "in_progress",
+                    "model": "qwen3.8-27b",
+                },
+            }
+        )
+        + _sse(
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": completed,
+            }
+        )
+    )
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            stream = OpenAI().responses.create(
+                model=local_model,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "synthetic stream"}],
+                    }
+                ],
+                tools=[
+                    {
+                        "type": "tool_search",
+                        "description": "synthetic candidate",
+                        "execution": "client",
+                        "parameters": {},
+                    },
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text"],
+                    },
+                ],
+                stream=True,
+            )
+            events = list(stream)
+
+    assert [event.type for event in events] == ["response.created", "response.completed"]
+    assert events[-1].response.usage.total_tokens == 7
+    assert len(local_route.calls) == 1
+    upstream_body = json.loads(local_route.calls[0].request.content)
+    assert upstream_body["stream"] is True
+    assert upstream_body["tools"][0]["type"] == "tool_search"
+    assert upstream_body["tools"][1]["type"] == "web_search"
+    state = asyncio.run(
+        _load_accounting_state(
+            database_url,
+            created.gateway_key_id,
+            provider="local-coding",
+        )
+    )
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 7
 
 
 @pytest.mark.e2e

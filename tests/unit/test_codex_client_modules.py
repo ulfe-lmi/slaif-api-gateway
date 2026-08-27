@@ -15,6 +15,7 @@ from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_CLIENT_MODULE_ID,
     CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
     CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+    CODEX_0149_CLIENT_MODULE_VERSION,
     CODEX_0149_FIXTURE_SHA256,
 )
 from slaif_gateway.modules.clients.registry import (
@@ -25,13 +26,15 @@ from slaif_gateway.modules.clients.registry import (
 )
 from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.modules.servers.registry import (
+    SERVER_MODULE_REGISTRY,
     ensure_client_module_has_server_pair,
     ensure_client_server_pair,
 )
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.services.responses_request_policy import _HOSTED_TOOL_TYPES
 
-FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural.json")
+FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural-v2.json")
+HISTORICAL_FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural.json")
 
 
 def _body(**overrides: object) -> dict[str, object]:
@@ -40,7 +43,17 @@ def _body(**overrides: object) -> dict[str, object]:
         "input": [{"type": "message", "role": "user", "content": "synthetic"}],
         "tools": [
             {"type": "function", "name": "safe", "parameters": {}, "strict": True},
-            {"type": "web_search", "external_web_access": False},
+            {
+                "type": "tool_search",
+                "description": "synthetic adapter-managed candidate",
+                "execution": "client",
+                "parameters": {},
+            },
+            {
+                "type": "web_search",
+                "external_web_access": False,
+                "search_content_types": ["text", "image"],
+            },
         ],
         "tool_choice": "auto",
     }
@@ -57,7 +70,13 @@ def test_0149_fixture_is_canonical_structural_only() -> None:
     assert hashlib.sha256(raw).hexdigest() == CODEX_0149_FIXTURE_SHA256
     assert fixture["identity"]["cli_version"] == "0.149.0"
     assert fixture["capture"]["subprocess"]["model_call"] == "not_performed"
-    assert fixture["gateway_compatibility"]["compatible_server_pairs"] == []
+    assert fixture["gateway_compatibility"]["compatible_server_pairs"] == [
+        "codex-0.149-responses-v1->local-coding-v1"
+    ]
+    historical = HISTORICAL_FIXTURE.read_bytes()
+    assert hashlib.sha256(historical).hexdigest() == (
+        "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
+    )
     observed_types = {
         shape["type"]
         for variant in fixture["capture"]["variants"]
@@ -96,18 +115,18 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
     request = CODEX_0149_CLIENT_MODULE.normalize_responses(body)
 
     assert request.body == body
-    assert request.adapter_managed_declaration_candidates == ("web_search",)
+    assert request.adapter_managed_declaration_candidates == ("tool_search", "web_search")
     assert request.capability_intents == ("adapter_managed_codex_search",)
     assert request.profile_facts == {
         "client_module_id": CODEX_0149_CLIENT_MODULE_ID,
-        "client_module_version": "1",
+        "client_module_version": CODEX_0149_CLIENT_MODULE_VERSION,
         "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
     }
 
 
 @pytest.mark.parametrize(
     "tool_type",
-    sorted(_HOSTED_TOOL_TYPES - {"web_search", "namespace"}),
+    sorted(_HOSTED_TOOL_TYPES - {"web_search", "namespace", "tool_search"}),
 )
 def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
     with pytest.raises(ModuleSelectionError, match="authority|unknown") as exc_info:
@@ -115,7 +134,7 @@ def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
             _body(tools=[{"type": tool_type}])
         )
     assert exc_info.value.error_code == (
-        "codex_0149_request_invalid" if tool_type == "tool_search" else "codex_0149_authority_shape"
+        "codex_0149_authority_shape"
     )
 
 
@@ -123,15 +142,15 @@ def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
     ("tool_choice", "code"),
     [
         ("web_search", "codex_0149_authority_shape"),
-        ("tool_search", "codex_0149_request_invalid"),
+        ("tool_search", "codex_0149_authority_shape"),
         ({"type": "web_search"}, "codex_0149_authority_shape"),
-        ({"type": "tool_search"}, "codex_0149_request_invalid"),
+        ({"type": "tool_search"}, "codex_0149_authority_shape"),
     ],
 )
 def test_0149_rejects_explicit_search_choices(tool_choice: object, code: str) -> None:
     with pytest.raises(ModuleSelectionError) as exc_info:
         CODEX_0149_CLIENT_MODULE.normalize_responses(
-            _body(tools=[{"type": "web_search"}], tool_choice=tool_choice)
+            _body(tool_choice=tool_choice)
         )
     assert exc_info.value.error_code == code
 
@@ -143,6 +162,31 @@ def test_0149_rejects_unknown_and_provider_authority_fields() -> None:
         CODEX_0149_CLIENT_MODULE.normalize_responses(
             _body(tools=[{"type": "function", "name": "safe", "headers": {}}])
         )
+    assert exc_info.value.error_code == "codex_0149_authority_shape"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        {
+            "type": "tool_search",
+            "description": "https://authority.invalid",
+            "execution": "client",
+            "parameters": {},
+        },
+        {
+            "type": "tool_search",
+            "description": "safe",
+            "execution": "client",
+            "parameters": {"nested": {"type": "web_search"}},
+        },
+    ],
+)
+def test_0149_rejects_candidate_urls_and_nested_search_types(
+    candidate: dict[str, object],
+) -> None:
+    with pytest.raises(ModuleSelectionError) as exc_info:
+        CODEX_0149_CLIENT_MODULE.normalize_responses(_body(tools=[candidate]))
     assert exc_info.value.error_code == "codex_0149_authority_shape"
 
 
@@ -164,7 +208,7 @@ def test_registry_uses_only_server_side_metadata_and_legacy_0147_path() -> None:
         {
             "client_module": {
                 "id": CODEX_0149_CLIENT_MODULE_ID,
-                "version": "1",
+                "version": CODEX_0149_CLIENT_MODULE_VERSION,
                 "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
             }
         }
@@ -182,10 +226,17 @@ def test_registry_uses_only_server_side_metadata_and_legacy_0147_path() -> None:
         )
 
 
-def test_0149_has_no_server_pair_while_0147_is_openai_only() -> None:
+def test_0149_has_only_the_local_coding_server_pair() -> None:
     ensure_client_server_pair(CODEX_0147_CLIENT_MODULE_ID, "openai")
-    with pytest.raises(ProviderConfigurationError, match="no compatible"):
-        ensure_client_module_has_server_pair(CODEX_0149_CLIENT_MODULE_ID)
+    ensure_client_module_has_server_pair(CODEX_0149_CLIENT_MODULE_ID)
+    ensure_client_server_pair(CODEX_0149_CLIENT_MODULE_ID, "local-coding-v1")
+    for server_module_id in SERVER_MODULE_REGISTRY:
+        if server_module_id == "local-coding-v1":
+            continue
+        with pytest.raises(ProviderConfigurationError, match="incompatible"):
+            ensure_client_server_pair(CODEX_0149_CLIENT_MODULE_ID, server_module_id)
+    with pytest.raises(ProviderConfigurationError, match="incompatible"):
+        ensure_client_server_pair(CODEX_0147_CLIENT_MODULE_ID, "local-coding-v1")
 
 
 def test_codex_client_modules_have_no_gateway_authority_imports() -> None:
@@ -264,4 +315,4 @@ def test_responses_handler_denies_0149_before_policy_or_provider_work(monkeypatc
                 settings=SimpleNamespace(),
             )
         )
-    assert exc_info.value.code == "incompatible_client_server_pair"
+    assert exc_info.value.code == "client_module_fixture_mismatch"

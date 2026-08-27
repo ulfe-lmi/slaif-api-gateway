@@ -59,9 +59,10 @@ keys, token hashes, prompts, completions, or raw request/response bodies.
 Versioned client modules are also trust-limited. Module ID/version/fixture
 digest are reviewed server-side facts; malformed or mismatched metadata fails
 closed. Codex 0.149 identity hints remain transient and untrusted, while its
-search declaration candidates cannot select a route, provider, hosted-tool
-fence, pricing rule, quota reservation, accounting category, or external
-authority. No raw Codex installation, session, thread, turn, workspace, or
+search declaration candidates cannot select or widen a route, provider,
+hosted-tool fence, pricing rule, quota reservation, accounting category, or
+external authority. They can reach only the exact statically selected Local
+Coding server adapter after the core gates pass. No raw Codex installation, session, thread, turn, workspace, or
 request-content metadata is stored, logged, audited, exported, hashed, or
 forwarded.
 Local Coding adds three separate roles: the public Gateway bearer, the

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, NoReturn
@@ -114,6 +115,29 @@ _SUPPORTED_COMPACT_FIELDS = frozenset(
 )
 
 TEXT_FORMAT_JSON_SCHEMA = _TEXT_FORMAT_JSON_SCHEMA
+_ADAPTER_MANAGED_TOOL_TOKEN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_ADAPTER_MANAGED_UNSAFE_VALUE_MARKERS = (
+    "bearer",
+    "api_key",
+    "apikey",
+    "authorization",
+    "secret",
+    "password",
+    "token",
+)
+
+
+def _contains_unsafe_adapter_value(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_unsafe_adapter_value(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_unsafe_adapter_value(item) for item in value)
+    if isinstance(value, str):
+        lowered = value.lower()
+        return "://" in value or any(
+            marker in lowered for marker in _ADAPTER_MANAGED_UNSAFE_VALUE_MARKERS
+        )
+    return False
 
 
 def codex_client_tool_taxonomy_id(policy: object) -> str | None:
@@ -179,6 +203,8 @@ class ResponsesRequestPolicy:
         allow_codex_compaction_replay: bool = False,
         codex_client_tool_taxonomy: str | None = None,
         allow_external_tool_request: bool = False,
+        adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
+        adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -279,6 +305,8 @@ class ResponsesRequestPolicy:
             effective_body,
             allow_external_tool_request=allow_external_tool_request,
             allow_codex_client_tools=allow_codex_client_tools,
+            adapter_managed_declaration_candidates=adapter_managed_declaration_candidates,
+            adapter_managed_declaration_shapes=adapter_managed_declaration_shapes,
         )
         if "max_tool_calls" in effective_body and not any(
             isinstance(tool, Mapping) and tool.get("type") == "web_search"
@@ -2986,6 +3014,8 @@ class ResponsesRequestPolicy:
         *,
         allow_external_tool_request: bool = False,
         allow_codex_client_tools: bool = False,
+        adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
+        adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
     ) -> int:
         value = body.get("tools")
         if value is None:
@@ -3016,6 +3046,28 @@ class ResponsesRequestPolicy:
         custom_tools_count = 0
         seen_names: set[str] = set()
         for index, tool in enumerate(value):
+            if (
+                isinstance(tool, Mapping)
+                and isinstance(tool.get("type"), str)
+                and tool.get("type") in adapter_managed_declaration_candidates
+            ):
+                tool_type = tool.get("type")
+                expected_fields = (adapter_managed_declaration_shapes or {}).get(tool_type)
+                if not isinstance(tool_type, str) or expected_fields is None:
+                    _raise(
+                        f"tools[{index}]",
+                        "responses_adapter_managed_tool_invalid",
+                        "This adapter-managed tool declaration is not enabled.",
+                    )
+                if set(tool) != expected_fields:
+                    _raise(
+                        f"tools[{index}]",
+                        "responses_adapter_managed_tool_invalid",
+                        "This adapter-managed tool declaration has an unrecognized shape.",
+                    )
+                self._validate_adapter_managed_tool(tool, param=f"tools[{index}]")
+                canonical_tools.append(copy.deepcopy(dict(tool)))
+                continue
             if allow_external_tool_request and isinstance(tool, Mapping) and tool.get("type") == "web_search":
                 allowed_fields = {"type", "search_context_size"}
                 if set(tool) - allowed_fields:
@@ -3088,6 +3140,79 @@ class ResponsesRequestPolicy:
 
         body["tools"] = canonical_tools
         return len(canonical_json_bytes({"tools": canonical_tools}))
+
+    def _validate_adapter_managed_tool(
+        self,
+        tool: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> None:
+        """Validate observed client candidates without granting provider authority."""
+        tool_type = tool.get("type")
+        if tool_type == "tool_search":
+            description = tool.get("description")
+            execution = tool.get("execution")
+            parameters = tool.get("parameters")
+            if (
+                not isinstance(description, str)
+                or not isinstance(execution, str)
+                or _ADAPTER_MANAGED_TOOL_TOKEN.fullmatch(execution) is None
+                or not isinstance(parameters, Mapping)
+            ):
+                _raise(
+                    param,
+                    "responses_adapter_managed_tool_invalid",
+                    "The captured tool_search declaration has invalid field types.",
+                )
+            self._validate_string_bytes(
+                description,
+                param=f"{param}.description",
+                max_bytes=self._settings.RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES,
+                code="responses_adapter_managed_tool_invalid",
+            )
+            self._validate_json_bytes(
+                parameters,
+                param=f"{param}.parameters",
+                max_bytes=self._settings.RESPONSES_MAX_SINGLE_FUNCTION_TOOL_SCHEMA_BYTES,
+                too_large_code="responses_adapter_managed_tool_invalid",
+                invalid_code="responses_adapter_managed_tool_invalid",
+                field_label="Adapter-managed tool_search parameters",
+            )
+        elif tool_type == "web_search":
+            external_web_access = tool.get("external_web_access")
+            search_content_types = tool.get("search_content_types")
+            if (
+                not isinstance(external_web_access, bool)
+                or not isinstance(search_content_types, list)
+                or not search_content_types
+                or len(search_content_types) > 8
+                or not all(
+                    isinstance(item, str)
+                    and _ADAPTER_MANAGED_TOOL_TOKEN.fullmatch(item) is not None
+                    for item in search_content_types
+                )
+            ):
+                _raise(
+                    param,
+                    "responses_adapter_managed_tool_invalid",
+                    "The captured web_search declaration has invalid field types.",
+                )
+        else:
+            _raise(
+                param,
+                "responses_adapter_managed_tool_invalid",
+                "This adapter-managed tool type is not enabled.",
+            )
+        nested = dict(tool)
+        nested.pop("type", None)
+        if _contains_recursive_codex_authority_marker(nested) or _contains_unsafe_adapter_value(
+            nested
+        ):
+            _raise(
+                param,
+                "responses_adapter_managed_tool_authority_not_supported",
+                "Adapter-managed tool declarations cannot contain provider authority.",
+            )
 
     def _validate_local_tool(
         self,

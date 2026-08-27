@@ -34,7 +34,9 @@ Core invariants:
   authoritative for finalization.
 - Local Coding signed identity and exact-byte hashes are transient transport
   facts only; they are not stored in ledger, audit, request metadata, or
-  metrics. Hosted-tool fence/hold accounting is not used by Objective 155.
+  metrics. Codex 0.149 adapter-managed candidates use the ordinary bounded
+  Responses reservation/finalization path after the exact Local Coding pair
+  gate; hosted-tool fence/hold accounting and hosted-search fees are not used.
 
 - PostgreSQL is authoritative for hard quota, reservations, usage counters,
   ledger rows, and reconciliation state.

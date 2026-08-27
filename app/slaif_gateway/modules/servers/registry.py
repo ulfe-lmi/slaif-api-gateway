@@ -109,6 +109,7 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
         ),
         ClientServerPair("codex-0.147-responses-v1", OPENAI_SERVER_MODULE_ID),
         ClientServerPair(DEFAULT_CLIENT_MODULE_ID, LOCAL_CODING_SERVER_MODULE_ID),
+        ClientServerPair("codex-0.149-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
     }
 )
 

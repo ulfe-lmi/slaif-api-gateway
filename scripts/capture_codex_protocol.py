@@ -35,6 +35,16 @@ FIXTURE_RELATIVE_PATH = Path(
 APPROVED_CANONICAL_FIXTURE_SHA256 = (
     "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 )
+PINNED_0149_CLI_VERSION = "0.149.0"
+PINNED_0149_RAW_VERSION = "codex-cli 0.149.0"
+PINNED_0149_MODEL = "qwen3.8-27b"
+PINNED_0149_PROFILE = "responses-structural-capture-v2"
+APPROVED_0149_CANONICAL_FIXTURE_SHA256 = (
+    "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+)
+FIXTURE_0149_RELATIVE_PATH = Path(
+    "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
+)
 FIXTURE_INTEGRITY_ERROR = "Fixture canonical document integrity check failed."
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAX_HEADER_BYTES = 64 * 1024
@@ -254,7 +264,12 @@ def validate_target(*, expected_version: str, model: str, profile: str) -> None:
         raise CaptureError("Requested profile is not the pinned capture profile.")
 
 
-def verify_codex_version(codex_binary: Path, expected_version: str) -> str:
+def verify_codex_version(
+    codex_binary: Path,
+    expected_version: str,
+    *,
+    expected_raw_version: str | None = None,
+) -> str:
     """Invoke only ``--version`` and enforce the exact pinned CLI family/version."""
 
     try:
@@ -270,7 +285,10 @@ def verify_codex_version(codex_binary: Path, expected_version: str) -> str:
     if result.returncode != 0:
         raise CaptureError("Codex CLI version check failed safely.")
     version = parse_codex_version(result.stdout)
-    if result.stdout.rstrip("\n") != PINNED_RAW_VERSION or version != expected_version:
+    if (
+        result.stdout.rstrip("\n") != (expected_raw_version or PINNED_RAW_VERSION)
+        or version != expected_version
+    ):
         raise CaptureError("Codex CLI version does not match the requested pinned version.")
     return version
 
@@ -513,6 +531,110 @@ def sanitize_request(request: ParsedHttpRequest) -> dict[str, object]:
         "method": request.method,
         "path": parsed_target.path,
         "top_level_fields": sorted(str(field) for field in payload),
+    }
+
+
+_0149_TOP_LEVEL_FIELDS = frozenset(
+    {
+        "client_metadata",
+        "include",
+        "input",
+        "instructions",
+        "model",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice",
+        "tools",
+    }
+)
+_0149_TOOL_TYPES = frozenset({"function", "custom", "tool_search", "web_search"})
+_0149_UNSAFE_FIELD_MARKERS = frozenset(
+    {"authorization", "api_key", "apikey", "cookie", "headers", "password", "secret", "token"}
+)
+
+
+def _0149_type_name(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, int | float):
+        return "number"
+    return "unknown"
+
+
+def _0149_safe_field_names(value: dict[str, Any]) -> list[str]:
+    field_names = sorted(str(field) for field in value)
+    if any(field.lower() in _0149_UNSAFE_FIELD_MARKERS for field in field_names):
+        raise CaptureError("Codex 0.149 capture contained a secret or authority field name.")
+    return field_names
+
+
+def _0149_reject_nested_authority_fields(value: Any) -> None:
+    if isinstance(value, dict):
+        if any(str(field).lower() in _0149_UNSAFE_FIELD_MARKERS for field in value):
+            raise CaptureError("Codex 0.149 capture contained a nested authority field name.")
+        for child in value.values():
+            _0149_reject_nested_authority_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            _0149_reject_nested_authority_fields(child)
+
+
+def sanitize_0149_request(request: ParsedHttpRequest) -> dict[str, object]:
+    """Keep only exact Codex 0.149 structural facts from one request."""
+    if request.method != "POST":
+        raise CaptureError("Loopback capture received an unexpected HTTP method.")
+    parsed_target = urlsplit(request.target)
+    if parsed_target.path != "/v1/responses" or parsed_target.query or parsed_target.fragment:
+        raise CaptureError("Loopback capture received an unexpected HTTP path.")
+    header_summary = sanitize_headers(request.headers)
+    if header_summary["content_encoding"] != {"present": False}:
+        raise CaptureError("Loopback capture received an unsupported Content-Encoding header.")
+    if header_summary["content_type"] != "application/json":
+        raise CaptureError("Loopback capture received an unsupported content type.")
+    if not header_summary["authorization"]["present"]:  # type: ignore[index]
+        raise CaptureError("Loopback capture did not receive API-key authorization.")
+    try:
+        payload = json.loads(request.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CaptureError("Loopback capture received malformed JSON.") from exc
+    if not isinstance(payload, dict) or not set(payload) <= _0149_TOP_LEVEL_FIELDS:
+        raise CaptureError("Codex 0.149 capture contained an unknown top-level field.")
+    tools = payload.get("tools")
+    if not isinstance(tools, list) or not tools or len(tools) > 16:
+        raise CaptureError("Codex 0.149 capture contained an invalid tools array.")
+    shapes: dict[tuple[str, tuple[str, ...]], int] = {}
+    for tool in tools:
+        if not isinstance(tool, dict) or not isinstance(tool.get("type"), str):
+            raise CaptureError("Codex 0.149 capture contained an invalid tool declaration.")
+        tool_type = tool["type"]
+        if tool_type not in _0149_TOOL_TYPES:
+            raise CaptureError("Codex 0.149 capture contained an unknown tool type.")
+        field_names = tuple(_0149_safe_field_names(tool))
+        _0149_reject_nested_authority_fields({key: child for key, child in tool.items() if key != "type"})
+        shapes[(tool_type, field_names)] = shapes.get((tool_type, field_names), 0) + 1
+    choice = payload.get("tool_choice")
+    if not isinstance(choice, str) or choice != "auto":
+        raise CaptureError("Codex 0.149 capture did not use the neutral auto tool choice.")
+    shape_rows = [
+        {"count": count, "field_names": list(field_names), "type": tool_type}
+        for (tool_type, field_names), count in sorted(shapes.items())
+    ]
+    return {
+        "field_types": {field: _0149_type_name(payload[field]) for field in sorted(payload)},
+        "tool_choice": {"type": "string", "value_class": "auto"},
+        "tool_declarations": {"count": len(tools), "shapes": shape_rows, "type": "array"},
     }
 
 
@@ -1046,10 +1168,27 @@ def _write_response(connection: socket.socket, *, success: bool) -> None:
     connection.sendall(response)
 
 
+def _write_0149_response(connection: socket.socket, *, success: bool) -> None:
+    """Stop exact 0.149 captures with a fixed, non-model HTTP error."""
+    del success
+    body = b'{"error":{"type":"synthetic_capture_stop"}}'
+    response = b"\r\n".join(
+        (
+            b"HTTP/1.1 400 Bad Request",
+            b"Content-Type: application/json",
+            f"Content-Length: {len(body)}".encode("ascii"),
+            b"Connection: close",
+            b"",
+            body,
+        )
+    )
+    connection.sendall(response)
+
+
 class LoopbackCaptureServer:
     """A single-purpose, one-request bounded HTTP server."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, request_sanitizer=sanitize_request, response_writer=_write_response) -> None:
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -1058,6 +1197,8 @@ class LoopbackCaptureServer:
         self.error: CaptureError | None = None
         self.request_count = 0
         self.port: int | None = None
+        self._request_sanitizer = request_sanitizer
+        self._response_writer = response_writer
 
     def start(self) -> None:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1091,30 +1232,30 @@ class LoopbackCaptureServer:
                 with connection:
                     if peer[0] != "127.0.0.1":
                         self.error = CaptureError("Capture server rejected a non-loopback peer.")
-                        _write_response(connection, success=False)
+                        self._response_writer(connection, success=False)
                         break
                     self.request_count += 1
                     if self.request_count != 1:
                         self.error = CaptureError("Loopback capture received multiple requests.")
-                        _write_response(connection, success=False)
+                        self._response_writer(connection, success=False)
                         break
                     try:
                         raw = _read_bounded_request(connection)
                         request = _parse_http_request(raw)
-                        sanitize_request(request)
+                        self._request_sanitizer(request)
                     except (CaptureError, OSError) as exc:
                         self.error = (
                             exc
                             if isinstance(exc, CaptureError)
                             else CaptureError("Loopback capture transport failed safely.")
                         )
-                        _write_response(connection, success=False)
+                        self._response_writer(connection, success=False)
                         break
                     finally:
                         if "raw" in locals():
                             del raw
                     self.request = request
-                    _write_response(connection, success=True)
+                    self._response_writer(connection, success=True)
             if self.request_count == 0 and not self._stop.is_set():
                 self.error = CaptureError("Codex did not reach the loopback capture server.")
         finally:
@@ -1192,6 +1333,109 @@ def _exec_command(codex_binary: Path, *, workdir: Path, port: int) -> list[str]:
         *_config(f"model_providers.{CAPTURE_PROVIDER_ID}.stream_max_retries", "0"),
         *_config(f"model_providers.{CAPTURE_PROVIDER_ID}.stream_idle_timeout_ms", "5000"),
         PROMPT_CANARY,
+    ]
+
+
+def _write_0149_model_catalog(
+    codex_binary: Path,
+    destination: Path,
+    *,
+    environment: dict[str, str],
+    model: str,
+) -> None:
+    """Create a private disposable catalog using only the installed CLI schema."""
+    try:
+        result = subprocess.run(
+            [str(codex_binary), "debug", "models", "--bundled"],
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=CODEX_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CaptureError("Bundled Codex model catalog command failed safely.") from exc
+    if result.returncode != 0 or len(result.stdout) > MAX_CATALOG_BYTES:
+        raise CaptureError("Bundled Codex model catalog command failed safely.")
+    try:
+        catalog = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CaptureError("Bundled Codex model catalog returned malformed JSON.") from exc
+    models = catalog.get("models") if isinstance(catalog, dict) else None
+    template = next(
+        (
+            item
+            for item in models or []
+            if isinstance(item, dict) and item.get("slug") == "gpt-5.4"
+        ),
+        next((item for item in models or [] if isinstance(item, dict)), None),
+    )
+    if template is None:
+        raise CaptureError("Bundled Codex model catalog has no usable model schema.")
+    local_model = dict(template)
+    local_instructions = (
+        "Use the provided shell_command function for workspace file reads. "
+        "After a required tool result arrives, provide exactly the requested final answer."
+    )
+    local_model.update(
+        {
+            "slug": model,
+            "display_name": model,
+            "description": "Disposable local capture model",
+            "input_modalities": ["text", "image"],
+            "supports_image_detail_original": False,
+            "supports_parallel_tool_calls": False,
+            "context_window": 150_000,
+            "max_context_window": 150_000,
+            "default_reasoning_level": "low",
+            "base_instructions": local_instructions,
+            "model_messages": {"instructions_template": local_instructions},
+        }
+    )
+    _atomic_write(
+        destination,
+        json.dumps({"models": [local_model]}, separators=(",", ":")).encode("utf-8"),
+    )
+    os.chmod(destination, 0o600)
+
+
+def _exec_command_0149(
+    codex_binary: Path,
+    *,
+    workdir: Path,
+    port: int,
+    model: str,
+    model_catalog: Path,
+    output_path: Path,
+) -> list[str]:
+    base_url = f'"http://127.0.0.1:{port}/v1"'
+    return [
+        str(codex_binary),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--strict-config",
+        "--ignore-user-config",
+        "-C",
+        str(workdir),
+        "-m",
+        model,
+        "-c",
+        'model_provider="slaif-capture"',
+        "-c",
+        (
+            "model_providers.slaif-capture={"
+            f'name="Synthetic capture",base_url={base_url},'
+            f'env_key="{CAPTURE_API_KEY_ENV}",wire_api="responses"'
+            "}"
+        ),
+        "-c",
+        f"model_catalog_json={json.dumps(str(model_catalog))}",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-o",
+        str(output_path),
+        "Return the word synthetic.",
     ]
 
 
@@ -1310,6 +1554,233 @@ def capture_live(
     return fixture
 
 
+def validate_0149_fixture_path(path: Path, *, allowed_root: Path | None = None) -> Path:
+    """Restrict 0.149 writes to the separate versioned structural fixture."""
+    root = (allowed_root or (REPO_ROOT / "tests/fixtures/codex")).resolve()
+    expected = (root / FIXTURE_0149_RELATIVE_PATH.relative_to("tests/fixtures/codex")).resolve()
+    resolved = path.resolve()
+    if resolved != expected:
+        raise CaptureError("Fixture path is outside the pinned 0.149 fixture location.")
+    return resolved
+
+
+def capture_live_0149(
+    *,
+    codex_binary: Path,
+    expected_version: str,
+    model: str,
+    profile: str,
+) -> dict[str, object]:
+    """Perform one exact 0.149.0 disposable structural capture."""
+    version = verify_codex_version(
+        codex_binary,
+        expected_version,
+        expected_raw_version=PINNED_0149_RAW_VERSION,
+    )
+    if expected_version != PINNED_0149_CLI_VERSION:
+        raise CaptureError("Requested Codex CLI version is not the pinned 0.149 capture version.")
+    if model != PINNED_0149_MODEL or profile != PINNED_0149_PROFILE:
+        raise CaptureError("Requested Codex 0.149 target does not match the pinned capture.")
+    with tempfile.TemporaryDirectory(prefix="slaif-codex-0149-capture-") as temporary:
+        temporary_root = Path(temporary)
+        codex_home = temporary_root / "codex-home"
+        workdir = temporary_root / "empty-workdir"
+        model_catalog = temporary_root / "model-catalog.json"
+        output_path = temporary_root / "last-message.tmp"
+        codex_home.mkdir(mode=0o700)
+        workdir.mkdir(mode=0o700)
+        environment = _isolated_environment(codex_home)
+        _write_0149_model_catalog(
+            codex_binary,
+            model_catalog,
+            environment=environment,
+            model=model,
+        )
+        server = LoopbackCaptureServer(
+            request_sanitizer=sanitize_0149_request,
+            response_writer=_write_0149_response,
+        )
+        server.start()
+        assert server.port is not None
+        timed_out = False
+        returncode: int | None = None
+        try:
+            try:
+                result = subprocess.run(
+                    _exec_command_0149(
+                        codex_binary,
+                        workdir=workdir,
+                        port=server.port,
+                        model=model,
+                        model_catalog=model_catalog,
+                        output_path=output_path,
+                    ),
+                    check=False,
+                    capture_output=True,
+                    env=environment,
+                    timeout=CODEX_TIMEOUT_SECONDS,
+                )
+                returncode = result.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            except OSError as exc:
+                raise CaptureError("Codex 0.149 capture subprocess failed to start safely.") from exc
+            time.sleep(0.1)
+        finally:
+            server.stop()
+        if timed_out:
+            raise CaptureError("Codex 0.149 capture subprocess timed out safely.")
+        if returncode != 1:
+            raise CaptureError("Codex 0.149 capture did not stop at the fixed synthetic rejection.")
+        if server.request is None:
+            server.result()
+        sanitized_request = sanitize_0149_request(server.request)
+        del server.request
+
+    fixture = {
+        "capture": {
+            "subprocess": {
+                "binary_version_output": PINNED_0149_RAW_VERSION,
+                "cli_exit_status": "synthetic_rejection",
+                "home_scope": "private_disposable",
+                "model_call": "not_performed",
+                "provider_key": "not_configured",
+                "server": "loopback_fake_responses",
+                "workspace": "empty",
+            },
+            "transport": {"method": "POST", "path": "/v1/responses", "wire_api": "responses"},
+            "variants": [{"flags": {"search": False}, "request": sanitized_request, "variant_id": "default"}],
+        },
+        "findings": {
+            "adapter_managed_candidate_types": ["tool_search", "web_search"],
+            "built_in_search_is_not_gateway_authority": True,
+            "identity_hints_transient": True,
+            "no_raw_request_content_retained": True,
+            "search_flag_did_not_change_captured_shape": False,
+        },
+        "gateway_compatibility": {
+            "compatible_server_pairs": ["codex-0.149-responses-v1->local-coding-v1"],
+            "module_status": "structural_capture_and_pair_reviewed_default_denied",
+            "provider_e2e": False,
+            "qualification": "none",
+        },
+        "identity": {
+            "cli_family": "codex-cli",
+            "cli_version": version,
+            "model": model,
+            "profile": profile,
+            "source_tag": "npm-@openai/codex-0.149.0",
+        },
+        "schema_version": 1,
+    }
+    validate_0149_fixture(fixture)
+    return fixture
+
+
+def validate_0149_fixture(fixture: Any) -> None:
+    """Validate the separately versioned 0.149 structural capture."""
+    if not isinstance(fixture, dict) or fixture.get("schema_version") != 1:
+        raise CaptureError("Codex 0.149 fixture schema version is invalid.")
+    identity = fixture.get("identity")
+    if not isinstance(identity, dict) or identity != {
+        "cli_family": "codex-cli",
+        "cli_version": PINNED_0149_CLI_VERSION,
+        "model": PINNED_0149_MODEL,
+        "profile": PINNED_0149_PROFILE,
+        "source_tag": "npm-@openai/codex-0.149.0",
+    }:
+        raise CaptureError("Codex 0.149 fixture identity is invalid.")
+    capture = fixture.get("capture")
+    if not isinstance(capture, dict) or capture.get("transport") != {
+        "method": "POST",
+        "path": "/v1/responses",
+        "wire_api": "responses",
+    }:
+        raise CaptureError("Codex 0.149 fixture transport is invalid.")
+    subprocess_result = capture.get("subprocess")
+    if not isinstance(subprocess_result, dict) or subprocess_result != {
+        "binary_version_output": PINNED_0149_RAW_VERSION,
+        "cli_exit_status": "synthetic_rejection",
+        "home_scope": "private_disposable",
+        "model_call": "not_performed",
+        "provider_key": "not_configured",
+        "server": "loopback_fake_responses",
+        "workspace": "empty",
+    }:
+        raise CaptureError("Codex 0.149 fixture subprocess facts are invalid.")
+    variants = capture.get("variants")
+    if not isinstance(variants, list) or len(variants) != 1:
+        raise CaptureError("Codex 0.149 fixture variants are invalid.")
+    request = variants[0].get("request") if isinstance(variants[0], dict) else None
+    if not isinstance(request, dict):
+        raise CaptureError("Codex 0.149 fixture request is invalid.")
+    expected_field_types = {
+        "client_metadata": "object",
+        "include": "array",
+        "input": "array",
+        "instructions": "string",
+        "model": "string",
+        "parallel_tool_calls": "boolean",
+        "prompt_cache_key": "string",
+        "reasoning": "object",
+        "store": "boolean",
+        "stream": "boolean",
+        "text": "object",
+        "tool_choice": "string",
+        "tools": "array",
+    }
+    if request.get("field_types") != expected_field_types or request.get("tool_choice") != {
+        "type": "string",
+        "value_class": "auto",
+    }:
+        raise CaptureError("Codex 0.149 fixture request facts are invalid.")
+    expected_shapes = [
+        {"count": 1, "field_names": ["description", "format", "name", "type"], "type": "custom"},
+        {
+            "count": 5,
+            "field_names": ["description", "name", "parameters", "strict", "type"],
+            "type": "function",
+        },
+        {
+            "count": 1,
+            "field_names": ["description", "execution", "parameters", "type"],
+            "type": "tool_search",
+        },
+        {
+            "count": 1,
+            "field_names": ["external_web_access", "search_content_types", "type"],
+            "type": "web_search",
+        },
+    ]
+    tool_declarations = request.get("tool_declarations")
+    if not isinstance(tool_declarations, dict) or tool_declarations != {
+        "count": 8,
+        "shapes": expected_shapes,
+        "type": "array",
+    }:
+        raise CaptureError("Codex 0.149 fixture tool facts are invalid.")
+    if fixture.get("findings") != {
+        "adapter_managed_candidate_types": ["tool_search", "web_search"],
+        "built_in_search_is_not_gateway_authority": True,
+        "identity_hints_transient": True,
+        "no_raw_request_content_retained": True,
+        "search_flag_did_not_change_captured_shape": False,
+    }:
+        raise CaptureError("Codex 0.149 fixture findings are invalid.")
+    if fixture.get("gateway_compatibility") != {
+        "compatible_server_pairs": ["codex-0.149-responses-v1->local-coding-v1"],
+        "module_status": "structural_capture_and_pair_reviewed_default_denied",
+        "provider_e2e": False,
+        "qualification": "none",
+    }:
+        raise CaptureError("Codex 0.149 fixture compatibility facts are invalid.")
+    serialized = canonical_json_bytes(fixture)
+    if any(marker in serialized for marker in (PROMPT_CANARY.encode(), TOKEN_CANARY.encode(), b"authorization", b"Bearer ")):
+        raise CaptureError("Codex 0.149 fixture contains forbidden capture content.")
+    if hashlib.sha256(serialized).hexdigest() != APPROVED_0149_CANONICAL_FIXTURE_SHA256:
+        raise CaptureError(FIXTURE_INTEGRITY_ERROR)
+
+
 def validate_fixture(fixture: Any) -> None:
     if not isinstance(fixture, dict) or fixture.get("schema_version") != SCHEMA_VERSION:
         raise CaptureError("Fixture schema version is invalid.")
@@ -1391,7 +1862,26 @@ def _load_fixture(path: Path) -> dict[str, object]:
     return fixture
 
 
+def _load_fixture_0149(path: Path) -> dict[str, object]:
+    try:
+        raw = path.read_bytes()
+        fixture = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CaptureError("Codex 0.149 fixture could not be read as JSON.") from exc
+    validate_0149_fixture(fixture)
+    if raw != canonical_json_bytes(fixture):
+        raise CaptureError("Codex 0.149 fixture is not canonical deterministic JSON.")
+    return fixture
+
+
 def _add_live_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--codex-binary", type=Path, required=True)
+    parser.add_argument("--expected-cli-version", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--profile", required=True)
+
+
+def _add_0149_live_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--codex-binary", type=Path, required=True)
     parser.add_argument("--expected-cli-version", required=True)
     parser.add_argument("--model", required=True)
@@ -1408,6 +1898,21 @@ def build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify-live", help="capture in memory and compare to fixture")
     _add_live_arguments(verify)
     verify.add_argument("--fixture", type=Path, required=True)
+    capture_0149 = subparsers.add_parser(
+        "capture-0149", help="capture and explicitly write the Codex 0.149 fixture"
+    )
+    _add_0149_live_arguments(capture_0149)
+    capture_0149.add_argument("--output", type=Path, required=True)
+    capture_0149.add_argument("--write-fixture", action="store_true")
+    verify_0149 = subparsers.add_parser(
+        "verify-live-0149", help="capture Codex 0.149 in memory and compare to its fixture"
+    )
+    _add_0149_live_arguments(verify_0149)
+    verify_0149.add_argument("--fixture", type=Path, required=True)
+    validate_0149 = subparsers.add_parser(
+        "validate-0149", help="validate a checked-in Codex 0.149 fixture"
+    )
+    validate_0149.add_argument("--fixture", type=Path, required=True)
     validate = subparsers.add_parser("validate", help="validate a checked-in fixture without Codex")
     validate.add_argument("--fixture", type=Path, required=True)
     return parser
@@ -1443,6 +1948,39 @@ def main(argv: list[str] | None = None) -> int:
             if canonical_json_bytes(live) != canonical_json_bytes(checked_in):
                 raise CaptureError("Live sanitized capture does not match the checked-in fixture.")
             print("VERIFY_LIVE_OK status=not_compatible")
+            return 0
+        if args.command == "capture-0149":
+            if not args.write_fixture:
+                raise CaptureError("Live fixture writing requires the explicit --write-fixture flag.")
+            fixture_path = validate_0149_fixture_path(args.output)
+            fixture = capture_live_0149(
+                codex_binary=args.codex_binary,
+                expected_version=args.expected_cli_version,
+                model=args.model,
+                profile=args.profile,
+            )
+            payload = canonical_json_bytes(fixture)
+            _atomic_write(fixture_path, payload)
+            digest = hashlib.sha256(payload).hexdigest()
+            print(f"CAPTURE_0149_OK fixture_sha256={digest} status=structural_candidate")
+            return 0
+        if args.command == "verify-live-0149":
+            fixture_path = validate_0149_fixture_path(args.fixture)
+            live = capture_live_0149(
+                codex_binary=args.codex_binary,
+                expected_version=args.expected_cli_version,
+                model=args.model,
+                profile=args.profile,
+            )
+            checked_in = _load_fixture_0149(fixture_path)
+            if canonical_json_bytes(live) != canonical_json_bytes(checked_in):
+                raise CaptureError("Live 0.149 sanitized capture does not match its fixture.")
+            print("VERIFY_LIVE_0149_OK status=structural_candidate")
+            return 0
+        if args.command == "validate-0149":
+            fixture_path = validate_0149_fixture_path(args.fixture)
+            _load_fixture_0149(fixture_path)
+            print("FIXTURE_0149_VALID status=structural_candidate")
             return 0
         fixture_path = validate_fixture_path(args.fixture)
         _load_fixture(fixture_path)

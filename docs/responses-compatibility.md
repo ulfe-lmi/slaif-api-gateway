@@ -17,9 +17,9 @@ provider/client authority.
 Responses client selection is versioned and server-side: ordinary traffic
 uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
-registered default-denied with no compatible server pair. Codex 0.149's
-observed `web_search` declaration is a transient adapter-managed candidate fact
-only; unobserved `tool_search` remains rejected. It never
+registered default-denied with exactly one `local-coding-v1` server pair.
+Codex 0.149's observed `web_search` and `tool_search` declarations are
+transient adapter-managed candidate facts only; they never
 set the hosted web-search admission path, external-tool fence, pricing, or
 accounting state. No raw Codex identity/session/workspace metadata is retained.
 
@@ -27,8 +27,8 @@ The `local-coding-v1` server module is a separate exact-route transport
 foundation. It is default-denied unless the resolved route has the complete
 versioned Local Coding contract and provider kind `openai_compatible`. Its
 signed identity is bound to exact method/path/raw-query/body bytes and is
-verified by the pinned Local Coding contract. No Codex 0.149 pair or hosted
-tool execution is authorized in this objective. The Local Coding adapter is
+verified by the pinned Local Coding contract. The Codex 0.149 pair does not
+authorize hosted tool execution or hosted-tool accounting. The Local Coding adapter is
 Responses-create-only: non-streaming create and typed Responses streaming are
 the only transport operations; every other ProviderAdapter operation fails
 closed before HTTP. Core identity derivation is boundary-tested from
