@@ -320,10 +320,16 @@ class ResponsesRequestPolicy:
         tool_choice_bytes = self._validate_tool_choice(effective_body)
         function_tools_requested = responses_function_tools_requested(effective_body)
         custom_tools_requested = responses_custom_tools_requested(effective_body)
+        adapter_managed_streaming_allowed = (
+            bool(adapter_managed_declaration_candidates)
+            and allow_codex_request_envelope
+            and allow_codex_client_tools
+            and allow_codex_streaming_tool_events
+        )
         if (
             effective_body.get("stream") is True
             and function_tools_requested
-            and not codex_streaming_tool_events_requested
+            and not (codex_streaming_tool_events_requested or adapter_managed_streaming_allowed)
         ):
             _raise(
                 "tools",
@@ -333,7 +339,7 @@ class ResponsesRequestPolicy:
         if (
             effective_body.get("stream") is True
             and custom_tools_requested
-            and not codex_streaming_tool_events_requested
+            and not (codex_streaming_tool_events_requested or adapter_managed_streaming_allowed)
         ):
             _raise(
                 "tools",

@@ -10,6 +10,7 @@ from types import MappingProxyType
 from slaif_gateway.modules.contracts import (
     CanonicalClientRequest,
     ModuleSelectionError,
+    ResponsesClientPolicySpec,
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
@@ -90,6 +91,95 @@ _FORBIDDEN_AUTHORITY_KEYS = frozenset(
     {"authorization", "api_key", "apikey", "headers", "server_url", "connector", "mcp_server"}
 )
 _ALLOWED_TOOL_CHOICES = frozenset({"auto", "none", "required"})
+_MAX_DECLARATION_DEPTH = 32
+
+# This is deliberately version-owned.  The values are the bounded envelope
+# classes observed by the 0.149 capture plus the existing neutral Codex
+# request-policy limits; no other Codex module supplies this contract.
+_CODEX_0149_INCLUDE_VALUE = "reasoning.encrypted_content"
+_CODEX_0149_REASONING_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
+_CODEX_0149_CLIENT_METADATA_KEYS = frozenset(
+    {
+        "x-codex-installation-id",
+        "session_id",
+        "root_turn_id",
+        "thread_id",
+        "turn_id",
+        "x-codex-window-id",
+        "x-codex-turn-metadata",
+    }
+)
+_CODEX_0149_MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CODEX_0149_TOOL_CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+
+
+def _codex_0149_taxonomy_for(
+    value: object,
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None:
+    _ = value
+    return None
+
+
+CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
+    compact_fields=frozenset(
+        {"model", "input", "instructions", "tools", "parallel_tool_calls", "reasoning", "prompt_cache_key", "text"}
+    ),
+    function_call_output_fields=frozenset({"type", "id", "call_id", "output"}),
+    custom_tool_call_output_fields=frozenset({"type", "id", "call_id", "output"}),
+    function_call_fields=frozenset(
+        {"type", "id", "status", "namespace", "name", "arguments", "call_id"}
+    ),
+    custom_tool_call_fields=frozenset(
+        {"type", "id", "status", "namespace", "name", "input", "call_id"}
+    ),
+    tool_output_content_fields=frozenset({"type", "text"}),
+    reasoning_replay_fields=frozenset({"type", "id", "summary", "encrypted_content", "content"}),
+    compaction_replay_fields=frozenset({"type", "id", "encrypted_content"}),
+    reasoning_summary_fields=frozenset({"type", "text"}),
+    additional_tools_fields=frozenset({"type", "role", "tools"}),
+    namespace_fields=_NAMESPACE_FIELDS,
+    include_value=_CODEX_0149_INCLUDE_VALUE,
+    reasoning_efforts=_CODEX_0149_REASONING_EFFORTS,
+    reasoning_context="all_turns",
+    text_verbosities=frozenset({"low", "medium", "high"}),
+    message_id_pattern=_CODEX_0149_MESSAGE_ID_PATTERN,
+    tool_call_id_pattern=_CODEX_0149_TOOL_CALL_ID_PATTERN,
+    tool_call_statuses=frozenset({"completed"}),
+    client_metadata_keys=_CODEX_0149_CLIENT_METADATA_KEYS,
+    max_include_items=8,
+    max_prompt_cache_key_bytes=256,
+    max_reasoning_bytes=256,
+    max_client_metadata_keys=len(_CODEX_0149_CLIENT_METADATA_KEYS),
+    max_client_metadata_key_bytes=64,
+    max_client_metadata_value_bytes=4096,
+    max_client_metadata_bytes=8192,
+    max_client_tool_schema_depth=16,
+    max_client_tool_schema_properties=256,
+    max_client_tool_description_bytes=20_000,
+    max_client_tool_total_description_bytes=32_768,
+    max_client_tool_declaration_bytes=589_824,
+    request_user_input_allowed_authority_key_paths=frozenset(
+        {("parameters", "properties", "questions", "items", "properties", "header")}
+    ),
+    exec_command_allowed_authority_key_paths=frozenset(
+        {("parameters", "properties", "shell")}
+    ),
+    max_encrypted_reasoning_item_bytes=262_144,
+    max_encrypted_reasoning_request_bytes=1_048_576,
+    max_reasoning_summary_bytes=65_536,
+    max_reasoning_summary_parts=64,
+    max_compaction_item_bytes=1_048_576,
+    internal_chat_message_metadata_field="internal_chat_message_metadata_passthrough",
+    max_internal_chat_message_metadata_bytes=32_768,
+    internal_chat_message_metadata_item_types=frozenset(
+        {None, "message", "reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "compaction"}
+    ),
+    taxonomy_for=_codex_0149_taxonomy_for,
+    taxonomy_0148=(),
+    taxonomy_id_0148="codex_0_149",
+)
 _CAPTURED_FIELD_VALUE_CLASSES = MappingProxyType(
     {
         "client_metadata": "object",
@@ -125,7 +215,7 @@ def _safe_shape_fields(value: Mapping[str, object], allowed: frozenset[str], *, 
 
 
 def _walk_forbidden_keys(value: object, *, depth: int = 0) -> None:
-    if depth > 8:
+    if depth > _MAX_DECLARATION_DEPTH:
         raise _error("The Codex 0.149 declaration is too deeply nested")
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -146,7 +236,7 @@ def _walk_forbidden_keys(value: object, *, depth: int = 0) -> None:
 
 
 def _walk_unsafe_candidate_values(value: object, *, depth: int = 0) -> None:
-    if depth > 8:
+    if depth > _MAX_DECLARATION_DEPTH:
         raise _error("The Codex 0.149 declaration is too deeply nested")
     if isinstance(value, Mapping):
         for child in value.values():
@@ -167,7 +257,7 @@ def _walk_unsafe_candidate_values(value: object, *, depth: int = 0) -> None:
 
 
 def _reject_nested_candidate_types(value: object, *, depth: int = 0) -> None:
-    if depth > 8:
+    if depth > _MAX_DECLARATION_DEPTH:
         raise _error("The Codex 0.149 declaration is too deeply nested")
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -302,7 +392,7 @@ class Codex0149ResponsesClientModule:
     module_id = CODEX_0149_CLIENT_MODULE_ID
     module_version = CODEX_0149_CLIENT_MODULE_VERSION
     fixture_sha256 = CODEX_0149_FIXTURE_SHA256
-    policy_spec = None
+    policy_spec = CODEX_0149_POLICY_SPEC
 
     def normalize(
         self,

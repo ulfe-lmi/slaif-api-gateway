@@ -305,6 +305,32 @@ def test_0149_fixture_is_separate_and_exactly_capture_derived() -> None:
     ]
 
 
+def test_0149_production_path_returns_only_candidate_types_without_raw_values() -> None:
+    body = {
+        "model": capture.PINNED_0149_MODEL,
+        "input": [{"type": "message", "role": "user", "content": "raw-canary"}],
+        "tools": [
+            {
+                "type": "tool_search",
+                "description": "candidate-description-canary",
+                "execution": "client",
+                "parameters": {},
+            },
+            {
+                "type": "web_search",
+                "external_web_access": False,
+                "search_content_types": ["text"],
+            },
+        ],
+        "tool_choice": "auto",
+    }
+    candidates = capture.validate_0149_production_path(_request(body))
+    assert candidates == ("tool_search", "web_search")
+    safe = capture.canonical_json_bytes({"candidate_types": candidates})
+    assert b"raw-canary" not in safe
+    assert b"candidate-description-canary" not in safe
+
+
 def test_0149_request_sanitizer_retains_only_observed_structural_facts() -> None:
     request = _request(
         {

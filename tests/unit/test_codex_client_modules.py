@@ -17,6 +17,7 @@ from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
     CODEX_0149_CLIENT_MODULE_VERSION,
     CODEX_0149_FIXTURE_SHA256,
+    CODEX_0149_POLICY_SPEC,
 )
 from slaif_gateway.modules.clients.registry import (
     CODEX_0147_CLIENT_MODULE,
@@ -122,6 +123,7 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
         "client_module_version": CODEX_0149_CLIENT_MODULE_VERSION,
         "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
     }
+    assert CODEX_0149_CLIENT_MODULE.policy_spec is CODEX_0149_POLICY_SPEC
 
 
 @pytest.mark.parametrize(

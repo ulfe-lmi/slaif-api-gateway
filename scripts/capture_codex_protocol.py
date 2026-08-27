@@ -638,6 +638,63 @@ def sanitize_0149_request(request: ParsedHttpRequest) -> dict[str, object]:
     }
 
 
+def validate_0149_production_path(request: ParsedHttpRequest) -> tuple[str, ...]:
+    """Run one fresh raw capture through the production module and policy in memory."""
+    try:
+        payload = json.loads(request.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CaptureError("Codex 0.149 production-path capture was not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise CaptureError("Codex 0.149 production-path capture was not an object.")
+
+    # Keep these production imports and the raw payload scoped to this check.
+    # Nothing from this path is serialized, logged, persisted, or returned.
+    try:
+        from slaif_gateway.config import Settings
+        from slaif_gateway.modules.clients.codex_0149 import (
+            CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+        )
+        from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE
+        from slaif_gateway.services.responses_request_policy import ResponsesRequestPolicy
+
+        normalized = CODEX_0149_CLIENT_MODULE.normalize_responses(payload)
+        candidates = tuple(normalized.adapter_managed_declaration_candidates)
+        if candidates != ("tool_search", "web_search"):
+            raise CaptureError("Codex 0.149 production path observed the wrong candidate set.")
+        policy_spec = CODEX_0149_CLIENT_MODULE.policy_spec
+        if policy_spec is None:
+            raise CaptureError("Codex 0.149 production policy spec is unavailable.")
+        policy_result = ResponsesRequestPolicy(Settings(), client_spec=policy_spec).apply(
+            normalized.body,
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset(candidates),
+            adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+            allow_external_tool_request=False,
+        )
+        policy_tools = policy_result.effective_body.get("tools")
+        if policy_tools != payload.get("tools"):
+            raise CaptureError("Codex 0.149 production policy changed the candidate declarations.")
+        hosted_admission_requested = any(
+            isinstance(item, dict)
+            and item.get("type") == "web_search"
+            and "web_search" not in candidates
+            for item in policy_tools
+        )
+        if hosted_admission_requested:
+            raise CaptureError("Codex 0.149 production path entered hosted-tool admission.")
+        return candidates
+    except CaptureError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        error_code = getattr(exc, "error_code", "unknown")
+        raise CaptureError(
+            "Codex 0.149 production normalizer or policy rejected the capture "
+            f"({type(exc).__name__}:{error_code}:{exc})."
+        ) from exc
+
+
 def sanitize_model_catalog(catalog: Any, *, model: str) -> dict[str, object]:
     if not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
         raise CaptureError("Bundled Codex model catalog has an unexpected shape.")
@@ -1634,6 +1691,7 @@ def capture_live_0149(
             raise CaptureError("Codex 0.149 capture did not stop at the fixed synthetic rejection.")
         if server.request is None:
             server.result()
+        production_candidates = validate_0149_production_path(server.request)
         sanitized_request = sanitize_0149_request(server.request)
         del server.request
 
@@ -1673,6 +1731,8 @@ def capture_live_0149(
         },
         "schema_version": 1,
     }
+    if production_candidates != ("tool_search", "web_search"):
+        raise CaptureError("Codex 0.149 production path did not preserve both candidates.")
     validate_0149_fixture(fixture)
     return fixture
 
@@ -1975,7 +2035,7 @@ def main(argv: list[str] | None = None) -> int:
             checked_in = _load_fixture_0149(fixture_path)
             if canonical_json_bytes(live) != canonical_json_bytes(checked_in):
                 raise CaptureError("Live 0.149 sanitized capture does not match its fixture.")
-            print("VERIFY_LIVE_0149_OK status=structural_candidate")
+            print("VERIFY_LIVE_0149_OK status=structural_candidate production_path=passed")
             return 0
         if args.command == "validate-0149":
             fixture_path = validate_0149_fixture_path(args.fixture)

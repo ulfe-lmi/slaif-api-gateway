@@ -317,6 +317,12 @@ def test_openai_python_client_local_coding_server_module_e2e(
                 "deployment_mode": "single_worker",
             },
             responses_policy={
+                "version": 1,
+                "allowed_capabilities": [
+                    "codex_request_envelope",
+                    "codex_client_tools",
+                    "codex_streaming_tool_events",
+                ],
                 "client_module": {
                     "id": "codex-0.149-responses-v1",
                     "version": "2",
@@ -446,6 +452,12 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
                 "deployment_mode": "single_worker",
             },
             responses_policy={
+                "version": 1,
+                "allowed_capabilities": [
+                    "codex_request_envelope",
+                    "codex_client_tools",
+                    "codex_streaming_tool_events",
+                ],
                 "client_module": {
                     "id": "codex-0.149-responses-v1",
                     "version": "2",
