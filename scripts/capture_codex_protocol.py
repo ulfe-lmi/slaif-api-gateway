@@ -691,7 +691,7 @@ def validate_0149_production_path(request: ParsedHttpRequest) -> tuple[str, ...]
         error_code = getattr(exc, "error_code", "unknown")
         raise CaptureError(
             "Codex 0.149 production normalizer or policy rejected the capture "
-            f"({type(exc).__name__}:{error_code}:{exc})."
+            f"({type(exc).__name__}:{error_code})."
         ) from exc
 
 

@@ -348,13 +348,18 @@ def _validate_tool(value: object) -> str | None:
     return tool_type if tool_type in _CANDIDATE_TYPES else None
 
 
-def _validate_tool_choice(value: object) -> None:
+def _validate_tool_choice(value: object, *, candidates: list[str], local_tools: bool) -> None:
     if value is None:
         return
     if isinstance(value, str):
         if value in _CANDIDATE_TYPES:
             raise _error(
                 "The Codex 0.149 request explicitly requires a search tool",
+                "codex_0149_authority_shape",
+            )
+        if value == "required" and candidates and not local_tools:
+            raise _error(
+                "The Codex 0.149 request requires an adapter-managed search tool",
                 "codex_0149_authority_shape",
             )
         if value not in _ALLOWED_TOOL_CHOICES:
@@ -428,7 +433,14 @@ class Codex0149ResponsesClientModule:
             candidate = _validate_tool(tool)
             if candidate is not None and candidate not in candidates:
                 candidates.append(candidate)
-        _validate_tool_choice(body.get("tool_choice"))
+        _validate_tool_choice(
+            body.get("tool_choice"),
+            candidates=candidates,
+            local_tools=any(
+                isinstance(tool, Mapping) and tool.get("type") in {"function", "custom", "namespace"}
+                for tool in tools
+            ),
+        )
         _walk_forbidden_keys(body.get("tools", []))
         for tool in tools:
             _reject_nested_candidate_types(tool)

@@ -157,6 +157,36 @@ def test_0149_rejects_explicit_search_choices(tool_choice: object, code: str) ->
     assert exc_info.value.error_code == code
 
 
+def test_0149_required_search_choice_rejects_before_gateway_policy() -> None:
+    with pytest.raises(ModuleSelectionError) as exc_info:
+        CODEX_0149_CLIENT_MODULE.normalize_responses(
+            _body(
+                tools=[
+                    {
+                        "type": "tool_search",
+                        "description": "candidate",
+                        "execution": "client",
+                        "parameters": {},
+                    },
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text"],
+                    },
+                ],
+                tool_choice="required",
+            )
+        )
+    assert exc_info.value.error_code == "codex_0149_authority_shape"
+
+
+def test_0149_required_choice_survives_with_a_local_tool() -> None:
+    request = CODEX_0149_CLIENT_MODULE.normalize_responses(
+        _body(tool_choice="required")
+    )
+    assert request.adapter_managed_declaration_candidates == ("tool_search", "web_search")
+
+
 def test_0149_rejects_unknown_and_provider_authority_fields() -> None:
     with pytest.raises(ModuleSelectionError):
         CODEX_0149_CLIENT_MODULE.normalize_responses(_body(unexpected=True))
@@ -318,3 +348,51 @@ def test_responses_handler_denies_0149_before_policy_or_provider_work(monkeypatc
             )
         )
     assert exc_info.value.code == "client_module_fixture_mismatch"
+
+
+def test_0149_required_search_choice_denies_before_policy_or_provider_work(monkeypatch) -> None:
+    from slaif_gateway.services import responses_gateway
+
+    payload = SimpleNamespace(
+        model_dump=lambda **_: _body(
+            tools=[
+                {
+                    "type": "tool_search",
+                    "description": "candidate",
+                    "execution": "client",
+                    "parameters": {},
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": False,
+                    "search_content_types": ["text"],
+                },
+            ],
+            tool_choice="required",
+        ),
+        model_fields_set=set(),
+    )
+    key = SimpleNamespace(
+        responses_policy={
+            "client_module": {
+                "id": CODEX_0149_CLIENT_MODULE_ID,
+                "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+            }
+        }
+    )
+    monkeypatch.setattr(
+        responses_gateway.ResponsesRequestPolicy,
+        "apply",
+        lambda *_args, **_kwargs: pytest.fail("policy must not run after choice rejection"),
+    )
+
+    with pytest.raises(responses_gateway.OpenAICompatibleError) as exc_info:
+        asyncio.run(
+            responses_gateway.handle_response_create(
+                payload=payload,
+                authenticated_key=key,
+                settings=SimpleNamespace(),
+            )
+        )
+    assert exc_info.value.code == "codex_0149_authority_shape"

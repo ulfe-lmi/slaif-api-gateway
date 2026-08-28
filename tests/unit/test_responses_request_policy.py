@@ -9,6 +9,7 @@ from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
     CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+    CODEX_0149_POLICY_SPEC,
 )
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_request_policy import (
@@ -20,6 +21,10 @@ from slaif_gateway.services.responses_request_policy import (
 
 def _policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+def _0149_policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
 def _body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "model": "gpt-test",
@@ -51,7 +56,7 @@ def _0149_candidate_body() -> dict[str, object]:
 
 def test_0149_candidates_are_preserved_only_when_explicitly_supplied_by_module() -> None:
     body = _0149_candidate_body()
-    result = _policy(Settings()).apply(
+    result = _0149_policy(Settings()).apply(
         body,
         adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
         adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
@@ -61,7 +66,7 @@ def test_0149_candidates_are_preserved_only_when_explicitly_supplied_by_module()
 
 def test_0149_candidates_are_not_general_hosted_tool_authority() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(_0149_candidate_body())
+        _0149_policy(Settings()).apply(_0149_candidate_body())
     assert exc_info.value.error_code == "responses_hosted_tool_not_supported"
 
 
@@ -85,7 +90,7 @@ def test_0149_candidates_are_not_general_hosted_tool_authority() -> None:
 )
 def test_0149_candidate_authority_or_shape_mutation_rejects(tool: dict[str, object]) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(
+        _0149_policy(Settings()).apply(
             _body(tools=[tool]),
             adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
             adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
@@ -104,7 +109,7 @@ def test_0149_candidate_url_value_rejects_even_with_the_captured_shape() -> None
         "parameters": {},
     }
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(
+        _0149_policy(Settings()).apply(
             _body(tools=[tool]),
             adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
             adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,

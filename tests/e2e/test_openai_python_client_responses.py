@@ -43,6 +43,32 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def _assert_strict_bounded_no_external_facts(state: object) -> None:
+    reservation = state.reservation
+    assert reservation.quota_mode == "strict_bounded"
+    assert reservation.external_tool_capabilities == []
+    assert reservation.external_tool_destination_ids == []
+    assert reservation.external_tool_provider is None
+    assert reservation.external_tool_route_id is None
+    assert state.gateway_key.external_tool_fence_state == "none"
+    assert state.gateway_key.external_tool_fence_reservation_id is None
+
+    def keys(value: object):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield str(key).lower()
+                yield from keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from keys(child)
+
+    metadata_keys = set(keys(state.usage_ledger.response_metadata))
+    assert not any(
+        "external_tool" in key or "tool_fee" in key or "hold" in key
+        for key in metadata_keys
+    )
+
+
 async def _create_responses_test_data(
     database_url: str,
     *,
@@ -422,6 +448,7 @@ def test_openai_python_client_local_coding_server_module_e2e(
     assert state.reservation.status == "finalized"
     assert state.gateway_key.tokens_reserved_total == 0
     assert state.usage_ledger.total_tokens == 5
+    _assert_strict_bounded_no_external_facts(state)
 
 
 @pytest.mark.e2e
@@ -565,6 +592,7 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
     assert state.reservation.status == "finalized"
     assert state.gateway_key.tokens_reserved_total == 0
     assert state.usage_ledger.total_tokens == 7
+    _assert_strict_bounded_no_external_facts(state)
 
 
 @pytest.mark.e2e
