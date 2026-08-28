@@ -329,6 +329,10 @@ def test_0149_production_path_returns_only_candidate_types_without_raw_values() 
     safe = capture.canonical_json_bytes({"candidate_types": candidates})
     assert b"raw-canary" not in safe
     assert b"candidate-description-canary" not in safe
+    source = Path(capture.__file__).read_text(encoding="utf-8")
+    assert "from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE" in source
+    assert "from slaif_gateway.services import responses_request_policy" in source
+    assert "responses_request_policy.ResponsesRequestPolicy" in source
 
 
 def test_0149_request_sanitizer_retains_only_observed_structural_facts() -> None:

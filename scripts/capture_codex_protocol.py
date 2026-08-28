@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import json
 import os
 import re
@@ -656,6 +655,7 @@ def validate_0149_production_path(request: ParsedHttpRequest) -> tuple[str, ...]
             CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
         )
         from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE
+        from slaif_gateway.services import responses_request_policy
 
         normalized = CODEX_0149_CLIENT_MODULE.normalize_responses(payload)
         candidates = tuple(normalized.adapter_managed_declaration_candidates)
@@ -664,10 +664,9 @@ def validate_0149_production_path(request: ParsedHttpRequest) -> tuple[str, ...]
         policy_spec = CODEX_0149_CLIENT_MODULE.policy_spec
         if policy_spec is None:
             raise CaptureError("Codex 0.149 production policy spec is unavailable.")
-        policy_class = importlib.import_module(
-            "slaif_gateway.services.responses_request_policy"
-        ).ResponsesRequestPolicy
-        policy_result = policy_class(Settings(), client_spec=policy_spec).apply(
+        policy_result = responses_request_policy.ResponsesRequestPolicy(
+            Settings(), client_spec=policy_spec
+        ).apply(
             normalized.body,
             allow_codex_request_envelope=True,
             allow_codex_client_tools=True,
