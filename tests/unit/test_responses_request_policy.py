@@ -25,6 +25,8 @@ def _policy(settings: Settings) -> ResponsesRequestPolicy:
 
 def _0149_policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
+
+
 def _body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "model": "gpt-test",
