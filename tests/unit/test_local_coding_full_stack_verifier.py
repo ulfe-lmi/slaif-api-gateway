@@ -148,6 +148,15 @@ def test_local_bound_privacy_allows_only_service_and_signed_headers() -> None:
         )
 
 
+def test_local_config_is_validated_before_composition(tmp_path: Path) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text("QWEN3090_API_KEY=private\n", encoding="utf-8")
+    config = verifier._validate_local_config(
+        tmp_path, verifier.RuntimeReference("http://private.example/v1", credential)
+    )
+    assert config.is_file()
+
+
 def test_scrubbed_launcher_does_not_forward_source_script_exports() -> None:
     source = verifier._start_process.__code__.co_consts
     script = " ".join(value for value in source if isinstance(value, str))

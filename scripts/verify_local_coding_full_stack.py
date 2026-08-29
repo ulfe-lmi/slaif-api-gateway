@@ -509,6 +509,26 @@ def _local_config(root: Path, *, local_port: int, runtime: RuntimeReference) -> 
     return config
 
 
+def _validate_local_config(root: Path, runtime: RuntimeReference) -> Path:
+    config = _local_config(root, local_port=18031, runtime=runtime)
+    sys.path.insert(0, str(LOCAL_ROOT / "src"))
+    try:
+        from slaif_local_coding.config import load_settings
+
+        settings = load_settings(config)
+    except Exception as exc:
+        raise VerificationError("local_config_invalid") from exc
+    if (
+        settings.server.listen_host != "127.0.0.1"
+        or settings.server.listen_port != 18031
+        or settings.upstream.model != CODEX_MODEL
+        or settings.gateway_ingress.mode != "service_bearer_signed_identity_v1"
+        or settings.routes[0].responses_tool_policy != "drop_disabled_codex_search"
+    ):
+        raise VerificationError("local_config_policy_mismatch")
+    return config
+
+
 @dataclass(frozen=True, slots=True)
 class CapturedRequest:
     path: str
@@ -655,6 +675,7 @@ def _start_process(command: list[str], *, cwd: Path, env: dict[str, str], source
         "PYTHONPATH=\"${PYTHONPATH:-}\" "
         "SLAIF_155F_LOCAL_SERVICE_TOKEN=\"${SLAIF_155F_LOCAL_SERVICE_TOKEN}\" "
         "SLAIF_155F_LOCAL_SIGNING_SECRET=\"${SLAIF_155F_LOCAL_SIGNING_SECRET}\" "
+        "UV_PROJECT_ENVIRONMENT=\"${UV_PROJECT_ENVIRONMENT}\" "
         "QWEN3090_API_KEY=\"${QWEN3090_API_KEY}\" \"$@\""
     )
     launcher = [
@@ -971,6 +992,7 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         "PYTHONDONTWRITEBYTECODE": "1",
         "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token,
         "SLAIF_155F_LOCAL_SIGNING_SECRET": signing_secret,
+        "UV_PROJECT_ENVIRONMENT": str(root / "local-venv"),
     }
     try:
         local = _start_process(
@@ -1239,6 +1261,8 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         _docker("rm", "-f", container, timeout=30)
         if pulled:
             _docker("rmi", "postgres:16", timeout=60)
+        if _git("status", "--porcelain", cwd=LOCAL_ROOT):
+            raise VerificationError("local_dependency_changed")
 
 
 def run() -> dict[str, object]:
@@ -1250,6 +1274,7 @@ def run() -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="slaif-155f-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
+        _validate_local_config(root, runtime)
         codex_binary = _install_codex(root)
         # Re-run the exact no-provider relationship gate before any DB/container.
         import scripts.capture_codex_protocol as capture
