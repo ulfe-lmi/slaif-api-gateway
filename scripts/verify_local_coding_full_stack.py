@@ -14,7 +14,6 @@ import hashlib
 import http.server
 import json
 import os
-import re
 import secrets
 import socket
 import stat
@@ -813,13 +812,28 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         user = messages[-1].get("content") if isinstance(messages, list) and messages else None
         if not isinstance(user, str):
             raise ValueError("compiler_input")
-        match = re.search(r"<source path='([^']+)' sha256=([0-9a-f]{64}) byte_length=(\\d+)>", user)
-        candidates_match = re.search(
-            r"<deterministic_candidates>\\n(.*?)\\n</deterministic_candidates>", user, re.S
+        source_marker = "<source path='"
+        source_start = user.find(source_marker)
+        source_end = user.find("' sha256=", source_start + len(source_marker))
+        sha_start = source_end + len("' sha256=")
+        sha_end = user.find(" byte_length=", sha_start)
+        length_start = sha_end + len(" byte_length=")
+        source_close = user.find(">", length_start)
+        candidates_marker = "<deterministic_candidates>\n"
+        candidates_start = user.find(candidates_marker, source_close)
+        candidates_end = user.find(
+            "\n</deterministic_candidates>", candidates_start + len(candidates_marker)
         )
-        if match is None or candidates_match is None:
+        if min(source_start, source_end, sha_end, source_close, candidates_start, candidates_end) < 0:
             raise ValueError("compiler_prompt")
-        candidates = json.loads(candidates_match.group(1))
+        logical_path = user[source_start + len(source_marker) : source_end]
+        source_hash = user[sha_start:sha_end]
+        byte_length_text = user[length_start:source_close]
+        if len(source_hash) != 64 or any(char not in "0123456789abcdef" for char in source_hash):
+            raise ValueError("compiler_hash")
+        candidates = json.loads(
+            user[candidates_start + len(candidates_marker) : candidates_end]
+        )
         if not isinstance(candidates, list):
             raise ValueError("compiler_candidates")
         dependencies = [
@@ -840,9 +854,9 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             "compiler_version": "compiler-v2",
             "prompt_policy_version": "constitutional-rank-v2",
             "model": payload.get("model"),
-            "source_logical_path": match.group(1),
-            "source_sha256": match.group(2),
-            "source_byte_length": int(match.group(3)),
+            "source_logical_path": logical_path,
+            "source_sha256": source_hash,
+            "source_byte_length": int(byte_length_text),
             "summary": "bounded fake rehearsal",
             "rules": [{
                 "rule_id": "fake-rule",
