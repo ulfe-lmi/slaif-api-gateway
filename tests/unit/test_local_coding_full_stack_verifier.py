@@ -202,6 +202,13 @@ def test_155o_topology_anchors_are_the_155n_report_and_implementation() -> None:
 def test_155o_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
     baseline = verifier._read_pinned_direct_baseline()
     assert verifier._terminal_completion_valid(baseline) is True
+    rebuilt = verifier._safe_stream_summary(
+        baseline, boundary="direct_qwen", ran=True,
+        decision="ambiguous_stream_evidence",
+    )
+    assert rebuilt["evidence_source"] == "pinned_155l"
+    assert rebuilt["ran_current_invocation"] is False
+    assert rebuilt["normalization_status"] == "complete"
     assert baseline["terminal_completion_valid"] is True
     assert baseline["event_vocabulary_reviewed"] is False
     assert baseline["unknown_events"] is True

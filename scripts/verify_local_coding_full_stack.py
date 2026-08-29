@@ -393,6 +393,9 @@ def _read_pinned_direct_baseline() -> dict[str, object]:
     normalized.update(
         {
             "error_event": False,
+            "error_field_names": [],
+            "error_code_class": "unknown",
+            "error_type_class": "unknown",
             "event_vocabulary_reviewed": False,
             "terminal_completion_valid": True,
             "evidence_source": "pinned_155l",
