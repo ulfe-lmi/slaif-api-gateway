@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-m verifier for protected stream boundary differential evidence.
+"""Bounded 155-n verifier for protected stream boundary differential evidence.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -35,6 +35,7 @@ RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
 GATEWAY_REPORT_HEAD = "382549cb0e31b22a3464c6622b0f21e48d115944"
 GATEWAY_IMPLEMENTATION_HEAD = "b2c504ed084664487e1088424bd4503977c90644"
 GATEWAY_ACTIVATION_HEAD = "5bf6111ec3584d94db1f2645b4c0d0ddbc8948a5"
+GATEWAY_REPORT_PATH = "oap/reports/155-m-terminal-validity-and-composed-closure.md"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -217,7 +218,7 @@ def _verify_commit_topology() -> None:
     if _git("rev-parse", f"{GATEWAY_REPORT_HEAD}^1") != GATEWAY_IMPLEMENTATION_HEAD:
         raise VerificationError("gateway_report_parent_mismatch")
     changed = _git("diff-tree", "--no-commit-id", "--name-only", "-r", GATEWAY_REPORT_HEAD)
-    if changed != "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md":
+    if changed != GATEWAY_REPORT_PATH:
         raise VerificationError("gateway_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", GATEWAY_REPORT_HEAD, "HEAD"], cwd=REPO_ROOT).returncode != 0:
         raise VerificationError("gateway_report_ancestry_failed")

@@ -150,7 +150,7 @@ def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
 ) -> None:
     current_head = "current-155n-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
+    report_path = "oap/reports/155-m-terminal-validity-and-composed-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -195,6 +195,7 @@ def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
 def test_155n_topology_anchors_are_the_155m_report_and_implementation() -> None:
     assert verifier.GATEWAY_REPORT_HEAD == "382549cb0e31b22a3464c6622b0f21e48d115944"
     assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b2c504ed084664487e1088424bd4503977c90644"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-m-terminal-validity-and-composed-closure.md"
 
 
 def test_155n_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
