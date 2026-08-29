@@ -1388,10 +1388,6 @@ def _localize_ordinary_response_failure(
     relay_status = relay.status()
     response_statuses = relay_status["response_statuses"]
     path_classes = relay_status["response_path_classes"]
-    if response_statuses and response_statuses[-1] == 404:
-        if path_classes and path_classes[-1] == "v1_responses":
-            return VerificationError("ordinary_response_local_404")
-        return VerificationError("ordinary_response_gateway_relay_404")
     if qwen_relay_port is not None:
         try:
             qwen_status = _qwen_relay_status(qwen_relay_port)
@@ -1401,6 +1397,10 @@ def _localize_ordinary_response_failure(
             return VerificationError("ordinary_response_qwen_path_404")
         if 404 in qwen_status["upstream_statuses"]:
             return VerificationError("ordinary_response_fake_qwen_404")
+    if response_statuses and response_statuses[-1] == 404:
+        if path_classes and path_classes[-1] == "v1_responses":
+            return VerificationError("ordinary_response_local_404")
+        return VerificationError("ordinary_response_gateway_relay_404")
     return VerificationError("ordinary_response_failed")
 
 

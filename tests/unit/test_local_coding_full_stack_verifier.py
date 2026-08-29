@@ -468,7 +468,7 @@ def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
-    relay.remember_response(502, "/v1/responses")
+    relay.remember_response(404, "/v1/responses")
     monkeypatch.setattr(
         verifier,
         "_qwen_relay_status",
