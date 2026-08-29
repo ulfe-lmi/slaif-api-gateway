@@ -92,6 +92,19 @@ def test_composed_wrapper_sanitizes_unexpected_exception_at_unknown_stage(
     assert "private" not in str(error.value)
 
 
+def test_composed_wrapper_preserves_primary_stage_across_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*_args: object, tracker: verifier.StageTracker, **_kwargs: object) -> dict[str, object]:
+        tracker.set("ordinary_response")
+        raise RuntimeError("private provider response")
+
+    monkeypatch.setattr(verifier, "_run_composed_impl", fail)
+    with pytest.raises(verifier.VerificationError, match="unexpected_ordinary_response") as error:
+        verifier._run_composed(tmp_path, object(), Path("codex"), fake_qwen=True)  # type: ignore[arg-type]
+    assert "private" not in str(error.value)
+
+
 def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
     fake, thread, token = verifier._start_fake_qwen()
     try:

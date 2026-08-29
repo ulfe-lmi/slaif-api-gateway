@@ -1991,9 +1991,12 @@ def _run_composed_impl(
                 if isinstance(primary, VerificationError):
                     raise primary
                 if primary_stage in COMPOSITION_STAGES:
+                    tracker.current = primary_stage
                     raise VerificationError(f"unexpected_{primary_stage}") from None
                 raise VerificationError("unexpected_unknown_stage") from None
             raise
+        if primary is not None and primary_stage in COMPOSITION_STAGES:
+            tracker.current = primary_stage
 
 
 def _run_composed(
