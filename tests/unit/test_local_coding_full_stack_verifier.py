@@ -516,6 +516,57 @@ def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
     assert str(error) == "ordinary_response_fake_qwen_404"
 
 
+@pytest.mark.parametrize(
+    ("exception_type", "expected"),
+    [
+        (
+            "APIResponseValidationError",
+            "ordinary_response_gateway_response_schema",
+        ),
+        ("BadRequestError", "ordinary_response_gateway_response_bad_request"),
+    ],
+)
+def test_ordinary_response_localizer_maps_allowlisted_downstream_200_errors(
+    monkeypatch: pytest.MonkeyPatch, exception_type: str, expected: str
+) -> None:
+    import httpx
+    from openai import APIResponseValidationError, BadRequestError
+
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    relay.remember_response(200, "/v1/responses")
+    monkeypatch.setattr(
+        verifier,
+        "_qwen_relay_status",
+        lambda _port: {"path_rejections": 0, "upstream_statuses": []},
+    )
+    response = httpx.Response(
+        200 if exception_type == "APIResponseValidationError" else 400,
+        request=httpx.Request("POST", "http://127.0.0.1/v1/responses"),
+    )
+    if exception_type == "APIResponseValidationError":
+        exception = APIResponseValidationError(response=response, body={})
+    else:
+        exception = BadRequestError("bad request", response=response, body={})
+    error = verifier._localize_ordinary_response_failure(relay, 39149, exception)
+    assert str(error) == expected
+
+
+def test_ordinary_response_localizer_keeps_unknown_downstream_200_errors_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    relay.remember_response(200, "/v1/responses")
+    monkeypatch.setattr(
+        verifier,
+        "_qwen_relay_status",
+        lambda _port: {"path_rejections": 0, "upstream_statuses": []},
+    )
+    error = verifier._localize_ordinary_response_failure(
+        relay, 39149, RuntimeError("private response detail")
+    )
+    assert str(error) == "ordinary_response_failed"
+
+
 def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

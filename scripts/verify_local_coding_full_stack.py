@@ -1403,7 +1403,9 @@ def _relay_request(
 
 
 def _localize_ordinary_response_failure(
-    relay: _ForwardingRelay, qwen_relay_port: int | None
+    relay: _ForwardingRelay,
+    qwen_relay_port: int | None,
+    exception: BaseException | None = None,
 ) -> VerificationError:
     relay_status = relay.status()
     response_statuses = relay_status["response_statuses"]
@@ -1421,6 +1423,18 @@ def _localize_ordinary_response_failure(
         if path_classes and path_classes[-1] == "v1_responses":
             return VerificationError("ordinary_response_local_404")
         return VerificationError("ordinary_response_gateway_relay_404")
+    if response_statuses and response_statuses[-1] == 200:
+        known_errors = {
+            "APIResponseValidationError": "ordinary_response_gateway_response_schema",
+            "APIStatusError": "ordinary_response_gateway_response_status",
+            "BadRequestError": "ordinary_response_gateway_response_bad_request",
+        }
+        return VerificationError(
+            known_errors.get(
+                type(exception).__name__ if exception is not None else "",
+                "ordinary_response_failed",
+            )
+        )
     return VerificationError("ordinary_response_failed")
 
 
@@ -1968,8 +1982,10 @@ def _run_composed_impl(
                 **request_body("155f ordinary", session_a),
                 tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
             )
-        except Exception:
-            raise _localize_ordinary_response_failure(relay, qwen_relay_port) from None
+        except Exception as exception:
+            raise _localize_ordinary_response_failure(
+                relay, qwen_relay_port, exception
+            ) from None
         tracker.set("stream_response")
         streamed = client.responses.create(
             **request_body("155f stream", session_a),
