@@ -44,6 +44,16 @@ def test_runtime_reference_requires_only_the_two_fixed_keys(monkeypatch: pytest.
         verifier._read_runtime_reference()
 
 
+def test_runtime_reference_repr_and_str_redact_both_private_values() -> None:
+    reference = verifier.RuntimeReference(
+        "https://endpoint-canary.invalid/v1", Path("/tmp/source-canary")
+    )
+    assert repr(reference) == "RuntimeReference(<redacted>)"
+    assert str(reference) == "RuntimeReference(<redacted>)"
+    assert "endpoint-canary" not in repr(reference)
+    assert "source-canary" not in str(reference)
+
+
 def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
@@ -442,6 +452,16 @@ def test_qwen_relay_maps_authenticated_readiness_health_without_counting_inferen
 def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
     assert verifier._qwen_target("https://private.example/v1", "/health") == "https://private.example/health"
     assert verifier._qwen_target("https://private.example/v1", "/v1/models") == "https://private.example/v1/models"
+    assert verifier._qwen_target("https://private.example/v1", "/v1/responses") == "https://private.example/v1/responses"
+    assert verifier._qwen_target("https://private.example/v1", "/v1/chat/completions") == "https://private.example/v1/chat/completions"
+    assert verifier._safe_path_class("/v1/responses?bounded=1") == "v1_responses"
+    assert verifier._safe_path_class("/v1/v1/responses") == "double_v1_responses"
+    assert verifier._safe_path_class("/responses") == "bare_responses"
+    assert verifier._safe_path_class("/v1/other") == "other"
+    with pytest.raises(verifier.VerificationError, match="qwen_relay_path_invalid"):
+        verifier._qwen_target("https://private.example/v1", "/responses")
+    with pytest.raises(verifier.VerificationError, match="qwen_relay_path_invalid"):
+        verifier._qwen_target("https://private.example/v1", "/v1/v1/responses")
 
 
 def test_unexpected_preflight_failure_is_localized_without_exception_text(

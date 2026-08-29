@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-h verifier for staged fake and final real acceptance.
+"""Bounded 155-i verifier for redacted fake and final real acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "422b666ac1d03bd9953430bb049921b3f2fb133b"
-GATEWAY_IMPLEMENTATION_HEAD = "a99533ef4b1e885893eedd5dfc4a7bd45f60457d"
-GATEWAY_ACTIVATION_HEAD = "81dbba8fbdb2c5d24df82df672b7c8ef85e6dfbd"
+GATEWAY_REPORT_HEAD = "8b433ba740071733585bcf4ac1fddaaf83368ac3"
+GATEWAY_IMPLEMENTATION_HEAD = "a7c63222d0995aa866d6733bd03d5b27a3c5bd1d"
+GATEWAY_ACTIVATION_HEAD = "0247a7cf68a6f5f3c8ea47b5e5ed5ca08d4e2246"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,8 +48,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155h_live"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155i_live"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
@@ -98,6 +98,24 @@ class StageTracker:
 class RuntimeReference:
     endpoint: str
     credential_source: Path
+
+    def __repr__(self) -> str:
+        return "RuntimeReference(<redacted>)"
+
+    __str__ = __repr__
+
+
+def _safe_path_class(path: str) -> str:
+    value = urlsplit(path).path
+    if value == "/v1/responses":
+        return "v1_responses"
+    if value == "/v1/chat/completions":
+        return "v1_chat_completions"
+    if value == "/responses":
+        return "bare_responses"
+    if value == "/v1/v1/responses":
+        return "double_v1_responses"
+    return "other"
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +196,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md",
+        "oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -189,7 +207,7 @@ def _verify_commit_topology() -> None:
     if _git("rev-parse", f"{GATEWAY_REPORT_HEAD}^1") != GATEWAY_IMPLEMENTATION_HEAD:
         raise VerificationError("gateway_report_parent_mismatch")
     changed = _git("diff-tree", "--no-commit-id", "--name-only", "-r", GATEWAY_REPORT_HEAD)
-    if changed != "oap/reports/155-g-corrected-single-composed-acceptance.md":
+    if changed != "oap/reports/155-h-staged-fake-rehearsal-and-final-real-acceptance.md":
         raise VerificationError("gateway_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", GATEWAY_REPORT_HEAD, "HEAD"], cwd=REPO_ROOT).returncode != 0:
         raise VerificationError("gateway_report_ancestry_failed")
@@ -221,11 +239,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-h\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-i\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -596,7 +614,7 @@ def _local_config(
     return config
 
 
-def _validate_local_config(root: Path, runtime: RuntimeReference) -> Path:
+def _validate_local_config(root: Path, runtime: RuntimeReference | None) -> Path:
     del runtime
     config = _local_config(
         root,
@@ -640,6 +658,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.local_port = local_port
         self.captured: list[CapturedRequest] = []
         self.response_statuses: list[int] = []
+        self.response_path_classes: list[str] = []
         self.forwarded = 0
         self.rejected = 0
         self._capture_lock = threading.Lock()
@@ -649,9 +668,17 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.captured.append(request)
             self.forwarded += 1
 
-    def remember_response(self, status: int) -> None:
+    def remember_response(self, status: int, path: str) -> None:
         with self._capture_lock:
             self.response_statuses.append(status)
+            self.response_path_classes.append(_safe_path_class(path))
+
+    def status(self) -> dict[str, object]:
+        with self._capture_lock:
+            return {
+                "response_statuses": list(self.response_statuses),
+                "response_path_classes": list(self.response_path_classes),
+            }
 
     def snapshot(self) -> tuple[CapturedRequest, ...]:
         with self._capture_lock:
@@ -706,7 +733,7 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
             self.server.rejected += 1
             self.send_error(502)
             return
-        self.server.remember_response(status)
+        self.server.remember_response(status, self.path)
 
     def do_GET(self) -> None:
         self._forward()
@@ -987,11 +1014,23 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.internal_body = False
         self.tool_types: set[str] = set()
         self.outbound_header_names: set[str] = set()
+        self.request_path_classes: set[str] = set()
+        self.upstream_statuses: list[int] = []
+        self.path_rejections = 0
         self._lock = threading.Lock()
 
-    def record_request(self, *, compiler: bool, payload: object, headers: dict[str, str], body: bytes) -> None:
+    def record_request(
+        self,
+        *,
+        path: str,
+        compiler: bool,
+        payload: object,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> None:
         with self._lock:
             self.calls += 1
+            self.request_path_classes.add(_safe_path_class(path))
             if compiler:
                 self.compiler_calls += 1
             else:
@@ -1016,6 +1055,14 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 {"accept", "accept-encoding", "authorization", "content-type"}
             )
             self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
+
+    def record_upstream_status(self, status: int) -> None:
+        with self._lock:
+            self.upstream_statuses.append(status)
+
+    def record_path_rejection(self) -> None:
+        with self._lock:
+            self.path_rejections += 1
 
     def record_success(self) -> None:
         with self._lock:
@@ -1051,6 +1098,9 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "internal_body": self.internal_body,
                 "tool_types": sorted(self.tool_types),
                 "outbound_header_names": sorted(self.outbound_header_names),
+                "request_path_classes": sorted(self.request_path_classes),
+                "upstream_statuses": list(self.upstream_statuses),
+                "path_rejections": self.path_rejections,
             }
 
 
@@ -1059,7 +1109,7 @@ def _qwen_target(endpoint: str, path: str) -> str:
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if path == "/health":
         return origin + "/health"
-    if path.startswith("/v1/"):
+    if path in {"/v1/models", "/v1/responses", "/v1/chat/completions"}:
         return endpoint.rstrip("/") + path[3:]
     raise VerificationError("qwen_relay_path_invalid")
 
@@ -1096,7 +1146,12 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
     def _forward_upstream(
         self, method: str, path: str, inbound_headers: dict[str, str], body: bytes
     ) -> int | None:
-        target = _qwen_target(self.server.endpoint, path)
+        try:
+            target = _qwen_target(self.server.endpoint, path)
+        except VerificationError:
+            self.server.record_path_rejection()
+            self.send_error(404)
+            return None
         outbound_headers = {
             name: inbound_headers[name]
             for name in ("content-type", "accept", "accept-encoding")
@@ -1119,6 +1174,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.write(chunk)
                         self.wfile.flush()
                     status = response.status_code
+                    self.server.record_upstream_status(status)
         except httpx.HTTPError:
             self.send_error(502)
             return None
@@ -1145,6 +1201,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         }
         compiler = isinstance(payload, dict) and isinstance(payload.get("messages"), list)
         self.server.record_request(
+            path=self.path,
             compiler=compiler,
             payload=payload,
             headers=inbound_headers,
@@ -1323,6 +1380,25 @@ def _relay_request(
     except httpx.HTTPError as exc:
         raise VerificationError("relay_replay_failed") from exc
     return status
+
+
+def _localize_ordinary_response_failure(
+    relay: _ForwardingRelay, qwen_relay: _QwenRelayServer | None
+) -> VerificationError:
+    relay_status = relay.status()
+    response_statuses = relay_status["response_statuses"]
+    path_classes = relay_status["response_path_classes"]
+    if response_statuses and response_statuses[-1] == 404:
+        if path_classes and path_classes[-1] == "v1_responses":
+            return VerificationError("ordinary_response_local_404")
+        return VerificationError("ordinary_response_gateway_relay_404")
+    if qwen_relay is not None:
+        qwen_status = qwen_relay.status()
+        if qwen_status["path_rejections"]:
+            return VerificationError("ordinary_response_qwen_path_404")
+        if 404 in qwen_status["upstream_statuses"]:
+            return VerificationError("ordinary_response_fake_qwen_404")
+    return VerificationError("ordinary_response_failed")
 
 
 def _replay_request(relay: _ForwardingRelay, request: CapturedRequest) -> int:
@@ -1573,7 +1649,7 @@ def _assert_required_evidence(
 
 def _run_composed_impl(
     root: Path,
-    runtime: RuntimeReference,
+    runtime: RuntimeReference | None,
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
@@ -1730,9 +1806,7 @@ def _run_composed_impl(
                 tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
             )
         except Exception:
-            if relay.response_statuses and relay.response_statuses[-1] == 404:
-                raise VerificationError("ordinary_response_local_404")
-            raise VerificationError("ordinary_response_failed")
+            raise _localize_ordinary_response_failure(relay, qwen_relay) from None
         tracker.set("stream_response")
         streamed = client.responses.create(
             **request_body("155f stream", session_a),
@@ -2017,7 +2091,7 @@ def _run_composed_impl(
 
 def _run_composed(
     root: Path,
-    runtime: RuntimeReference,
+    runtime: RuntimeReference | None,
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
@@ -2038,7 +2112,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
     try:
         _verify_commit_topology()
         stage = "runtime_reference"
-        runtime = _read_runtime_reference()
+        runtime = None if fake_qwen else _read_runtime_reference()
         stage = "fixtures"
         _verify_fixtures()
         stage = "protected_preflight"
