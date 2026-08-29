@@ -1412,6 +1412,22 @@ def _localize_ordinary_response_failure(
     return VerificationError("ordinary_response_failed")
 
 
+def _localize_constitution_failure(qwen_relay_port: int | None) -> VerificationError:
+    if qwen_relay_port is None:
+        return VerificationError("constitution_root_first_failed")
+    try:
+        qwen_status = _qwen_relay_status(qwen_relay_port)
+    except VerificationError:
+        return VerificationError("constitution_qwen_status_unavailable")
+    if qwen_status["path_rejections"]:
+        return VerificationError("constitution_qwen_path_404")
+    if qwen_status["compiler_calls"] <= 0:
+        return VerificationError("constitution_compiler_call_missing")
+    if any(status >= 400 for status in qwen_status["upstream_statuses"]):
+        return VerificationError("constitution_qwen_upstream_error")
+    return VerificationError("constitution_local_compiler_rejected")
+
+
 def _replay_request(relay: _ForwardingRelay, request: CapturedRequest) -> int:
     return _relay_request(relay, request.path, request.headers, request.body)
 
@@ -1838,7 +1854,10 @@ def _run_composed_impl(
             "extra_body": {"client_metadata": metadata(session_a)},
         }
         tracker.set("constitution_root_first")
-        client.responses.create(**project_body)
+        try:
+            client.responses.create(**project_body)
+        except Exception:
+            raise _localize_constitution_failure(qwen_relay_port) from None
         tracker.set("constitution_root_reuse")
         client.responses.create(**project_body)
         tracker.set("zero_root_rehydration")

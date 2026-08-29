@@ -482,6 +482,23 @@ def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
     assert str(error) == "ordinary_response_fake_qwen_404"
 
 
+def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        verifier,
+        "_qwen_relay_status",
+        lambda _port: {
+            "path_rejections": 0,
+            "compiler_calls": 1,
+            "upstream_statuses": [200],
+        },
+    )
+    assert str(verifier._localize_constitution_failure(39149)) == (
+        "constitution_local_compiler_rejected"
+    )
+
+
 def test_unexpected_preflight_failure_is_localized_without_exception_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
