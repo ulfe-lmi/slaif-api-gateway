@@ -37,6 +37,9 @@ Core invariants:
   metrics. Codex 0.149 adapter-managed candidates use the ordinary bounded
   Responses reservation/finalization path after the exact Local Coding pair
   gate; hosted-tool fence/hold accounting and hosted-search fees are not used.
+  The Codex 0.149 thread namespace is transient and never an accounting,
+  replay, or idempotency key. Successful requests using it remain ordinary
+  `strict_bounded` reservations finalized from provider usage.
 
 - PostgreSQL is authoritative for hard quota, reservations, usage counters,
   ledger rows, and reconciliation state.

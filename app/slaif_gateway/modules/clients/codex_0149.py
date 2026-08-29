@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+import uuid
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -14,11 +15,11 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
-CODEX_0149_CLIENT_MODULE_VERSION = "2"
+CODEX_0149_CLIENT_MODULE_VERSION = "3"
 CODEX_0149_CLI_VERSION = "0.149.0"
-CODEX_0149_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
-CODEX_0149_PROFILE_ID = "responses-structural-capture-v2"
+CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
+CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+CODEX_0149_PROFILE_ID = "responses-session-relationship-v3"
 
 _PROFILE_FACTS = MappingProxyType(
     {
@@ -454,7 +455,10 @@ class Codex0149ResponsesClientModule:
             adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
             stream_profile=self.module_id,
             profile_facts=_PROFILE_FACTS,
-            identity_hints=_transient_identity_hints(body.get("client_metadata")),
+            identity_hints=_transient_identity_hints(
+                body.get("client_metadata"),
+                metadata_present="client_metadata" in body,
+            ),
         )
 
     def normalize_responses(
@@ -472,13 +476,46 @@ class Codex0149ResponsesClientModule:
         return False
 
 
-def _transient_identity_hints(value: object) -> Mapping[str, str]:
-    if not isinstance(value, Mapping):
+def _transient_identity_hints(
+    value: object,
+    *,
+    metadata_present: bool = True,
+) -> Mapping[str, str]:
+    if not metadata_present:
         return {}
-    # Values are deliberately transient: this mapping is never placed in a
-    # profile, audit record, log, export, provider body, or database row.
-    return {
-        key: item
-        for key, item in value.items()
-        if isinstance(key, str) and isinstance(item, str) and key.startswith("x-codex-")
-    }
+    if not isinstance(value, Mapping):
+        raise _error("The Codex 0.149 client metadata is invalid", "codex_0149_identity_shape")
+    aliases = (value.get("session_id"), value.get("thread_id"))
+    if not all(isinstance(item, str) for item in aliases):
+        raise _error(
+            "The Codex 0.149 session aliases are unavailable",
+            "codex_0149_identity_shape",
+        )
+    canonical: list[str] = []
+    for item in aliases:
+        if len(item.encode("utf-8")) != 36:
+            raise _error(
+                "The Codex 0.149 session alias is not canonical",
+                "codex_0149_identity_shape",
+            )
+        try:
+            parsed = uuid.UUID(item)
+        except (ValueError, AttributeError):
+            raise _error(
+                "The Codex 0.149 session alias is not canonical",
+                "codex_0149_identity_shape",
+            ) from None
+        if str(parsed) != item:
+            raise _error(
+                "The Codex 0.149 session alias is not canonical",
+                "codex_0149_identity_shape",
+            )
+        canonical.append(item)
+    if canonical[0] != canonical[1]:
+        raise _error(
+            "The Codex 0.149 session aliases are ambiguous",
+            "codex_0149_identity_shape",
+        )
+    # This one canonical UUID is transient and never reaches a provider,
+    # persistence, logging, audit, export, metric label, or wire header.
+    return {"session_id": canonical[0]}

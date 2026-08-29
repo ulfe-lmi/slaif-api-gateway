@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from slaif_gateway.modules.servers.local_coding.contract import LocalCodingRouteContract
 
 _SESSION_KEYS = ("session_id", "thread_id", "turn_id", "root_turn_id")
+_CANONICAL_SESSION_KEY = "session_id"
 _OPAQUE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
@@ -43,6 +44,7 @@ def _opaque_hmac(secret: bytes, domain: str, *values: str) -> str:
 def derive_request_identity(
     *,
     owner_id: object,
+    gateway_key_id: object,
     identity_hints: Mapping[str, str],
     repository_scope: str | None,
     route: LocalCodingRouteContract,
@@ -56,23 +58,28 @@ def derive_request_identity(
         raise ValueError("Local Coding identity derivation secret is invalid")
     if not isinstance(identity_hints, Mapping):
         raise TypeError("Local Coding session context is unavailable or ambiguous")
-    repository_scope = _bounded_identity_input(repository_scope, "repository binding")
-    session_values = [
-        _bounded_identity_input(identity_hints[key], "session hint")
-        for key in _SESSION_KEYS
-        if identity_hints.get(key)
-    ]
-    if len(session_values) != 1:
+    if set(identity_hints) != {_CANONICAL_SESSION_KEY}:
         raise ValueError("Local Coding session context is unavailable or ambiguous")
+    repository_scope = _bounded_identity_input(repository_scope, "repository binding")
     if not isinstance(owner_id, uuid.UUID):
         raise TypeError("Local Coding owner truth is unavailable")
+    if not isinstance(gateway_key_id, uuid.UUID):
+        raise TypeError("Local Coding Gateway-key truth is unavailable")
+    session_value = _bounded_identity_input(identity_hints[_CANONICAL_SESSION_KEY], "session hint")
+    try:
+        parsed_session = uuid.UUID(session_value)
+    except (ValueError, AttributeError):
+        raise ValueError("Local Coding session hint is not canonical") from None
+    if str(parsed_session) != session_value:
+        raise ValueError("Local Coding session hint is not canonical")
     owner_truth = _bounded_identity_input(str(owner_id), "owner truth")
     principal = _opaque_hmac(derivation_secret, "slaif-local-coding:principal:v1", owner_truth)
     session = _opaque_hmac(
         derivation_secret,
-        "slaif-local-coding:session:v1",
+        "slaif-local-coding:session:v2",
         principal,
-        session_values[0],
+        str(gateway_key_id),
+        session_value,
     )
     repository = _opaque_hmac(
         derivation_secret,

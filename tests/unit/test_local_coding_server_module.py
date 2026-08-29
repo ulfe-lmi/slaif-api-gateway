@@ -116,21 +116,30 @@ def test_signed_identity_fixture_matches_exact_canonical_bytes_and_hmac() -> Non
 def test_identity_derivation_is_opaque_and_requires_trusted_repository_and_session() -> None:
     contract = parse_local_coding_route_contract(ROUTE_CAPABILITIES)
     assert contract is not None
+    owner_id = uuid.uuid4()
+    gateway_key_id = uuid.uuid4()
+    session = "123e4567-e89b-12d3-a456-426614174000"
     identity = derive_request_identity(
-        owner_id=uuid.uuid4(),
-        identity_hints={"session_id": "thread-private"},
+        owner_id=owner_id,
+        gateway_key_id=gateway_key_id,
+        identity_hints={"session_id": session},
         repository_scope="repo-scope",
         route=contract,
         derivation_secret=DERIVATION_SECRET.encode(),
     )
     assert identity is not None
     assert "owner-uuid" not in identity.principal
-    assert "thread-private" not in identity.session
+    assert session not in identity.session
     assert "repo-scope" not in identity.repository
-    for hints, repository in (({}, "repo-scope"), ({"session_id": "a", "thread_id": "b"}, "repo-scope"), ({"session_id": "a"}, None)):
+    for hints, repository in (
+        ({}, "repo-scope"),
+        ({"session_id": session, "thread_id": session}, "repo-scope"),
+        ({"session_id": session}, None),
+    ):
         with pytest.raises(ValueError):
             derive_request_identity(
-                owner_id="owner-uuid",
+                owner_id=owner_id,
+                gateway_key_id=gateway_key_id,
                 identity_hints=hints,
                 repository_scope=repository,
                 route=contract,
@@ -354,10 +363,11 @@ def test_local_coding_static_adapter_allows_distinct_optional_identity_secrets()
 def _authenticated_key(
     *,
     owner_id: uuid.UUID,
+    gateway_key_id: uuid.UUID | None = None,
     repository_scope: str | None = "server-repository-scope",
 ) -> AuthenticatedGatewayKey:
     return AuthenticatedGatewayKey(
-        gateway_key_id=uuid.uuid4(),
+        gateway_key_id=gateway_key_id or uuid.uuid4(),
         owner_id=owner_id,
         cohort_id=None,
         public_key_id="pk-local-coding",
@@ -404,12 +414,14 @@ def _local_route(*, route_name: str = "vision", identity_mode: str = "signed_ide
 
 def test_core_local_coding_identity_context_is_opaque_stable_and_isolated() -> None:
     owner_id = uuid.uuid4()
-    client_request = SimpleNamespace(identity_hints={"session_id": "transient-session"})
+    gateway_key_id = uuid.uuid4()
+    session = "123e4567-e89b-12d3-a456-426614174000"
+    client_request = SimpleNamespace(identity_hints={"session_id": session})
     route = _local_route()
     settings = Settings(LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=DERIVATION_SECRET)
     context = _build_local_coding_server_context(
         client_request=client_request,
-        authenticated_key=_authenticated_key(owner_id=owner_id),
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=gateway_key_id),
         route=route,
         settings=settings,
     )
@@ -418,11 +430,11 @@ def test_core_local_coding_identity_context_is_opaque_stable_and_isolated() -> N
     assert context["identity_mode"] == "signed_identity_v1"
     assert context["route"] == "vision"
     assert str(owner_id) not in str(context)
-    assert "transient-session" not in str(context)
+    assert session not in str(context)
     assert "server-repository-scope" not in str(context)
     assert context == _build_local_coding_server_context(
         client_request=client_request,
-        authenticated_key=_authenticated_key(owner_id=owner_id),
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=gateway_key_id),
         route=route,
         settings=settings,
     )
@@ -433,25 +445,32 @@ def test_core_local_coding_identity_context_is_opaque_stable_and_isolated() -> N
         route=route,
         settings=settings,
     )
+    changed_gateway_key = _build_local_coding_server_context(
+        client_request=client_request,
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=uuid.uuid4()),
+        route=route,
+        settings=settings,
+    )
     changed_session = _build_local_coding_server_context(
-        client_request=SimpleNamespace(identity_hints={"session_id": "other-session"}),
-        authenticated_key=_authenticated_key(owner_id=owner_id),
+        client_request=SimpleNamespace(identity_hints={"session_id": "123e4567-e89b-12d3-a456-426614174001"}),
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=gateway_key_id),
         route=route,
         settings=settings,
     )
     changed_repository = _build_local_coding_server_context(
         client_request=client_request,
-        authenticated_key=_authenticated_key(owner_id=owner_id, repository_scope="other-repo"),
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=gateway_key_id, repository_scope="other-repo"),
         route=route,
         settings=settings,
     )
     changed_route = _build_local_coding_server_context(
         client_request=client_request,
-        authenticated_key=_authenticated_key(owner_id=owner_id),
+        authenticated_key=_authenticated_key(owner_id=owner_id, gateway_key_id=gateway_key_id),
         route=_local_route(route_name="other-route"),
         settings=settings,
     )
     assert changed_owner is not None and changed_owner["principal"] != context["principal"]
+    assert changed_gateway_key is not None and changed_gateway_key["session"] != context["session"]
     assert changed_session is not None and changed_session["session"] != context["session"]
     assert changed_repository is not None and changed_repository["repository"] != context["repository"]
     assert changed_route is not None and changed_route["route"] != context["route"]

@@ -19,6 +19,10 @@ FIXTURE = (
 FIXTURE_0149 = (
     capture.REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 )
+SESSION_FIXTURE_0149 = (
+    capture.REPO_ROOT
+    / "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+)
 HISTORICAL_0149 = (
     capture.REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural.json"
 )
@@ -303,6 +307,32 @@ def test_0149_fixture_is_separate_and_exactly_capture_derived() -> None:
         "tool_search",
         "web_search",
     ]
+
+
+def test_0149_session_fixture_is_exactly_sanitized_relationship_evidence() -> None:
+    raw = SESSION_FIXTURE_0149.read_bytes()
+    fixture = json.loads(raw)
+    capture.validate_0149_session_fixture(fixture)
+    assert raw == capture.canonical_json_bytes(fixture)
+    assert hashlib.sha256(raw).hexdigest() == (
+        "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
+    )
+    assert fixture["capture"]["requests"] == 3
+    assert fixture["capture"]["subprocess"]["session_a"] == "explicit_resume"
+    assert fixture["relationships"]["selected_source"] == {
+        "canonical_key": "session_id",
+        "value_type": "string",
+        "byte_bound": 36,
+        "canonical_uuid": True,
+    }
+    assert fixture["relationships"]["corroborating_alias"]["key"] == "thread_id"
+    assert fixture["relationships"]["same_session_stability"] is True
+    assert fixture["relationships"]["cross_session_isolation"] is True
+    assert fixture["relationships"]["same_installation"] is True
+    assert fixture["cleanup"]["provider_calls"] == 0
+    assert hashlib.sha256(FIXTURE_0149.read_bytes()).hexdigest() == (
+        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+    )
 
 
 def test_0149_production_path_returns_only_candidate_types_without_raw_values() -> None:

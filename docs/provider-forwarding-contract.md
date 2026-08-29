@@ -39,8 +39,11 @@ other ProviderAdapter operations fail before HTTP. Construction rejects a
 service Bearer that equals a signing, derivation, or known core secret using
 the bounded `local_coding_secret_roles_not_separate` configuration error.
 Core-derived signed identity is boundary-tested from authenticated owner truth,
-transient session hints, server-side repository scope, and resolved route facts;
-it is not yet a Codex-composed E2E claim.
+authenticated Gateway-key truth, the one corroborated Codex 0.149 thread
+namespace, server-side repository scope, and resolved route facts. The client
+thread remains an untrusted namespace below Gateway authority and is not a
+Codex-composed E2E claim. The request's raw client metadata is dropped before
+the canonical provider body is built.
 
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured

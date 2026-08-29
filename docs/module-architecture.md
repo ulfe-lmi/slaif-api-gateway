@@ -90,3 +90,10 @@ Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient
 untrusted input and are never stored, logged, audited, exported, hashed, or
 forwarded.
+
+For the Codex 0.149 v3 module, `client_metadata.session_id` and
+`client_metadata.thread_id` must be canonical equal UUID aliases. The module
+exposes only the transient internal `session_id` hint; installation, root-turn,
+turn, cache, item, and other metadata are dropped. Local Coding derives its
+opaque session from authenticated owner and Gateway-key facts plus this
+corroborated thread namespace under a domain-separated derivation version.

@@ -21,7 +21,10 @@ registered default-denied with exactly one `local-coding-v1` server pair.
 Codex 0.149's observed `web_search` and `tool_search` declarations are
 transient adapter-managed candidate facts only; they never
 set the hosted web-search admission path, external-tool fence, pricing, or
-accounting state. No raw Codex identity/session/workspace metadata is retained.
+accounting state. Its v3 identity contract requires equal canonical UUID
+aliases in `client_metadata.session_id` and `client_metadata.thread_id`, then
+exposes only one transient `session_id` namespace hint. No raw Codex
+identity/session/workspace metadata is retained.
 
 The `local-coding-v1` server module is a separate exact-route transport
 foundation. It is default-denied unless the resolved route has the complete
@@ -32,7 +35,7 @@ authorize hosted tool execution or hosted-tool accounting. The Local Coding adap
 Responses-create-only: non-streaming create and typed Responses streaming are
 the only transport operations; every other ProviderAdapter operation fails
 closed before HTTP. Core identity derivation is boundary-tested from
-authenticated owner/session/repository/route facts, while adapter and pinned
+authenticated owner/Gateway-key/session/repository/route facts, while adapter and pinned
 application conformance remains separate from any Codex-composed E2E claim.
 
 This document defines the RC2-beta support boundary for Responses API work.

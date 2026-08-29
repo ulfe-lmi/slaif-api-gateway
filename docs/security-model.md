@@ -64,7 +64,13 @@ hosted-tool fence, pricing rule, quota reservation, accounting category, or
 external authority. They can reach only the exact statically selected Local
 Coding server adapter after the core gates pass. No raw Codex installation, session, thread, turn, workspace, or
 request-content metadata is stored, logged, audited, exported, hashed, or
-forwarded.
+forwarded. The Codex 0.149 v3 module accepts only canonical equal
+`session_id`/`thread_id` UUID aliases and exposes one transient `session_id`
+namespace hint. The authenticated owner and Gateway key remain authoritative;
+the client thread cannot authenticate, select tenancy, own accounting, prove
+replay, or act as an idempotency key. Local Coding's opaque session derivation
+is domain-separated and includes the authenticated Gateway key, while
+installation-wide and per-turn metadata fail closed as session context.
 Local Coding adds three separate roles: the public Gateway bearer, the
 configured Local Coding service Bearer, and dedicated versioned identity
 derivation/signing secrets. The roles are validated as distinct and are never

@@ -332,6 +332,7 @@ def _build_local_coding_server_context(
         repository_scope = policy.get("local_coding_repository_scope") if isinstance(policy, Mapping) else None
         identity = derive_request_identity(
             owner_id=authenticated_key.owner_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
             identity_hints=getattr(client_request, "identity_hints", {}),
             repository_scope=repository_scope if isinstance(repository_scope, str) else None,
             route=contract,

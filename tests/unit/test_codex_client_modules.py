@@ -36,6 +36,7 @@ from slaif_gateway.services.responses_request_policy import _HOSTED_TOOL_TYPES
 
 FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural-v2.json")
 HISTORICAL_FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural.json")
+SESSION_FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json")
 
 
 def _body(**overrides: object) -> dict[str, object]:
@@ -68,7 +69,9 @@ def test_0149_fixture_is_canonical_structural_only() -> None:
     canonical = (json.dumps(fixture, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
 
     assert raw == canonical
-    assert hashlib.sha256(raw).hexdigest() == CODEX_0149_FIXTURE_SHA256
+    assert hashlib.sha256(raw).hexdigest() == (
+        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+    )
     assert fixture["identity"]["cli_version"] == "0.149.0"
     assert fixture["capture"]["subprocess"]["model_call"] == "not_performed"
     assert fixture["gateway_compatibility"]["compatible_server_pairs"] == [
@@ -103,6 +106,25 @@ def test_0149_fixture_is_canonical_structural_only() -> None:
         assert forbidden not in raw.decode("utf-8")
 
 
+def test_0149_session_fixture_is_canonical_and_version_owned() -> None:
+    raw = SESSION_FIXTURE.read_bytes()
+    fixture = json.loads(raw)
+    from scripts import capture_codex_protocol as capture
+
+    capture.validate_0149_session_fixture(fixture)
+    assert raw == capture.canonical_json_bytes(fixture)
+    assert hashlib.sha256(raw).hexdigest() == CODEX_0149_FIXTURE_SHA256
+    assert fixture["relationships"]["selected_source"]["canonical_key"] == "session_id"
+    assert fixture["relationships"]["same_session_stability"] is True
+    assert fixture["relationships"]["cross_session_isolation"] is True
+    assert fixture["relationships"]["installation_identity"]["different_session_b"] is False
+    assert fixture["provenance"]["prior_structural_fixture_sha256"] == (
+        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+    )
+    for forbidden in ("/tmp/", "Bearer ", "SLAIF_CAPTURE_PROMPT", "session.jsonl"):
+        assert forbidden.encode() not in raw
+
+
 def test_0147_module_keeps_exact_qualified_identity() -> None:
     request = CODEX_0147_CLIENT_MODULE.normalize_responses(_body())
 
@@ -124,6 +146,49 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
         "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
     }
     assert CODEX_0149_CLIENT_MODULE.policy_spec is CODEX_0149_POLICY_SPEC
+
+
+def test_0149_extracts_only_equal_canonical_session_aliases() -> None:
+    session = "123e4567-e89b-12d3-a456-426614174000"
+    request = CODEX_0149_CLIENT_MODULE.normalize_responses(
+        _body(
+            client_metadata={
+                "session_id": session,
+                "thread_id": session,
+                "root_turn_id": "123e4567-e89b-12d3-a456-426614174001",
+                "turn_id": "123e4567-e89b-12d3-a456-426614174002",
+                "x-codex-installation-id": "123e4567-e89b-12d3-a456-426614174003",
+            }
+        )
+    )
+    assert request.identity_hints == {"session_id": session}
+    assert "thread_id" not in request.identity_hints
+    assert "x-codex-installation-id" not in request.identity_hints
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"session_id": "123e4567-e89b-12d3-a456-426614174000"},
+        {
+            "session_id": "123e4567-e89b-12d3-a456-426614174000",
+            "thread_id": "123e4567-e89b-12d3-a456-426614174001",
+        },
+        {
+            "session_id": "123E4567-e89b-12d3-a456-426614174000",
+            "thread_id": "123E4567-e89b-12d3-a456-426614174000",
+        },
+        {
+            "session_id": "https://identity.invalid",
+            "thread_id": "https://identity.invalid",
+        },
+    ],
+)
+def test_0149_rejects_missing_malformed_or_ambiguous_session_aliases(metadata: dict[str, str]) -> None:
+    with pytest.raises(ModuleSelectionError) as exc_info:
+        CODEX_0149_CLIENT_MODULE.normalize_responses(_body(client_metadata=metadata))
+    assert exc_info.value.error_code == "codex_0149_identity_shape"
 
 
 @pytest.mark.parametrize(
