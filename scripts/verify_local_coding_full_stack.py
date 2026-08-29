@@ -1861,6 +1861,7 @@ def _composed_path_from_statuses(
     local_status: dict[str, object],
     gateway_status: dict[str, object],
     qwen_status: dict[str, object],
+    qwen_before: dict[str, object] | None = None,
     local_output: dict[str, object],
     gateway_output: dict[str, object],
     accounting_verified: bool,
@@ -1870,6 +1871,19 @@ def _composed_path_from_statuses(
     qwen_structure = qwen_structures[-1] if isinstance(qwen_structures, list) and qwen_structures else None
     qwen_statuses = qwen_status.get("upstream_statuses")
     qwen_contents = qwen_status.get("sse_content_type_classes")
+    if qwen_before is not None:
+        before_statuses = qwen_before.get("upstream_statuses")
+        before_contents = qwen_before.get("sse_content_type_classes")
+        qwen_statuses = (
+            qwen_statuses[len(before_statuses) :]
+            if isinstance(before_statuses, list) and isinstance(qwen_statuses, list)
+            else None
+        )
+        qwen_contents = (
+            qwen_contents[len(before_contents) :]
+            if isinstance(before_contents, list) and isinstance(qwen_contents, list)
+            else None
+        )
     qwen_terminal = (
         isinstance(qwen_structure, dict)
         and _stream_has_valid_completion(qwen_structure)
@@ -4155,6 +4169,7 @@ def _run_composed_stream_diagnostic(
             base_url=f"http://127.0.0.1:{gateway_output.server_address[1]}/v1",
             max_retries=0,
         )
+        qwen_status_before = _qwen_relay_status(qwen_port)
         session = str(uuid.uuid4())
         metadata = {
             "session_id": session,
@@ -4254,6 +4269,7 @@ def _run_composed_stream_diagnostic(
             "gateway_output": gateway_observation,
             "accounting_verified": accounting_verified,
             "qwen_status": qwen_status,
+            "qwen_status_before": qwen_status_before,
             "local_status": local_status,
             "gateway_status": gateway_status,
         }
@@ -4486,6 +4502,7 @@ def _run_composed_only_impl(
         local_status=composed.get("local_status", {}),
         gateway_status=composed.get("gateway_status", {}),
         qwen_status=composed.get("qwen_status", {}),
+        qwen_before=composed.get("qwen_status_before"),
         local_output=local_output,
         gateway_output=gateway_output,
         accounting_verified=composed.get("accounting_verified") is True,
