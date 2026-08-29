@@ -464,7 +464,7 @@ def _start_postgres(
 
 async def _seed_database(
     database_url: str, *, relay_port: int, failure_port: int
-) -> tuple[SeededKey, SeededKey]:
+) -> tuple[SeededKey, SeededKey, SeededKey]:
     sys.path.insert(0, str(REPO_ROOT / "app"))
     from datetime import UTC, datetime, timedelta
     from decimal import Decimal
@@ -579,8 +579,30 @@ async def _seed_database(
             second_input = dict(key_input)
             second_input["request_limit_total"] = 1
             second = await service.create_gateway_key(CreateGatewayKeyInput(**second_input, note="155f disposable second key"))
+            failure_key_input = dict(
+                owner_id=owner.id,
+                cohort_id=cohort.id,
+                valid_from=now - timedelta(minutes=1),
+                valid_until=now + timedelta(hours=1),
+                cost_limit_eur=Decimal("20"),
+                token_limit_total=2_000_000,
+                request_limit_total=5,
+                allowed_models=[FAILURE_MODEL],
+                allowed_endpoints=["/v1/responses"],
+            )
+            failure_key = await service.create_gateway_key(
+                CreateGatewayKeyInput(**failure_key_input, note="155f disposable failure key")
+            )
             await session.commit()
-            return SeededKey(created.gateway_key_id, created.owner_id, created.plaintext_key), SeededKey(second.gateway_key_id, second.owner_id, second.plaintext_key)
+            return (
+                SeededKey(created.gateway_key_id, created.owner_id, created.plaintext_key),
+                SeededKey(second.gateway_key_id, second.owner_id, second.plaintext_key),
+                SeededKey(
+                    failure_key.gateway_key_id,
+                    failure_key.owner_id,
+                    failure_key.plaintext_key,
+                ),
+            )
     except Exception as exc:
         raise VerificationError("database_seed_failed") from exc
     finally:
@@ -1925,13 +1947,31 @@ async def _verify_failure_accounting(database_url: str, key: SeededKey) -> None:
                     )
                 ).scalars()
             )
-            if gateway_key is None or len(reservations) != len(ledgers):
+            if gateway_key is None or len(reservations) != 1 or len(ledgers) != 1:
                 raise VerificationError("failure_accounting_rows_incomplete")
             released = [row for row in reservations if row.status == "released"]
-            if len(released) != 1 or gateway_key.tokens_reserved_total != 0:
+            reservation = reservations[0]
+            if (
+                len(released) != 1
+                or gateway_key.tokens_reserved_total != 0
+                or reservation.quota_mode != "strict_bounded"
+                or reservation.external_tool_capabilities != []
+                or reservation.external_tool_destination_ids != []
+                or reservation.external_tool_provider is not None
+                or reservation.external_tool_route_id is not None
+            ):
                 raise VerificationError("failure_reservation_not_released")
             failure_ledgers = [row for row in ledgers if row.accounting_status == "failed"]
-            if len(failure_ledgers) != 1:
+            metadata_keys = _metadata_keys(ledgers[0].response_metadata)
+            if (
+                len(failure_ledgers) != 1
+                or any(
+                    "external_tool" in key.lower()
+                    or "tool_fee" in key.lower()
+                    or "hold" in key.lower()
+                    for key in metadata_keys
+                )
+            ):
                 raise VerificationError("failure_ledger_not_terminal")
     finally:
         await engine.dispose()
@@ -2150,7 +2190,7 @@ def _run_composed_impl(
     finally:
         os.environ.clear()
         os.environ.update(previous_environment)
-    key_one, key_two = seeded
+    key_one, key_two, failure_key = seeded
     local_config = _local_config(
         root,
         local_port=local_port,
@@ -2505,10 +2545,22 @@ def _run_composed_impl(
         tracker.set("controlled_provider_failure")
         local_before_failure = _local_metrics(local_port)
         before_failure = len(relay.snapshot())
-        failure_request = request_body("155f failure", session_a)
-        failure_request.pop("extra_body", None)
+        failure_client = OpenAI(
+            api_key=failure_key.plaintext,
+            base_url=f"http://127.0.0.1:{gateway_port}/v1",
+            max_retries=0,
+        )
         try:
-            client.responses.create(**{**failure_request, "model": FAILURE_MODEL})
+            failure_client.responses.create(
+                model=FAILURE_MODEL,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "155f failure"}],
+                    }
+                ],
+            )
         except Exception:
             pass
         else:
@@ -2519,7 +2571,7 @@ def _run_composed_impl(
         if local_after_failure != local_before_failure:
             raise VerificationError("failure_reached_local_cache")
         tracker.set("accounting")
-        asyncio.run(_verify_failure_accounting(postgres_url, key_one))
+        asyncio.run(_verify_failure_accounting(postgres_url, failure_key))
         relay_statuses = relay.response_statuses[relay_start:]
         local_forwarded_calls = local_after_failure.ingress_responses - baseline.ingress_responses
         relay_calls = _successful_relay_count(relay_statuses)
@@ -2530,7 +2582,7 @@ def _run_composed_impl(
                 (session_a, session_b, installation),
             )
         )
-        if database_rows != relay_calls + 1:
+        if database_rows != relay_calls:
             raise VerificationError("accounting_row_count_mismatch")
         tracker.set("local_metrics")
         final_metrics = _local_metrics(local_port)
