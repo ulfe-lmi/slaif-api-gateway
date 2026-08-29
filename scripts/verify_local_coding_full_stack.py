@@ -944,12 +944,12 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         for index, (event, payload) in enumerate(events):
-            self.wfile.write(f"event: {event}\\ndata: {json.dumps(payload, separators=(',', ':'))}\\n\\n".encode())
+            self.wfile.write(f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode())
             self.wfile.flush()
             if index == 0:
                 self.server.first_event_sent.set()
                 time.sleep(0.05)
-        self.wfile.write(b"data: [DONE]\\n\\n")
+        self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
     def do_POST(self) -> None:
