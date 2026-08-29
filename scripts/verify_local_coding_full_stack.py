@@ -1108,12 +1108,17 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
 
 
 def _qwen_target(endpoint: str, path: str) -> str:
-    parsed = urlsplit(endpoint)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    if path == "/health":
-        return origin + "/health"
-    if path in {"/v1/models", "/v1/responses", "/v1/chat/completions"}:
-        return endpoint.rstrip("/") + path[3:]
+    endpoint_parts = urlsplit(endpoint)
+    request_parts = urlsplit(path)
+    request_path = request_parts.path
+    if request_parts.fragment or len(request_parts.query) > 256:
+        raise VerificationError("qwen_relay_path_invalid")
+    query = f"?{request_parts.query}" if request_parts.query else ""
+    origin = f"{endpoint_parts.scheme}://{endpoint_parts.netloc}"
+    if request_path == "/health":
+        return origin + "/health" + query
+    if request_path in {"/v1/models", "/v1/responses", "/v1/chat/completions"}:
+        return endpoint.rstrip("/") + request_path[3:] + query
     raise VerificationError("qwen_relay_path_invalid")
 
 

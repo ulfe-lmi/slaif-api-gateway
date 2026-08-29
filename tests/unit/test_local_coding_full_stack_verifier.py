@@ -454,6 +454,8 @@ def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
     assert verifier._qwen_target("https://private.example/v1", "/v1/models") == "https://private.example/v1/models"
     assert verifier._qwen_target("https://private.example/v1", "/v1/responses") == "https://private.example/v1/responses"
     assert verifier._qwen_target("https://private.example/v1", "/v1/chat/completions") == "https://private.example/v1/chat/completions"
+    assert verifier._qwen_target("https://private.example/v1", "https://gateway.example/v1/responses") == "https://private.example/v1/responses"
+    assert verifier._qwen_target("https://private.example/v1", "/v1/responses?bounded=1") == "https://private.example/v1/responses?bounded=1"
     assert verifier._safe_path_class("/v1/responses?bounded=1") == "v1_responses"
     assert verifier._safe_path_class("/v1/v1/responses") == "double_v1_responses"
     assert verifier._safe_path_class("/responses") == "bare_responses"
@@ -462,6 +464,8 @@ def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
         verifier._qwen_target("https://private.example/v1", "/responses")
     with pytest.raises(verifier.VerificationError, match="qwen_relay_path_invalid"):
         verifier._qwen_target("https://private.example/v1", "/v1/v1/responses")
+    with pytest.raises(verifier.VerificationError, match="qwen_relay_path_invalid"):
+        verifier._qwen_target("https://private.example/v1", "/v1/responses?" + "x" * 257)
 
 
 def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
