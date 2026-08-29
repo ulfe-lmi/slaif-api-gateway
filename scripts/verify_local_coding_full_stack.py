@@ -933,22 +933,28 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         }
 
     def _stream(self) -> None:
-        response = self._response()
+        created = {
+            "type": "response.created",
+            "response": {
+                "id": "resp_capture",
+                "object": "response",
+                "status": "in_progress",
+                "model": CODEX_MODEL,
+            },
+        }
         completed = {
             "type": "response.completed",
             "response": {
-                "id": response["id"],
-                "usage": {
-                    "input_tokens": 0,
-                    "input_tokens_details": None,
-                    "output_tokens": 0,
-                    "output_tokens_details": None,
-                    "total_tokens": 0,
-                },
+                "id": "resp_capture",
+                "object": "response",
+                "status": "completed",
+                "model": CODEX_MODEL,
+                "output": [],
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             },
         }
         events = (
-            ("response.created", {"type": "response.created", "response": {"id": response["id"]}}),
+            ("response.created", created),
             ("response.completed", completed),
         )
         self.send_response(200)
