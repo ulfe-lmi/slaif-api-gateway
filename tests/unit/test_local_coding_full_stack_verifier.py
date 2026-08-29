@@ -1189,6 +1189,18 @@ def test_stream_summary_rejects_missing_boundary_or_decision(missing: str) -> No
         verifier._stream_summary_lines(result)
 
 
+def test_stream_summary_emits_fixed_invalid_schema_for_missing_structure() -> None:
+    result = _stream_result_for_summary("ambiguous_stream_evidence")
+    result["direct_qwen"] = dict(
+        result["direct_qwen"], structure=None, response_completed=False, valid_completion=False
+    )
+    lines = verifier._stream_summary_lines(result)
+    assert '"boundary":"direct_qwen"' in lines[0]
+    assert '"event_sequence":[]' in lines[0]
+    assert '"failure_code":"unknown_failure"' in lines[0]
+    assert '"invalid":true' in lines[0]
+
+
 def test_stream_summary_rejects_inconsistent_event_counts() -> None:
     result = _stream_result_for_summary()
     structure = dict(result["direct_qwen"]["structure"])  # type: ignore[index]

@@ -1071,8 +1071,27 @@ def _safe_stream_summary(
         or status_class not in _STREAM_STATUS_CLASSES
         or not isinstance(content_type, str)
         or content_type not in _STREAM_CONTENT_TYPES
-        or not isinstance(structure, dict)
     ):
+        raise VerificationError("differential_summary_invalid")
+    missing_structure = structure is None
+    if missing_structure:
+        structure = {
+            "invalid": True,
+            "event_sequence": [],
+            "event_counts": {},
+            "done_sentinel": False,
+            "duplicates": False,
+            "unknown_events": False,
+            "response_id_relation": False,
+            "completed_status_completed": False,
+            "model_matches": False,
+            "completed_output_empty": False,
+            "completed_usage_valid": False,
+            "terminal_output_shape": "missing",
+            "normal_close": False,
+            "downstream_closed_early": False,
+        }
+    elif not isinstance(structure, dict):
         raise VerificationError("differential_summary_invalid")
     sequence = structure.get("event_sequence")
     counts = structure.get("event_counts")
@@ -1115,7 +1134,7 @@ def _safe_stream_summary(
         raise VerificationError("differential_summary_invalid")
     failure_code = observation.get("failure_code")
     if failure_code is None:
-        failure_code = "none"
+        failure_code = "unknown_failure" if missing_structure else "none"
     if not isinstance(failure_code, str) or failure_code not in _STREAM_FAILURE_CODES:
         failure_code = "unknown_failure"
     terminal_shape = structure.get("terminal_output_shape")
