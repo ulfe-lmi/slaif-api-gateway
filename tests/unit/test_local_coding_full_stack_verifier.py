@@ -145,10 +145,10 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155m_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155m-head"
+    current_head = "current-155n-head"
     local_head = verifier.LOCAL_REPORT_HEAD
     report_path = "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 
@@ -160,7 +160,7 @@ def test_155m_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-m-terminal-validity-and-composed-closure.md"
+            return "oap/active\noap/orders/155-n-fake-composed-stage-localization-and-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,12 +192,12 @@ def test_155m_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155m_topology_anchors_are_the_155l_report_and_implementation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "264f15fbcfe513882597a48f41095f108849ee74"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "e1e2395c4d77ea9772a2471e6d5e55102484a440"
+def test_155n_topology_anchors_are_the_155m_report_and_implementation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "382549cb0e31b22a3464c6622b0f21e48d115944"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b2c504ed084664487e1088424bd4503977c90644"
 
 
-def test_155m_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
+def test_155n_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
     baseline = verifier._read_pinned_direct_baseline()
     assert verifier._terminal_completion_valid(baseline) is True
     assert baseline["terminal_completion_valid"] is True
@@ -242,6 +242,15 @@ def test_stage_tracker_accepts_only_declared_stages_and_localizes_unknowns() -> 
         tracker.set("not-a-stage")
     unknown = verifier.StageTracker()
     assert str(unknown.unexpected()) == "unexpected_unknown_stage"
+
+
+def test_stage_tracker_composed_codes_are_fixed_and_private_free() -> None:
+    tracker = verifier.StageTracker()
+    for stage in verifier.COMPOSITION_STAGES:
+        tracker.set(stage)
+        assert str(tracker.unexpected_composed()) == f"unexpected_composed_{stage}"
+    unknown = verifier.StageTracker()
+    assert str(unknown.unexpected_composed()) == "unexpected_composed_unknown_stage"
 
 
 def test_composed_wrapper_sanitizes_unexpected_exception_at_unknown_stage(
@@ -1055,7 +1064,7 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
         '"event_counts":{"response.completed":1,"response.created":1},'
         '"event_trace":[{"count":1,"event":"response.created"},'
         '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
-        '"event_vocabulary_reviewed":true,"evidence_source":"current_155m",'
+        '"event_vocabulary_reviewed":true,"evidence_source":"current_155n",'
         '"failure_code":"none","first_event_before_upstream_completion":true,'
         '"handler_error":false,"http_status_class":"2xx","invalid":false,'
         '"model_matches":true,"normal_close":true,"normalization_reason":"none",'
@@ -1212,7 +1221,11 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
     )
     gateway = dict(raw, boundary="gateway_output")
     monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
-    monkeypatch.setattr(verifier, "_read_runtime_reference", lambda: object())
+    monkeypatch.setattr(
+        verifier,
+        "_read_runtime_reference",
+        lambda: pytest.fail("fake composed mode must not read protected runtime"),
+    )
     monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
     monkeypatch.setattr(verifier, "_read_pinned_direct_baseline", lambda: baseline)
     monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: None)
@@ -1224,19 +1237,19 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
     monkeypatch.setattr(
         verifier,
         "_run_composed_stream_diagnostic",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "local_output": raw,
             "gateway_output": gateway,
             "accounting_verified": True,
         },
     )
-    result = verifier.run_composed_only()
+    result = verifier.run_composed_only(fake_qwen=True)
     assert result["decision"] == "terminal_boundaries_completed"
     assert result["ran_boundaries"] == ["direct_qwen", "local_output", "gateway_output"]
     assert result["direct_qwen"]["evidence_source"] == "pinned_155l"
     assert result["direct_qwen"]["ran_current_invocation"] is False
     for boundary in ("local_output", "gateway_output"):
-        assert result[boundary]["evidence_source"] == "current_155m"
+        assert result[boundary]["evidence_source"] == "current_155n"
         assert result[boundary]["ran_current_invocation"] is True
 
 

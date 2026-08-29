@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "264f15fbcfe513882597a48f41095f108849ee74"
-GATEWAY_IMPLEMENTATION_HEAD = "e1e2395c4d77ea9772a2471e6d5e55102484a440"
-GATEWAY_ACTIVATION_HEAD = "6a0ff0b8f26d4d7e086a0741a6e74f996ccfcd49"
+GATEWAY_REPORT_HEAD = "382549cb0e31b22a3464c6622b0f21e48d115944"
+GATEWAY_IMPLEMENTATION_HEAD = "b2c504ed084664487e1088424bd4503977c90644"
+GATEWAY_ACTIVATION_HEAD = "5bf6111ec3584d94db1f2645b4c0d0ddbc8948a5"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,10 +48,10 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-m-terminal-validity-and-composed-closure.md"
-TASK_DB = "slaif_gateway_oap_155m_diff"
-SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155M_SAFE_OUTPUT_ARTIFACT"
-SAFE_OUTPUT_ROOT_ENV = "SLAIF_155M_SAFE_OUTPUT_ROOT"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-n-fake-composed-stage-localization-and-closure.md"
+TASK_DB = "slaif_gateway_oap_155n_diff"
+SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155N_SAFE_OUTPUT_ARTIFACT"
+SAFE_OUTPUT_ROOT_ENV = "SLAIF_155N_SAFE_OUTPUT_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -67,6 +67,8 @@ class VerificationError(RuntimeError):
 
 
 COMPOSITION_STAGES = (
+    "topology", "runtime_reference", "fixtures", "pinned_direct_baseline",
+    "local_config",
     "postgres_image", "postgres_start", "migration", "database_seed",
     "relay_start", "failure_provider_start", "qwen_relay_start", "local_start",
     "gateway_start", "qwen_relay_ready", "local_health", "local_readiness",
@@ -95,6 +97,11 @@ class StageTracker:
         if self.current not in COMPOSITION_STAGES:
             return VerificationError("unexpected_unknown_stage")
         return VerificationError(f"unexpected_{self.current}")
+
+    def unexpected_composed(self) -> VerificationError:
+        if self.current not in COMPOSITION_STAGES:
+            return VerificationError("unexpected_composed_unknown_stage")
+        return VerificationError(f"unexpected_composed_{self.current}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +206,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-m-terminal-validity-and-composed-closure.md",
+        "oap/orders/155-n-fake-composed-stage-localization-and-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -242,11 +249,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-m-terminal-validity-and-composed-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-n-fake-composed-stage-localization-and-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-m\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-n\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1229,7 +1236,7 @@ _STREAM_FAILURE_CODES = frozenset(
 )
 _STREAM_TERMINAL_SHAPES = frozenset({"missing", "empty_array", "nonempty_array", "other"})
 _STREAM_NORMALIZATION_STATUSES = frozenset({"complete", "degraded", "invalid"})
-_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155m", "not_run"})
+_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155n", "not_run"})
 _STREAM_NORMALIZATION_REASONS = frozenset(
     {
         "none",
@@ -1258,7 +1265,7 @@ def _minimal_stream_summary(
     return {
         "boundary": boundary,
         "ran": ran,
-        "evidence_source": "current_155m" if ran else "not_run",
+        "evidence_source": "current_155n" if ran else "not_run",
         "ran_current_invocation": ran,
         "http_status_class": "unknown",
         "content_type_class": "unknown",
@@ -1451,7 +1458,7 @@ def _safe_stream_summary(
                 and observation.get("ran_current_invocation") is not False
             )
             or (
-                observation.get("evidence_source") == "current_155m"
+                observation.get("evidence_source") == "current_155n"
                 and (
                     observation.get("ran") is not True
                     or observation.get("ran_current_invocation") is not True
@@ -1592,7 +1599,7 @@ def _safe_stream_summary(
         "evidence_source": (
             observation.get("evidence_source")
             if observation.get("evidence_source") in _STREAM_EVIDENCE_SOURCES
-            else "current_155m"
+            else "current_155n"
         ),
         "ran_current_invocation": True,
         "http_status_class": status_class,
@@ -3146,7 +3153,12 @@ def _run_composed_impl(
     fake_qwen_server: _FakeQwenServer | None = None
     fake_qwen_thread: threading.Thread | None = None
     fake_qwen_token: str | None = None
-    postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
+    try:
+        postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
+    except VerificationError:
+        raise
+    except Exception:
+        raise tracker.unexpected_composed() from None
     gateway = local = None
     qwen_relay = None
     relay = failure_server = None
@@ -3771,11 +3783,22 @@ def _run_direct_stream_diagnostic(
 
 
 def _run_composed_stream_diagnostic(
-    root: Path, runtime: RuntimeReference
+    root: Path,
+    runtime: RuntimeReference | None,
+    *,
+    fake_qwen: bool = False,
+    tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     from openai import OpenAI
 
-    postgres_url, container, pulled = _start_postgres(root)
+    tracker = tracker or StageTracker()
+    tracker.set("postgres_image")
+    try:
+        postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
+    except VerificationError:
+        raise
+    except Exception:
+        raise tracker.unexpected_composed() from None
     gateway_port = _free_port()
     local_port = 18031
     qwen_port = _free_port()
@@ -3794,8 +3817,12 @@ def _run_composed_stream_diagnostic(
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
     relay = failure_server = qwen_relay = local = gateway = gateway_output = None
+    fake_qwen_server: _FakeQwenServer | None = None
+    fake_qwen_thread: threading.Thread | None = None
+    fake_qwen_token: str | None = None
     relay_thread = failure_thread = gateway_output_thread = None
     try:
+        tracker.set("migration")
         migration = _run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=REPO_ROOT,
@@ -3804,9 +3831,15 @@ def _run_composed_stream_diagnostic(
         )
         if migration.returncode != 0:
             raise VerificationError("differential_migration_failed")
+        tracker.set("relay_start")
         relay, relay_thread = _start_relay(local_port)
+        tracker.set("failure_provider_start")
         failure_server, failure_thread = _start_failure_server()
+        if fake_qwen:
+            tracker.set("qwen_relay_start")
+            fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen()
         previous_environment = os.environ.copy()
+        tracker.set("database_seed")
         os.environ.update(gateway_env)
         try:
             seeded = asyncio.run(
@@ -3822,12 +3855,21 @@ def _run_composed_stream_diagnostic(
             os.environ.update(previous_environment)
         key = seeded[0]
         qwen_token = secrets.token_urlsafe(32)
+        tracker.set("qwen_relay_start")
         qwen_relay = _start_qwen_relay(
             qwen_port,
-            runtime=runtime,
+            runtime=None if fake_qwen else runtime,
+            endpoint=(
+                f"http://127.0.0.1:{fake_qwen_server.server_address[1]}/v1"
+                if fake_qwen_server is not None
+                else None
+            ),
+            qwen_token=fake_qwen_token,
             relay_token=qwen_token,
         )
+        tracker.set("qwen_relay_ready")
         _wait_http(f"http://127.0.0.1:{qwen_port}/__155f_status")
+        tracker.set("local_config")
         local_config = _local_config(
             root,
             local_port=local_port,
@@ -3845,6 +3887,7 @@ def _run_composed_stream_diagnostic(
         }
         if (LOCAL_ROOT / ".venv").exists():
             raise VerificationError("local_checkout_venv_present_before_start")
+        tracker.set("local_start")
         local = _start_process(
             [
                 "uv",
@@ -3859,6 +3902,7 @@ def _run_composed_stream_diagnostic(
             cwd=LOCAL_ROOT,
             env=local_env,
         )
+        tracker.set("gateway_start")
         gateway = _start_process(
             [
                 sys.executable,
@@ -3876,9 +3920,13 @@ def _run_composed_stream_diagnostic(
             cwd=REPO_ROOT,
             env=gateway_env,
         )
+        tracker.set("local_health")
         _wait_http(f"http://127.0.0.1:{local_port}/healthz")
+        tracker.set("local_readiness")
         _wait_http(f"http://127.0.0.1:{local_port}/readyz")
+        tracker.set("gateway_health")
         _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
+        tracker.set("gateway_start")
         gateway_output, gateway_output_thread = _start_relay(
             gateway_port,
             capture_requests=False,
@@ -3898,6 +3946,7 @@ def _run_composed_stream_diagnostic(
             "x-codex-installation-id": str(uuid.uuid4()),
             "x-codex-window-id": str(uuid.uuid4()),
         }
+        tracker.set("client_stream")
         client_completed = False
         failure_code: str | None = None
         try:
@@ -3918,6 +3967,7 @@ def _run_composed_stream_diagnostic(
             client_completed = True
         except Exception:
             failure_code = "composed_client_stream_failed"
+        tracker.set("boundary_capture")
         local_status = relay.status()
         gateway_status = gateway_output.status()
         qwen_status = _qwen_relay_status(qwen_port)
@@ -3968,6 +4018,7 @@ def _run_composed_stream_diagnostic(
         )
         gateway_observation["handler_error"] = gateway_status.get("handler_error") is True
         gateway_observation["upstream_truncated"] = gateway_status.get("upstream_truncated") is True
+        tracker.set("accounting")
         accounting_verified = False
         try:
             asyncio.run(
@@ -3987,31 +4038,52 @@ def _run_composed_stream_diagnostic(
             "qwen_status": qwen_status,
         }
     finally:
-        _stop_process(local)
-        _stop_process(gateway)
-        _stop_process(qwen_relay)
-        for server, thread in (
-            (relay, relay_thread),
-            (gateway_output, gateway_output_thread),
-            (failure_server, failure_thread),
-        ):
-            if server is not None:
-                server.shutdown()
-                server.server_close()
-            if thread is not None:
-                thread.join(timeout=10)
-        if container:
-            _docker("rm", "-f", container, timeout=30)
-        if pulled:
-            _docker("rmi", "postgres:16", timeout=60)
-        _verify_repository_cleanup()
+        primary = sys.exc_info()[1]
+        primary_stage = tracker.current
+        try:
+            tracker.set("process_cleanup")
+            _stop_process(local)
+            _stop_process(gateway)
+            _stop_process(qwen_relay)
+            for server, thread in (
+                (relay, relay_thread),
+                (gateway_output, gateway_output_thread),
+                (failure_server, failure_thread),
+            ):
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=10)
+            if fake_qwen_server is not None:
+                fake_qwen_server.shutdown()
+                fake_qwen_server.server_close()
+            if fake_qwen_thread is not None:
+                fake_qwen_thread.join(timeout=10)
+            tracker.set("container_cleanup")
+            if container:
+                _docker("rm", "-f", container, timeout=30)
+            if pulled:
+                _docker("rmi", "postgres:16", timeout=60)
+            tracker.set("repository_cleanup")
+            _verify_repository_cleanup()
+        except Exception:
+            if primary is not None:
+                if isinstance(primary, VerificationError):
+                    raise primary
+                tracker.current = primary_stage
+                raise tracker.unexpected_composed() from None
+            raise tracker.unexpected_composed() from None
+        if primary is not None and not isinstance(primary, VerificationError):
+            tracker.current = primary_stage
+            raise tracker.unexpected_composed() from None
 
 
 def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155m-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155n-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -4081,19 +4153,31 @@ def _classify_composed_boundaries(
     return "terminal_boundaries_completed"
 
 
-def run_composed_only() -> dict[str, object]:
+def _run_composed_only_impl(
+    *, fake_qwen: bool, tracker: StageTracker
+) -> dict[str, object]:
     """Run only the composed boundary using the immutable direct baseline."""
+    tracker.set("topology")
     _verify_commit_topology()
-    runtime = _read_runtime_reference()
+    tracker.set("runtime_reference")
+    runtime = None if fake_qwen else _read_runtime_reference()
+    tracker.set("fixtures")
     _verify_fixtures()
+    tracker.set("pinned_direct_baseline")
     direct_qwen = _read_pinned_direct_baseline()
     if not _terminal_completion_valid(direct_qwen):
         raise VerificationError("pinned_direct_terminal_invalid")
-    with tempfile.TemporaryDirectory(prefix="slaif-155m-", dir="/tmp") as temporary:
+    if not fake_qwen:
+        tracker.set("protected_postcheck")
+        _verify_protected_model_health(runtime)
+    with tempfile.TemporaryDirectory(prefix="slaif-155n-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
+        tracker.set("local_config")
         _validate_local_config(root, runtime)
-        composed = _run_composed_stream_diagnostic(root, runtime)
+        composed = _run_composed_stream_diagnostic(
+            root, runtime, fake_qwen=fake_qwen, tracker=tracker
+        )
     local_output = _safe_stream_summary(
         composed.get("local_output"),
         boundary="local_output",
@@ -4109,6 +4193,9 @@ def run_composed_only() -> dict[str, object]:
     decision = _classify_composed_boundaries(local_output, gateway_output)
     if decision == "terminal_boundaries_completed" and composed.get("accounting_verified") is not True:
         decision = "ambiguous_stream_evidence"
+    if not fake_qwen:
+        tracker.set("protected_postcheck")
+        _verify_protected_model_health(runtime)
     for observation in (direct_qwen, local_output, gateway_output):
         observation["decision"] = decision
     return {
@@ -4119,6 +4206,16 @@ def run_composed_only() -> dict[str, object]:
         "gateway_output": gateway_output,
         "accounting_verified": composed.get("accounting_verified") is True,
     }
+
+
+def run_composed_only(*, fake_qwen: bool = False) -> dict[str, object]:
+    tracker = StageTracker()
+    try:
+        return _run_composed_only_impl(fake_qwen=fake_qwen, tracker=tracker)
+    except VerificationError:
+        raise
+    except Exception:
+        raise tracker.unexpected_composed() from None
 
 
 def _run_composed(
@@ -4190,6 +4287,7 @@ def main() -> int:
     parser.add_argument("--fake-rehearsal", action="store_true")
     parser.add_argument("--stream-differential", action="store_true")
     parser.add_argument("--composed-only", action="store_true")
+    parser.add_argument("--composed-only-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
@@ -4208,9 +4306,9 @@ def main() -> int:
             print(f"RESULT=BLOCKED code={exc}")
             return 1
         return 0
-    if arguments.composed_only:
+    if arguments.composed_only or arguments.composed_only_fake:
         try:
-            result = run_composed_only()
+            result = run_composed_only(fake_qwen=arguments.composed_only_fake)
             _emit_stream_summary(_stream_summary_lines(result))
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")
