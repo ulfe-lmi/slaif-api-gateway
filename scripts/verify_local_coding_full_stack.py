@@ -1421,8 +1421,10 @@ def _localize_constitution_failure(qwen_relay_port: int | None) -> VerificationE
         return VerificationError("constitution_qwen_status_unavailable")
     if qwen_status["path_rejections"]:
         return VerificationError("constitution_qwen_path_404")
+    if qwen_status["calls"] <= 0:
+        return VerificationError("constitution_local_before_qwen")
     if qwen_status["compiler_calls"] <= 0:
-        return VerificationError("constitution_compiler_call_missing")
+        return VerificationError("constitution_inference_without_compiler")
     if any(status >= 400 for status in qwen_status["upstream_statuses"]):
         return VerificationError("constitution_qwen_upstream_error")
     return VerificationError("constitution_local_compiler_rejected")

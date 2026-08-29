@@ -490,6 +490,7 @@ def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
         "_qwen_relay_status",
         lambda _port: {
             "path_rejections": 0,
+            "calls": 1,
             "compiler_calls": 1,
             "upstream_statuses": [200],
         },
