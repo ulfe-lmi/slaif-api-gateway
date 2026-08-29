@@ -74,6 +74,7 @@ COMPOSITION_STAGES = (
     "relay_start", "failure_provider_start", "qwen_relay_start", "local_start",
     "gateway_start", "qwen_relay_ready", "local_health", "local_readiness",
     "gateway_health", "gateway_models", "ordinary_response", "stream_response",
+    "client_stream", "boundary_capture",
     "image_response", "constitution_root_first", "constitution_root_reuse",
     "zero_root_rehydration", "codex_session_a", "codex_session_a_resume",
     "codex_session_b", "replay_and_tamper", "second_gateway_key",

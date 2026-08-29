@@ -247,6 +247,7 @@ def test_stage_tracker_accepts_only_declared_stages_and_localizes_unknowns() -> 
 
 def test_stage_tracker_composed_codes_are_fixed_and_private_free() -> None:
     tracker = verifier.StageTracker()
+    assert {"client_stream", "boundary_capture"}.issubset(verifier.COMPOSITION_STAGES)
     for stage in verifier.COMPOSITION_STAGES:
         tracker.set(stage)
         assert str(tracker.unexpected_composed()) == f"unexpected_composed_{stage}"
