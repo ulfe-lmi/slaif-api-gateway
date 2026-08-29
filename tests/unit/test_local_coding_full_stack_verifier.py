@@ -1384,6 +1384,61 @@ def test_sse_recorder_compresses_repeated_deltas_beyond_64_events() -> None:
     assert summary["event_trace"] == [{"event": "response.output_text.delta", "count": 100}]
 
 
+def test_repeated_deltas_do_not_invalidate_a_complete_stream() -> None:
+    created = {
+        "type": "response.created",
+        "response": {
+            "id": "resp_capture",
+            "object": "response",
+            "status": "in_progress",
+            "model": verifier.CODEX_MODEL,
+        },
+    }
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_capture",
+            "object": "response",
+            "status": "completed",
+            "model": verifier.CODEX_MODEL,
+            "output": [{"type": "message"}],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    }
+    events = [("response.created", created)]
+    events.extend(
+        ("response.output_text.delta", {"type": "response.output_text.delta"})
+        for _ in range(100)
+    )
+    events.append(("response.completed", completed))
+    structure = _record_sse_structure(events)
+    assert structure["duplicates"] is False
+    assert structure["event_counts"]["response.output_text.delta"] == 100
+    assert verifier._stream_has_valid_completion(structure) is True
+
+
+def test_trace_overflow_preserves_producer_completion_fact() -> None:
+    structure = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
+    structure["event_trace"] = [{"event": "response.created", "count": 1}]
+    structure["event_sequence"] = ["response.created"]
+    structure["event_counts"] = {"response.created": 1, "response.completed": 1}
+    structure["event_trace_overflow"] = True
+    observation = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=structure,
+        client_completed=True,
+    )
+    observation["response_completed"] = True
+    summary = verifier._safe_stream_summary(
+        observation, boundary="direct_qwen", decision="ambiguous_stream_evidence"
+    )
+    assert summary["response_completed"] is True
+    assert summary["normalization_reason"] == "trace_overflow"
+    assert summary["valid_completion"] is False
+
+
 def test_sse_recorder_marks_event_run_overflow_without_opaque_failure() -> None:
     recorder = verifier._SSEStructuralRecorder()
     for index in range(verifier._SSE_EVENT_RUN_LIMIT + 1):
@@ -1463,15 +1518,55 @@ def test_safe_stream_summary_records_handler_and_truncation_without_private_text
     assert "private" not in verifier.json.dumps(summary)
 
 
+def test_normalized_summary_rebuild_discards_unexpected_extra_keys() -> None:
+    observation = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        client_completed=True,
+    )
+    normalized = verifier._safe_stream_summary(
+        observation, boundary="direct_qwen", decision="ambiguous_stream_evidence"
+    )
+    normalized["raw_private_extra"] = "opaque"
+    rebuilt = verifier._safe_stream_summary(
+        normalized, boundary="direct_qwen", decision="ambiguous_stream_evidence"
+    )
+    assert "raw_private_extra" not in rebuilt
+    assert "opaque" not in verifier.json.dumps(rebuilt)
+
+
 def test_stream_summary_artifact_is_exact_bounded_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     result = _stream_result_for_summary("ambiguous_stream_evidence")
     artifact = tmp_path / "safe-output.log"
+    tmp_path.chmod(0o700)
     monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(artifact))
+    monkeypatch.setenv(verifier.SAFE_OUTPUT_ROOT_ENV, str(tmp_path))
     lines = verifier._stream_summary_lines(result)
     verifier._emit_stream_summary(lines)
     expected = "\n".join(lines) + "\n"
     assert capsys.readouterr().out == expected
     assert artifact.read_bytes() == expected.encode("ascii")
     assert artifact.stat().st_mode & 0o777 == 0o600
+
+
+def test_stream_summary_artifact_rejects_existing_or_symlink_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    result = _stream_result_for_summary()
+    lines = verifier._stream_summary_lines(result)
+    existing = tmp_path / "existing.log"
+    existing.write_bytes(b"old")
+    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(existing))
+    monkeypatch.setenv(verifier.SAFE_OUTPUT_ROOT_ENV, str(tmp_path))
+    with pytest.raises(verifier.VerificationError, match="safe_output_artifact_invalid"):
+        verifier._emit_stream_summary(lines)
+    link = tmp_path / "link.log"
+    link.symlink_to(existing)
+    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(link))
+    with pytest.raises(verifier.VerificationError, match="safe_output_artifact_invalid"):
+        verifier._emit_stream_summary(lines)
