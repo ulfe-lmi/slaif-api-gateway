@@ -695,6 +695,8 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.compiler_calls = 0
         self.inference_calls = 0
         self.successful_calls = 0
+        self.health_calls = 0
+        self.models_calls = 0
         self.bad_inbound_auth = False
         self.auth_replaced = False
         self.internal_headers = False
@@ -735,6 +737,21 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         with self._lock:
             self.successful_calls += 1
 
+    def record_probe(self, path: str, headers: dict[str, str]) -> None:
+        with self._lock:
+            if path == "/health":
+                self.health_calls += 1
+            elif path == "/v1/models":
+                self.models_calls += 1
+            if headers.get("authorization") != f"Bearer {self.relay_token}":
+                self.bad_inbound_auth = True
+            self.internal_headers = self.internal_headers or any(
+                name.startswith("x-slaif-") or name.startswith("x-internal-")
+                for name in headers
+            )
+            self.outbound_header_names.update({"accept", "accept-encoding", "authorization"})
+            self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
+
     def status(self) -> dict[str, object]:
         with self._lock:
             return {
@@ -742,6 +759,8 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "compiler_calls": self.compiler_calls,
                 "inference_calls": self.inference_calls,
                 "successful_calls": self.successful_calls,
+                "health_calls": self.health_calls,
+                "models_calls": self.models_calls,
                 "bad_inbound_auth": self.bad_inbound_auth,
                 "auth_replaced": self.auth_replaced,
                 "internal_headers": self.internal_headers,
@@ -749,6 +768,16 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "tool_types": sorted(self.tool_types),
                 "outbound_header_names": sorted(self.outbound_header_names),
             }
+
+
+def _qwen_target(endpoint: str, path: str) -> str:
+    parsed = urlsplit(endpoint)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if path == "/health":
+        return origin + "/health"
+    if path.startswith("/v1/"):
+        return endpoint.rstrip("/") + path[3:]
+    raise VerificationError("qwen_relay_path_invalid")
 
 
 class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
@@ -766,7 +795,50 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        self.send_error(404)
+        if self.path not in {"/health", "/v1/models"}:
+            self.send_error(404)
+            return
+        inbound_headers = {
+            key.lower(): value
+            for key, value in self.headers.items()
+            if key.lower() not in {"host", "content-length", "connection"}
+        }
+        self.server.record_probe(self.path, inbound_headers)
+        if inbound_headers.get("authorization") != f"Bearer {self.server.relay_token}":
+            self.send_error(401)
+            return
+        self._forward_upstream("GET", self.path, inbound_headers, b"")
+
+    def _forward_upstream(
+        self, method: str, path: str, inbound_headers: dict[str, str], body: bytes
+    ) -> int | None:
+        target = _qwen_target(self.server.endpoint, path)
+        outbound_headers = {
+            name: inbound_headers[name]
+            for name in ("content-type", "accept", "accept-encoding")
+            if name in inbound_headers
+        }
+        outbound_headers["authorization"] = f"Bearer {self.server.qwen_token}"
+        try:
+            with httpx.Client(timeout=300, follow_redirects=False) as client:
+                with client.stream(method, target, headers=outbound_headers, content=body) as response:
+                    self.send_response(response.status_code)
+                    for key, value in response.headers.items():
+                        if key.lower() not in {
+                            "content-length",
+                            "connection",
+                            "transfer-encoding",
+                        }:
+                            self.send_header(key, value)
+                    self.end_headers()
+                    for chunk in response.iter_raw():
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    status = response.status_code
+        except httpx.HTTPError:
+            self.send_error(502)
+            return None
+        return status
 
     def do_POST(self) -> None:
         try:
@@ -800,34 +872,8 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         if not self.server.qwen_token:
             self.send_error(503)
             return
-        suffix = self.path[3:] if self.path.startswith("/v1") else self.path
-        target = self.server.endpoint.rstrip("/") + suffix
-        outbound_headers = {
-            name: inbound_headers[name]
-            for name in ("content-type", "accept", "accept-encoding")
-            if name in inbound_headers
-        }
-        outbound_headers["authorization"] = f"Bearer {self.server.qwen_token}"
-        try:
-            with httpx.Client(timeout=300, follow_redirects=False) as client:
-                with client.stream("POST", target, headers=outbound_headers, content=body) as response:
-                    self.send_response(response.status_code)
-                    for key, value in response.headers.items():
-                        if key.lower() not in {
-                            "content-length",
-                            "connection",
-                            "transfer-encoding",
-                        }:
-                            self.send_header(key, value)
-                    self.end_headers()
-                    for chunk in response.iter_raw():
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                    status = response.status_code
-        except httpx.HTTPError:
-            self.send_error(502)
-            return
-        if 200 <= status < 300:
+        status = self._forward_upstream("POST", self.path, inbound_headers, body)
+        if status is not None and 200 <= status < 300:
             self.server.record_success()
 
 

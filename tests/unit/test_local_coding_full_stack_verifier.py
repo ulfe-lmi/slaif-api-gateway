@@ -308,6 +308,63 @@ def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     relay_thread.join(timeout=2)
 
 
+def test_qwen_relay_maps_authenticated_readiness_health_without_counting_inference() -> None:
+    class Protected(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_GET(self) -> None:
+            if self.path != "/health" or self.headers.get("authorization") != "Bearer qwen-token":
+                self.send_response(401)
+                self.end_headers()
+                return
+            body = b'{"status":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    protected = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Protected)
+    protected_thread = threading.Thread(target=protected.serve_forever, daemon=True)
+    protected_thread.start()
+    relay = verifier._QwenRelayServer(
+        ("127.0.0.1", 0),
+        endpoint=f"http://127.0.0.1:{protected.server_address[1]}/v1",
+        relay_token="local-relay-token",
+        qwen_token="qwen-token",
+    )
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    try:
+        response = verifier.httpx.get(
+            f"http://127.0.0.1:{relay.server_address[1]}/health",
+            headers={"Authorization": "Bearer local-relay-token"},
+            timeout=5,
+        )
+        assert response.status_code == 200
+        assert relay.status()["health_calls"] == 1
+        assert relay.status()["calls"] == 0
+        unauthorized = verifier.httpx.get(
+            f"http://127.0.0.1:{relay.server_address[1]}/health",
+            headers={"Authorization": "Bearer wrong"},
+            timeout=5,
+        )
+        assert unauthorized.status_code == 401
+        assert relay.status()["calls"] == 0
+    finally:
+        relay.shutdown()
+        relay.server_close()
+        protected.shutdown()
+        protected.server_close()
+        relay_thread.join(timeout=2)
+        protected_thread.join(timeout=2)
+
+
+def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
+    assert verifier._qwen_target("https://private.example/v1", "/health") == "https://private.example/health"
+    assert verifier._qwen_target("https://private.example/v1", "/v1/models") == "https://private.example/v1/models"
+
+
 def test_scrubbed_launcher_does_not_forward_source_script_exports() -> None:
     source = verifier._start_process.__code__.co_consts
     script = " ".join(value for value in source if isinstance(value, str))
