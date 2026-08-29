@@ -464,6 +464,20 @@ def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
         verifier._qwen_target("https://private.example/v1", "/v1/v1/responses")
 
 
+def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    relay.remember_response(502, "/v1/responses")
+    monkeypatch.setattr(
+        verifier,
+        "_qwen_relay_status",
+        lambda _port: {"path_rejections": 0, "upstream_statuses": [404]},
+    )
+    error = verifier._localize_ordinary_response_failure(relay, 39149)
+    assert str(error) == "ordinary_response_fake_qwen_404"
+
+
 def test_unexpected_preflight_failure_is_localized_without_exception_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1383,7 +1383,7 @@ def _relay_request(
 
 
 def _localize_ordinary_response_failure(
-    relay: _ForwardingRelay, qwen_relay: _QwenRelayServer | None
+    relay: _ForwardingRelay, qwen_relay_port: int | None
 ) -> VerificationError:
     relay_status = relay.status()
     response_statuses = relay_status["response_statuses"]
@@ -1392,8 +1392,11 @@ def _localize_ordinary_response_failure(
         if path_classes and path_classes[-1] == "v1_responses":
             return VerificationError("ordinary_response_local_404")
         return VerificationError("ordinary_response_gateway_relay_404")
-    if qwen_relay is not None:
-        qwen_status = qwen_relay.status()
+    if qwen_relay_port is not None:
+        try:
+            qwen_status = _qwen_relay_status(qwen_relay_port)
+        except VerificationError:
+            return VerificationError("ordinary_response_qwen_status_unavailable")
         if qwen_status["path_rejections"]:
             return VerificationError("ordinary_response_qwen_path_404")
         if 404 in qwen_status["upstream_statuses"]:
@@ -1806,7 +1809,7 @@ def _run_composed_impl(
                 tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
             )
         except Exception:
-            raise _localize_ordinary_response_failure(relay, qwen_relay) from None
+            raise _localize_ordinary_response_failure(relay, qwen_relay_port) from None
         tracker.set("stream_response")
         streamed = client.responses.create(
             **request_body("155f stream", session_a),
