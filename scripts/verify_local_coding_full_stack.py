@@ -116,6 +116,8 @@ def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
 
 def _verify_commit_topology() -> None:
     current_head = _git("rev-parse", "HEAD")
+    if _git("status", "--porcelain", cwd=REPO_ROOT):
+        raise VerificationError("gateway_checkout_dirty")
     if _git("rev-parse", f"{GATEWAY_ACTIVATION_HEAD}^1") != GATEWAY_REPORT_HEAD:
         raise VerificationError("gateway_activation_parent_mismatch")
     activation_changed = _git(
@@ -144,7 +146,7 @@ def _verify_commit_topology() -> None:
         raise VerificationError("local_dependency_not_clean")
     if _run(["git", "merge-base", "--is-ancestor", LOCAL_SIGNED_CONTRACT_HEAD, LOCAL_REPORT_HEAD], cwd=LOCAL_ROOT).returncode != 0:
         raise VerificationError("local_signed_contract_ancestry_failed")
-    for pr, expected in (("291", GATEWAY_REPORT_HEAD), ("7", LOCAL_REPORT_HEAD)):
+    for pr, expected in (("291", current_head), ("7", LOCAL_REPORT_HEAD)):
         result = _run(["gh", "pr", "view", pr, "--repo", "ulfe-lmi/slaif-api-gateway" if pr == "291" else "ulfe-lmi/slaif-local-coding", "--json", "state,isDraft,headRefOid,mergeStateStatus,autoMergeRequest"])
         if result.returncode != 0:
             raise VerificationError("github_pr_state_unavailable")
