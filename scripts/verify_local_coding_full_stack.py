@@ -1269,7 +1269,7 @@ def _assert_required_evidence(evidence: dict[str, object]) -> None:
         raise VerificationError("local_forward_count_mismatch")
 
 
-def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
+def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
     from openai import OpenAI
 
@@ -1326,9 +1326,11 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         "PYTHONDONTWRITEBYTECODE": "1",
         "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token,
         "SLAIF_155F_LOCAL_SIGNING_SECRET": signing_secret,
-        "SLAIF_155F_LOCAL_UV_ENV": str(root / "local-venv"),
+        "UV_PROJECT_ENVIRONMENT": str(root / "local-venv"),
         QWEN_RELAY_TOKEN_ENV: qwen_relay_token,
     }
+    if (LOCAL_ROOT / ".venv").exists():
+        raise VerificationError("local_checkout_venv_present_before_start")
     try:
         qwen_relay = _start_qwen_relay(
             qwen_relay_port, runtime=runtime, relay_token=qwen_relay_token
@@ -1339,6 +1341,8 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
             cwd=LOCAL_ROOT,
             env=local_env,
         )
+        if (LOCAL_ROOT / ".venv").exists():
+            raise VerificationError("local_checkout_venv_created")
         gateway = _start_process(
             [sys.executable, "-m", "uvicorn", "slaif_gateway.main:app", "--host", "127.0.0.1", "--port", str(gateway_port), "--no-access-log", "--log-level", "warning"],
             cwd=REPO_ROOT,
@@ -1619,29 +1623,60 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
             _docker("rmi", "postgres:16", timeout=60)
         if _git("status", "--porcelain", cwd=LOCAL_ROOT):
             raise VerificationError("local_dependency_changed")
+        if (LOCAL_ROOT / ".venv").exists():
+            raise VerificationError("local_checkout_venv_present_after_cleanup")
+
+
+def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
+    try:
+        return _run_composed_impl(root, runtime, codex_binary)
+    except VerificationError:
+        raise
+    except Exception:
+        raise VerificationError("unexpected_composition") from None
 
 
 def run() -> dict[str, object]:
-    _verify_commit_topology()
-    runtime = _read_runtime_reference()
-    _verify_fixtures()
-    _verify_protected_model_health(runtime)
-    _source_qwen_credential_only_for_local(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155f-", dir="/tmp") as temporary:
-        root = Path(temporary)
-        root.chmod(0o700)
-        _validate_local_config(root, runtime)
-        codex_binary = _install_codex(root)
-        # Re-run the exact no-provider relationship gate before any DB/container.
-        import scripts.capture_codex_protocol as capture
-        live = capture.capture_live_0149_session(codex_binary=codex_binary, expected_version=CODEX_VERSION, model=CODEX_MODEL, profile="responses-session-relationship-v3")
-        if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
-            raise VerificationError("exact_relationship_fixture_mismatch")
-        result = _run_composed(root, runtime, codex_binary)
-    _verify_protected_model_health(runtime)
-    result["post_cleanup_model_ok"] = True
-    _assert_required_evidence(result)
-    return result
+    stage = "topology"
+    try:
+        _verify_commit_topology()
+        stage = "runtime_reference"
+        runtime = _read_runtime_reference()
+        stage = "fixtures"
+        _verify_fixtures()
+        stage = "protected_preflight"
+        _verify_protected_model_health(runtime)
+        _source_qwen_credential_only_for_local(runtime)
+        with tempfile.TemporaryDirectory(prefix="slaif-155f-", dir="/tmp") as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            stage = "local_config_preflight"
+            _validate_local_config(root, runtime)
+            stage = "codex_install"
+            codex_binary = _install_codex(root)
+            stage = "exact_capture_preflight"
+            import scripts.capture_codex_protocol as capture
+
+            live = capture.capture_live_0149_session(
+                codex_binary=codex_binary,
+                expected_version=CODEX_VERSION,
+                model=CODEX_MODEL,
+                profile="responses-session-relationship-v3",
+            )
+            if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
+                raise VerificationError("exact_relationship_fixture_mismatch")
+            stage = "composition"
+            result = _run_composed(root, runtime, codex_binary)
+        stage = "protected_post_cleanup"
+        _verify_protected_model_health(runtime)
+        result["post_cleanup_model_ok"] = True
+        stage = "evidence"
+        _assert_required_evidence(result)
+        return result
+    except VerificationError:
+        raise
+    except Exception:
+        raise VerificationError(f"unexpected_{stage}") from None
 
 
 def main() -> int:

@@ -375,6 +375,18 @@ def test_qwen_relay_path_mapping_uses_protected_origin_and_v1_base() -> None:
     assert verifier._qwen_target("https://private.example/v1", "/v1/models") == "https://private.example/v1/models"
 
 
+def test_unexpected_preflight_failure_is_localized_without_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail() -> None:
+        raise RuntimeError("private-derived detail")
+
+    monkeypatch.setattr(verifier, "_verify_commit_topology", fail)
+    with pytest.raises(verifier.VerificationError, match="unexpected_topology") as error:
+        verifier.run()
+    assert "private-derived" not in str(error.value)
+
+
 def test_scrubbed_launcher_does_not_forward_source_script_exports() -> None:
     source = verifier._start_process.__code__.co_consts
     script = " ".join(value for value in source if isinstance(value, str))
