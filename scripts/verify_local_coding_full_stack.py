@@ -125,6 +125,17 @@ def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
         raise VerificationError("git_output_invalid") from exc
 
 
+def _checks_are_green(output: bytes) -> bool:
+    try:
+        lines = [line for line in output.decode("utf-8").splitlines() if line.strip()]
+    except UnicodeDecodeError:
+        return False
+    statuses = [line.split("\t", 2)[1] for line in lines if len(line.split("\t", 2)) >= 2]
+    return len(lines) >= 10 and len(statuses) == len(lines) and all(
+        status == "pass" for status in statuses
+    )
+
+
 def _verify_commit_topology() -> None:
     current_head = _git("rev-parse", "HEAD")
     if _git("status", "--porcelain", cwd=REPO_ROOT):
@@ -170,8 +181,7 @@ def _verify_commit_topology() -> None:
     checks = _run(["gh", "pr", "checks", "291", "--repo", "ulfe-lmi/slaif-api-gateway"])
     if checks.returncode != 0:
         raise VerificationError("github_checks_unavailable")
-    check_lines = checks.stdout.decode("utf-8").splitlines()
-    if len(check_lines) < 10 or any(line.split(maxsplit=2)[1] != "pass" for line in check_lines if len(line.split(maxsplit=2)) >= 2):
+    if not _checks_are_green(checks.stdout):
         raise VerificationError("github_checks_not_green")
     if _git(
         "diff", "--exit-code", f"{GATEWAY_REPORT_HEAD}^1", GATEWAY_REPORT_HEAD, "--", "oap/reports"

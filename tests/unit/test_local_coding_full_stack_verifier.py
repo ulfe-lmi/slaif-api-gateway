@@ -59,6 +59,16 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
     ]
 
 
+def test_check_parser_handles_spaced_names_and_fails_mixed_statuses() -> None:
+    rows = [
+        f"Check {index} with spaces\tpass\t1s\thttps://example.invalid/{index}\t"
+        for index in range(10)
+    ]
+    assert verifier._checks_are_green(("\n".join(rows) + "\n").encode())
+    rows[-1] = rows[-1].replace("\tpass\t", "\tpending\t")
+    assert not verifier._checks_are_green(("\n".join(rows) + "\n").encode())
+
+
 def test_composed_evidence_rejects_placeholder_counts() -> None:
     evidence = {name: True for name in (
         "session_a1_a2_equal", "session_b_different", "session_second_key_different",
