@@ -2505,8 +2505,10 @@ def _run_composed_impl(
         tracker.set("controlled_provider_failure")
         local_before_failure = _local_metrics(local_port)
         before_failure = len(relay.snapshot())
+        failure_request = request_body("155f failure", session_a)
+        failure_request.pop("extra_body", None)
         try:
-            client.responses.create(**{**request_body("155f failure", session_a), "model": FAILURE_MODEL})
+            client.responses.create(**{**failure_request, "model": FAILURE_MODEL})
         except Exception:
             pass
         else:
