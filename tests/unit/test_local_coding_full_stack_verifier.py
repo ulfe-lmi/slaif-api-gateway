@@ -166,8 +166,13 @@ def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
             timeout=5,
         )
         with stream as result:
-            first = next(result.iter_raw())
+            chunks = result.iter_raw()
+            first = next(chunks)
             assert b"response.created" in first
+            body = first + b"".join(chunks)
+            assert b"response.output_text.delta" not in body
+            assert body.count(b"event: response.created") == 1
+            assert body.count(b"event: response.completed") == 1
             assert fake.first_event_sent.wait(timeout=1)
         assert fake.inference_calls == 2
         assert fake.stream_calls == 1
