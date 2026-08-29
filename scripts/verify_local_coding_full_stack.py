@@ -510,7 +510,7 @@ def _local_config(root: Path, *, local_port: int, runtime: RuntimeReference) -> 
     # and is removed with the task root during teardown; it never contains a
     # credential value.  The protected endpoint cannot be configured otherwise.
     # codeql[py/clear-text-storage-sensitive-data]
-    config.write_text(body, encoding="utf-8")  # codeql[py/clear-text-storage-sensitive-data]
+    config.write_text(body, encoding="utf-8")  # codeql[py/clear-text-storage-sensitive-data] lgtm[py/clear-text-storage-sensitive-data]
     config.chmod(0o600)
     return config
 
