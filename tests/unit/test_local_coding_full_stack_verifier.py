@@ -145,12 +145,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155l_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155m_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155l-head"
+    current_head = "current-155m-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
+    report_path = "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -160,7 +160,7 @@ def test_155l_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
+            return "oap/active\noap/orders/155-m-terminal-validity-and-composed-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,9 +192,35 @@ def test_155l_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155l_topology_anchors_are_the_155k_report_and_implementation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "cc2def438ee60cab92e0fb28305c89d2be7f4051"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "598915417f510aa592374ec6624905d37546aa18"
+def test_155m_topology_anchors_are_the_155l_report_and_implementation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "264f15fbcfe513882597a48f41095f108849ee74"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "e1e2395c4d77ea9772a2471e6d5e55102484a440"
+
+
+def test_155m_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
+    baseline = verifier._read_pinned_direct_baseline()
+    assert verifier._terminal_completion_valid(baseline) is True
+    assert baseline["terminal_completion_valid"] is True
+    assert baseline["event_vocabulary_reviewed"] is False
+    assert baseline["unknown_events"] is True
+    assert baseline["event_counts"]["other"] == 1259
+
+
+@pytest.mark.parametrize("mutation", ["altered", "duplicate"])
+def test_155m_rejects_altered_or_multiple_direct_baseline_lines(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+) -> None:
+    source = verifier.DIRECT_BASELINE_REPORT.read_text(encoding="utf-8")
+    direct = next(line for line in source.splitlines() if line.startswith("STREAM_BOUNDARY ") and '"boundary":"direct_qwen"' in line)
+    if mutation == "altered":
+        source = source.replace('"unknown_events":true', '"unknown_events":false', 1)
+    else:
+        source += direct + "\n"
+    report = tmp_path / "155-l-report.md"
+    report.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(verifier, "DIRECT_BASELINE_REPORT", report)
+    with pytest.raises(verifier.VerificationError, match="pinned_direct_baseline"):
+        verifier._read_pinned_direct_baseline()
 
 
 def test_check_parser_handles_spaced_names_and_fails_mixed_statuses() -> None:
@@ -562,7 +588,7 @@ def test_sse_structure_rejects_unknown_event_type() -> None:
     }
     structure = _record_sse_structure([("response.unreviewed", event)])
     assert structure["unknown_events"] is True
-    assert structure["event_sequence"] == ["other"]
+    assert structure["event_trace"] == [{"event": "other", "count": 1}]
 
 
 @pytest.mark.parametrize(
@@ -625,9 +651,16 @@ def test_stream_completion_gate_rejects_missing_terminal_event_and_invalid_bound
     structure = verifier.json.loads(
         verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)
     )
-    structure["event_sequence"] = ["response.created"]
+    structure["event_trace"] = [{"event": "response.created", "count": 1}]
+    structure["event_counts"] = {"response.created": 1}
+    structure["response_completed"] = False
     assert verifier._stream_has_valid_completion(structure) is False
-    structure["event_sequence"] = ["response.created", "response.completed"]
+    structure["event_trace"] = [
+        {"event": "response.created", "count": 1},
+        {"event": "response.completed", "count": 1},
+    ]
+    structure["event_counts"] = {"response.created": 1, "response.completed": 1}
+    structure["response_completed"] = True
     structure["terminal_output_shape"] = "other"
     assert verifier._stream_has_valid_completion(structure) is False
     recorder = verifier._SSEStructuralRecorder()
@@ -713,8 +746,15 @@ def test_stream_differential_decision_table_covers_each_nonambiguous_branch(
             "local_output": local,
             "gateway_output": gateway,
         }[target]
-        target_observation["valid_completion"] = False
+        target_structure = verifier.json.loads(
+            verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)
+        )
+        target_structure["event_trace"] = [{"event": "response.created", "count": 1}]
+        target_structure["event_counts"] = {"response.created": 1}
+        target_structure["response_completed"] = False
+        target_observation["structure"] = target_structure
         target_observation["response_completed"] = False
+        target_observation["valid_completion"] = False
     assert verifier._classify_stream_differential(direct, local, gateway) == expected
 
 
@@ -1011,16 +1051,17 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
         '"completed_status_completed":true,"completed_usage_valid":true,'
         '"content_type_class":"sse","created_status_in_progress":true,'
         '"decision":"all_boundaries_completed","done_sentinel":false,'
-        '"downstream_closed_early":false,"duplicates":false,'
+        '"downstream_closed_early":false,"duplicates":false,"error_event":false,'
         '"event_counts":{"response.completed":1,"response.created":1},'
         '"event_trace":[{"count":1,"event":"response.created"},'
         '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
+        '"event_vocabulary_reviewed":true,"evidence_source":"current_155m",'
         '"failure_code":"none","first_event_before_upstream_completion":true,'
         '"handler_error":false,"http_status_class":"2xx","invalid":false,'
         '"model_matches":true,"normal_close":true,"normalization_reason":"none",'
         '"normalization_status":"complete","official_client_completion":true,'
-        '"ran":true,"response_completed":true,"response_id_relation":true,'
-        '"terminal_output_shape":"empty_array","unknown_events":false,'
+        '"ran":true,"ran_current_invocation":true,"response_completed":true,"response_id_relation":true,'
+        '"terminal_completion_valid":true,"terminal_output_shape":"empty_array","unknown_events":false,'
         '"upstream_truncated":false,"valid_completion":true}'
     )
     expected = "\n".join(
@@ -1158,6 +1199,47 @@ def test_stream_differential_stops_before_composed_on_qwen_owned(
     assert result["ran_boundaries"] == ["direct_qwen"]
 
 
+def test_composed_only_mode_never_calls_direct_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = verifier._read_pinned_direct_baseline()
+    raw = verifier._stream_observation(
+        boundary="local_output",
+        status=200,
+        content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        client_completed=True,
+    )
+    gateway = dict(raw, boundary="gateway_output")
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_read_runtime_reference", lambda: object())
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_read_pinned_direct_baseline", lambda: baseline)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: None)
+    monkeypatch.setattr(
+        verifier,
+        "_run_direct_stream_diagnostic",
+        lambda *_args: pytest.fail("composed-only mode must not call direct"),
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_run_composed_stream_diagnostic",
+        lambda *_args: {
+            "local_output": raw,
+            "gateway_output": gateway,
+            "accounting_verified": True,
+        },
+    )
+    result = verifier.run_composed_only()
+    assert result["decision"] == "terminal_boundaries_completed"
+    assert result["ran_boundaries"] == ["direct_qwen", "local_output", "gateway_output"]
+    assert result["direct_qwen"]["evidence_source"] == "pinned_155l"
+    assert result["direct_qwen"]["ran_current_invocation"] is False
+    for boundary in ("local_output", "gateway_output"):
+        assert result[boundary]["evidence_source"] == "current_155m"
+        assert result[boundary]["ran_current_invocation"] is True
+
+
 def test_relay_handle_error_is_safe_and_fail_closed() -> None:
     forwarding = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
     forwarding.handle_error(None, None)
@@ -1207,8 +1289,8 @@ def test_stream_summary_totalizes_inconsistent_event_counts() -> None:
     structure["event_counts"] = {"response.created": 2}
     result["direct_qwen"] = dict(result["direct_qwen"], structure=structure)  # type: ignore[arg-type]
     lines = verifier._stream_summary_lines(result)
-    assert '"normalization_status":"invalid"' in lines[0]
-    assert '"normalization_reason":"event_count_invalid"' in lines[0]
+    assert '"duplicates":true' in lines[0]
+    assert '"terminal_completion_valid":false' in lines[0]
 
 
 @pytest.mark.parametrize("response_completed", [True, False])
@@ -1297,7 +1379,10 @@ def test_forwarding_relay_drains_upstream_after_downstream_reset() -> None:
                 break
             verifier.time.sleep(0.02)
         assert structure is not None
-        assert structure["event_sequence"] == ["response.created", "response.completed"]
+        assert structure["event_trace"] == [
+            {"event": "response.created", "count": 1},
+            {"event": "response.completed", "count": 1},
+        ]
         assert structure["normal_close"] is True
         assert structure["response_id_relation"] is True
         assert relay.status()["upstream_truncated"] is False
@@ -1366,7 +1451,6 @@ def test_sse_recorder_compresses_repeated_deltas_beyond_64_events() -> None:
         )
     recorder.mark_normal_close()
     structure = recorder.snapshot()
-    assert structure["event_sequence"] == ["response.output_text.delta"] * 100
     assert structure["event_trace"] == [{"event": "response.output_text.delta", "count": 100}]
     assert structure["event_counts"] == {"response.output_text.delta": 100}
     summary = verifier._safe_stream_summary(
