@@ -41,6 +41,10 @@ Core invariants:
   replay, or idempotency key. Successful requests using it remain ordinary
   `strict_bounded` reservations finalized from provider usage.
 
+The disposable full-stack verifier additionally checks one terminal ledger
+outcome per admitted public request, zero pending counters, empty external
+facts, and no hosted-tool fee/hold metadata for both Gateway keys.
+
 - PostgreSQL is authoritative for hard quota, reservations, usage counters,
   ledger rows, and reconciliation state.
 - Redis is temporary operational state only. Redis must not become the only

@@ -45,6 +45,12 @@ thread remains an untrusted namespace below Gateway authority and is not a
 Codex-composed E2E claim. The request's raw client metadata is dropped before
 the canonical provider body is built.
 
+The bounded 155-f composition uses the exact `codex-0.149-responses-v1` to
+`local-coding-v1` pair and the protected Qwen route only through task-local
+configuration. The verifier keeps the Gateway, Local Coding, and protected
+provider credentials in separate process roles and records only safe transport
+and accounting facts.
+
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured
 server-side bearer secret, with redirects and retries disabled, and retains

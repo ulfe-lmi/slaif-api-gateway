@@ -97,3 +97,8 @@ exposes only the transient internal `session_id` hint; installation, root-turn,
 turn, cache, item, and other metadata are dropped. Local Coding derives its
 opaque session from authenticated owner and Gateway-key facts plus this
 corroborated thread namespace under a domain-separated derivation version.
+
+The 155-f acceptance verifier composes only the reviewed static Gateway and
+Local Coding modules with the exact open PR heads. It does not introduce a
+new module, endpoint, header, session store, or provider authority; the real
+Codex thread remains a namespace below the authenticated Gateway owner/key.

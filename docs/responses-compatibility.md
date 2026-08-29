@@ -26,6 +26,11 @@ aliases in `client_metadata.session_id` and `client_metadata.thread_id`, then
 exposes only one transient `session_id` namespace hint. No raw Codex
 identity/session/workspace metadata is retained.
 
+The full-stack acceptance verifier is a disposable qualification attempt for
+the exact open Gateway and Local Coding heads. It does not broaden the
+Responses compatibility claim to persistent replay, production deployment,
+hostile same-key isolation, release readiness, or certification.
+
 The `local-coding-v1` server module is a separate exact-route transport
 foundation. It is default-denied unless the resolved route has the complete
 versioned Local Coding contract and provider kind `openai_compatible`. Its

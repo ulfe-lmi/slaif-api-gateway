@@ -71,6 +71,11 @@ the client thread cannot authenticate, select tenancy, own accounting, prove
 replay, or act as an idempotency key. Local Coding's opaque session derivation
 is domain-separated and includes the authenticated Gateway key, while
 installation-wide and per-turn metadata fail closed as session context.
+
+The 155-f verifier may source the protected credential privately for the
+Local Coding-to-Qwen process only. It never passes that value to Gateway or
+Codex, and it emits no endpoint, credential, body, identity, nonce, signature,
+prompt, source, or model-output values.
 Local Coding adds three separate roles: the public Gateway bearer, the
 configured Local Coding service Bearer, and dedicated versioned identity
 derivation/signing secrets. The roles are validated as distinct and are never
