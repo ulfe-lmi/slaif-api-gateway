@@ -1254,6 +1254,7 @@ _STREAM_DECISIONS = frozenset(
         "ambiguous_stream_evidence",
         "qwen_owned",
         "local_owned",
+        "local_qwen_owned",
         "gateway_owned",
         "official_client_observation",
         "all_boundaries_completed",

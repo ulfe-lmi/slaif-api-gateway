@@ -1216,6 +1216,7 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
     [
         "qwen_owned",
         "local_owned",
+        "local_qwen_owned",
         "gateway_owned",
         "official_client_observation",
         "ambiguous_stream_evidence",
