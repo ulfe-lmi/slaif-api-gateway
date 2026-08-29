@@ -1724,10 +1724,15 @@ def _run_composed_impl(
         if not any(item.id == CODEX_MODEL for item in models.data):
             raise VerificationError("gateway_model_visibility_failed")
         tracker.set("ordinary_response")
-        client.responses.create(
-            **request_body("155f ordinary", session_a),
-            tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
-        )
+        try:
+            client.responses.create(
+                **request_body("155f ordinary", session_a),
+                tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
+            )
+        except Exception:
+            if relay.response_statuses and relay.response_statuses[-1] == 404:
+                raise VerificationError("ordinary_response_local_404")
+            raise VerificationError("ordinary_response_failed")
         tracker.set("stream_response")
         streamed = client.responses.create(
             **request_body("155f stream", session_a),
