@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-k verifier for protected stream boundary differential evidence.
+"""Bounded 155-l verifier for protected stream boundary differential evidence.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "37c84c9cf32fb63303fe1f1897ca97bb170abb2c"
-GATEWAY_IMPLEMENTATION_HEAD = "c2b7cdaeb5d7c595a4882c2bf841b1fc8704a42f"
-GATEWAY_ACTIVATION_HEAD = "5305d3832a911472d9dbf216cb3fea9e0d6e5942"
+GATEWAY_REPORT_HEAD = "cc2def438ee60cab92e0fb28305c89d2be7f4051"
+GATEWAY_IMPLEMENTATION_HEAD = "598915417f510aa592374ec6624905d37546aa18"
+GATEWAY_ACTIVATION_HEAD = "cac5cd217219cb32f1a1bc2fcb1cfb2004c13657"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,8 +48,9 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
-TASK_DB = "slaif_gateway_oap_155k_diff"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
+TASK_DB = "slaif_gateway_oap_155l_diff"
+SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155L_SAFE_OUTPUT_ARTIFACT"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
@@ -196,7 +197,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md",
+        "oap/orders/155-l-total-safe-stream-normalization-and-single-diagnostic.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -207,7 +208,7 @@ def _verify_commit_topology() -> None:
     if _git("rev-parse", f"{GATEWAY_REPORT_HEAD}^1") != GATEWAY_IMPLEMENTATION_HEAD:
         raise VerificationError("gateway_report_parent_mismatch")
     changed = _git("diff-tree", "--no-commit-id", "--name-only", "-r", GATEWAY_REPORT_HEAD)
-    if changed != "oap/reports/155-j-protected-stream-boundary-differential-and-closure.md":
+    if changed != "oap/reports/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md":
         raise VerificationError("gateway_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", GATEWAY_REPORT_HEAD, "HEAD"], cwd=REPO_ROOT).returncode != 0:
         raise VerificationError("gateway_report_ancestry_failed")
@@ -239,11 +240,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-k\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-l\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -686,10 +687,17 @@ _SAFE_SSE_EVENT_TYPES = frozenset(
     }
 )
 _SSE_CAPTURE_LIMIT = 64 * 1024
+_SSE_EVENT_RUN_LIMIT = 128
+_SSE_EVENT_COUNT_LIMIT = _SSE_CAPTURE_LIMIT
 _PINNED_CAPTURE_SSE_STRUCTURE = {
     "invalid": False,
     "event_sequence": ["response.created", "response.completed"],
     "event_counts": {"response.completed": 1, "response.created": 1},
+    "event_trace": [
+        {"event": "response.created", "count": 1},
+        {"event": "response.completed", "count": 1},
+    ],
+    "event_trace_overflow": False,
     "done_sentinel": False,
     "duplicates": False,
     "unknown_events": False,
@@ -720,6 +728,9 @@ class _SSEStructuralRecorder:
         self._event_unknown = False
         self._data = bytearray()
         self._event_sequence: list[str] = []
+        self._event_runs: list[dict[str, object]] = []
+        self._event_counts: dict[str, int] = {}
+        self._event_trace_overflow = False
         self._response_field_names: dict[str, set[str]] = {}
         self._created_id: str | None = None
         self._response_id_relation = False
@@ -824,6 +835,14 @@ class _SSEStructuralRecorder:
             event_name, event_unknown = self._safe_name(payload_type_bytes)
         event_name = event_name or "other"
         self._event_sequence.append(event_name)
+        count = self._event_counts.get(event_name, 0)
+        self._event_counts[event_name] = min(count + 1, _SSE_EVENT_COUNT_LIMIT)
+        if self._event_runs and self._event_runs[-1]["event"] == event_name:
+            self._event_runs[-1]["count"] = int(self._event_runs[-1]["count"]) + 1
+        elif len(self._event_runs) < _SSE_EVENT_RUN_LIMIT:
+            self._event_runs.append({"event": event_name, "count": 1})
+        else:
+            self._event_trace_overflow = True
         self._unknown_events = self._unknown_events or event_unknown
         response = payload.get("response")
         if isinstance(response, dict):
@@ -877,14 +896,13 @@ class _SSEStructuralRecorder:
 
     def snapshot(self) -> dict[str, object]:
         self.finish()
-        event_counts = {
-            event: self._event_sequence.count(event)
-            for event in sorted(set(self._event_sequence))
-        }
+        event_counts = dict(sorted(self._event_counts.items()))
         return {
             "invalid": self._invalid,
             "event_sequence": list(self._event_sequence),
             "event_counts": event_counts,
+            "event_trace": [dict(run) for run in self._event_runs],
+            "event_trace_overflow": self._event_trace_overflow,
             "done_sentinel": self._done_sentinel,
             "duplicates": len(self._event_sequence) != len(set(self._event_sequence)),
             "unknown_events": self._unknown_events,
@@ -933,6 +951,8 @@ def _assert_new_pinned_capture_sse_structure(
 
 
 def _stream_has_valid_completion(structure: object) -> bool:
+    if isinstance(structure, dict) and "normalization_status" in structure:
+        return structure.get("valid_completion") is True
     if not isinstance(structure, dict) or structure.get("invalid") is not False:
         return False
     sequence = structure.get("event_sequence")
@@ -947,6 +967,7 @@ def _stream_has_valid_completion(structure: object) -> bool:
         and structure.get("first_event_before_upstream_completion") is True
         and structure.get("normal_close") is True
         and structure.get("unknown_events") is False
+        and structure.get("event_trace_overflow") is False
     )
 
 
@@ -985,9 +1006,23 @@ def _relay_failure_code(status: object, current: str | None = None) -> str | Non
 
 
 def _stream_observation_is_ambiguous(observation: dict[str, object]) -> bool:
+    if "normalization_status" in observation:
+        return (
+            observation.get("normalization_status") != "complete"
+            or observation.get("normalization_reason") != "none"
+            or observation.get("failure_code") != "none"
+            or observation.get("handler_error") is True
+            or observation.get("upstream_truncated") is True
+            or observation.get("http_status_class") != "2xx"
+            or observation.get("content_type_class") != "sse"
+            or observation.get("valid_completion") is not True
+            and observation.get("response_completed") is True
+        )
     structure = observation.get("structure")
     return (
         observation.get("failure_code") is not None
+        or observation.get("handler_error") is True
+        or observation.get("upstream_truncated") is True
         or observation.get("http_status_class") != "2xx"
         or observation.get("content_type_class") != "sse"
         or not isinstance(structure, dict)
@@ -1052,141 +1087,291 @@ _STREAM_FAILURE_CODES = frozenset(
     }
 )
 _STREAM_TERMINAL_SHAPES = frozenset({"missing", "empty_array", "nonempty_array", "other"})
+_STREAM_NORMALIZATION_STATUSES = frozenset({"complete", "degraded", "invalid"})
+_STREAM_NORMALIZATION_REASONS = frozenset(
+    {
+        "none",
+        "not_run",
+        "missing_structure",
+        "invalid_shape",
+        "producer_status_invalid",
+        "producer_content_type_invalid",
+        "event_trace_invalid",
+        "event_count_invalid",
+        "trace_overflow",
+        "inconsistent_completion",
+        "handler_error",
+        "upstream_truncated",
+        "non_sse",
+        "unknown_failure",
+    }
+)
 
 
-def _safe_stream_summary(
-    observation: object, *, decision: str
+def _minimal_stream_summary(
+    boundary: str, *, ran: bool, decision: str, reason: str
 ) -> dict[str, object]:
-    """Validate and project one observation into the fixed public schema."""
-    if not isinstance(observation, dict):
-        raise VerificationError("differential_summary_invalid")
-    boundary = observation.get("boundary")
-    status_class = observation.get("http_status_class")
-    content_type = observation.get("content_type_class")
-    structure = observation.get("structure")
-    if (
-        not isinstance(boundary, str)
-        or boundary not in _STREAM_BOUNDARIES
-        or not isinstance(status_class, str)
-        or status_class not in _STREAM_STATUS_CLASSES
-        or not isinstance(content_type, str)
-        or content_type not in _STREAM_CONTENT_TYPES
-    ):
-        raise VerificationError("differential_summary_invalid")
-    missing_structure = structure is None
-    if missing_structure:
-        structure = {
-            "invalid": True,
-            "event_sequence": [],
-            "event_counts": {},
-            "done_sentinel": False,
-            "duplicates": False,
-            "unknown_events": False,
-            "response_id_relation": False,
-            "completed_status_completed": False,
-            "model_matches": False,
-            "completed_output_empty": False,
-            "completed_usage_valid": False,
-            "terminal_output_shape": "missing",
-            "normal_close": False,
-            "downstream_closed_early": False,
-        }
-    elif not isinstance(structure, dict):
-        raise VerificationError("differential_summary_invalid")
-    sequence = structure.get("event_sequence")
-    counts = structure.get("event_counts")
-    if (
-        not isinstance(sequence, list)
-        or len(sequence) > 64
-        or any(not isinstance(event, str) or event not in _SAFE_SSE_EVENT_TYPES for event in sequence)
-        or not isinstance(counts, dict)
-        or any(
-            not isinstance(event, str)
-            or event not in _SAFE_SSE_EVENT_TYPES
-            or type(count) is not int
-            or count < 0
-            or count > len(sequence)
-            for event, count in counts.items()
-        )
-        or counts != {event: sequence.count(event) for event in sorted(set(sequence))}
-    ):
-        raise VerificationError("differential_summary_invalid")
-    bool_fields = (
-        "invalid",
-        "done_sentinel",
-        "duplicates",
-        "unknown_events",
-        "response_id_relation",
-        "completed_status_completed",
-        "model_matches",
-        "completed_output_empty",
-        "completed_usage_valid",
-        "normal_close",
-        "downstream_closed_early",
-    )
-    if any(type(structure.get(field)) is not bool for field in bool_fields):
-        raise VerificationError("differential_summary_invalid")
-    if type(observation.get("response_completed")) is not bool:
-        raise VerificationError("differential_summary_invalid")
-    if type(observation.get("client_completed")) is not bool:
-        raise VerificationError("differential_summary_invalid")
-    if observation["response_completed"] != ("response.completed" in sequence):
-        raise VerificationError("differential_summary_invalid")
-    failure_code = observation.get("failure_code")
-    if failure_code is None:
-        failure_code = "unknown_failure" if missing_structure else "none"
-    if not isinstance(failure_code, str) or failure_code not in _STREAM_FAILURE_CODES:
-        failure_code = "unknown_failure"
-    terminal_shape = structure.get("terminal_output_shape")
-    if terminal_shape not in _STREAM_TERMINAL_SHAPES:
-        raise VerificationError("differential_summary_invalid")
+    status = "degraded" if not ran or reason == "missing_structure" else "invalid"
     return {
         "boundary": boundary,
-        "http_status_class": status_class,
-        "content_type_class": content_type,
-        "event_sequence": list(sequence),
-        "event_counts": dict(counts),
-        "invalid": structure["invalid"],
-        "response_completed": observation["response_completed"],
-        "duplicates": structure["duplicates"],
-        "unknown_events": structure["unknown_events"],
-        "done_sentinel": structure["done_sentinel"],
-        "response_id_relation": structure["response_id_relation"],
-        "completed_status_completed": structure["completed_status_completed"],
-        "model_matches": structure["model_matches"],
-        "completed_output_empty": structure["completed_output_empty"],
-        "terminal_output_shape": terminal_shape,
-        "completed_usage_valid": structure["completed_usage_valid"],
-        "normal_close": structure["normal_close"],
-        "downstream_closed_early": structure["downstream_closed_early"],
-        "official_client_completion": observation["client_completed"],
-        "failure_code": failure_code,
+        "ran": ran,
+        "http_status_class": "unknown",
+        "content_type_class": "unknown",
+        "event_trace": [],
+        "event_counts": {},
+        "invalid": True,
+        "response_completed": False,
+        "duplicates": False,
+        "unknown_events": False,
+        "done_sentinel": False,
+        "response_id_relation": False,
+        "created_status_in_progress": False,
+        "completed_status_completed": False,
+        "model_matches": False,
+        "completed_output_empty": False,
+        "completed_usage_valid": False,
+        "terminal_output_shape": "missing",
+        "first_event_before_upstream_completion": False,
+        "normal_close": False,
+        "downstream_closed_early": False,
+        "handler_error": False,
+        "upstream_truncated": False,
+        "official_client_completion": False,
+        "event_trace_overflow": False,
+        "valid_completion": False,
+        "normalization_status": status,
+        "normalization_reason": reason if reason in _STREAM_NORMALIZATION_REASONS else "invalid_shape",
+        "failure_code": "unknown_failure" if ran else "none",
         "decision": decision,
     }
 
 
+def _bounded_event_trace(
+    structure: dict[str, object]
+) -> tuple[list[dict[str, object]], dict[str, int], bool, str]:
+    raw_trace = structure.get("event_trace")
+    sequence = structure.get("event_sequence")
+    reason = "none"
+    trace: list[dict[str, object]] = []
+    if isinstance(raw_trace, list):
+        for run in raw_trace:
+            if (
+                not isinstance(run, dict)
+                or not isinstance(run.get("event"), str)
+                or run["event"] not in _SAFE_SSE_EVENT_TYPES
+                or type(run.get("count")) is not int
+                or run["count"] < 1
+                or run["count"] > _SSE_EVENT_COUNT_LIMIT
+            ):
+                reason = "event_trace_invalid"
+                trace = []
+                break
+            trace.append({"event": run["event"], "count": run["count"]})
+        if len(trace) > _SSE_EVENT_RUN_LIMIT:
+            trace = trace[:_SSE_EVENT_RUN_LIMIT]
+            reason = "trace_overflow"
+    elif isinstance(sequence, list):
+        for event in sequence:
+            if not isinstance(event, str) or event not in _SAFE_SSE_EVENT_TYPES:
+                reason = "event_trace_invalid"
+                trace = []
+                break
+            if trace and trace[-1]["event"] == event:
+                trace[-1]["count"] = int(trace[-1]["count"]) + 1
+            elif len(trace) < _SSE_EVENT_RUN_LIMIT:
+                trace.append({"event": event, "count": 1})
+            else:
+                reason = "trace_overflow"
+    else:
+        return [], {}, False, "event_trace_invalid"
+    counts: dict[str, int] = {}
+    raw_counts = structure.get("event_counts")
+    if isinstance(raw_counts, dict):
+        for event, count in raw_counts.items():
+            if (
+                not isinstance(event, str)
+                or event not in _SAFE_SSE_EVENT_TYPES
+                or type(count) is not int
+                or count < 0
+                or count > _SSE_EVENT_COUNT_LIMIT
+            ):
+                reason = "event_count_invalid"
+                counts = {}
+                break
+            counts[event] = count
+    if not counts:
+        for run in trace:
+            event = str(run["event"])
+            counts[event] = counts.get(event, 0) + int(run["count"])
+    if isinstance(sequence, list) and reason == "none":
+        sequence_counts = {event: sequence.count(event) for event in sorted(set(sequence)) if isinstance(event, str)}
+        if counts != sequence_counts:
+            reason = "event_count_invalid"
+            counts = sequence_counts
+    overflow = structure.get("event_trace_overflow")
+    if type(overflow) is not bool:
+        overflow = reason == "trace_overflow"
+        if reason == "none":
+            reason = "event_trace_invalid"
+    if overflow is True and reason == "none":
+        reason = "trace_overflow"
+    return trace, counts, overflow, reason
+
+
+def _safe_stream_summary(
+    observation: object,
+    *,
+    decision: str,
+    boundary: str | None = None,
+    ran: bool = True,
+) -> dict[str, object]:
+    """Total, raw-free normalization of one producer observation."""
+    if isinstance(observation, dict) and "normalization_status" in observation:
+        summary = dict(observation)
+        summary["boundary"] = boundary or summary.get("boundary", "unknown")
+        summary["ran"] = ran
+        summary["decision"] = decision
+        return summary
+    if boundary not in _STREAM_BOUNDARIES:
+        boundary = observation.get("boundary") if isinstance(observation, dict) else None
+    if boundary not in _STREAM_BOUNDARIES:
+        return _minimal_stream_summary("direct_qwen", ran=ran, decision=decision, reason="invalid_shape")
+    if not ran:
+        return _minimal_stream_summary(boundary, ran=False, decision=decision, reason="not_run")
+    if not isinstance(observation, dict):
+        return _minimal_stream_summary(boundary, ran=True, decision=decision, reason="invalid_shape")
+    status_class = observation.get("http_status_class")
+    content_type = observation.get("content_type_class")
+    reason = "none"
+    if status_class not in _STREAM_STATUS_CLASSES:
+        status_class = "unknown"
+        reason = "producer_status_invalid"
+    if content_type not in _STREAM_CONTENT_TYPES:
+        content_type = "unknown"
+        reason = "producer_content_type_invalid"
+    structure = observation.get("structure")
+    if structure is None:
+        return _minimal_stream_summary(boundary, ran=True, decision=decision, reason="missing_structure") | {
+            "http_status_class": status_class,
+            "content_type_class": content_type,
+            "official_client_completion": observation.get("client_completed") is True,
+        }
+    if not isinstance(structure, dict):
+        return _minimal_stream_summary(boundary, ran=True, decision=decision, reason="invalid_shape") | {
+            "http_status_class": status_class,
+            "content_type_class": content_type,
+        }
+    trace, counts, overflow, trace_reason = _bounded_event_trace(structure)
+    if trace_reason != "none":
+        reason = trace_reason
+    bool_fields = (
+        "invalid", "done_sentinel", "duplicates", "unknown_events", "response_id_relation",
+        "created_status_in_progress", "completed_status_completed", "model_matches",
+        "completed_output_empty", "completed_usage_valid", "first_event_before_upstream_completion",
+        "normal_close", "downstream_closed_early",
+    )
+    facts = {field: structure.get(field) is True for field in bool_fields}
+    missing_facts = any(field not in structure for field in bool_fields)
+    if missing_facts and reason == "none":
+        reason = "invalid_shape"
+    if facts["invalid"] and reason == "none":
+        reason = "invalid_shape"
+    response_completed = "response.completed" in {run["event"] for run in trace}
+    if type(observation.get("response_completed")) is bool and observation["response_completed"] != response_completed:
+        reason = "inconsistent_completion"
+    failure_code = observation.get("failure_code")
+    if failure_code is None:
+        failure_code = "none"
+    if not isinstance(failure_code, str) or failure_code not in _STREAM_FAILURE_CODES:
+        failure_code = "unknown_failure"
+    handler_error = observation.get("handler_error") is True
+    upstream_truncated = observation.get("upstream_truncated") is True
+    if handler_error:
+        reason = "handler_error"
+        failure_code = "handler_error"
+    elif upstream_truncated:
+        reason = "upstream_truncated"
+        failure_code = "unknown_failure"
+    elif content_type != "sse" and reason == "none":
+        reason = "non_sse"
+    if overflow:
+        reason = "trace_overflow"
+    status = "complete" if reason == "none" and not facts["invalid"] else "degraded"
+    if reason in {"invalid_shape", "event_trace_invalid", "event_count_invalid", "inconsistent_completion"}:
+        status = "invalid"
+    summary = {
+        "boundary": boundary,
+        "ran": True,
+        "http_status_class": status_class,
+        "content_type_class": content_type,
+        "event_trace": trace,
+        "event_counts": counts,
+        "invalid": facts["invalid"],
+        "response_completed": response_completed,
+        "duplicates": facts["duplicates"],
+        "unknown_events": facts["unknown_events"],
+        "done_sentinel": facts["done_sentinel"],
+        "response_id_relation": facts["response_id_relation"],
+        "created_status_in_progress": facts["created_status_in_progress"],
+        "completed_status_completed": facts["completed_status_completed"],
+        "model_matches": facts["model_matches"],
+        "completed_output_empty": facts["completed_output_empty"],
+        "completed_usage_valid": facts["completed_usage_valid"],
+        "terminal_output_shape": structure.get("terminal_output_shape") if structure.get("terminal_output_shape") in _STREAM_TERMINAL_SHAPES else "missing",
+        "first_event_before_upstream_completion": facts["first_event_before_upstream_completion"],
+        "normal_close": facts["normal_close"],
+        "downstream_closed_early": facts["downstream_closed_early"],
+        "handler_error": handler_error,
+        "upstream_truncated": upstream_truncated,
+        "official_client_completion": observation.get("client_completed") is True,
+        "event_trace_overflow": overflow,
+        "normalization_status": status,
+        "normalization_reason": reason,
+        "failure_code": failure_code,
+        "decision": decision,
+    }
+    summary["valid_completion"] = (
+        status == "complete"
+        and status_class == "2xx"
+        and content_type == "sse"
+        and response_completed
+        and facts["response_id_relation"]
+        and facts["completed_status_completed"]
+        and facts["model_matches"]
+        and summary["terminal_output_shape"] in {"empty_array", "nonempty_array"}
+        and facts["completed_usage_valid"]
+        and facts["first_event_before_upstream_completion"]
+        and facts["normal_close"]
+        and not facts["unknown_events"]
+        and not facts["duplicates"]
+        and not facts["done_sentinel"]
+        and not overflow
+    )
+    return summary
+
+
 def _stream_summary_lines(result: object) -> tuple[str, ...]:
-    if not isinstance(result, dict):
-        raise VerificationError("differential_summary_invalid")
-    decision = result.get("decision")
+    source = result if isinstance(result, dict) else {}
+    decision = source.get("decision")
     if not isinstance(decision, str) or decision not in _STREAM_DECISIONS:
-        raise VerificationError("differential_summary_invalid")
-    ran_boundaries = result.get("ran_boundaries")
-    if (
-        not isinstance(ran_boundaries, list)
-        or not ran_boundaries
-        or any(not isinstance(boundary, str) for boundary in ran_boundaries)
-        or len(ran_boundaries) != len(set(ran_boundaries))
-        or any(boundary not in _STREAM_BOUNDARIES for boundary in ran_boundaries)
-        or ran_boundaries != [boundary for boundary in _STREAM_BOUNDARIES if boundary in ran_boundaries]
+        decision = "ambiguous_stream_evidence"
+    ran_boundaries = source.get("ran_boundaries")
+    if not isinstance(ran_boundaries, list) or any(
+        not isinstance(boundary, str) or boundary not in _STREAM_BOUNDARIES
+        for boundary in ran_boundaries
     ):
-        raise VerificationError("differential_summary_invalid")
+        ran_boundaries = []
+    ran_set = set(ran_boundaries)
     summaries = []
-    for boundary in ran_boundaries:
-        observation = result.get(boundary)
-        if not isinstance(observation, dict) or observation.get("boundary") != boundary:
-            raise VerificationError("differential_summary_invalid")
-        summaries.append(_safe_stream_summary(observation, decision=decision))
+    for boundary in _STREAM_BOUNDARIES:
+        summaries.append(
+            _safe_stream_summary(
+                source.get(boundary),
+                boundary=boundary,
+                ran=boundary in ran_set,
+                decision=decision,
+            )
+        )
     return tuple(
         [
             *(
@@ -1197,6 +1382,19 @@ def _stream_summary_lines(result: object) -> tuple[str, ...]:
             "STREAM_DECISION " + json.dumps(decision, separators=(",", ":")),
         ]
     )
+
+
+def _emit_stream_summary(lines: tuple[str, ...]) -> None:
+    payload = "\n".join(lines) + "\n"
+    artifact_name = os.environ.get(SAFE_OUTPUT_ARTIFACT_ENV)
+    if artifact_name:
+        artifact = Path(artifact_name)
+        try:
+            artifact.write_bytes(payload.encode("ascii"))
+            artifact.chmod(0o600)
+        except (OSError, UnicodeEncodeError) as exc:
+            raise VerificationError("safe_output_artifact_failed") from exc
+    sys.stdout.write(payload)
 
 
 def _stop_process(process: subprocess.Popen[bytes] | None) -> None:
@@ -3230,7 +3428,7 @@ def _run_direct_stream_diagnostic(
         structure = structures[-1] if isinstance(structures, list) and structures else None
         statuses = status.get("upstream_statuses")
         content_types = status.get("sse_content_type_classes")
-        return _stream_observation(
+        observation = _stream_observation(
             boundary="direct_qwen",
             status=statuses[-1] if isinstance(statuses, list) and statuses else None,
             content_type_class=(
@@ -3242,6 +3440,9 @@ def _run_direct_stream_diagnostic(
             client_completed=client_completed,
             failure_code=_relay_failure_code(status, failure_code),
         )
+        observation["handler_error"] = status.get("handler_error") is True
+        observation["upstream_truncated"] = status.get("upstream_truncated") is True
+        return observation
     finally:
         _stop_process(relay)
 
@@ -3420,6 +3621,8 @@ def _run_composed_stream_diagnostic(
             client_completed=True,
             failure_code=_relay_failure_code(local_status, qwen_failure_code),
         )
+        local_output["handler_error"] = local_status.get("handler_error") is True
+        local_output["upstream_truncated"] = local_status.get("upstream_truncated") is True
         gateway_observation = _stream_observation(
             boundary="gateway_output",
             status=(
@@ -3440,6 +3643,8 @@ def _run_composed_stream_diagnostic(
             client_completed=client_completed,
             failure_code=_relay_failure_code(gateway_status, failure_code),
         )
+        gateway_observation["handler_error"] = gateway_status.get("handler_error") is True
+        gateway_observation["upstream_truncated"] = gateway_status.get("upstream_truncated") is True
         accounting_verified = False
         try:
             asyncio.run(
@@ -3483,26 +3688,50 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155k-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155l-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
-        direct_qwen = _run_direct_stream_diagnostic(root, runtime)
+        direct_qwen = _safe_stream_summary(
+            _run_direct_stream_diagnostic(root, runtime),
+            boundary="direct_qwen",
+            ran=True,
+            decision="ambiguous_stream_evidence",
+        )
         direct_decision = _classify_direct_stream(direct_qwen)
         if direct_decision is not None:
+            direct_qwen["decision"] = direct_decision
             return {
                 "decision": direct_decision,
                 "ran_boundaries": ["direct_qwen"],
                 "direct_qwen": direct_qwen,
             }
         composed = _run_composed_stream_diagnostic(root, runtime)
-    local_output = composed["local_output"]
-    gateway_output = composed["gateway_output"]
+    local_output = _safe_stream_summary(
+        composed.get("local_output"),
+        boundary="local_output",
+        ran=True,
+        decision="ambiguous_stream_evidence",
+    )
+    gateway_output = _safe_stream_summary(
+        composed.get("gateway_output"),
+        boundary="gateway_output",
+        ran=True,
+        decision="ambiguous_stream_evidence",
+    )
     if not isinstance(local_output, dict) or not isinstance(gateway_output, dict):
-        raise VerificationError("differential_observation_invalid")
+        return {
+            "decision": "ambiguous_stream_evidence",
+            "ran_boundaries": ["direct_qwen", "local_output", "gateway_output"],
+            "direct_qwen": direct_qwen,
+            "local_output": local_output,
+            "gateway_output": gateway_output,
+        }
     decision = _classify_stream_differential(direct_qwen, local_output, gateway_output)
     if decision == "all_boundaries_completed" and composed.get("accounting_verified") is not True:
         raise VerificationError("differential_accounting_missing")
+    for observation in (direct_qwen, local_output, gateway_output):
+        observation["decision"] = decision
     return {
         "decision": decision,
         "ran_boundaries": ["direct_qwen", "local_output", "gateway_output"],
@@ -3594,8 +3823,7 @@ def main() -> int:
             print("RESULT=BLOCKED code=unexpected_stream_differential")
             return 1
         try:
-            for line in _stream_summary_lines(result):
-                print(line)
+            _emit_stream_summary(_stream_summary_lines(result))
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")
             return 1

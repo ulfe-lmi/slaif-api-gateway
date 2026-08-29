@@ -145,12 +145,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155k_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155l_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155k-head"
+    current_head = "current-155l-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-j-protected-stream-boundary-differential-and-closure.md"
+    report_path = "oap/reports/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -160,7 +160,7 @@ def test_155k_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
+            return "oap/active\noap/orders/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,9 +192,9 @@ def test_155k_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155k_topology_anchors_are_the_155j_report_and_implementation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "37c84c9cf32fb63303fe1f1897ca97bb170abb2c"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "c2b7cdaeb5d7c595a4882c2bf841b1fc8704a42f"
+def test_155l_topology_anchors_are_the_155k_report_and_implementation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "cc2def438ee60cab92e0fb28305c89d2be7f4051"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "598915417f510aa592374ec6624905d37546aa18"
 
 
 def test_check_parser_handles_spaced_names_and_fails_mixed_statuses() -> None:
@@ -1006,44 +1006,34 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
     monkeypatch.setattr(sys, "argv", ["verify_local_coding_full_stack.py", "--stream-differential"])
     assert verifier.main() == 0
     captured = capsys.readouterr()
-    lines = captured.out.splitlines()
-    assert len(lines) == 4
-    assert captured.out == (
-        'STREAM_BOUNDARY {"boundary":"direct_qwen","completed_output_empty":true,'
+    expected_boundary = (
+        '{"boundary":"{boundary}","completed_output_empty":true,'
         '"completed_status_completed":true,"completed_usage_valid":true,'
-        '"content_type_class":"sse","decision":"all_boundaries_completed",'
-        '"done_sentinel":false,"downstream_closed_early":false,'
-        '"duplicates":false,'
+        '"content_type_class":"sse","created_status_in_progress":true,'
+        '"decision":"all_boundaries_completed","done_sentinel":false,'
+        '"downstream_closed_early":false,"duplicates":false,'
         '"event_counts":{"response.completed":1,"response.created":1},'
-        '"event_sequence":["response.created","response.completed"],'
-        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
-        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
-        '"response_completed":true,"response_id_relation":true,'
-        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
-        'STREAM_BOUNDARY {"boundary":"local_output","completed_output_empty":true,'
-        '"completed_status_completed":true,"completed_usage_valid":true,'
-        '"content_type_class":"sse","decision":"all_boundaries_completed",'
-        '"done_sentinel":false,"downstream_closed_early":false,'
-        '"duplicates":false,'
-        '"event_counts":{"response.completed":1,"response.created":1},'
-        '"event_sequence":["response.created","response.completed"],'
-        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
-        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
-        '"response_completed":true,"response_id_relation":true,'
-        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
-        'STREAM_BOUNDARY {"boundary":"gateway_output","completed_output_empty":true,'
-        '"completed_status_completed":true,"completed_usage_valid":true,'
-        '"content_type_class":"sse","decision":"all_boundaries_completed",'
-        '"done_sentinel":false,"downstream_closed_early":false,'
-        '"duplicates":false,'
-        '"event_counts":{"response.completed":1,"response.created":1},'
-        '"event_sequence":["response.created","response.completed"],'
-        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
-        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
-        '"response_completed":true,"response_id_relation":true,'
-        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
-        'STREAM_DECISION "all_boundaries_completed"\n'
+        '"event_trace":[{"count":1,"event":"response.created"},'
+        '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
+        '"failure_code":"none","first_event_before_upstream_completion":true,'
+        '"handler_error":false,"http_status_class":"2xx","invalid":false,'
+        '"model_matches":true,"normal_close":true,"normalization_reason":"none",'
+        '"normalization_status":"complete","official_client_completion":true,'
+        '"ran":true,"response_completed":true,"response_id_relation":true,'
+        '"terminal_output_shape":"empty_array","unknown_events":false,'
+        '"upstream_truncated":false,"valid_completion":true}'
     )
+    expected = "\n".join(
+        [
+            "STREAM_BOUNDARY "
+            + expected_boundary.replace(
+                '"boundary":"{boundary}"', f'"boundary":"{boundary}"', 1
+            )
+            for boundary in verifier._STREAM_BOUNDARIES
+        ]
+        + ['STREAM_DECISION "all_boundaries_completed"']
+    ) + "\n"
+    assert captured.out == expected
     assert captured.err == ""
     assert len(captured.out) < 4096
     assert "resp_capture" not in captured.out
@@ -1085,6 +1075,7 @@ def test_stream_differential_qwen_owned_emits_only_direct_boundary() -> None:
     direct_structure = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
     direct_structure["event_sequence"] = ["response.created"]
     direct_structure["event_counts"] = {"response.created": 1}
+    direct_structure["event_trace"] = [{"event": "response.created", "count": 1}]
     direct["structure"] = direct_structure
     direct["response_completed"] = False
     direct["valid_completion"] = False
@@ -1094,10 +1085,13 @@ def test_stream_differential_qwen_owned_emits_only_direct_boundary() -> None:
         "direct_qwen": direct,
     }
     lines = verifier._stream_summary_lines(result)
-    assert len(lines) == 2
+    assert len(lines) == 4
     assert lines[0].startswith("STREAM_BOUNDARY ")
-    assert "local_output" not in lines[0]
-    assert lines[1] == 'STREAM_DECISION "qwen_owned"'
+    assert '"ran":true' in lines[0]
+    assert '"ran":false' in lines[1]
+    assert '"normalization_reason":"not_run"' in lines[1]
+    assert '"ran":false' in lines[2]
+    assert lines[3] == 'STREAM_DECISION "qwen_owned"'
 
 
 def test_stream_differential_cli_qwen_owned_is_exact_and_does_not_claim_unrun_boundaries(
@@ -1112,6 +1106,7 @@ def test_stream_differential_cli_qwen_owned_is_exact_and_does_not_claim_unrun_bo
     )
     direct["structure"]["event_sequence"] = ["response.created"]
     direct["structure"]["event_counts"] = {"response.created": 1}
+    direct["structure"]["event_trace"] = [{"event": "response.created", "count": 1}]
     direct["response_completed"] = False
     direct["valid_completion"] = False
     result = {
@@ -1126,9 +1121,9 @@ def test_stream_differential_cli_qwen_owned_is_exact_and_does_not_claim_unrun_bo
     expected = "\n".join(verifier._stream_summary_lines(result)) + "\n"
     assert captured.out == expected
     assert captured.err == ""
-    assert captured.out.count("STREAM_BOUNDARY ") == 1
-    assert "local_output" not in captured.out
-    assert "gateway_output" not in captured.out
+    assert captured.out.count("STREAM_BOUNDARY ") == 3
+    assert '"ran":false' in captured.out
+    assert '"normalization_reason":"not_run"' in captured.out
 
 
 def test_stream_differential_stops_before_composed_on_qwen_owned(
@@ -1144,6 +1139,7 @@ def test_stream_differential_stops_before_composed_on_qwen_owned(
     direct_structure = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
     direct_structure["event_sequence"] = ["response.created"]
     direct_structure["event_counts"] = {"response.created": 1}
+    direct_structure["event_trace"] = [{"event": "response.created", "count": 1}]
     direct["structure"] = direct_structure
     direct["response_completed"] = False
     direct["valid_completion"] = False
@@ -1182,11 +1178,15 @@ def test_relay_handle_error_is_safe_and_fail_closed() -> None:
         "decision",
     ],
 )
-def test_stream_summary_rejects_missing_boundary_or_decision(missing: str) -> None:
+def test_stream_summary_totalizes_missing_boundary_or_decision(missing: str) -> None:
     result = _stream_result_for_summary()
     result.pop(missing)
-    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
-        verifier._stream_summary_lines(result)
+    lines = verifier._stream_summary_lines(result)
+    assert len(lines) == 4
+    expected_decision = (
+        "ambiguous_stream_evidence" if missing == "decision" else "all_boundaries_completed"
+    )
+    assert lines[-1] == f'STREAM_DECISION "{expected_decision}"'
 
 
 def test_stream_summary_emits_fixed_invalid_schema_for_missing_structure() -> None:
@@ -1196,18 +1196,19 @@ def test_stream_summary_emits_fixed_invalid_schema_for_missing_structure() -> No
     )
     lines = verifier._stream_summary_lines(result)
     assert '"boundary":"direct_qwen"' in lines[0]
-    assert '"event_sequence":[]' in lines[0]
+    assert '"event_trace":[]' in lines[0]
     assert '"failure_code":"unknown_failure"' in lines[0]
     assert '"invalid":true' in lines[0]
 
 
-def test_stream_summary_rejects_inconsistent_event_counts() -> None:
+def test_stream_summary_totalizes_inconsistent_event_counts() -> None:
     result = _stream_result_for_summary()
     structure = dict(result["direct_qwen"]["structure"])  # type: ignore[index]
     structure["event_counts"] = {"response.created": 2}
     result["direct_qwen"] = dict(result["direct_qwen"], structure=structure)  # type: ignore[arg-type]
-    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
-        verifier._stream_summary_lines(result)
+    lines = verifier._stream_summary_lines(result)
+    assert '"normalization_status":"invalid"' in lines[0]
+    assert '"normalization_reason":"event_count_invalid"' in lines[0]
 
 
 @pytest.mark.parametrize("response_completed", [True, False])
@@ -1220,11 +1221,18 @@ def test_stream_summary_rejects_response_completed_sequence_mismatch(
     if response_completed:
         structure["event_sequence"] = ["response.created"]
         structure["event_counts"] = {"response.created": 1}
+        structure["event_trace"] = [{"event": "response.created", "count": 1}]
+    else:
+        structure["event_trace"] = [
+            {"event": "response.created", "count": 1},
+            {"event": "response.completed", "count": 1},
+        ]
     observation["structure"] = structure
     observation["response_completed"] = response_completed
     result["direct_qwen"] = observation
-    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
-        verifier._stream_summary_lines(result)
+    lines = verifier._stream_summary_lines(result)
+    assert '"normalization_status":"invalid"' in lines[0]
+    assert '"normalization_reason":"inconsistent_completion"' in lines[0]
 
 
 def test_forwarding_relay_drains_upstream_after_downstream_reset() -> None:
@@ -1347,3 +1355,123 @@ def test_forwarding_relay_records_upstream_truncation_without_normal_close() -> 
         upstream.server_close()
         relay_thread.join(timeout=2)
         upstream_thread.join(timeout=2)
+
+
+def test_sse_recorder_compresses_repeated_deltas_beyond_64_events() -> None:
+    recorder = verifier._SSEStructuralRecorder()
+    for _ in range(100):
+        recorder.feed(
+            b'event: response.output_text.delta\n'
+            b'data: {"type":"response.output_text.delta"}\n\n'
+        )
+    recorder.mark_normal_close()
+    structure = recorder.snapshot()
+    assert structure["event_sequence"] == ["response.output_text.delta"] * 100
+    assert structure["event_trace"] == [{"event": "response.output_text.delta", "count": 100}]
+    assert structure["event_counts"] == {"response.output_text.delta": 100}
+    summary = verifier._safe_stream_summary(
+        verifier._stream_observation(
+            boundary="direct_qwen",
+            status=200,
+            content_type_class="sse",
+            structure=structure,
+            client_completed=True,
+        ),
+        boundary="direct_qwen",
+        decision="ambiguous_stream_evidence",
+    )
+    assert summary["normalization_status"] == "complete"
+    assert summary["event_trace"] == [{"event": "response.output_text.delta", "count": 100}]
+
+
+def test_sse_recorder_marks_event_run_overflow_without_opaque_failure() -> None:
+    recorder = verifier._SSEStructuralRecorder()
+    for index in range(verifier._SSE_EVENT_RUN_LIMIT + 1):
+        event = "response.created" if index % 2 else "response.in_progress"
+        recorder.feed(
+            f'event: {event}\ndata: {{"type":"{event}"}}\n\n'.encode("ascii")
+        )
+    recorder.mark_normal_close()
+    structure = recorder.snapshot()
+    summary = verifier._safe_stream_summary(
+        verifier._stream_observation(
+            boundary="direct_qwen",
+            status=200,
+            content_type_class="sse",
+            structure=structure,
+            client_completed=True,
+        ),
+        boundary="direct_qwen",
+        decision="ambiguous_stream_evidence",
+    )
+    assert structure["event_trace_overflow"] is True
+    assert summary["normalization_status"] == "degraded"
+    assert summary["normalization_reason"] == "trace_overflow"
+    assert summary["valid_completion"] is False
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "structure"),
+    [
+        (100, "unknown", None),
+        (302, "other", None),
+        (404, "json", None),
+        (500, "other", None),
+        (None, None, None),
+        (200, "sse", []),
+        (200, "sse", {"event_sequence": ["response.created"]}),
+    ],
+)
+def test_safe_stream_summary_totalizes_all_bounded_producer_shapes(
+    status: int | None, content_type: str | None, structure: object
+) -> None:
+    observation = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=status,
+        content_type_class=content_type,
+        structure=structure,
+        client_completed=False,
+        failure_code=None,
+    )
+    summary = verifier._safe_stream_summary(
+        observation, boundary="direct_qwen", decision="ambiguous_stream_evidence"
+    )
+    assert summary["boundary"] == "direct_qwen"
+    assert summary["ran"] is True
+    assert summary["decision"] == "ambiguous_stream_evidence"
+    assert summary["normalization_status"] in {"complete", "degraded", "invalid"}
+    assert summary["normalization_reason"] in verifier._STREAM_NORMALIZATION_REASONS
+    assert len(summary["event_trace"]) <= verifier._SSE_EVENT_RUN_LIMIT
+
+
+def test_safe_stream_summary_records_handler_and_truncation_without_private_text() -> None:
+    observation = verifier._stream_observation(
+        boundary="gateway_output",
+        status=200,
+        content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        client_completed=False,
+        failure_code="handler_error",
+    )
+    observation.update(handler_error=True, upstream_truncated=True)
+    summary = verifier._safe_stream_summary(
+        observation, boundary="gateway_output", decision="ambiguous_stream_evidence"
+    )
+    assert summary["handler_error"] is True
+    assert summary["upstream_truncated"] is True
+    assert summary["normalization_reason"] == "handler_error"
+    assert "private" not in verifier.json.dumps(summary)
+
+
+def test_stream_summary_artifact_is_exact_bounded_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = _stream_result_for_summary("ambiguous_stream_evidence")
+    artifact = tmp_path / "safe-output.log"
+    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(artifact))
+    lines = verifier._stream_summary_lines(result)
+    verifier._emit_stream_summary(lines)
+    expected = "\n".join(lines) + "\n"
+    assert capsys.readouterr().out == expected
+    assert artifact.read_bytes() == expected.encode("ascii")
+    assert artifact.stat().st_mode & 0o777 == 0o600
