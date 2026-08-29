@@ -448,6 +448,7 @@ def _record_sse_structure(
     events: list[tuple[str, dict[str, object]]], *, done: bool = False
 ) -> dict[str, object]:
     recorder = verifier._SSEStructuralRecorder()
+    recorder.mark_first_event_before_upstream_completion()
     for event, payload in events:
         recorder.feed(
             (
@@ -457,6 +458,7 @@ def _record_sse_structure(
         )
     if done:
         recorder.feed(b"data: [DONE]\n\n")
+    recorder.mark_normal_close()
     return recorder.snapshot()
 
 
@@ -527,6 +529,57 @@ def test_sse_structure_rejects_order_duplicates_done_and_wrong_status(variant: s
     structure = _record_sse_structure(events, done=variant == "done")
     with pytest.raises(verifier.VerificationError, match="gateway_sse_schema_mismatch"):
         verifier._assert_pinned_capture_sse_structure(structure)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "response_id_relation",
+        "completed_status_completed",
+        "model_matches",
+        "completed_usage_valid",
+        "first_event_before_upstream_completion",
+        "normal_close",
+    ],
+)
+def test_stream_completion_gate_rejects_missing_or_false_safe_facts(field: str) -> None:
+    structure = verifier.json.loads(
+        verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)
+    )
+    structure[field] = False
+    assert verifier._stream_has_valid_completion(structure) is False
+
+
+def test_stream_completion_gate_rejects_missing_terminal_event_and_invalid_bounds() -> None:
+    structure = verifier.json.loads(
+        verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)
+    )
+    structure["event_sequence"] = ["response.created"]
+    assert verifier._stream_has_valid_completion(structure) is False
+    structure["event_sequence"] = ["response.created", "response.completed"]
+    structure["terminal_output_shape"] = "other"
+    assert verifier._stream_has_valid_completion(structure) is False
+    recorder = verifier._SSEStructuralRecorder()
+    recorder.feed(b"data: {" + b"x" * verifier._SSE_CAPTURE_LIMIT + b"}\n\n")
+    assert recorder.snapshot()["invalid"] is True
+
+
+def test_stream_differential_classification_fails_closed_for_non_sse() -> None:
+    valid = {
+        "structure": verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        "http_status_class": "2xx",
+        "content_type_class": "sse",
+        "failure_code": None,
+        "valid_completion": True,
+        "client_completed": True,
+    }
+    local = dict(valid)
+    gateway = dict(valid)
+    direct = dict(valid)
+    gateway["content_type_class"] = "json"
+    assert verifier._classify_stream_differential(direct, local, gateway) == (
+        "ambiguous_stream_evidence"
+    )
 
 
 def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:

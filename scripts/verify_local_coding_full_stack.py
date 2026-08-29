@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-i verifier for redacted fake and final real acceptance.
+"""Bounded 155-j verifier for protected stream boundary differential evidence.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "8b433ba740071733585bcf4ac1fddaaf83368ac3"
-GATEWAY_IMPLEMENTATION_HEAD = "a7c63222d0995aa866d6733bd03d5b27a3c5bd1d"
-GATEWAY_ACTIVATION_HEAD = "0247a7cf68a6f5f3c8ea47b5e5ed5ca08d4e2246"
+GATEWAY_REPORT_HEAD = "9c29eb5bb5d95d75dd600c3b629c589d797ab1d8"
+GATEWAY_IMPLEMENTATION_HEAD = "621af9f74d0229db5bdb6d21b98e31b6dcefc73a"
+GATEWAY_ACTIVATION_HEAD = "6a9634aa56a18c6fefe9229839a7455fed65d832"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,8 +48,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155i_live"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-j-protected-stream-boundary-differential-and-closure.md"
+TASK_DB = "slaif_gateway_oap_155j_diff"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
@@ -196,7 +196,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md",
+        "oap/orders/155-j-protected-stream-boundary-differential-and-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -207,7 +207,7 @@ def _verify_commit_topology() -> None:
     if _git("rev-parse", f"{GATEWAY_REPORT_HEAD}^1") != GATEWAY_IMPLEMENTATION_HEAD:
         raise VerificationError("gateway_report_parent_mismatch")
     changed = _git("diff-tree", "--no-commit-id", "--name-only", "-r", GATEWAY_REPORT_HEAD)
-    if changed != "oap/reports/155-h-staged-fake-rehearsal-and-final-real-acceptance.md":
+    if changed != "oap/reports/155-i-redacted-fake-closure-and-protected-acceptance.md":
         raise VerificationError("gateway_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", GATEWAY_REPORT_HEAD, "HEAD"], cwd=REPO_ROOT).returncode != 0:
         raise VerificationError("gateway_report_ancestry_failed")
@@ -239,11 +239,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-i-redacted-fake-closure-and-protected-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-j-protected-stream-boundary-differential-and-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-i\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-j\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -463,8 +463,8 @@ def _start_postgres(
 
 
 async def _seed_database(
-    database_url: str, *, relay_port: int, failure_port: int
-) -> tuple[SeededKey, SeededKey, SeededKey]:
+    database_url: str, *, relay_port: int, failure_port: int, differential: bool = False
+) -> tuple[SeededKey, ...]:
     sys.path.insert(0, str(REPO_ROOT / "app"))
     from datetime import UTC, datetime, timedelta
     from decimal import Decimal
@@ -576,6 +576,9 @@ async def _seed_database(
             policy = {"version": 1, "local_coding_repository_scope": "155f-repository", "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"], "client_module": {"id": CODEX_MODULE_ID, "version": CODEX_MODULE_VERSION, "fixture_sha256": CODEX_FIXTURE_SHA256}}
             key_input = dict(owner_id=owner.id, cohort_id=cohort.id, valid_from=now - timedelta(minutes=1), valid_until=now + timedelta(hours=1), cost_limit_eur=Decimal("20"), token_limit_total=2_000_000, request_limit_total=50, allowed_models=[CODEX_MODEL, FAILURE_MODEL], allowed_endpoints=["/v1/models", "/v1/responses"], responses_policy=policy)
             created = await service.create_gateway_key(CreateGatewayKeyInput(**key_input, note="155f disposable key"))
+            if differential:
+                await session.commit()
+                return (SeededKey(created.gateway_key_id, created.owner_id, created.plaintext_key),)
             second_input = dict(key_input)
             second_input["request_limit_total"] = 1
             second = await service.create_gateway_key(CreateGatewayKeyInput(**second_input, note="155f disposable second key"))
@@ -700,13 +703,17 @@ _PINNED_CAPTURE_SSE_STRUCTURE = {
     "model_matches": True,
     "completed_output_empty": True,
     "completed_usage_valid": True,
+    "terminal_output_shape": "empty_array",
+    "first_event_before_upstream_completion": True,
+    "normal_close": True,
 }
 
 
 class _SSEStructuralRecorder:
     """Retain only bounded event names and response object field names."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, expected_model: str = CODEX_MODEL) -> None:
+        self._expected_model = expected_model
         self._buffer = bytearray()
         self._event_name: str | None = None
         self._event_unknown = False
@@ -719,10 +726,19 @@ class _SSEStructuralRecorder:
         self._completed_status_completed = False
         self._model_matches = False
         self._completed_output_empty = False
+        self._terminal_output_shape = "missing"
         self._completed_usage_valid = False
         self._done_sentinel = False
         self._unknown_events = False
+        self._first_event_before_upstream_completion = False
+        self._normal_close = False
         self._invalid = False
+
+    def mark_first_event_before_upstream_completion(self, value: bool = True) -> None:
+        self._first_event_before_upstream_completion = value
+
+    def mark_normal_close(self, value: bool = True) -> None:
+        self._normal_close = value
 
     def feed(self, chunk: bytes) -> None:
         if self._invalid:
@@ -821,7 +837,7 @@ class _SSEStructuralRecorder:
                 and len(response_id) <= 256
                 and all(33 <= ord(char) <= 126 for char in response_id)
             )
-            model_matches = response.get("model") == CODEX_MODEL
+            model_matches = response.get("model") == self._expected_model
             if event_name == "response.created":
                 self._created_id = response_id if id_shape else None
                 self._created_status_in_progress = response.get("status") == "in_progress"
@@ -835,6 +851,15 @@ class _SSEStructuralRecorder:
                 self._completed_status_completed = response.get("status") == "completed"
                 self._model_matches = self._model_matches and model_matches
                 self._completed_output_empty = response.get("output") == []
+                output = response.get("output")
+                if output == []:
+                    self._terminal_output_shape = "empty_array"
+                elif isinstance(output, list):
+                    self._terminal_output_shape = "nonempty_array"
+                elif output is None:
+                    self._terminal_output_shape = "missing"
+                else:
+                    self._terminal_output_shape = "other"
                 usage = response.get("usage")
                 self._completed_usage_valid = (
                     isinstance(usage, dict)
@@ -868,6 +893,9 @@ class _SSEStructuralRecorder:
             "model_matches": self._model_matches,
             "completed_output_empty": self._completed_output_empty,
             "completed_usage_valid": self._completed_usage_valid,
+            "terminal_output_shape": self._terminal_output_shape,
+            "first_event_before_upstream_completion": self._first_event_before_upstream_completion,
+            "normal_close": self._normal_close,
         }
 
 
@@ -898,6 +926,90 @@ def _assert_new_pinned_capture_sse_structure(
         raise VerificationError(mismatch_code) from None
 
 
+def _stream_has_valid_completion(structure: object) -> bool:
+    if not isinstance(structure, dict) or structure.get("invalid") is not False:
+        return False
+    sequence = structure.get("event_sequence")
+    return (
+        isinstance(sequence, list)
+        and "response.completed" in sequence
+        and structure.get("response_id_relation") is True
+        and structure.get("completed_status_completed") is True
+        and structure.get("model_matches") is True
+        and structure.get("terminal_output_shape") in {"empty_array", "nonempty_array"}
+        and structure.get("completed_usage_valid") is True
+        and structure.get("first_event_before_upstream_completion") is True
+        and structure.get("normal_close") is True
+        and structure.get("unknown_events") is False
+    )
+
+
+def _stream_observation(
+    *,
+    boundary: str,
+    status: int | None,
+    content_type_class: str | None,
+    structure: object,
+    client_completed: bool,
+    failure_code: str | None = None,
+) -> dict[str, object]:
+    return {
+        "boundary": boundary,
+        "http_status_class": (
+            f"{status // 100}xx" if isinstance(status, int) else "unknown"
+        ),
+        "content_type_class": content_type_class or "unknown",
+        "structure": structure,
+        "client_completed": client_completed,
+        "failure_code": failure_code,
+        "valid_completion": _stream_has_valid_completion(structure),
+    }
+
+
+def _stream_observation_is_ambiguous(observation: dict[str, object]) -> bool:
+    structure = observation.get("structure")
+    return (
+        observation.get("failure_code") is not None
+        or observation.get("http_status_class") != "2xx"
+        or observation.get("content_type_class") != "sse"
+        or not isinstance(structure, dict)
+        or structure.get("invalid") is not False
+        or structure.get("normal_close") is not True
+    )
+
+
+def _classify_stream_differential(
+    direct_qwen: dict[str, object],
+    local_output: dict[str, object],
+    gateway_output: dict[str, object],
+) -> str:
+    if any(
+        _stream_observation_is_ambiguous(observation)
+        for observation in (direct_qwen, local_output, gateway_output)
+    ):
+        return "ambiguous_stream_evidence"
+    if not direct_qwen["valid_completion"]:
+        return "qwen_owned"
+    if not local_output["valid_completion"]:
+        return "local_owned"
+    if not gateway_output["valid_completion"]:
+        return "gateway_owned"
+    if gateway_output.get("client_completed") is not True:
+        return "official_client_observation"
+    return "all_boundaries_completed"
+
+
+def _stop_process(process: subprocess.Popen[bytes] | None) -> None:
+    if process is None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+
+
 class _ForwardingRelay(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -907,14 +1019,19 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         local_port: int,
         *,
         capture_requests: bool = True,
+        boundary_class: str = "local_output",
     ) -> None:
         super().__init__(server_address, _RelayHandler)
         self.local_port = local_port
         self.capture_requests = capture_requests
+        self.boundary_class = boundary_class
         self.captured: list[CapturedRequest] = []
         self.response_statuses: list[int] = []
+        self.response_status_classes: list[str] = []
+        self.response_content_type_classes: list[str] = []
         self.response_path_classes: list[str] = []
         self.sse_structures: list[dict[str, object]] = []
+        self.sse_boundaries: list[str] = []
         self.forwarded = 0
         self.rejected = 0
         self._capture_lock = threading.Lock()
@@ -924,21 +1041,29 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.captured.append(request)
             self.forwarded += 1
 
-    def remember_response(self, status: int, path: str) -> None:
+    def remember_response(
+        self, status: int, path: str, content_type_class: str = "other"
+    ) -> None:
         with self._capture_lock:
             self.response_statuses.append(status)
             self.response_path_classes.append(_safe_path_class(path))
+            self.response_status_classes.append(f"{status // 100}xx")
+            self.response_content_type_classes.append(content_type_class)
 
     def remember_sse_structure(self, structure: dict[str, object]) -> None:
         with self._capture_lock:
             self.sse_structures.append(structure)
+            self.sse_boundaries.append(self.boundary_class)
 
     def status(self) -> dict[str, object]:
         with self._capture_lock:
             return {
                 "response_statuses": list(self.response_statuses),
+                "response_status_classes": list(self.response_status_classes),
+                "response_content_type_classes": list(self.response_content_type_classes),
                 "response_path_classes": list(self.response_path_classes),
                 "sse_structures": list(self.sse_structures),
+                "sse_boundaries": list(self.sse_boundaries),
             }
 
     def snapshot(self) -> tuple[CapturedRequest, ...]:
@@ -994,20 +1119,33 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                         }:
                             self.send_header(key, value)
                     self.end_headers()
+                    first_chunk = True
                     for chunk in response.iter_raw():
                         if recorder is not None:
+                            if first_chunk:
+                                recorder.mark_first_event_before_upstream_completion()
                             recorder.feed(chunk)
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                        first_chunk = False
                     if recorder is not None:
+                        recorder.mark_normal_close()
                         recorder.finish()
                         self.server.remember_sse_structure(recorder.snapshot())
                     status = response.status_code
+                    content_type = response.headers.get("content-type", "").lower()
+                    content_type_class = (
+                        "sse"
+                        if content_type.startswith("text/event-stream")
+                        else "json"
+                        if "json" in content_type
+                        else "other"
+                    )
         except httpx.HTTPError:
             self.server.rejected += 1
             self.send_error(502)
             return
-        self.server.remember_response(status, self.path)
+        self.server.remember_response(status, self.path, content_type_class)
 
     def do_GET(self) -> None:
         self._forward()
@@ -1308,6 +1446,10 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.upstream_statuses: list[int] = []
         self.path_rejections = 0
         self.path_rejection_classes: set[str] = set()
+        self.sse_structures: list[dict[str, object]] = []
+        self.stream_first_event_before_upstream_completion = False
+        self.stream_normal_close = False
+        self.sse_content_type_classes: list[str] = []
         self._lock = threading.Lock()
 
     def record_request(
@@ -1375,6 +1517,28 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
             self.outbound_header_names.update({"accept", "accept-encoding", "authorization"})
             self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
 
+    def record_stream_first_event(self) -> None:
+        with self._lock:
+            self.stream_first_event_before_upstream_completion = True
+
+    def record_stream_normal_close(self) -> None:
+        with self._lock:
+            self.stream_normal_close = True
+
+    def remember_sse_structure(self, structure: dict[str, object]) -> None:
+        with self._lock:
+            self.sse_structures.append(structure)
+
+    def remember_content_type(self, content_type: str) -> None:
+        with self._lock:
+            self.sse_content_type_classes.append(
+                "sse"
+                if content_type.startswith("text/event-stream")
+                else "json"
+                if "json" in content_type
+                else "other"
+            )
+
     def status(self) -> dict[str, object]:
         with self._lock:
             return {
@@ -1394,6 +1558,10 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "upstream_statuses": list(self.upstream_statuses),
                 "path_rejections": self.path_rejections,
                 "path_rejection_classes": sorted(self.path_rejection_classes),
+                "first_event_before_upstream_completion": self.stream_first_event_before_upstream_completion,
+                "stream_normal_close": self.stream_normal_close,
+                "sse_structures": list(self.sse_structures),
+                "sse_content_type_classes": list(self.sse_content_type_classes),
             }
 
 
@@ -1459,6 +1627,16 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         try:
             with httpx.Client(timeout=300, follow_redirects=False) as client:
                 with client.stream(method, target, headers=outbound_headers, content=body) as response:
+                    self.server.remember_content_type(
+                        response.headers.get("content-type", "").lower()
+                    )
+                    recorder = (
+                        _SSEStructuralRecorder()
+                        if response.headers.get("content-type", "").lower().startswith(
+                            "text/event-stream"
+                        )
+                        else None
+                    )
                     self.send_response(response.status_code)
                     for key, value in response.headers.items():
                         if key.lower() not in {
@@ -1468,9 +1646,22 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                         }:
                             self.send_header(key, value)
                     self.end_headers()
+                    first_chunk = True
                     for chunk in response.iter_raw():
+                        if first_chunk:
+                            self.server.record_stream_first_event()
+                            if recorder is not None:
+                                recorder.mark_first_event_before_upstream_completion()
+                        if recorder is not None:
+                            recorder.feed(chunk)
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                        first_chunk = False
+                    self.server.record_stream_normal_close()
+                    if recorder is not None:
+                        recorder.mark_normal_close()
+                        recorder.finish()
+                        self.server.remember_sse_structure(recorder.snapshot())
                     status = response.status_code
                     self.server.record_upstream_status(status)
         except httpx.HTTPError:
@@ -1589,10 +1780,13 @@ def _qwen_relay_status(port: int) -> dict[str, object]:
 
 
 def _start_relay(
-    local_port: int, *, capture_requests: bool = True
+    local_port: int, *, capture_requests: bool = True, boundary_class: str = "local_output"
 ) -> tuple[_ForwardingRelay, threading.Thread]:
     relay = _ForwardingRelay(
-        ("127.0.0.1", 0), local_port, capture_requests=capture_requests
+        ("127.0.0.1", 0),
+        local_port,
+        capture_requests=capture_requests,
+        boundary_class=boundary_class,
     )
     thread = threading.Thread(target=relay.serve_forever, name="155f-relay", daemon=True)
     thread.start()
@@ -2705,6 +2899,313 @@ def _run_composed_impl(
             tracker.current = primary_stage
 
 
+def _run_direct_stream_diagnostic(
+    root: Path, runtime: RuntimeReference
+) -> dict[str, object]:
+    from openai import OpenAI
+
+    del root
+    port = _free_port()
+    relay_token = secrets.token_urlsafe(32)
+    relay = None
+    client_completed = False
+    failure_code: str | None = None
+    try:
+        relay = _start_qwen_relay(port, runtime=runtime, relay_token=relay_token)
+        _wait_http(f"http://127.0.0.1:{port}/__155f_status")
+        client = OpenAI(
+            api_key=relay_token,
+            base_url=f"http://127.0.0.1:{port}/v1",
+            max_retries=0,
+        )
+        try:
+            stream = client.responses.create(
+                model=CODEX_MODEL,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "bounded differential"}],
+                    }
+                ],
+                stream=True,
+            )
+            for _event in stream:
+                pass
+            client_completed = True
+        except Exception:
+            failure_code = "direct_qwen_client_stream_failed"
+        status = _qwen_relay_status(port)
+        structures = status.get("sse_structures")
+        structure = structures[-1] if isinstance(structures, list) and structures else None
+        statuses = status.get("upstream_statuses")
+        content_types = status.get("sse_content_type_classes")
+        return _stream_observation(
+            boundary="direct_qwen",
+            status=statuses[-1] if isinstance(statuses, list) and statuses else None,
+            content_type_class=(
+                content_types[-1]
+                if isinstance(content_types, list) and content_types
+                else None
+            ),
+            structure=structure,
+            client_completed=client_completed,
+            failure_code=failure_code,
+        )
+    finally:
+        _stop_process(relay)
+
+
+def _run_composed_stream_diagnostic(
+    root: Path, runtime: RuntimeReference
+) -> dict[str, object]:
+    from openai import OpenAI
+
+    postgres_url, container, pulled = _start_postgres(root)
+    gateway_port = _free_port()
+    local_port = 18031
+    qwen_port = _free_port()
+    service_token = secrets.token_urlsafe(32)
+    signing_secret = secrets.token_urlsafe(32)
+    derivation_secret = secrets.token_urlsafe(32)
+    encryption_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    gateway_env = _gateway_environment(
+        postgres_url,
+        gateway_port=gateway_port,
+        service_token=service_token,
+        signing_secret=signing_secret,
+        derivation_secret=derivation_secret,
+        encryption_key=encryption_key,
+    )
+    env_for_migration = dict(os.environ, **gateway_env)
+    env_for_migration.pop("TEST_DATABASE_URL", None)
+    relay = failure_server = qwen_relay = local = gateway = gateway_output = None
+    relay_thread = failure_thread = gateway_output_thread = None
+    try:
+        migration = _run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=REPO_ROOT,
+            env=env_for_migration,
+            timeout=120,
+        )
+        if migration.returncode != 0:
+            raise VerificationError("differential_migration_failed")
+        relay, relay_thread = _start_relay(local_port)
+        failure_server, failure_thread = _start_failure_server()
+        previous_environment = os.environ.copy()
+        os.environ.update(gateway_env)
+        try:
+            seeded = asyncio.run(
+                _seed_database(
+                    postgres_url,
+                    relay_port=relay.server_address[1],
+                    failure_port=failure_server.server_address[1],
+                    differential=True,
+                )
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environment)
+        key = seeded[0]
+        qwen_token = secrets.token_urlsafe(32)
+        qwen_relay = _start_qwen_relay(
+            qwen_port,
+            runtime=runtime,
+            relay_token=qwen_token,
+        )
+        _wait_http(f"http://127.0.0.1:{qwen_port}/__155f_status")
+        local_config = _local_config(
+            root,
+            local_port=local_port,
+            qwen_relay_port=qwen_port,
+            qwen_relay_token=qwen_token,
+        )
+        local_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONPATH": str(LOCAL_ROOT / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            SERVICE_TOKEN_ENV: service_token,
+            SIGNING_SECRET_ENV: signing_secret,
+            "UV_PROJECT_ENVIRONMENT": str(root / "local-venv"),
+            QWEN_RELAY_TOKEN_ENV: qwen_token,
+        }
+        if (LOCAL_ROOT / ".venv").exists():
+            raise VerificationError("local_checkout_venv_present_before_start")
+        local = _start_process(
+            [
+                "uv",
+                "run",
+                "--project",
+                str(LOCAL_ROOT),
+                "--frozen",
+                "slaif-local-coding",
+                "--config",
+                str(local_config),
+            ],
+            cwd=LOCAL_ROOT,
+            env=local_env,
+        )
+        gateway = _start_process(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "slaif_gateway.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(gateway_port),
+                "--no-access-log",
+                "--log-level",
+                "warning",
+            ],
+            cwd=REPO_ROOT,
+            env=gateway_env,
+        )
+        _wait_http(f"http://127.0.0.1:{local_port}/healthz")
+        _wait_http(f"http://127.0.0.1:{local_port}/readyz")
+        _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
+        gateway_output, gateway_output_thread = _start_relay(
+            gateway_port,
+            capture_requests=False,
+            boundary_class="gateway_output",
+        )
+        client = OpenAI(
+            api_key=key.plaintext,
+            base_url=f"http://127.0.0.1:{gateway_output.server_address[1]}/v1",
+            max_retries=0,
+        )
+        session = str(uuid.uuid4())
+        metadata = {
+            "session_id": session,
+            "thread_id": session,
+            "root_turn_id": str(uuid.uuid4()),
+            "turn_id": str(uuid.uuid4()),
+            "x-codex-installation-id": str(uuid.uuid4()),
+            "x-codex-window-id": str(uuid.uuid4()),
+        }
+        client_completed = False
+        failure_code: str | None = None
+        try:
+            stream = client.responses.create(
+                model=CODEX_MODEL,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "bounded differential"}],
+                    }
+                ],
+                stream=True,
+                extra_body={"client_metadata": metadata},
+            )
+            for _event in stream:
+                pass
+            client_completed = True
+        except Exception:
+            failure_code = "composed_client_stream_failed"
+        local_status = relay.status()
+        gateway_status = gateway_output.status()
+        local_structures = local_status.get("sse_structures")
+        gateway_structures = gateway_status.get("sse_structures")
+        local_output = _stream_observation(
+            boundary="local_output",
+            status=(
+                local_status["response_statuses"][-1]
+                if local_status.get("response_statuses")
+                else None
+            ),
+            content_type_class=(
+                local_status["response_content_type_classes"][-1]
+                if local_status.get("response_content_type_classes")
+                else None
+            ),
+            structure=(
+                local_structures[-1]
+                if isinstance(local_structures, list) and local_structures
+                else None
+            ),
+            client_completed=True,
+        )
+        gateway_observation = _stream_observation(
+            boundary="gateway_output",
+            status=(
+                gateway_status["response_statuses"][-1]
+                if gateway_status.get("response_statuses")
+                else None
+            ),
+            content_type_class=(
+                gateway_status["response_content_type_classes"][-1]
+                if gateway_status.get("response_content_type_classes")
+                else None
+            ),
+            structure=(
+                gateway_structures[-1]
+                if isinstance(gateway_structures, list) and gateway_structures
+                else None
+            ),
+            client_completed=client_completed,
+            failure_code=failure_code,
+        )
+        accounting_verified = False
+        try:
+            asyncio.run(_verify_accounting(postgres_url, (key,)))
+            accounting_verified = True
+        except VerificationError:
+            accounting_verified = False
+        return {
+            "local_output": local_output,
+            "gateway_output": gateway_observation,
+            "accounting_verified": accounting_verified,
+            "qwen_status": _qwen_relay_status(qwen_port),
+        }
+    finally:
+        _stop_process(local)
+        _stop_process(gateway)
+        _stop_process(qwen_relay)
+        for server, thread in (
+            (relay, relay_thread),
+            (gateway_output, gateway_output_thread),
+            (failure_server, failure_thread),
+        ):
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+            if thread is not None:
+                thread.join(timeout=10)
+        if container:
+            _docker("rm", "-f", container, timeout=30)
+        if pulled:
+            _docker("rmi", "postgres:16", timeout=60)
+        _verify_repository_cleanup()
+
+
+def run_stream_differential() -> dict[str, object]:
+    _verify_commit_topology()
+    runtime = _read_runtime_reference()
+    _verify_fixtures()
+    with tempfile.TemporaryDirectory(prefix="slaif-155j-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        root.chmod(0o700)
+        _validate_local_config(root, runtime)
+        direct_qwen = _run_direct_stream_diagnostic(root, runtime)
+        composed = _run_composed_stream_diagnostic(root, runtime)
+    local_output = composed["local_output"]
+    gateway_output = composed["gateway_output"]
+    if not isinstance(local_output, dict) or not isinstance(gateway_output, dict):
+        raise VerificationError("differential_observation_invalid")
+    decision = _classify_stream_differential(direct_qwen, local_output, gateway_output)
+    if decision == "all_boundaries_completed" and composed.get("accounting_verified") is not True:
+        raise VerificationError("differential_accounting_missing")
+    return {
+        "decision": decision,
+        "direct_qwen": direct_qwen,
+        "local_output": local_output,
+        "gateway_output": gateway_output,
+        "accounting_verified": composed.get("accounting_verified") is True,
+    }
+
+
 def _run_composed(
     root: Path,
     runtime: RuntimeReference | None,
@@ -2772,9 +3273,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qwen-relay", action="store_true")
     parser.add_argument("--fake-rehearsal", action="store_true")
+    parser.add_argument("--stream-differential", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
+    if arguments.stream_differential:
+        try:
+            result = run_stream_differential()
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
+        except Exception:
+            print("RESULT=BLOCKED code=unexpected_stream_differential")
+            return 1
+        print(f"RESULT=DIFFERENTIAL decision={result['decision']}")
+        return 0
     try:
         result = run(fake_qwen=arguments.fake_rehearsal)
         _assert_required_evidence(
