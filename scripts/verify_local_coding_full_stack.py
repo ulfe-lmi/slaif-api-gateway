@@ -774,6 +774,18 @@ _SAFE_SSE_EVENT_TYPES = frozenset(
         "other",
     }
 )
+_SAFE_ERROR_FIELD_NAMES = frozenset(
+    {"type", "message", "code", "param", "sequence_number", "request_id"}
+)
+_SAFE_ERROR_VALUE_CLASSES = frozenset(
+    {
+        "invalid_request_error", "authentication_error", "permission_error",
+        "rate_limit_error", "server_error", "provider_error",
+        "provider_request_error", "provider_http_error", "provider_timeout",
+        "provider_response_parse_error", "provider_configuration_error",
+        "codex_0149_request_invalid", "codex_0149_identity_shape",
+    }
+)
 _SSE_CAPTURE_LIMIT = 64 * 1024
 _SSE_EVENT_RUN_LIMIT = 128
 _SSE_EVENT_COUNT_LIMIT = _SSE_CAPTURE_LIMIT
@@ -789,6 +801,9 @@ _PINNED_CAPTURE_SSE_STRUCTURE = {
     "duplicates": False,
     "unknown_events": False,
     "error_event": False,
+    "error_field_names": [],
+    "error_code_class": "unknown",
+    "error_type_class": "unknown",
     "event_vocabulary_reviewed": True,
     "response_completed": True,
     "response_field_names": {
@@ -832,6 +847,9 @@ class _SSEStructuralRecorder:
         self._done_sentinel = False
         self._unknown_events = False
         self._error_event = False
+        self._error_field_names: set[str] = set()
+        self._error_code_class = "unknown"
+        self._error_type_class = "unknown"
         self._response_completed = False
         self._first_event_before_upstream_completion = False
         self._normal_close = False
@@ -936,6 +954,18 @@ class _SSEStructuralRecorder:
         self._unknown_events = self._unknown_events or event_unknown
         self._error_event = self._error_event or event_name == "error"
         self._response_completed = self._response_completed or event_name == "response.completed"
+        if event_name == "error":
+            error_object = payload.get("error")
+            error_object = error_object if isinstance(error_object, dict) else payload
+            self._error_field_names.update(
+                key for key in error_object if key in _SAFE_ERROR_FIELD_NAMES
+            )
+            for field, target in (("code", "_error_code_class"), ("type", "_error_type_class")):
+                value = error_object.get(field)
+                if isinstance(value, str) and value in _SAFE_ERROR_VALUE_CLASSES:
+                    setattr(self, target, value)
+                else:
+                    setattr(self, target, "unknown")
         response = payload.get("response")
         if isinstance(response, dict):
             fields = {
@@ -1001,6 +1031,9 @@ class _SSEStructuralRecorder:
             ),
             "unknown_events": self._unknown_events,
             "error_event": self._error_event,
+            "error_field_names": sorted(self._error_field_names),
+            "error_code_class": self._error_code_class,
+            "error_type_class": self._error_type_class,
             "event_vocabulary_reviewed": not self._unknown_events and not self._error_event,
             "response_completed": self._response_completed,
             "response_field_names": {
@@ -1278,6 +1311,9 @@ def _minimal_stream_summary(
         "duplicates": False,
         "unknown_events": False,
         "error_event": False,
+        "error_field_names": [],
+        "error_code_class": "unknown",
+        "error_type_class": "unknown",
         "event_vocabulary_reviewed": False,
         "done_sentinel": False,
         "response_id_relation": False,
@@ -1389,7 +1425,8 @@ def _safe_stream_summary(
             "boundary", "ran", "evidence_source", "ran_current_invocation",
             "http_status_class", "content_type_class", "event_trace",
             "event_counts", "invalid", "response_completed", "duplicates", "unknown_events",
-            "error_event", "event_vocabulary_reviewed", "terminal_completion_valid",
+            "error_event", "error_field_names", "error_code_class", "error_type_class",
+            "event_vocabulary_reviewed", "terminal_completion_valid",
             "done_sentinel", "response_id_relation", "created_status_in_progress",
             "completed_status_completed", "model_matches", "completed_output_empty",
             "completed_usage_valid", "terminal_output_shape", "first_event_before_upstream_completion",
@@ -1454,6 +1491,15 @@ def _safe_stream_summary(
             or observation.get("terminal_output_shape") not in _STREAM_TERMINAL_SHAPES
             or not isinstance(observation.get("evidence_source"), str)
             or observation.get("evidence_source") not in _STREAM_EVIDENCE_SOURCES
+            or not isinstance(observation.get("error_field_names"), list)
+            or any(
+                not isinstance(field, str) or field not in _SAFE_ERROR_FIELD_NAMES
+                for field in observation.get("error_field_names", [])
+            )
+            or not isinstance(observation.get("error_code_class"), str)
+            or observation.get("error_code_class") not in _COMPOSED_ERROR_CLASSES
+            or not isinstance(observation.get("error_type_class"), str)
+            or observation.get("error_type_class") not in _COMPOSED_ERROR_CLASSES
             or observation.get("ran") is not ran
             or (
                 observation.get("evidence_source") == "pinned_155l"
@@ -1491,6 +1537,7 @@ def _safe_stream_summary(
             for key in (
                 "boundary", "ran", "http_status_class", "content_type_class", "event_trace",
                 "event_counts", "invalid", "response_completed", "duplicates", "unknown_events", "error_event",
+                "error_field_names", "error_code_class", "error_type_class",
                 "evidence_source", "ran_current_invocation",
                 "event_vocabulary_reviewed", "terminal_completion_valid",
                 "done_sentinel", "response_id_relation", "created_status_in_progress",
@@ -1613,6 +1660,22 @@ def _safe_stream_summary(
         "duplicates": facts["duplicates"],
         "unknown_events": facts["unknown_events"],
         "error_event": facts["error_event"],
+        "error_field_names": sorted(
+            field for field in structure.get("error_field_names", [])
+            if isinstance(field, str) and field in _SAFE_ERROR_FIELD_NAMES
+        ) if isinstance(structure.get("error_field_names"), list) else [],
+        "error_code_class": (
+            structure.get("error_code_class")
+            if isinstance(structure.get("error_code_class"), str)
+            and structure.get("error_code_class") in _COMPOSED_ERROR_CLASSES
+            else "unknown"
+        ),
+        "error_type_class": (
+            structure.get("error_type_class")
+            if isinstance(structure.get("error_type_class"), str)
+            and structure.get("error_type_class") in _COMPOSED_ERROR_CLASSES
+            else "unknown"
+        ),
         "event_vocabulary_reviewed": facts["event_vocabulary_reviewed"],
         "done_sentinel": facts["done_sentinel"],
         "response_id_relation": facts["response_id_relation"],
@@ -1682,15 +1745,166 @@ def _stream_summary_lines(result: object) -> tuple[str, ...]:
                 decision=decision,
             )
         )
-    return tuple(
-        [
-            *(
-                "STREAM_BOUNDARY "
-                + json.dumps(summary, sort_keys=True, separators=(",", ":"))
-                for summary in summaries
-            ),
-            "STREAM_DECISION " + json.dumps(decision, separators=(",", ":")),
-        ]
+    lines = [
+        *(
+            "STREAM_BOUNDARY "
+            + json.dumps(summary, sort_keys=True, separators=(",", ":"))
+            for summary in summaries
+        )
+    ]
+    if "composed_path" in source:
+        lines.append(
+            "COMPOSED_PATH "
+            + json.dumps(
+                _safe_composed_path(source.get("composed_path"), decision=decision),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    lines.append("STREAM_DECISION " + json.dumps(decision, separators=(",", ":")))
+    return tuple(lines)
+
+
+_COMPOSED_COUNT_CLASSES = frozenset({"zero", "one", "many"})
+_COMPOSED_PATH_STATUS_CLASSES = frozenset({"2xx", "4xx", "5xx", "unknown"})
+_COMPOSED_ERROR_CLASSES = frozenset(_SAFE_ERROR_VALUE_CLASSES | {"unknown"})
+
+
+def _count_class(value: object) -> str:
+    if type(value) is not int or value < 0:
+        return "unknown"
+    return "zero" if value == 0 else "one" if value == 1 else "many"
+
+
+def _last_status_class(value: object) -> str:
+    if not isinstance(value, list) or not value:
+        return "unknown"
+    status = value[-1]
+    if type(status) is not int or status < 100 or status > 599:
+        return "unknown"
+    return f"{status // 100}xx" if status // 100 in {2, 4, 5} else "unknown"
+
+
+def _last_content_class(value: object) -> str:
+    if not isinstance(value, list) or not value:
+        return "unknown"
+    content = value[-1]
+    return content if content in {"sse", "json", "other"} else "unknown"
+
+
+def _safe_composed_path(value: object, *, decision: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        value = {}
+    count_fields = (
+        "gateway_to_local_request_count_class",
+        "gateway_to_local_response_count_class",
+        "local_to_qwen_inference_call_count_class",
+        "qwen_upstream_response_count_class",
+    )
+    status_fields = (
+        "local_response_status_class",
+        "qwen_upstream_status_class",
+    )
+    bool_fields = (
+        "local_rejected", "local_handler_error", "local_upstream_truncated",
+        "local_downstream_closed_early", "qwen_terminal_completion_valid",
+        "qwen_handler_error", "qwen_upstream_truncated", "qwen_path_rejection",
+        "gateway_error_event", "gateway_accounting_terminal",
+        "local_terminal_completion_valid",
+    )
+    def choice(field: str, choices: frozenset[str]) -> str:
+        candidate = value.get(field)
+        return candidate if isinstance(candidate, str) and candidate in choices else "unknown"
+
+    result = {field: choice(field, _COMPOSED_COUNT_CLASSES) for field in count_fields}
+    result.update({
+        field: choice(field, _COMPOSED_PATH_STATUS_CLASSES)
+        for field in status_fields
+    })
+    result.update({field: value.get(field) is True for field in bool_fields})
+    result.update({
+        "local_response_content_type_class": (
+            value.get("local_response_content_type_class")
+            if isinstance(value.get("local_response_content_type_class"), str)
+            and value.get("local_response_content_type_class") in {"sse", "json", "other", "unknown"}
+            else "unknown"
+        ),
+        "qwen_upstream_content_type_class": (
+            value.get("qwen_upstream_content_type_class")
+            if isinstance(value.get("qwen_upstream_content_type_class"), str)
+            and value.get("qwen_upstream_content_type_class") in {"sse", "json", "other", "unknown"}
+            else "unknown"
+        ),
+        "gateway_error_code_class": (
+            value.get("gateway_error_code_class")
+            if isinstance(value.get("gateway_error_code_class"), str)
+            and value.get("gateway_error_code_class") in _COMPOSED_ERROR_CLASSES
+            else "unknown"
+        ),
+        "gateway_error_type_class": (
+            value.get("gateway_error_type_class")
+            if isinstance(value.get("gateway_error_type_class"), str)
+            and value.get("gateway_error_type_class") in _COMPOSED_ERROR_CLASSES
+            else "unknown"
+        ),
+        "gateway_error_field_names": sorted(
+            field for field in value.get("gateway_error_field_names", [])
+            if isinstance(field, str) and field in _SAFE_ERROR_FIELD_NAMES
+        ) if isinstance(value.get("gateway_error_field_names"), list) else [],
+        "decision": decision,
+    })
+    return result
+
+
+def _composed_path_from_statuses(
+    *,
+    local_status: dict[str, object],
+    gateway_status: dict[str, object],
+    qwen_status: dict[str, object],
+    local_output: dict[str, object],
+    gateway_output: dict[str, object],
+    accounting_verified: bool,
+    decision: str,
+) -> dict[str, object]:
+    qwen_structures = qwen_status.get("sse_structures")
+    qwen_structure = qwen_structures[-1] if isinstance(qwen_structures, list) and qwen_structures else None
+    qwen_statuses = qwen_status.get("upstream_statuses")
+    qwen_contents = qwen_status.get("sse_content_type_classes")
+    qwen_terminal = (
+        isinstance(qwen_structure, dict)
+        and _stream_has_valid_completion(qwen_structure)
+        and _last_status_class(qwen_statuses) == "2xx"
+        and _last_content_class(qwen_contents) == "sse"
+    )
+    gateway_structures = gateway_status.get("sse_structures")
+    gateway_structure = gateway_structures[-1] if isinstance(gateway_structures, list) and gateway_structures else {}
+    error_fields = gateway_structure.get("error_field_names", []) if isinstance(gateway_structure, dict) else []
+    return _safe_composed_path(
+        {
+            "gateway_to_local_request_count_class": _count_class(local_status.get("forwarded_count")),
+            "gateway_to_local_response_count_class": _count_class(len(local_status.get("response_statuses", []))) if isinstance(local_status.get("response_statuses"), list) else "unknown",
+            "local_response_status_class": _last_status_class(local_status.get("response_statuses")),
+            "local_response_content_type_class": _last_content_class(local_status.get("response_content_type_classes")),
+            "local_rejected": type(local_status.get("rejected_count")) is int and local_status["rejected_count"] > 0,
+            "local_handler_error": local_status.get("handler_error") is True,
+            "local_upstream_truncated": local_status.get("upstream_truncated") is True,
+            "local_downstream_closed_early": local_status.get("downstream_closed_early") is True,
+            "local_terminal_completion_valid": local_output.get("terminal_completion_valid") is True,
+            "local_to_qwen_inference_call_count_class": _count_class(qwen_status.get("inference_calls")),
+            "qwen_upstream_response_count_class": _count_class(len(qwen_statuses)) if isinstance(qwen_statuses, list) else "unknown",
+            "qwen_upstream_status_class": _last_status_class(qwen_statuses),
+            "qwen_upstream_content_type_class": _last_content_class(qwen_contents),
+            "qwen_terminal_completion_valid": qwen_terminal,
+            "qwen_handler_error": qwen_status.get("handler_error") is True,
+            "qwen_upstream_truncated": qwen_status.get("upstream_truncated") is True,
+            "qwen_path_rejection": type(qwen_status.get("path_rejections")) is int and qwen_status["path_rejections"] > 0,
+            "gateway_error_event": gateway_structure.get("error_event") is True if isinstance(gateway_structure, dict) else False,
+            "gateway_error_field_names": error_fields,
+            "gateway_error_code_class": gateway_structure.get("error_code_class", "unknown") if isinstance(gateway_structure, dict) else "unknown",
+            "gateway_error_type_class": gateway_structure.get("error_type_class", "unknown") if isinstance(gateway_structure, dict) else "unknown",
+            "gateway_accounting_terminal": accounting_verified,
+        },
+        decision=decision,
     )
 
 
@@ -1805,6 +2019,8 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         with self._capture_lock:
             return {
                 "response_statuses": list(self.response_statuses),
+                "forwarded_count": self.forwarded,
+                "rejected_count": self.rejected,
                 "response_status_classes": list(self.response_status_classes),
                 "response_content_type_classes": list(self.response_content_type_classes),
                 "response_path_classes": list(self.response_path_classes),
@@ -4038,6 +4254,8 @@ def _run_composed_stream_diagnostic(
             "gateway_output": gateway_observation,
             "accounting_verified": accounting_verified,
             "qwen_status": qwen_status,
+            "local_status": local_status,
+            "gateway_status": gateway_status,
         }
     finally:
         primary = sys.exc_info()[1]
@@ -4139,9 +4357,81 @@ def run_stream_differential() -> dict[str, object]:
     }
 
 
-def _classify_composed_boundaries(
-    local_output: dict[str, object], gateway_output: dict[str, object]
+def _classify_composed_path(
+    path: dict[str, object],
+    local_output: dict[str, object],
+    gateway_output: dict[str, object],
 ) -> str:
+    count_fields = (
+        "gateway_to_local_request_count_class",
+        "gateway_to_local_response_count_class",
+        "local_to_qwen_inference_call_count_class",
+        "qwen_upstream_response_count_class",
+    )
+    if any(path.get(field) not in _COMPOSED_COUNT_CLASSES for field in count_fields):
+        return "ambiguous_stream_evidence"
+    if any(path.get(field) == "many" for field in count_fields):
+        return "ambiguous_stream_evidence"
+    local_request_count = path["gateway_to_local_request_count_class"]
+    local_response_failed = (
+        path["local_response_status_class"] == "unknown"
+        or path["local_rejected"] is True
+        or path["local_handler_error"] is True
+        or path["local_upstream_truncated"] is True
+        or path["local_downstream_closed_early"] is True
+        or not _terminal_completion_valid(local_output)
+    )
+    qwen_failed = (
+        path["local_to_qwen_inference_call_count_class"] == "one"
+        and (
+            path["qwen_upstream_response_count_class"] != "one"
+            or path["qwen_upstream_status_class"] != "2xx"
+            or path["qwen_upstream_content_type_class"] != "sse"
+            or path["qwen_terminal_completion_valid"] is not True
+            or path["qwen_handler_error"] is True
+            or path["qwen_upstream_truncated"] is True
+            or path["qwen_path_rejection"] is True
+        )
+    )
+    if local_request_count == "zero":
+        return "gateway_owned"
+    if (
+        local_request_count == "one"
+        and path["local_to_qwen_inference_call_count_class"] == "zero"
+        and local_response_failed
+    ):
+        return "local_owned"
+    if qwen_failed and local_response_failed:
+        return "local_qwen_owned"
+    if path["qwen_terminal_completion_valid"] is True and local_response_failed:
+        return "local_owned"
+    if (
+        _terminal_completion_valid(local_output)
+        and (
+            path["gateway_error_event"] is True
+            or not _terminal_completion_valid(gateway_output)
+        )
+    ):
+        return "gateway_owned"
+    if (
+        _terminal_completion_valid(local_output)
+        and _terminal_completion_valid(gateway_output)
+        and gateway_output.get(
+            "official_client_completion", gateway_output.get("client_completed")
+        ) is True
+        and path["gateway_accounting_terminal"] is True
+    ):
+        return "terminal_boundaries_completed"
+    return "ambiguous_stream_evidence"
+
+
+def _classify_composed_boundaries(
+    local_output: dict[str, object],
+    gateway_output: dict[str, object],
+    composed_path: dict[str, object] | None = None,
+) -> str:
+    if composed_path is not None:
+        return _classify_composed_path(composed_path, local_output, gateway_output)
     if _stream_observation_is_ambiguous(local_output) or _stream_observation_is_ambiguous(
         gateway_output
     ):
@@ -4192,7 +4482,19 @@ def _run_composed_only_impl(
         ran=True,
         decision="ambiguous_stream_evidence",
     )
-    decision = _classify_composed_boundaries(local_output, gateway_output)
+    composed_path = _composed_path_from_statuses(
+        local_status=composed.get("local_status", {}),
+        gateway_status=composed.get("gateway_status", {}),
+        qwen_status=composed.get("qwen_status", {}),
+        local_output=local_output,
+        gateway_output=gateway_output,
+        accounting_verified=composed.get("accounting_verified") is True,
+        decision="ambiguous_stream_evidence",
+    )
+    decision = _classify_composed_boundaries(
+        local_output, gateway_output, composed_path
+    )
+    composed_path = _safe_composed_path(composed_path, decision=decision)
     if decision == "terminal_boundaries_completed" and composed.get("accounting_verified") is not True:
         decision = "ambiguous_stream_evidence"
     if not fake_qwen:
@@ -4206,6 +4508,7 @@ def _run_composed_only_impl(
         "direct_qwen": direct_qwen,
         "local_output": local_output,
         "gateway_output": gateway_output,
+        "composed_path": composed_path,
         "accounting_verified": composed.get("accounting_verified") is True,
     }
 

@@ -592,6 +592,122 @@ def test_sse_structure_accepts_exact_pinned_capture_pair() -> None:
     verifier._assert_pinned_capture_sse_structure(_record_sse_structure(events))
 
 
+def test_error_event_projection_keeps_only_finite_safe_facts() -> None:
+    structure = _record_sse_structure([
+        (
+            "error",
+            {
+                "type": "error",
+                "code": "provider_error",
+                "message": "private provider detail",
+                "param": None,
+                "sequence_number": 4,
+                "private_extra": "must not survive",
+            },
+        )
+    ])
+    assert structure["error_event"] is True
+    assert structure["error_code_class"] == "provider_error"
+    assert structure["error_type_class"] == "unknown"
+    assert structure["error_field_names"] == [
+        "code", "message", "param", "sequence_number", "type"
+    ]
+    rendered = verifier.json.dumps(structure)
+    assert "private provider detail" not in rendered
+    assert "must not survive" not in rendered
+
+    hostile = _record_sse_structure([
+        ("error", {"type": "error", "code": "unbounded-private-code" * 100})
+    ])
+    assert hostile["error_code_class"] == "unknown"
+    assert "unbounded-private-code" not in verifier.json.dumps(hostile)
+
+
+def _valid_composed_path() -> dict[str, object]:
+    return {
+        "gateway_to_local_request_count_class": "one",
+        "gateway_to_local_response_count_class": "one",
+        "local_response_status_class": "2xx",
+        "local_response_content_type_class": "sse",
+        "local_rejected": False,
+        "local_handler_error": False,
+        "local_upstream_truncated": False,
+        "local_downstream_closed_early": False,
+        "local_terminal_completion_valid": True,
+        "local_to_qwen_inference_call_count_class": "one",
+        "qwen_upstream_response_count_class": "one",
+        "qwen_upstream_status_class": "2xx",
+        "qwen_upstream_content_type_class": "sse",
+        "qwen_terminal_completion_valid": True,
+        "qwen_handler_error": False,
+        "qwen_upstream_truncated": False,
+        "qwen_path_rejection": False,
+        "gateway_error_event": False,
+        "gateway_error_field_names": [],
+        "gateway_error_code_class": "unknown",
+        "gateway_error_type_class": "unknown",
+        "gateway_accounting_terminal": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("zero_gateway_request", "gateway_owned"),
+        ("local_before_qwen", "local_owned"),
+        ("qwen_failure", "local_qwen_owned"),
+        ("qwen_valid_local_failure", "local_owned"),
+        ("gateway_failure", "gateway_owned"),
+        ("complete", "terminal_boundaries_completed"),
+        ("many_calls", "ambiguous_stream_evidence"),
+    ],
+)
+def test_composed_path_classifier_proves_each_owner_branch(
+    mutation: str, expected: str
+) -> None:
+    local = verifier._stream_observation(
+        boundary="local_output", status=200, content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE, client_completed=True,
+    )
+    gateway = verifier._stream_observation(
+        boundary="gateway_output", status=200, content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE, client_completed=True,
+    )
+    path = _valid_composed_path()
+    if mutation == "zero_gateway_request":
+        path["gateway_to_local_request_count_class"] = "zero"
+    elif mutation == "local_before_qwen":
+        path.update(
+            local_to_qwen_inference_call_count_class="zero",
+            local_response_status_class="unknown",
+            local_terminal_completion_valid=False,
+        )
+    elif mutation == "qwen_failure":
+        path.update(
+            qwen_upstream_status_class="5xx",
+            qwen_terminal_completion_valid=False,
+            local_response_status_class="unknown",
+            local_terminal_completion_valid=False,
+        )
+    elif mutation == "qwen_valid_local_failure":
+        path.update(local_response_status_class="unknown", local_terminal_completion_valid=False)
+    elif mutation == "gateway_failure":
+        path["gateway_error_event"] = True
+    elif mutation == "many_calls":
+        path["local_to_qwen_inference_call_count_class"] = "many"
+    assert verifier._classify_composed_path(path, local, gateway) == expected
+
+
+def test_composed_path_projection_totalizes_hostile_values() -> None:
+    safe = verifier._safe_composed_path(
+        {"gateway_to_local_request_count_class": [], "gateway_error_code_class": ["secret"]},
+        decision="ambiguous_stream_evidence",
+    )
+    assert safe["gateway_to_local_request_count_class"] == "unknown"
+    assert safe["gateway_error_code_class"] == "unknown"
+    assert all(isinstance(value, (bool, str, list)) for value in safe.values())
+
+
 def test_sse_structure_rejects_unknown_event_type() -> None:
     event = {
         "type": "response.unreviewed",
@@ -1062,7 +1178,8 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
         '"completed_status_completed":true,"completed_usage_valid":true,'
         '"content_type_class":"sse","created_status_in_progress":true,'
         '"decision":"all_boundaries_completed","done_sentinel":false,'
-        '"downstream_closed_early":false,"duplicates":false,"error_event":false,'
+        '"downstream_closed_early":false,"duplicates":false,"error_code_class":"unknown",'
+        '"error_event":false,"error_field_names":[],"error_type_class":"unknown",'
         '"event_counts":{"response.completed":1,"response.created":1},'
         '"event_trace":[{"count":1,"event":"response.created"},'
         '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
@@ -1243,6 +1360,22 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
             "local_output": raw,
             "gateway_output": gateway,
             "accounting_verified": True,
+            "local_status": {
+                "forwarded_count": 1,
+                "rejected_count": 0,
+                "response_statuses": [200],
+                "response_content_type_classes": ["sse"],
+            },
+            "gateway_status": {
+                "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE],
+            },
+            "qwen_status": {
+                "inference_calls": 1,
+                "upstream_statuses": [200],
+                "sse_content_type_classes": ["sse"],
+                "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE],
+                "path_rejections": 0,
+            },
         },
     )
     result = verifier.run_composed_only(fake_qwen=True)
