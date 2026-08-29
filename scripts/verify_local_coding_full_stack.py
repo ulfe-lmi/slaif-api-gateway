@@ -1433,6 +1433,8 @@ def _localize_constitution_failure(
                 return VerificationError("constitution_local_http_5xx")
             if response_statuses and response_statuses[-1] >= 400:
                 return VerificationError("constitution_local_http_4xx")
+            if response_statuses and response_statuses[-1] == 200:
+                return VerificationError("constitution_gateway_response_rejected")
             return VerificationError("constitution_local_response_rejected")
         return VerificationError("constitution_inference_without_compiler")
     if any(status >= 400 for status in qwen_status["upstream_statuses"]):

@@ -501,6 +501,24 @@ def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
     )
 
 
+def test_constitution_failure_localizer_distinguishes_successful_local_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    relay.remember_response(200, "/v1/responses")
+    verifier_status = {
+        "path_rejections": 0,
+        "calls": 1,
+        "compiler_calls": 0,
+        "inference_calls": 1,
+        "upstream_statuses": [200],
+    }
+    monkeypatch.setattr(verifier, "_qwen_relay_status", lambda _port: verifier_status)
+    assert str(verifier._localize_constitution_failure(relay, 39149)) == (
+        "constitution_gateway_response_rejected"
+    )
+
+
 def test_unexpected_preflight_failure_is_localized_without_exception_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
