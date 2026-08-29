@@ -650,6 +650,137 @@ class CapturedRequest:
     headers: dict[str, str]
 
 
+_SAFE_SSE_EVENT_TYPES = frozenset(
+    {
+        "response.created",
+        "response.completed",
+        "response.in_progress",
+        "response.output_text.delta",
+        "error",
+        "other",
+    }
+)
+_SSE_CAPTURE_LIMIT = 64 * 1024
+_PINNED_CAPTURE_SSE_STRUCTURE = {
+    "invalid": False,
+    "event_types": ["response.completed", "response.created"],
+    "response_field_names": {
+        "response.created": ["id", "model", "object", "status"],
+        "response.completed": ["id", "model", "object", "output", "status", "usage"],
+    },
+}
+
+
+class _SSEStructuralRecorder:
+    """Retain only bounded event names and response object field names."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+        self._event_name: str | None = None
+        self._data = bytearray()
+        self._event_types: set[str] = set()
+        self._response_field_names: dict[str, set[str]] = {}
+        self._invalid = False
+
+    def feed(self, chunk: bytes) -> None:
+        if self._invalid:
+            return
+        if len(self._buffer) + len(chunk) > _SSE_CAPTURE_LIMIT:
+            self._invalid = True
+            self._buffer.clear()
+            self._data.clear()
+            return
+        self._buffer.extend(chunk)
+        self._consume_lines()
+
+    def finish(self) -> None:
+        if self._invalid:
+            return
+        if self._buffer:
+            self._buffer.extend(b"\n")
+            self._consume_lines()
+        if self._event_name is not None or self._data:
+            self._finish_event()
+
+    def _consume_lines(self) -> None:
+        while b"\n" in self._buffer:
+            line, _, remainder = self._buffer.partition(b"\n")
+            self._buffer = bytearray(remainder)
+            line = line.rstrip(b"\r")
+            if not line:
+                self._finish_event()
+            elif line.startswith(b"event:"):
+                self._event_name = self._safe_name(line[6:])
+            elif line.startswith(b"data:"):
+                value = line[5:]
+                if value.startswith(b" "):
+                    value = value[1:]
+                if len(self._data) + len(value) > _SSE_CAPTURE_LIMIT:
+                    self._invalid = True
+                    self._data.clear()
+                    self._buffer.clear()
+                    return
+                self._data.extend(value)
+
+    @staticmethod
+    def _safe_name(raw: bytes) -> str:
+        try:
+            value = raw.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return "other"
+        return value if value in _SAFE_SSE_EVENT_TYPES else "other"
+
+    def _finish_event(self) -> None:
+        data = bytes(self._data)
+        event_name = self._event_name
+        self._data.clear()
+        self._event_name = None
+        if not data or data == b"[DONE]":
+            return
+        try:
+            payload = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._invalid = True
+            return
+        if not isinstance(payload, dict):
+            self._invalid = True
+            return
+        payload_type = payload.get("type")
+        if event_name is None:
+            try:
+                payload_type_bytes = payload_type.encode("ascii") if isinstance(payload_type, str) else b""
+            except UnicodeEncodeError:
+                payload_type_bytes = b""
+            event_name = self._safe_name(payload_type_bytes)
+        self._event_types.add(event_name or "other")
+        response = payload.get("response")
+        if isinstance(response, dict):
+            fields = {
+                key
+                for key in response
+                if isinstance(key, str)
+                and len(key) <= 64
+                and all(33 <= ord(char) <= 126 for char in key)
+            }
+            self._response_field_names.setdefault(event_name or "other", set()).update(fields)
+
+    def snapshot(self) -> dict[str, object]:
+        self.finish()
+        return {
+            "invalid": self._invalid,
+            "event_types": sorted(self._event_types),
+            "response_field_names": {
+                event: sorted(fields)
+                for event, fields in sorted(self._response_field_names.items())
+            },
+        }
+
+
+def _assert_pinned_capture_sse_structure(structure: dict[str, object]) -> None:
+    if structure != _PINNED_CAPTURE_SSE_STRUCTURE:
+        raise VerificationError("gateway_sse_schema_mismatch")
+
+
 class _ForwardingRelay(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -659,6 +790,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.captured: list[CapturedRequest] = []
         self.response_statuses: list[int] = []
         self.response_path_classes: list[str] = []
+        self.sse_structures: list[dict[str, object]] = []
         self.forwarded = 0
         self.rejected = 0
         self._capture_lock = threading.Lock()
@@ -673,11 +805,16 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.response_statuses.append(status)
             self.response_path_classes.append(_safe_path_class(path))
 
+    def remember_sse_structure(self, structure: dict[str, object]) -> None:
+        with self._capture_lock:
+            self.sse_structures.append(structure)
+
     def status(self) -> dict[str, object]:
         with self._capture_lock:
             return {
                 "response_statuses": list(self.response_statuses),
                 "response_path_classes": list(self.response_path_classes),
+                "sse_structures": list(self.sse_structures),
             }
 
     def snapshot(self) -> tuple[CapturedRequest, ...]:
@@ -716,6 +853,13 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                     headers=headers,
                     content=body,
                 ) as response:
+                    recorder = (
+                        _SSEStructuralRecorder()
+                        if response.headers.get("content-type", "").lower().startswith(
+                            "text/event-stream"
+                        )
+                        else None
+                    )
                     self.send_response(response.status_code)
                     for key, value in response.headers.items():
                         if key.lower() not in {
@@ -726,8 +870,13 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                             self.send_header(key, value)
                     self.end_headers()
                     for chunk in response.iter_raw():
+                        if recorder is not None:
+                            recorder.feed(chunk)
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                    if recorder is not None:
+                        recorder.finish()
+                        self.server.remember_sse_structure(recorder.snapshot())
                     status = response.status_code
         except httpx.HTTPError:
             self.server.rejected += 1
@@ -1998,6 +2147,14 @@ def _run_composed_impl(
         stream_events = list(streamed)
         if not any(getattr(event, "type", None) == "response.completed" for event in stream_events):
             raise VerificationError("stream_completion_event_missing")
+        if fake_qwen:
+            stream_structures = relay.status()["sse_structures"]
+            if not isinstance(stream_structures, list) or not stream_structures:
+                raise VerificationError("gateway_sse_schema_missing")
+            structure = stream_structures[-1]
+            if not isinstance(structure, dict):
+                raise VerificationError("gateway_sse_schema_invalid")
+            _assert_pinned_capture_sse_structure(structure)
         tracker.set("image_response")
         client.responses.create(
             **request_body("155f image", session_a, image=True),

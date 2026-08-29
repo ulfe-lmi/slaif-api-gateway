@@ -376,6 +376,36 @@ def test_forwarding_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     relay_thread.join(timeout=2)
 
 
+def test_gateway_facing_relay_records_pinned_capture_sse_structure() -> None:
+    fake, fake_thread, token = verifier._start_fake_qwen()
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), fake.server_address[1])
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    try:
+        with verifier.httpx.stream(
+            "POST",
+            f"http://127.0.0.1:{relay.server_address[1]}/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": verifier.CODEX_MODEL, "stream": True},
+            timeout=5,
+        ) as response:
+            assert response.status_code == 200
+            chunks = response.iter_raw()
+            first = next(chunks)
+            assert b"response.created" in first
+            assert b"response.completed" in first + b"".join(chunks)
+        structures = relay.status()["sse_structures"]
+        assert isinstance(structures, list) and len(structures) == 1
+        verifier._assert_pinned_capture_sse_structure(structures[0])
+    finally:
+        relay.shutdown()
+        relay.server_close()
+        fake.shutdown()
+        fake.server_close()
+        relay_thread.join(timeout=2)
+        fake_thread.join(timeout=2)
+
+
 def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     first_sent = threading.Event()
     release = threading.Event()
