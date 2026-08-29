@@ -183,9 +183,11 @@ def _verify_commit_topology() -> None:
         raise VerificationError("github_checks_unavailable")
     if not _checks_are_green(checks.stdout):
         raise VerificationError("github_checks_not_green")
-    if _git(
-        "diff", "--exit-code", f"{GATEWAY_REPORT_HEAD}^1", GATEWAY_REPORT_HEAD, "--", "oap/reports"
-    ):
+    report_diff = _run(
+        ["git", "diff", f"{GATEWAY_REPORT_HEAD}^1", GATEWAY_REPORT_HEAD, "--", "oap/reports"],
+        cwd=REPO_ROOT,
+    )
+    if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
         "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-f-real-codex-local-coding-qwen-acceptance.md"
