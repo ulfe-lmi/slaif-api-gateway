@@ -677,7 +677,7 @@ def _start_process(command: list[str], *, cwd: Path, env: dict[str, str], source
         "PYTHONPATH=\"${PYTHONPATH:-}\" "
         "SLAIF_155F_LOCAL_SERVICE_TOKEN=\"${SLAIF_155F_LOCAL_SERVICE_TOKEN}\" "
         "SLAIF_155F_LOCAL_SIGNING_SECRET=\"${SLAIF_155F_LOCAL_SIGNING_SECRET}\" "
-        "UV_PROJECT_ENVIRONMENT=\"${UV_PROJECT_ENVIRONMENT}\" "
+        "UV_PROJECT_ENVIRONMENT=\"${SLAIF_155F_LOCAL_UV_ENV}\" "
         "QWEN3090_API_KEY=\"${QWEN3090_API_KEY}\" \"$@\""
     )
     launcher = [
@@ -994,7 +994,7 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         "PYTHONDONTWRITEBYTECODE": "1",
         "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token,
         "SLAIF_155F_LOCAL_SIGNING_SECRET": signing_secret,
-        "UV_PROJECT_ENVIRONMENT": str(root / "local-venv"),
+        "SLAIF_155F_LOCAL_UV_ENV": str(root / "local-venv"),
     }
     try:
         local = _start_process(
