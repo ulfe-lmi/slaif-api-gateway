@@ -1413,7 +1413,9 @@ def _localize_ordinary_response_failure(
 
 
 def _localize_constitution_failure(
-    relay: _ForwardingRelay, qwen_relay_port: int | None
+    relay: _ForwardingRelay,
+    qwen_relay_port: int | None,
+    exception: BaseException | None = None,
 ) -> VerificationError:
     if qwen_relay_port is None:
         return VerificationError("constitution_root_first_failed")
@@ -1434,7 +1436,17 @@ def _localize_constitution_failure(
             if response_statuses and response_statuses[-1] >= 400:
                 return VerificationError("constitution_local_http_4xx")
             if response_statuses and response_statuses[-1] == 200:
-                return VerificationError("constitution_gateway_response_rejected")
+                known_errors = {
+                    "APIResponseValidationError": "constitution_gateway_response_schema",
+                    "APIStatusError": "constitution_gateway_response_status",
+                    "BadRequestError": "constitution_gateway_response_bad_request",
+                }
+                return VerificationError(
+                    known_errors.get(
+                        type(exception).__name__ if exception is not None else "",
+                        "constitution_gateway_response_rejected",
+                    )
+                )
             return VerificationError("constitution_local_response_rejected")
         return VerificationError("constitution_inference_without_compiler")
     if any(status >= 400 for status in qwen_status["upstream_statuses"]):
@@ -1870,8 +1882,8 @@ def _run_composed_impl(
         tracker.set("constitution_root_first")
         try:
             client.responses.create(**project_body)
-        except Exception:
-            raise _localize_constitution_failure(relay, qwen_relay_port) from None
+        except Exception as exc:
+            raise _localize_constitution_failure(relay, qwen_relay_port, exc) from None
         tracker.set("constitution_root_reuse")
         client.responses.create(**project_body)
         tracker.set("zero_root_rehydration")
