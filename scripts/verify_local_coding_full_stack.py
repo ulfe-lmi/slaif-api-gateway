@@ -1412,7 +1412,9 @@ def _localize_ordinary_response_failure(
     return VerificationError("ordinary_response_failed")
 
 
-def _localize_constitution_failure(qwen_relay_port: int | None) -> VerificationError:
+def _localize_constitution_failure(
+    relay: _ForwardingRelay, qwen_relay_port: int | None
+) -> VerificationError:
     if qwen_relay_port is None:
         return VerificationError("constitution_root_first_failed")
     try:
@@ -1424,6 +1426,14 @@ def _localize_constitution_failure(qwen_relay_port: int | None) -> VerificationE
     if qwen_status["calls"] <= 0:
         return VerificationError("constitution_local_before_qwen")
     if qwen_status["compiler_calls"] <= 0:
+        if qwen_status["inference_calls"] > 0:
+            relay_status = relay.status()
+            response_statuses = relay_status["response_statuses"]
+            if response_statuses and response_statuses[-1] >= 500:
+                return VerificationError("constitution_local_http_5xx")
+            if response_statuses and response_statuses[-1] >= 400:
+                return VerificationError("constitution_local_http_4xx")
+            return VerificationError("constitution_local_response_rejected")
         return VerificationError("constitution_inference_without_compiler")
     if any(status >= 400 for status in qwen_status["upstream_statuses"]):
         return VerificationError("constitution_qwen_upstream_error")
@@ -1859,7 +1869,7 @@ def _run_composed_impl(
         try:
             client.responses.create(**project_body)
         except Exception:
-            raise _localize_constitution_failure(qwen_relay_port) from None
+            raise _localize_constitution_failure(relay, qwen_relay_port) from None
         tracker.set("constitution_root_reuse")
         client.responses.create(**project_body)
         tracker.set("zero_root_rehydration")

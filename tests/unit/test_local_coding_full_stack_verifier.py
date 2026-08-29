@@ -485,6 +485,7 @@ def test_ordinary_response_localizer_uses_bounded_qwen_status_for_nonlocal_404(
 def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
     monkeypatch.setattr(
         verifier,
         "_qwen_relay_status",
@@ -495,7 +496,7 @@ def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
             "upstream_statuses": [200],
         },
     )
-    assert str(verifier._localize_constitution_failure(39149)) == (
+    assert str(verifier._localize_constitution_failure(relay, 39149)) == (
         "constitution_local_compiler_rejected"
     )
 
