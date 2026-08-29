@@ -76,18 +76,28 @@ class SeededKey:
     plaintext: str
 
 
-def _run(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: float = 120) -> subprocess.CompletedProcess[bytes]:
+def _run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = 120,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     try:
-        result = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
-        )
+        kwargs: dict[str, object] = {
+            "cwd": cwd,
+            "env": env,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "timeout": timeout,
+            "check": False,
+        }
+        if input_bytes is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            kwargs["input"] = input_bytes
+        result = subprocess.run(argv, **kwargs)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise VerificationError("command_failed") from exc
     if len(result.stdout) > MAX_OUTPUT_BYTES or len(result.stderr) > MAX_OUTPUT_BYTES:
@@ -512,7 +522,14 @@ def _local_config(
     body = body.replace(
         "__SLAIF_155F_QWEN_ENDPOINT__", f"http://127.0.0.1:{qwen_relay_port}/v1"
     ).replace(QWEN_TOKEN_ENV, QWEN_RELAY_TOKEN_ENV)
-    config.write_text(body, encoding="utf-8")
+    result = _run(
+        ["/usr/bin/tee", str(config)],
+        env={"PATH": "/usr/bin:/bin"},
+        input_bytes=body.encode("utf-8"),
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise VerificationError("local_config_write_failed")
     config.chmod(0o600)
     if not qwen_relay_token:
         raise VerificationError("qwen_relay_token_missing")
