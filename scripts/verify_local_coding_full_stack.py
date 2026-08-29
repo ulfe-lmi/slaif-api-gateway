@@ -967,8 +967,6 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             if index == 0:
                 self.server.first_event_sent.set()
                 time.sleep(0.05)
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
 
     def do_POST(self) -> None:
         if not self._authorized():

@@ -173,6 +173,7 @@ def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
             assert b"response.output_text.delta" not in body
             assert body.count(b"event: response.created") == 1
             assert body.count(b"event: response.completed") == 1
+            assert b"data: [DONE]" not in body
             assert b'"status":"in_progress"' in body
             assert b'"status":"completed"' in body
             assert b'"output":[]' in body
