@@ -53,6 +53,7 @@ TASK_DB = "slaif_gateway_oap_155f_live"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
+QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
@@ -503,33 +504,29 @@ def _gateway_environment(database_url: str, *, gateway_port: int, service_token:
     return env
 
 
-def _local_config(root: Path, *, local_port: int, runtime: RuntimeReference) -> Path:
+def _local_config(
+    root: Path, *, local_port: int, qwen_relay_port: int, qwen_relay_token: str
+) -> Path:
     config = root / "local-coding.toml"
     body = f'''[server]\nlisten_host = "127.0.0.1"\nlisten_port = {local_port}\n\n[gateway_ingress]\nmode = "service_bearer_signed_identity_v1"\nservice_token_env = "{SERVICE_TOKEN_ENV}"\nsigning_secret_env = "{SIGNING_SECRET_ENV}"\n\n[upstream]\nbase_url = "__SLAIF_155F_QWEN_ENDPOINT__"\napi_key_env = "{QWEN_TOKEN_ENV}"\nmodel = "{CODEX_MODEL}"\nconnect_timeout_seconds = 10\nrequest_timeout_seconds = 300\nwrite_timeout_seconds = 30\npool_timeout_seconds = 10\n\n[compiler]\nenabled = true\napi_key_env = "{QWEN_TOKEN_ENV}"\n\n[cache]\nbackend = "filesystem"\nroot = "{(root / "cache").as_posix()}"\nfallback_root = "{(root / "cache-fallback").as_posix()}"\n\n[constitution]\nenabled = true\nidentity_source = "signed_request"\n\n[observation]\n\n[[routes]]\nname = "qwen38-vision-codex"\nmodel = "{CODEX_MODEL}"\nmax_images_per_request = 1\nimage_overflow_policy = "retain_newest"\nresponses_tool_policy = "drop_disabled_codex_search"\nobservation_enabled = true\nconstitution_enabled = true\n'''
+    body = body.replace(
+        "__SLAIF_155F_QWEN_ENDPOINT__", f"http://127.0.0.1:{qwen_relay_port}/v1"
+    ).replace(QWEN_TOKEN_ENV, QWEN_RELAY_TOKEN_ENV)
     config.write_text(body, encoding="utf-8")
     config.chmod(0o600)
-    materialize = (
-        "from pathlib import Path; import os; "
-        "path=Path(os.environ['SLAIF_155F_CONFIG_PATH']); "
-        "text=path.read_text(encoding='utf-8'); "
-        "path.write_text(text.replace('__SLAIF_155F_QWEN_ENDPOINT__', os.environ['SLAIF_155F_CONFIG_ENDPOINT']), encoding='utf-8')"
-    )
-    result = _run(
-        [sys.executable, "-c", materialize],
-        env={
-            "PATH": "/usr/bin:/bin",
-            "SLAIF_155F_CONFIG_PATH": str(config),
-            "SLAIF_155F_CONFIG_ENDPOINT": runtime.endpoint,
-        },
-        timeout=10,
-    )
-    if result.returncode != 0:
-        raise VerificationError("local_config_materialization_failed")
+    if not qwen_relay_token:
+        raise VerificationError("qwen_relay_token_missing")
     return config
 
 
 def _validate_local_config(root: Path, runtime: RuntimeReference) -> Path:
-    config = _local_config(root, local_port=18031, runtime=runtime)
+    del runtime
+    config = _local_config(
+        root,
+        local_port=18031,
+        qwen_relay_port=39149,
+        qwen_relay_token="synthetic-qwen-relay-token",
+    )
     sys.path.insert(0, str(LOCAL_ROOT / "src"))
     try:
         from slaif_local_coding.config import load_settings
@@ -541,6 +538,9 @@ def _validate_local_config(root: Path, runtime: RuntimeReference) -> Path:
         settings.server.listen_host != "127.0.0.1"
         or settings.server.listen_port != 18031
         or settings.upstream.model != CODEX_MODEL
+        or settings.upstream.api_key_env != QWEN_RELAY_TOKEN_ENV
+        or settings.compiler.api_key_env != QWEN_RELAY_TOKEN_ENV
+        or settings.upstream.base_url.startswith("http://127.0.0.1:") is False
         or settings.gateway_ingress.mode != "service_bearer_signed_identity_v1"
         or settings.routes[0].responses_tool_policy != "drop_disabled_codex_search"
     ):
@@ -606,24 +606,30 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
         self.server.remember(captured)
         try:
             with httpx.Client(timeout=300, follow_redirects=False) as client:
-                response = client.request(
+                with client.stream(
                     self.command,
                     f"http://127.0.0.1:{self.server.local_port}{self.path}",
                     headers=headers,
                     content=body,
-                )
+                ) as response:
+                    self.send_response(response.status_code)
+                    for key, value in response.headers.items():
+                        if key.lower() not in {
+                            "content-length",
+                            "connection",
+                            "transfer-encoding",
+                        }:
+                            self.send_header(key, value)
+                    self.end_headers()
+                    for chunk in response.iter_raw():
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    status = response.status_code
         except httpx.HTTPError:
             self.server.rejected += 1
             self.send_error(502)
             return
-        self.send_response(response.status_code)
-        for key, value in response.headers.items():
-            if key.lower() not in {"content-length", "connection", "transfer-encoding"}:
-                self.send_header(key, value)
-        self.send_header("Content-Length", str(len(response.content)))
-        self.end_headers()
-        self.wfile.write(response.content)
-        self.server.remember_response(response.status_code)
+        self.server.remember_response(status)
 
     def do_GET(self) -> None:
         self._forward()
@@ -670,6 +676,217 @@ class _FailureHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class _QwenRelayServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        *,
+        endpoint: str,
+        relay_token: str,
+        qwen_token: str,
+    ) -> None:
+        super().__init__(server_address, _QwenRelayHandler)
+        self.endpoint = endpoint
+        self.relay_token = relay_token
+        self.qwen_token = qwen_token
+        self.calls = 0
+        self.compiler_calls = 0
+        self.inference_calls = 0
+        self.successful_calls = 0
+        self.bad_inbound_auth = False
+        self.auth_replaced = False
+        self.internal_headers = False
+        self.internal_body = False
+        self.tool_types: set[str] = set()
+        self.outbound_header_names: set[str] = set()
+        self._lock = threading.Lock()
+
+    def record_request(self, *, compiler: bool, payload: object, headers: dict[str, str], body: bytes) -> None:
+        with self._lock:
+            self.calls += 1
+            if compiler:
+                self.compiler_calls += 1
+            else:
+                self.inference_calls += 1
+            if headers.get("authorization") != f"Bearer {self.relay_token}":
+                self.bad_inbound_auth = True
+            self.internal_headers = self.internal_headers or any(
+                name.startswith("x-slaif-") or name.startswith("x-internal-")
+                for name in headers
+            )
+            self.internal_body = self.internal_body or any(
+                marker in body
+                for marker in (b"x-slaif-", b"x-internal-", self.relay_token.encode("utf-8"))
+            )
+            if isinstance(payload, dict) and isinstance(payload.get("tools"), list):
+                self.tool_types.update(
+                    item["type"]
+                    for item in payload["tools"]
+                    if isinstance(item, dict) and isinstance(item.get("type"), str)
+                )
+            self.outbound_header_names.update(
+                {"accept", "accept-encoding", "authorization", "content-type"}
+            )
+            self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
+
+    def record_success(self) -> None:
+        with self._lock:
+            self.successful_calls += 1
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "calls": self.calls,
+                "compiler_calls": self.compiler_calls,
+                "inference_calls": self.inference_calls,
+                "successful_calls": self.successful_calls,
+                "bad_inbound_auth": self.bad_inbound_auth,
+                "auth_replaced": self.auth_replaced,
+                "internal_headers": self.internal_headers,
+                "internal_body": self.internal_body,
+                "tool_types": sorted(self.tool_types),
+                "outbound_header_names": sorted(self.outbound_header_names),
+            }
+
+
+class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
+    server: _QwenRelayServer
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        if self.path == "/__155f_status":
+            body = json.dumps(self.server.status(), separators=(",", ":")).encode("ascii")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
+    def do_POST(self) -> None:
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            self.send_error(400)
+            return
+        if length < 0 or length > RELAY_BODY_LIMIT:
+            self.send_error(413)
+            return
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
+        inbound_headers = {
+            key.lower(): value
+            for key, value in self.headers.items()
+            if key.lower() not in {"host", "content-length", "connection"}
+        }
+        compiler = isinstance(payload, dict) and isinstance(payload.get("messages"), list)
+        self.server.record_request(
+            compiler=compiler,
+            payload=payload,
+            headers=inbound_headers,
+            body=body,
+        )
+        if inbound_headers.get("authorization") != f"Bearer {self.server.relay_token}":
+            self.send_error(401)
+            return
+        if not self.server.qwen_token:
+            self.send_error(503)
+            return
+        suffix = self.path[3:] if self.path.startswith("/v1") else self.path
+        target = self.server.endpoint.rstrip("/") + suffix
+        outbound_headers = {
+            name: inbound_headers[name]
+            for name in ("content-type", "accept", "accept-encoding")
+            if name in inbound_headers
+        }
+        outbound_headers["authorization"] = f"Bearer {self.server.qwen_token}"
+        try:
+            with httpx.Client(timeout=300, follow_redirects=False) as client:
+                with client.stream("POST", target, headers=outbound_headers, content=body) as response:
+                    self.send_response(response.status_code)
+                    for key, value in response.headers.items():
+                        if key.lower() not in {
+                            "content-length",
+                            "connection",
+                            "transfer-encoding",
+                        }:
+                            self.send_header(key, value)
+                    self.end_headers()
+                    for chunk in response.iter_raw():
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    status = response.status_code
+        except httpx.HTTPError:
+            self.send_error(502)
+            return
+        if 200 <= status < 300:
+            self.server.record_success()
+
+
+def _qwen_relay_main() -> int:
+    try:
+        port = int(os.environ["SLAIF_155F_QWEN_RELAY_PORT"])
+        endpoint = os.environ["SLAIF_155F_QWEN_BASE_URL"]
+        relay_token = os.environ[QWEN_RELAY_TOKEN_ENV]
+        qwen_token = os.environ[QWEN_TOKEN_ENV]
+    except (KeyError, ValueError):
+        return 2
+    server = _QwenRelayServer(
+        ("127.0.0.1", port),
+        endpoint=endpoint,
+        relay_token=relay_token,
+        qwen_token=qwen_token,
+    )
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+    return 0
+
+
+def _start_qwen_relay(
+    port: int, *, runtime: RuntimeReference, relay_token: str
+) -> subprocess.Popen[bytes]:
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(REPO_ROOT),
+        "SLAIF_155F_QWEN_BASE_URL": runtime.endpoint,
+        "SLAIF_155F_QWEN_RELAY_PORT": str(port),
+        QWEN_RELAY_TOKEN_ENV: relay_token,
+    }
+    return _start_process(
+        [sys.executable, str(Path(__file__).resolve()), "--qwen-relay"],
+        cwd=REPO_ROOT,
+        env=env,
+        source=runtime.credential_source,
+        selected_env=(
+            "SLAIF_155F_QWEN_BASE_URL",
+            "SLAIF_155F_QWEN_RELAY_PORT",
+            QWEN_RELAY_TOKEN_ENV,
+            QWEN_TOKEN_ENV,
+        ),
+    )
+
+
+def _qwen_relay_status(port: int) -> dict[str, object]:
+    try:
+        response = httpx.get(f"http://127.0.0.1:{port}/__155f_status", timeout=10)
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise VerificationError("qwen_relay_status_unavailable") from exc
+    if response.status_code != 200 or not isinstance(payload, dict):
+        raise VerificationError("qwen_relay_status_invalid")
+    return payload
+
+
 def _start_relay(local_port: int) -> tuple[_ForwardingRelay, threading.Thread]:
     relay = _ForwardingRelay(("127.0.0.1", 0), local_port)
     thread = threading.Thread(target=relay.serve_forever, name="155f-relay", daemon=True)
@@ -684,18 +901,27 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     return server, thread
 
 
-def _start_process(command: list[str], *, cwd: Path, env: dict[str, str], source: Path | None = None) -> subprocess.Popen[bytes]:
+def _start_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    source: Path | None = None,
+    selected_env: tuple[str, ...] = (),
+) -> subprocess.Popen[bytes]:
     if source is None:
         return subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    names = selected_env or (
+        "PYTHONPATH",
+        "SLAIF_155F_LOCAL_SERVICE_TOKEN",
+        "SLAIF_155F_LOCAL_SIGNING_SECRET",
+        "SLAIF_155F_LOCAL_UV_ENV",
+    )
+    assignments = " ".join(f'{name}="${{{name}}}"' for name in names)
     selected = (
         "set +x; . \"$SLAIF_155F_CREDENTIAL_SOURCE\" >/dev/null 2>&1; "
         "test -n \"${QWEN3090_API_KEY:-}\"; "
-        "exec /usr/bin/env -i PATH=\"${PATH:-/usr/bin:/bin}\" "
-        "PYTHONPATH=\"${PYTHONPATH:-}\" "
-        "SLAIF_155F_LOCAL_SERVICE_TOKEN=\"${SLAIF_155F_LOCAL_SERVICE_TOKEN}\" "
-        "SLAIF_155F_LOCAL_SIGNING_SECRET=\"${SLAIF_155F_LOCAL_SIGNING_SECRET}\" "
-        "UV_PROJECT_ENVIRONMENT=\"${SLAIF_155F_LOCAL_UV_ENV}\" "
-        "QWEN3090_API_KEY=\"${QWEN3090_API_KEY}\" \"$@\""
+        f'exec /usr/bin/env -i PATH="${{PATH:-/usr/bin:/bin}}" {assignments} "$@"'
     )
     launcher = [
         "bash",
@@ -956,10 +1182,16 @@ def _assert_required_evidence(evidence: dict[str, object]) -> None:
         raise VerificationError("required_composed_evidence_missing")
     if type(evidence.get("provider_calls")) is not int or evidence["provider_calls"] <= 0:
         raise VerificationError("provider_call_count_missing")
+    if type(evidence.get("qwen_calls")) is not int or evidence["qwen_calls"] <= 0:
+        raise VerificationError("qwen_call_count_missing")
+    if evidence["provider_calls"] != evidence["qwen_calls"]:
+        raise VerificationError("provider_call_count_mismatch")
     if type(evidence.get("relay_calls")) is not int or evidence["relay_calls"] <= 0:
         raise VerificationError("relay_call_count_missing")
-    if evidence["provider_calls"] != evidence.get("relay_calls"):
-        raise VerificationError("provider_call_count_mismatch")
+    if type(evidence.get("local_forwarded_calls")) is not int or evidence["local_forwarded_calls"] <= 0:
+        raise VerificationError("local_forward_count_missing")
+    if evidence["relay_calls"] != evidence["local_forwarded_calls"]:
+        raise VerificationError("local_forward_count_mismatch")
 
 
 def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
@@ -968,10 +1200,13 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
 
     postgres_url, container, pulled = _start_postgres(root)
     gateway = local = None
+    qwen_relay = None
     relay = failure_server = None
     relay_thread = failure_thread = None
     gateway_port = _free_port()
     local_port = 18031
+    qwen_relay_port = _free_port()
+    qwen_relay_token = secrets.token_urlsafe(32)
     service_token = secrets.token_urlsafe(32)
     signing_secret = secrets.token_urlsafe(32)
     derivation_secret = secrets.token_urlsafe(32)
@@ -1004,7 +1239,12 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         os.environ.clear()
         os.environ.update(previous_environment)
     key_one, key_two = seeded
-    local_config = _local_config(root, local_port=local_port, runtime=runtime)
+    local_config = _local_config(
+        root,
+        local_port=local_port,
+        qwen_relay_port=qwen_relay_port,
+        qwen_relay_token=qwen_relay_token,
+    )
     local_env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PYTHONPATH": str(LOCAL_ROOT / "src"),
@@ -1012,13 +1252,17 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
         "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token,
         "SLAIF_155F_LOCAL_SIGNING_SECRET": signing_secret,
         "SLAIF_155F_LOCAL_UV_ENV": str(root / "local-venv"),
+        QWEN_RELAY_TOKEN_ENV: qwen_relay_token,
     }
     try:
+        qwen_relay = _start_qwen_relay(
+            qwen_relay_port, runtime=runtime, relay_token=qwen_relay_token
+        )
+        _wait_http(f"http://127.0.0.1:{qwen_relay_port}/__155f_status")
         local = _start_process(
             ["uv", "run", "--project", str(LOCAL_ROOT), "--frozen", "slaif-local-coding", "--config", str(local_config)],
             cwd=LOCAL_ROOT,
             env=local_env,
-            source=runtime.credential_source,
         )
         gateway = _start_process(
             [sys.executable, "-m", "uvicorn", "slaif_gateway.main:app", "--host", "127.0.0.1", "--port", str(gateway_port), "--no-access-log", "--log-level", "warning"],
@@ -1214,7 +1458,7 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
             raise VerificationError("failure_reached_local_cache")
         asyncio.run(_verify_failure_accounting(postgres_url, key_one))
         relay_statuses = relay.response_statuses[relay_start:]
-        provider_calls = local_after_failure.ingress_responses - baseline.ingress_responses
+        local_forwarded_calls = local_after_failure.ingress_responses - baseline.ingress_responses
         relay_calls = _successful_relay_count(relay_statuses)
         database_rows = asyncio.run(
             _verify_accounting(
@@ -1232,6 +1476,22 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
             raise VerificationError("hosted_tool_strip_evidence_missing")
         if final_metrics.ingress_responses <= baseline.ingress_responses:
             raise VerificationError("provider_metrics_missing")
+        qwen_status = _qwen_relay_status(qwen_relay_port)
+        if (
+            type(qwen_status.get("calls")) is not int
+            or qwen_status["calls"] <= 0
+            or qwen_status.get("successful_calls") != qwen_status["calls"]
+            or qwen_status.get("compiler_calls", 0) <= 0
+            or qwen_status.get("inference_calls", 0) <= 0
+            or qwen_status.get("bad_inbound_auth") is not False
+            or qwen_status.get("auth_replaced") is not True
+            or qwen_status.get("internal_headers") is not False
+            or qwen_status.get("internal_body") is not False
+            or set(qwen_status.get("tool_types", [])) & {"tool_search", "web_search"}
+            or set(qwen_status.get("outbound_header_names", []))
+            - {"authorization", "content-type", "accept", "accept-encoding"}
+        ):
+            raise VerificationError("qwen_relay_boundary_failed")
         provider_calls = final_metrics.ingress_responses - baseline.ingress_responses
         if provider_calls <= 0:
             raise VerificationError("provider_call_count_missing")
@@ -1258,12 +1518,14 @@ def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> 
             "hosted_tools_stripped": True,
             "privacy_observed": True,
             "post_cleanup_model_ok": False,
-            "provider_calls": provider_calls,
+            "provider_calls": qwen_status["calls"],
             "relay_calls": relay_calls,
+            "qwen_calls": qwen_status["calls"],
+            "local_forwarded_calls": local_forwarded_calls,
         }
         return evidence
     finally:
-        for process in (local, gateway):
+        for process in (local, gateway, qwen_relay):
             if process is not None:
                 process.terminate()
                 try:
@@ -1309,7 +1571,10 @@ def run() -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument("--qwen-relay", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.qwen_relay:
+        return _qwen_relay_main()
     try:
         result = run()
         _assert_required_evidence(result)

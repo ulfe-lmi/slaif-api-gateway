@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
+import queue
 import subprocess
 import sys
 import types
+import threading
 from pathlib import Path
 
 import pytest
@@ -70,10 +73,15 @@ def test_composed_evidence_rejects_placeholder_counts() -> None:
 
 def test_composed_evidence_requires_real_equal_provider_and_relay_counts() -> None:
     evidence = _complete_evidence()
-    evidence.update(provider_calls=3, relay_calls=2)
+    evidence.update(provider_calls=3, qwen_calls=2, relay_calls=2, local_forwarded_calls=2)
     with pytest.raises(verifier.VerificationError, match="provider_call_count_mismatch"):
         verifier._assert_required_evidence(evidence)
+    evidence["qwen_calls"] = 3
+    evidence["local_forwarded_calls"] = 1
+    with pytest.raises(verifier.VerificationError, match="local_forward_count_mismatch"):
+        verifier._assert_required_evidence(evidence)
     evidence["relay_calls"] = 3
+    evidence["local_forwarded_calls"] = 3
     verifier._assert_required_evidence(evidence)
 
 
@@ -94,7 +102,12 @@ def _complete_evidence() -> dict[str, object]:
             "privacy_observed",
             "post_cleanup_model_ok",
         )
-    } | {"provider_calls": 3, "relay_calls": 3}
+    } | {
+        "provider_calls": 3,
+        "qwen_calls": 3,
+        "relay_calls": 3,
+        "local_forwarded_calls": 3,
+    }
 
 
 @pytest.mark.parametrize(
@@ -156,7 +169,12 @@ def test_local_config_is_validated_before_composition(
     credential.write_text("QWEN3090_API_KEY=private\n", encoding="utf-8")
     settings = types.SimpleNamespace(
         server=types.SimpleNamespace(listen_host="127.0.0.1", listen_port=18031),
-        upstream=types.SimpleNamespace(model=verifier.CODEX_MODEL),
+        upstream=types.SimpleNamespace(
+            model=verifier.CODEX_MODEL,
+            api_key_env=verifier.QWEN_RELAY_TOKEN_ENV,
+            base_url="http://127.0.0.1:39149/v1",
+        ),
+        compiler=types.SimpleNamespace(api_key_env=verifier.QWEN_RELAY_TOKEN_ENV),
         gateway_ingress=types.SimpleNamespace(mode="service_bearer_signed_identity_v1"),
         routes=[types.SimpleNamespace(responses_tool_policy="drop_disabled_codex_search")],
     )
@@ -169,6 +187,125 @@ def test_local_config_is_validated_before_composition(
         tmp_path, verifier.RuntimeReference("http://private.example/v1", credential)
     )
     assert config.is_file()
+    config_text = config.read_text(encoding="utf-8")
+    assert "private.example" not in config_text
+    assert "http://127.0.0.1:39149/v1" in config_text
+    assert verifier.QWEN_RELAY_TOKEN_ENV in config_text
+
+
+def test_forwarding_relay_passes_sse_chunk_before_upstream_finishes() -> None:
+    first_sent = threading.Event()
+    release = threading.Event()
+
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b"data: first\\n\\n")
+            self.wfile.flush()
+            first_sent.set()
+            release.wait(timeout=2)
+            self.wfile.write(b"data: done\\n\\n")
+            self.wfile.flush()
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), upstream.server_address[1])
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    chunks: queue.Queue[bytes] = queue.Queue()
+
+    def read_response() -> None:
+        with verifier.httpx.Client(timeout=5) as client:
+            with client.stream(
+                "POST",
+                f"http://127.0.0.1:{relay.server_address[1]}/v1/responses",
+                content=b"{}",
+            ) as response:
+                for chunk in response.iter_raw():
+                    chunks.put(chunk)
+
+    reader = threading.Thread(target=read_response, daemon=True)
+    reader.start()
+    assert first_sent.wait(timeout=2)
+    first_chunk = chunks.get(timeout=2)
+    assert b"data: first" in first_chunk
+    assert reader.is_alive()
+    release.set()
+    reader.join(timeout=2)
+    assert not reader.is_alive()
+    upstream.shutdown()
+    upstream.server_close()
+    relay.shutdown()
+    relay.server_close()
+    upstream_thread.join(timeout=2)
+    relay_thread.join(timeout=2)
+
+
+def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
+    first_sent = threading.Event()
+    release = threading.Event()
+
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b"data: first\\n\\n")
+            self.wfile.flush()
+            first_sent.set()
+            release.wait(timeout=2)
+            self.wfile.write(b"data: done\\n\\n")
+            self.wfile.flush()
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    relay = verifier._QwenRelayServer(
+        ("127.0.0.1", 0),
+        endpoint=f"http://127.0.0.1:{upstream.server_address[1]}/v1",
+        relay_token="local-relay-token",
+        qwen_token="qwen-token",
+    )
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    chunks: queue.Queue[bytes] = queue.Queue()
+
+    def read_response() -> None:
+        with verifier.httpx.Client(timeout=5) as client:
+            with client.stream(
+                "POST",
+                f"http://127.0.0.1:{relay.server_address[1]}/v1/responses",
+                headers={"Authorization": "Bearer local-relay-token"},
+                content=b'{"model":"qwen3.8-27b"}',
+            ) as response:
+                for chunk in response.iter_raw():
+                    chunks.put(chunk)
+
+    reader = threading.Thread(target=read_response, daemon=True)
+    reader.start()
+    assert first_sent.wait(timeout=2)
+    assert b"data: first" in chunks.get(timeout=2)
+    assert reader.is_alive()
+    release.set()
+    reader.join(timeout=2)
+    assert not reader.is_alive()
+    upstream.shutdown()
+    upstream.server_close()
+    relay.shutdown()
+    relay.server_close()
+    upstream_thread.join(timeout=2)
+    relay_thread.join(timeout=2)
 
 
 def test_scrubbed_launcher_does_not_forward_source_script_exports() -> None:
