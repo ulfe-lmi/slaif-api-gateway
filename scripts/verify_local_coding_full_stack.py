@@ -1416,6 +1416,7 @@ def _localize_constitution_failure(
     relay: _ForwardingRelay,
     qwen_relay_port: int | None,
     exception: BaseException | None = None,
+    before: dict[str, object] | None = None,
 ) -> VerificationError:
     if qwen_relay_port is None:
         return VerificationError("constitution_root_first_failed")
@@ -1423,12 +1424,38 @@ def _localize_constitution_failure(
         qwen_status = _qwen_relay_status(qwen_relay_port)
     except VerificationError:
         return VerificationError("constitution_qwen_status_unavailable")
-    if qwen_status["path_rejections"]:
+    if before is None:
+        before = {
+            "calls": 0,
+            "compiler_calls": 0,
+            "inference_calls": 0,
+            "path_rejections": 0,
+            "upstream_statuses": [],
+        }
+    try:
+        if any(
+            type(qwen_status[key]) is not int or type(before[key]) is not int
+            or qwen_status[key] < before[key]
+            for key in ("calls", "compiler_calls", "inference_calls", "path_rejections")
+        ):
+            return VerificationError("constitution_qwen_counter_invalid")
+        before_statuses = before["upstream_statuses"]
+        current_statuses = qwen_status["upstream_statuses"]
+        if not isinstance(before_statuses, list) or not isinstance(current_statuses, list):
+            return VerificationError("constitution_qwen_counter_invalid")
+        delta = {
+            key: qwen_status[key] - before[key]
+            for key in ("calls", "compiler_calls", "inference_calls", "path_rejections")
+        }
+        upstream_delta = current_statuses[len(before_statuses) :]
+    except (KeyError, TypeError):
+        return VerificationError("constitution_qwen_counter_invalid")
+    if delta["path_rejections"]:
         return VerificationError("constitution_qwen_path_404")
-    if qwen_status["calls"] <= 0:
+    if delta["calls"] <= 0:
         return VerificationError("constitution_local_before_qwen")
-    if qwen_status["compiler_calls"] <= 0:
-        if qwen_status["inference_calls"] > 0:
+    if delta["compiler_calls"] <= 0:
+        if delta["inference_calls"] > 0:
             relay_status = relay.status()
             response_statuses = relay_status["response_statuses"]
             if response_statuses and response_statuses[-1] >= 500:
@@ -1449,9 +1476,71 @@ def _localize_constitution_failure(
                 )
             return VerificationError("constitution_local_response_rejected")
         return VerificationError("constitution_inference_without_compiler")
-    if any(status >= 400 for status in qwen_status["upstream_statuses"]):
+    if any(status >= 400 for status in upstream_delta):
         return VerificationError("constitution_qwen_upstream_error")
     return VerificationError("constitution_local_compiler_rejected")
+
+
+def _observe_project_safely(payload: dict[str, object]) -> dict[str, object]:
+    local_source = str(LOCAL_ROOT / "src")
+    sys.path.insert(0, local_source)
+    try:
+        from slaif_local_coding.config import ObservationPolicy
+        from slaif_local_coding.constitution.detector import observe_request_for_pipeline
+        from slaif_local_coding.constitution.models import ObservationContext, TrustClass
+
+        observed, _sources, _dependencies = observe_request_for_pipeline(
+            payload,
+            ObservationContext(
+                endpoint="/v1/responses",
+                route_id="qwen38-vision-codex",
+                model=CODEX_MODEL,
+                streaming=False,
+                discriminator_trust=TrustClass.ABSENT,
+            ),
+            ObservationPolicy(),
+        )
+        evidence_types = sorted(
+            {
+                evidence.type.value
+                for root in observed.roots
+                for evidence in root.evidence
+            }
+        )
+        return {
+            "root_count": len(observed.roots),
+            "project_root_observed": any(
+                evidence_type == "project_instructions" for evidence_type in evidence_types
+            ),
+            "evidence_types": evidence_types,
+            "observation_complete": observed.complete,
+        }
+    except (ImportError, OSError, TypeError, ValueError, AttributeError) as exc:
+        raise VerificationError("constitution_detector_failed") from exc
+    finally:
+        if sys.path and sys.path[0] == local_source:
+            del sys.path[0]
+
+
+def _qwen_counter_delta(
+    before: dict[str, object], after: dict[str, object]
+) -> dict[str, object]:
+    keys = ("calls", "compiler_calls", "inference_calls", "path_rejections")
+    if any(
+        type(before.get(key)) is not int
+        or type(after.get(key)) is not int
+        or after[key] < before[key]
+        for key in keys
+    ):
+        raise VerificationError("constitution_qwen_counter_invalid")
+    before_statuses = before.get("upstream_statuses")
+    after_statuses = after.get("upstream_statuses")
+    if not isinstance(before_statuses, list) or not isinstance(after_statuses, list):
+        raise VerificationError("constitution_qwen_counter_invalid")
+    return {
+        **{key: after[key] - before[key] for key in keys},
+        "upstream_statuses": after_statuses[len(before_statuses) :],
+    }
 
 
 def _replay_request(relay: _ForwardingRelay, request: CapturedRequest) -> int:
@@ -1879,11 +1968,33 @@ def _run_composed_impl(
             "tools": [{"type": "tool_search"}, {"type": "web_search"}],
             "extra_body": {"client_metadata": metadata(session_a)},
         }
+        constitution_observation = _observe_project_safely(project_body)
+        if (
+            constitution_observation["root_count"] != 1
+            or constitution_observation["project_root_observed"] is not True
+            or constitution_observation["observation_complete"] is not True
+        ):
+            raise VerificationError("constitution_detector_miss")
         tracker.set("constitution_root_first")
+        constitution_qwen_before = _qwen_relay_status(qwen_relay_port)
         try:
             client.responses.create(**project_body)
         except Exception as exc:
-            raise _localize_constitution_failure(relay, qwen_relay_port, exc) from None
+            raise _localize_constitution_failure(
+                relay, qwen_relay_port, exc, constitution_qwen_before
+            ) from None
+        constitution_qwen_after = _qwen_relay_status(qwen_relay_port)
+        constitution_qwen_delta = _qwen_counter_delta(
+            constitution_qwen_before, constitution_qwen_after
+        )
+        if (
+            constitution_qwen_delta["calls"] <= 0
+            or constitution_qwen_delta["compiler_calls"] <= 0
+            or constitution_qwen_delta["inference_calls"] <= 0
+            or constitution_qwen_delta["path_rejections"] != 0
+            or any(status >= 400 for status in constitution_qwen_delta["upstream_statuses"])
+        ):
+            raise VerificationError("constitution_qwen_delta_invalid")
         tracker.set("constitution_root_reuse")
         client.responses.create(**project_body)
         tracker.set("zero_root_rehydration")
@@ -2099,6 +2210,13 @@ def _run_composed_impl(
             "qwen_calls": qwen_status["calls"],
             "local_forwarded_calls": local_forwarded_calls,
             "fake_rehearsal": fake_qwen,
+            "constitution_detector_root_count": constitution_observation["root_count"],
+            "constitution_detector_project_root": constitution_observation["project_root_observed"],
+            "constitution_detector_evidence_types": constitution_observation["evidence_types"],
+            "constitution_detector_complete": constitution_observation["observation_complete"],
+            "constitution_qwen_delta_calls": constitution_qwen_delta["calls"],
+            "constitution_qwen_delta_compiler_calls": constitution_qwen_delta["compiler_calls"],
+            "constitution_qwen_delta_inference_calls": constitution_qwen_delta["inference_calls"],
         }
         return evidence
     finally:

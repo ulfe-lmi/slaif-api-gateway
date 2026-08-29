@@ -493,6 +493,7 @@ def test_constitution_failure_localizer_reports_only_bounded_stage_codes(
             "path_rejections": 0,
             "calls": 1,
             "compiler_calls": 1,
+            "inference_calls": 1,
             "upstream_statuses": [200],
         },
     )
