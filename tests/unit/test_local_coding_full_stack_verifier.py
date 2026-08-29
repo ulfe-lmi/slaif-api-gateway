@@ -83,6 +83,44 @@ def test_codex_0149_production_normalizer_accepts_only_reviewed_candidate_shapes
     assert normalized.body["tools"] == payload["tools"]
 
 
+def test_exact_codex_capture_tool_mix_exercises_disposable_custom_tool_route_gate() -> None:
+    from slaif_gateway.services.responses_route_capabilities import (
+        default_responses_capabilities,
+        enforce_responses_route_capabilities,
+    )
+
+    fixture = verifier.json.loads(verifier.V2_FIXTURE.read_bytes())
+    shapes = fixture["capture"]["variants"][0]["request"]["tool_declarations"]["shapes"]
+    assert {shape["type"] for shape in shapes} == {
+        "custom",
+        "function",
+        "tool_search",
+        "web_search",
+    }
+    capabilities = default_responses_capabilities()
+    capabilities.update(
+        {
+            "streaming": True,
+            "tools": True,
+            "function_tools": True,
+            "custom_tools": True,
+            "codex_request_envelope": True,
+            "codex_client_tools": True,
+            "codex_streaming_tool_events": True,
+        }
+    )
+    enforce_responses_route_capabilities(
+        route_capabilities={"responses": capabilities},
+        streaming_requested=True,
+        route_supports_streaming=True,
+        function_tools_requested=True,
+        custom_tools_requested=True,
+        codex_request_envelope_requested=True,
+        codex_client_tools_requested=True,
+        codex_streaming_tool_events_requested=True,
+    )
+
+
 def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 

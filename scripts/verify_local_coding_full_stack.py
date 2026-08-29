@@ -517,13 +517,13 @@ async def _seed_database(
                     "streaming": True,
                     "tools": True,
                     "function_tools": True,
+                    "custom_tools": True,
                     "image_input": True,
                     "codex_request_envelope": True,
                     "codex_client_tools": True,
                     "codex_streaming_tool_events": True,
                 }
             )
-            capabilities.update({"streaming": True, "image_input": True, "codex_request_envelope": True, "codex_client_tools": True, "codex_streaming_tool_events": True})
             await ModelRoutesRepository(session).create_model_route(
                 requested_model=CODEX_MODEL,
                 provider="local-coding",
