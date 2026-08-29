@@ -859,6 +859,13 @@ def _assert_new_pinned_capture_sse_structure(
 ) -> None:
     structures = relay.status()["sse_structures"]
     if not isinstance(structures, list) or len(structures) <= start_index:
+        response_statuses = relay.status()["response_statuses"]
+        if isinstance(response_statuses, list) and response_statuses:
+            status = response_statuses[-1]
+            if isinstance(status, int) and status >= 500:
+                raise VerificationError(f"{missing_code}_http_5xx")
+            if isinstance(status, int) and status >= 400:
+                raise VerificationError(f"{missing_code}_http_4xx")
         raise VerificationError(missing_code)
     structure = structures[-1]
     if not isinstance(structure, dict):
