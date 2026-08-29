@@ -2042,7 +2042,32 @@ def _run_composed_impl(
         tracker.set("codex_session_a")
         first = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-1", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if first.returncode != 0:
-            raise VerificationError("codex_session_a_failed")
+            category = capture.classify_codex_failure(first.stderr, first.stdout)
+            allowed_categories = {
+                "configuration_rejected",
+                "argument_rejected",
+                "argument_separator_rejected",
+                "argument_or_configuration_rejected",
+                "dummy_auth_environment_rejected",
+                "loopback_request_failed",
+                "loopback_connection_failed",
+                "workdir_rejected",
+                "custom_provider_auth_rejected",
+                "mock_stream_rejected",
+                "mock_stream_closed_early",
+                "mock_stream_idle_timeout",
+                "mock_completed_event_rejected",
+                "mock_response_failed",
+                "mock_http_status_rejected",
+                "turn_failed",
+                "error_event",
+                "incomplete_event_sequence",
+                "nonzero_after_turn_completed",
+                "unclassified",
+            }
+            raise VerificationError(
+                f"codex_session_a_{category if category in allowed_categories else 'unclassified'}"
+            )
         thread = capture._session_capture_thread_id(first.stdout)
         first_capture = relay.snapshot()[first_index:]
         if len(first_capture) != 1:
