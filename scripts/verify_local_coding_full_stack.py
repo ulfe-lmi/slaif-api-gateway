@@ -1974,7 +1974,19 @@ def _run_composed_impl(
         project_body = {
             "model": CODEX_MODEL,
             "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": project_text}]}],
-            "tools": [{"type": "tool_search"}, {"type": "web_search"}],
+            "tools": [
+                {
+                    "type": "tool_search",
+                    "description": "synthetic candidate",
+                    "execution": "client",
+                    "parameters": {},
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": False,
+                    "search_content_types": ["text"],
+                },
+            ],
             "extra_body": {"client_metadata": metadata(session_a)},
         }
         constitution_observation = _observe_project_safely(project_body)

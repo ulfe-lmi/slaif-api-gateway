@@ -54,6 +54,35 @@ def test_runtime_reference_repr_and_str_redact_both_private_values() -> None:
     assert "source-canary" not in str(reference)
 
 
+def test_codex_0149_production_normalizer_accepts_only_reviewed_candidate_shapes() -> None:
+    from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE
+
+    payload = {
+        "model": verifier.CODEX_MODEL,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "synthetic"}]}],
+        "tools": [
+            {
+                "type": "tool_search",
+                "description": "synthetic candidate",
+                "execution": "client",
+                "parameters": {},
+            },
+            {
+                "type": "web_search",
+                "external_web_access": False,
+                "search_content_types": ["text"],
+            },
+        ],
+        "tool_choice": "auto",
+    }
+    normalized = CODEX_0149_CLIENT_MODULE.normalize_responses(payload)
+    assert normalized.adapter_managed_declaration_candidates == (
+        "tool_search",
+        "web_search",
+    )
+    assert normalized.body["tools"] == payload["tools"]
+
+
 def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
