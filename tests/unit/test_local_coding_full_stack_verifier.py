@@ -406,6 +406,91 @@ def test_gateway_facing_relay_records_pinned_capture_sse_structure() -> None:
         fake_thread.join(timeout=2)
 
 
+def _record_sse_structure(
+    events: list[tuple[str, dict[str, object]]], *, done: bool = False
+) -> dict[str, object]:
+    recorder = verifier._SSEStructuralRecorder()
+    for event, payload in events:
+        recorder.feed(
+            (
+                f"event: {event}\ndata: "
+                f"{verifier.json.dumps(payload, separators=(',', ':'))}\n\n"
+            ).encode()
+        )
+    if done:
+        recorder.feed(b"data: [DONE]\n\n")
+    return recorder.snapshot()
+
+
+def test_sse_structure_accepts_exact_pinned_capture_pair() -> None:
+    events = [
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "response": {
+                    "id": "resp_capture",
+                    "object": "response",
+                    "status": "in_progress",
+                    "model": verifier.CODEX_MODEL,
+                },
+            },
+        ),
+        (
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_capture",
+                    "object": "response",
+                    "status": "completed",
+                    "model": verifier.CODEX_MODEL,
+                    "output": [],
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                },
+            },
+        ),
+    ]
+    verifier._assert_pinned_capture_sse_structure(_record_sse_structure(events))
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["reordered", "duplicated", "done", "wrong_status"],
+)
+def test_sse_structure_rejects_order_duplicates_done_and_wrong_status(variant: str) -> None:
+    created = {
+        "type": "response.created",
+        "response": {
+            "id": "resp_capture",
+            "object": "response",
+            "status": "in_progress",
+            "model": verifier.CODEX_MODEL,
+        },
+    }
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_capture",
+            "object": "response",
+            "status": "completed",
+            "model": verifier.CODEX_MODEL,
+            "output": [],
+            "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        },
+    }
+    events = [("response.created", created), ("response.completed", completed)]
+    if variant == "reordered":
+        events.reverse()
+    elif variant == "duplicated":
+        events.insert(1, events[0])
+    elif variant == "wrong_status":
+        created["response"]["status"] = "completed"
+    structure = _record_sse_structure(events, done=variant == "done")
+    with pytest.raises(verifier.VerificationError, match="gateway_sse_schema_mismatch"):
+        verifier._assert_pinned_capture_sse_structure(structure)
+
+
 def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     first_sent = threading.Event()
     release = threading.Event()

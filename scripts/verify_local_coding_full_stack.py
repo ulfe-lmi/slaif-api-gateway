@@ -663,11 +663,21 @@ _SAFE_SSE_EVENT_TYPES = frozenset(
 _SSE_CAPTURE_LIMIT = 64 * 1024
 _PINNED_CAPTURE_SSE_STRUCTURE = {
     "invalid": False,
-    "event_types": ["response.completed", "response.created"],
+    "event_sequence": ["response.created", "response.completed"],
+    "event_counts": {"response.completed": 1, "response.created": 1},
+    "done_sentinel": False,
+    "duplicates": False,
+    "unknown_events": False,
     "response_field_names": {
         "response.created": ["id", "model", "object", "status"],
         "response.completed": ["id", "model", "object", "output", "status", "usage"],
     },
+    "response_id_relation": True,
+    "created_status_in_progress": True,
+    "completed_status_completed": True,
+    "model_matches": True,
+    "completed_output_empty": True,
+    "completed_usage_valid": True,
 }
 
 
@@ -677,9 +687,19 @@ class _SSEStructuralRecorder:
     def __init__(self) -> None:
         self._buffer = bytearray()
         self._event_name: str | None = None
+        self._event_unknown = False
         self._data = bytearray()
-        self._event_types: set[str] = set()
+        self._event_sequence: list[str] = []
         self._response_field_names: dict[str, set[str]] = {}
+        self._created_id: str | None = None
+        self._response_id_relation = False
+        self._created_status_in_progress = False
+        self._completed_status_completed = False
+        self._model_matches = False
+        self._completed_output_empty = False
+        self._completed_usage_valid = False
+        self._done_sentinel = False
+        self._unknown_events = False
         self._invalid = False
 
     def feed(self, chunk: bytes) -> None:
@@ -710,7 +730,7 @@ class _SSEStructuralRecorder:
             if not line:
                 self._finish_event()
             elif line.startswith(b"event:"):
-                self._event_name = self._safe_name(line[6:])
+                self._event_name, self._event_unknown = self._safe_name(line[6:])
             elif line.startswith(b"data:"):
                 value = line[5:]
                 if value.startswith(b" "):
@@ -723,19 +743,26 @@ class _SSEStructuralRecorder:
                 self._data.extend(value)
 
     @staticmethod
-    def _safe_name(raw: bytes) -> str:
+    def _safe_name(raw: bytes) -> tuple[str, bool]:
         try:
             value = raw.decode("ascii").strip()
         except UnicodeDecodeError:
-            return "other"
-        return value if value in _SAFE_SSE_EVENT_TYPES else "other"
+            return "other", True
+        if value in _SAFE_SSE_EVENT_TYPES and value != "other":
+            return value, False
+        return "other", value != "other"
 
     def _finish_event(self) -> None:
         data = bytes(self._data)
         event_name = self._event_name
+        event_unknown = self._event_unknown
         self._data.clear()
         self._event_name = None
-        if not data or data == b"[DONE]":
+        self._event_unknown = False
+        if data == b"[DONE]":
+            self._done_sentinel = True
+            return
+        if not data:
             return
         try:
             payload = json.loads(data)
@@ -751,8 +778,10 @@ class _SSEStructuralRecorder:
                 payload_type_bytes = payload_type.encode("ascii") if isinstance(payload_type, str) else b""
             except UnicodeEncodeError:
                 payload_type_bytes = b""
-            event_name = self._safe_name(payload_type_bytes)
-        self._event_types.add(event_name or "other")
+            event_name, event_unknown = self._safe_name(payload_type_bytes)
+        event_name = event_name or "other"
+        self._event_sequence.append(event_name)
+        self._unknown_events = self._unknown_events or event_unknown
         response = payload.get("response")
         if isinstance(response, dict):
             fields = {
@@ -762,17 +791,61 @@ class _SSEStructuralRecorder:
                 and len(key) <= 64
                 and all(33 <= ord(char) <= 126 for char in key)
             }
-            self._response_field_names.setdefault(event_name or "other", set()).update(fields)
+            self._response_field_names.setdefault(event_name, set()).update(fields)
+            response_id = response.get("id")
+            id_shape = (
+                isinstance(response_id, str)
+                and response_id.startswith("resp_")
+                and len(response_id) <= 256
+                and all(33 <= ord(char) <= 126 for char in response_id)
+            )
+            model_matches = response.get("model") == CODEX_MODEL
+            if event_name == "response.created":
+                self._created_id = response_id if id_shape else None
+                self._created_status_in_progress = response.get("status") == "in_progress"
+                self._model_matches = model_matches
+            elif event_name == "response.completed":
+                self._response_id_relation = (
+                    self._created_id is not None
+                    and id_shape
+                    and response_id == self._created_id
+                )
+                self._completed_status_completed = response.get("status") == "completed"
+                self._model_matches = self._model_matches and model_matches
+                self._completed_output_empty = response.get("output") == []
+                usage = response.get("usage")
+                self._completed_usage_valid = (
+                    isinstance(usage, dict)
+                    and all(
+                        type(usage.get(field)) is int and usage[field] >= 0
+                        for field in ("input_tokens", "output_tokens", "total_tokens")
+                    )
+                )
+                self._created_id = None
 
     def snapshot(self) -> dict[str, object]:
         self.finish()
+        event_counts = {
+            event: self._event_sequence.count(event)
+            for event in sorted(set(self._event_sequence))
+        }
         return {
             "invalid": self._invalid,
-            "event_types": sorted(self._event_types),
+            "event_sequence": list(self._event_sequence),
+            "event_counts": event_counts,
+            "done_sentinel": self._done_sentinel,
+            "duplicates": len(self._event_sequence) != len(set(self._event_sequence)),
+            "unknown_events": self._unknown_events,
             "response_field_names": {
                 event: sorted(fields)
                 for event, fields in sorted(self._response_field_names.items())
             },
+            "response_id_relation": self._response_id_relation,
+            "created_status_in_progress": self._created_status_in_progress,
+            "completed_status_completed": self._completed_status_completed,
+            "model_matches": self._model_matches,
+            "completed_output_empty": self._completed_output_empty,
+            "completed_usage_valid": self._completed_usage_valid,
         }
 
 
@@ -781,12 +854,34 @@ def _assert_pinned_capture_sse_structure(structure: dict[str, object]) -> None:
         raise VerificationError("gateway_sse_schema_mismatch")
 
 
+def _assert_new_pinned_capture_sse_structure(
+    relay: _ForwardingRelay, start_index: int, *, missing_code: str, mismatch_code: str
+) -> None:
+    structures = relay.status()["sse_structures"]
+    if not isinstance(structures, list) or len(structures) <= start_index:
+        raise VerificationError(missing_code)
+    structure = structures[-1]
+    if not isinstance(structure, dict):
+        raise VerificationError(mismatch_code)
+    try:
+        _assert_pinned_capture_sse_structure(structure)
+    except VerificationError:
+        raise VerificationError(mismatch_code) from None
+
+
 class _ForwardingRelay(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address: tuple[str, int], local_port: int) -> None:
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        local_port: int,
+        *,
+        capture_requests: bool = True,
+    ) -> None:
         super().__init__(server_address, _RelayHandler)
         self.local_port = local_port
+        self.capture_requests = capture_requests
         self.captured: list[CapturedRequest] = []
         self.response_statuses: list[int] = []
         self.response_path_classes: list[str] = []
@@ -844,7 +939,8 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
             if key.lower() not in {"host", "content-length", "connection"}
         }
         captured = CapturedRequest(path=self.path, body=body, headers=headers)
-        self.server.remember(captured)
+        if self.server.capture_requests:
+            self.server.remember(captured)
         try:
             with httpx.Client(timeout=300, follow_redirects=False) as client:
                 with client.stream(
@@ -1463,8 +1559,12 @@ def _qwen_relay_status(port: int) -> dict[str, object]:
     return payload
 
 
-def _start_relay(local_port: int) -> tuple[_ForwardingRelay, threading.Thread]:
-    relay = _ForwardingRelay(("127.0.0.1", 0), local_port)
+def _start_relay(
+    local_port: int, *, capture_requests: bool = True
+) -> tuple[_ForwardingRelay, threading.Thread]:
+    relay = _ForwardingRelay(
+        ("127.0.0.1", 0), local_port, capture_requests=capture_requests
+    )
     thread = threading.Thread(target=relay.serve_forever, name="155f-relay", daemon=True)
     thread.start()
     return relay, thread
@@ -1999,6 +2099,8 @@ def _run_composed_impl(
     qwen_relay = None
     relay = failure_server = None
     relay_thread = failure_thread = None
+    gateway_facing_relay = None
+    gateway_facing_relay_thread = None
     gateway_port = _free_port()
     local_port = 18031
     qwen_relay_port = _free_port()
@@ -2094,6 +2196,9 @@ def _run_composed_impl(
         _wait_http(f"http://127.0.0.1:{local_port}/readyz")
         tracker.set("gateway_health")
         _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
+        gateway_facing_relay, gateway_facing_relay_thread = _start_relay(
+            gateway_port, capture_requests=False
+        )
         client = OpenAI(api_key=key_one.plaintext, base_url=f"http://127.0.0.1:{gateway_port}/v1", max_retries=0)
         session_a = str(uuid.uuid4())
         session_b = str(uuid.uuid4())
@@ -2227,19 +2332,19 @@ def _run_composed_impl(
         codex_env["OPENAI_API_KEY"] = key_one.plaintext
         codex_env["SLAIF_CODEX_CAPTURE_API_KEY"] = key_one.plaintext
         capture._write_0149_model_catalog(codex_binary, catalog, environment=codex_env, model=CODEX_MODEL)
+        codex_gateway_port = gateway_facing_relay.server_address[1]
         first_index = len(relay.snapshot())
-        first_sse_structure_index = len(relay.status()["sse_structures"])
+        first_sse_structure_index = len(gateway_facing_relay.status()["sse_structures"])
         tracker.set("codex_session_a")
-        first = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-1", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
+        first = _run(capture._exec_command_0149(codex_binary, workdir=work, port=codex_gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-1", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if first.returncode != 0:
-            sse_structures = relay.status()["sse_structures"]
-            if (
-                isinstance(sse_structures, list)
-                and len(sse_structures) > first_sse_structure_index
-                and isinstance(sse_structures[-1], dict)
-                and sse_structures[-1] != _PINNED_CAPTURE_SSE_STRUCTURE
-            ):
-                raise VerificationError("codex_session_a_gateway_sse_mismatch")
+            if fake_qwen:
+                _assert_new_pinned_capture_sse_structure(
+                    gateway_facing_relay,
+                    first_sse_structure_index,
+                    missing_code="codex_session_a_gateway_sse_missing",
+                    mismatch_code="codex_session_a_gateway_sse_mismatch",
+                )
             category = capture.classify_codex_failure(first.stderr, first.stdout)
             allowed_categories = {
                 "configuration_rejected",
@@ -2266,23 +2371,46 @@ def _run_composed_impl(
             raise VerificationError(
                 f"codex_session_a_{category if category in allowed_categories else 'unclassified'}"
             )
+        if fake_qwen:
+            _assert_new_pinned_capture_sse_structure(
+                gateway_facing_relay,
+                first_sse_structure_index,
+                missing_code="codex_session_a_gateway_sse_missing",
+                mismatch_code="codex_session_a_gateway_sse_mismatch",
+            )
         thread = capture._session_capture_thread_id(first.stdout)
         first_capture = relay.snapshot()[first_index:]
         if len(first_capture) != 1:
             raise VerificationError("codex_session_a_request_count")
         second_index = len(relay.snapshot())
+        second_sse_structure_index = len(gateway_facing_relay.status()["sse_structures"])
         tracker.set("codex_session_a_resume")
-        second = _run(capture._exec_resume_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-2", thread_id=thread), cwd=work, env=codex_env, timeout=180)
+        second = _run(capture._exec_resume_command_0149(codex_binary, workdir=work, port=codex_gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-2", thread_id=thread), cwd=work, env=codex_env, timeout=180)
         if second.returncode != 0:
             raise VerificationError("codex_session_resume_failed")
+        if fake_qwen:
+            _assert_new_pinned_capture_sse_structure(
+                gateway_facing_relay,
+                second_sse_structure_index,
+                missing_code="codex_session_resume_gateway_sse_missing",
+                mismatch_code="codex_session_resume_gateway_sse_mismatch",
+            )
         second_capture = relay.snapshot()[second_index:]
         if len(second_capture) != 1:
             raise VerificationError("codex_session_resume_request_count")
         third_index = len(relay.snapshot())
+        third_sse_structure_index = len(gateway_facing_relay.status()["sse_structures"])
         tracker.set("codex_session_b")
-        third = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-3", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
+        third = _run(capture._exec_command_0149(codex_binary, workdir=work, port=codex_gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-3", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if third.returncode != 0:
             raise VerificationError("codex_session_b_failed")
+        if fake_qwen:
+            _assert_new_pinned_capture_sse_structure(
+                gateway_facing_relay,
+                third_sse_structure_index,
+                missing_code="codex_session_b_gateway_sse_missing",
+                mismatch_code="codex_session_b_gateway_sse_mismatch",
+            )
         third_capture = relay.snapshot()[third_index:]
         if len(third_capture) != 1:
             raise VerificationError("codex_session_b_request_count")
@@ -2481,7 +2609,11 @@ def _run_composed_impl(
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=10)
-            for server, thread in ((relay, relay_thread), (failure_server, failure_thread)):
+            for server, thread in (
+                (relay, relay_thread),
+                (gateway_facing_relay, gateway_facing_relay_thread),
+                (failure_server, failure_thread),
+            ):
                 if server is not None:
                     server.shutdown()
                     server.server_close()
