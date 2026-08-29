@@ -1486,6 +1486,26 @@ def _successful_relay_count(statuses: tuple[int, ...] | list[int]) -> int:
     return sum(status == 200 for status in statuses)
 
 
+def _verify_repository_cleanup() -> None:
+    try:
+        dirty = _git("status", "--porcelain", cwd=LOCAL_ROOT)
+    except VerificationError:
+        raise
+    except Exception:
+        raise VerificationError("repository_cleanup_failed") from None
+    if dirty:
+        raise VerificationError("local_dependency_changed")
+    try:
+        local_venv = (LOCAL_ROOT / ".venv").exists()
+        local_bytecode = (LOCAL_ROOT / "src/slaif_local_coding/__pycache__").exists()
+    except OSError:
+        raise VerificationError("repository_cleanup_failed") from None
+    if local_venv:
+        raise VerificationError("local_checkout_venv_present_after_cleanup")
+    if local_bytecode:
+        raise VerificationError("local_bytecode_present_after_cleanup")
+
+
 def _assert_local_bound_privacy(
     requests: tuple[CapturedRequest, ...],
     *,
@@ -1965,10 +1985,7 @@ def _run_composed_impl(
             if pulled:
                 _docker("rmi", "postgres:16", timeout=60)
             tracker.set("repository_cleanup")
-            if _git("status", "--porcelain", cwd=LOCAL_ROOT):
-                raise VerificationError("local_dependency_changed")
-            if (LOCAL_ROOT / ".venv").exists():
-                raise VerificationError("local_checkout_venv_present_after_cleanup")
+            _verify_repository_cleanup()
         except Exception:
             if primary is not None:
                 if isinstance(primary, VerificationError):
