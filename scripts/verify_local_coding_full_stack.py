@@ -1417,6 +1417,7 @@ def _localize_constitution_failure(
     qwen_relay_port: int | None,
     exception: BaseException | None = None,
     before: dict[str, object] | None = None,
+    relay_response_count_before: int | None = None,
 ) -> VerificationError:
     if qwen_relay_port is None:
         return VerificationError("constitution_root_first_failed")
@@ -1455,6 +1456,8 @@ def _localize_constitution_failure(
     if delta["calls"] <= 0:
         relay_status = relay.status()
         response_statuses = relay_status["response_statuses"]
+        if relay_response_count_before is not None and len(response_statuses) <= relay_response_count_before:
+            return VerificationError("constitution_gateway_before_local")
         if response_statuses and response_statuses[-1] >= 500:
             return VerificationError("constitution_local_http_5xx")
         if response_statuses and response_statuses[-1] >= 400:
@@ -1982,12 +1985,17 @@ def _run_composed_impl(
         ):
             raise VerificationError("constitution_detector_miss")
         tracker.set("constitution_root_first")
+        constitution_relay_before = len(relay.status()["response_statuses"])
         constitution_qwen_before = _qwen_relay_status(qwen_relay_port)
         try:
             client.responses.create(**project_body)
         except Exception as exc:
             raise _localize_constitution_failure(
-                relay, qwen_relay_port, exc, constitution_qwen_before
+                relay,
+                qwen_relay_port,
+                exc,
+                constitution_qwen_before,
+                constitution_relay_before,
             ) from None
         constitution_qwen_after = _qwen_relay_status(qwen_relay_port)
         constitution_qwen_delta = _qwen_counter_delta(
