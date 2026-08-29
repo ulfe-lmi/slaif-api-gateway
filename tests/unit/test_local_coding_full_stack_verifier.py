@@ -145,12 +145,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155o_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155n-head"
+    current_head = "current-155o-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-m-terminal-validity-and-composed-closure.md"
+    report_path = "oap/reports/155-n-fake-composed-stage-localization-and-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -160,7 +160,7 @@ def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-n-fake-composed-stage-localization-and-closure.md"
+            return "oap/active\noap/orders/155-o-hop-evidence-and-error-owner-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,13 +192,14 @@ def test_155n_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155n_topology_anchors_are_the_155m_report_and_implementation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "382549cb0e31b22a3464c6622b0f21e48d115944"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b2c504ed084664487e1088424bd4503977c90644"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-m-terminal-validity-and-composed-closure.md"
+def test_155o_topology_anchors_are_the_155n_report_and_implementation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "e26ac23ce352d7318615a4b01f4662f2bc3a165b"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "bd0cfd976bfd570561d7943be2d62686d4d48972"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "e201051303aa8cb43e2cfc102e58e4c153fc908f"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-n-fake-composed-stage-localization-and-closure.md"
 
 
-def test_155n_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
+def test_155o_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
     baseline = verifier._read_pinned_direct_baseline()
     assert verifier._terminal_completion_valid(baseline) is True
     assert baseline["terminal_completion_valid"] is True
@@ -208,7 +209,7 @@ def test_155n_parses_immutable_direct_baseline_with_independent_verdicts() -> No
 
 
 @pytest.mark.parametrize("mutation", ["altered", "duplicate"])
-def test_155m_rejects_altered_or_multiple_direct_baseline_lines(
+def test_155o_rejects_altered_or_multiple_direct_baseline_lines(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
 ) -> None:
     source = verifier.DIRECT_BASELINE_REPORT.read_text(encoding="utf-8")
@@ -1183,7 +1184,7 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
         '"event_counts":{"response.completed":1,"response.created":1},'
         '"event_trace":[{"count":1,"event":"response.created"},'
         '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
-        '"event_vocabulary_reviewed":true,"evidence_source":"current_155n",'
+        '"event_vocabulary_reviewed":true,"evidence_source":"current_155o",'
         '"failure_code":"none","first_event_before_upstream_completion":true,'
         '"handler_error":false,"http_status_class":"2xx","invalid":false,'
         '"model_matches":true,"normal_close":true,"normalization_reason":"none",'
@@ -1384,7 +1385,7 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
     assert result["direct_qwen"]["evidence_source"] == "pinned_155l"
     assert result["direct_qwen"]["ran_current_invocation"] is False
     for boundary in ("local_output", "gateway_output"):
-        assert result[boundary]["evidence_source"] == "current_155n"
+        assert result[boundary]["evidence_source"] == "current_155o"
         assert result[boundary]["ran_current_invocation"] is True
 
 
