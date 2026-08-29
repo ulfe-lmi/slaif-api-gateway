@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-g verifier for the real Codex/Gateway/Local Coding path.
+"""Bounded 155-h verifier for staged fake and final real acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -14,6 +14,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import socket
 import stat
@@ -32,9 +33,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "63b8a459d8a1b50e22e47feaa0dff8efc8b6957b"
-GATEWAY_IMPLEMENTATION_HEAD = "feb55ced305839f0793597eebca2304d917517dc"
-GATEWAY_ACTIVATION_HEAD = "510a2a2e366ebd9bca97be2f13841e0c64ea1308"
+GATEWAY_REPORT_HEAD = "422b666ac1d03bd9953430bb049921b3f2fb133b"
+GATEWAY_IMPLEMENTATION_HEAD = "a99533ef4b1e885893eedd5dfc4a7bd45f60457d"
+GATEWAY_ACTIVATION_HEAD = "81dbba8fbdb2c5d24df82df672b7c8ef85e6dfbd"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,8 +49,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-g-corrected-single-composed-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155f_live"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155h_live"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
@@ -61,6 +62,37 @@ RELAY_BODY_LIMIT = 512 * 1024
 
 class VerificationError(RuntimeError):
     """A fixed verifier failure that cannot reflect private values."""
+
+
+COMPOSITION_STAGES = (
+    "postgres_image", "postgres_start", "migration", "database_seed",
+    "relay_start", "failure_provider_start", "qwen_relay_start", "local_start",
+    "gateway_start", "qwen_relay_ready", "local_health", "local_readiness",
+    "gateway_health", "gateway_models", "ordinary_response", "stream_response",
+    "image_response", "constitution_root_first", "constitution_root_reuse",
+    "zero_root_rehydration", "codex_session_a", "codex_session_a_resume",
+    "codex_session_b", "replay_and_tamper", "second_gateway_key",
+    "preprovider_negatives", "controlled_provider_failure", "accounting",
+    "local_metrics", "qwen_wire_evidence", "privacy", "process_cleanup",
+    "container_cleanup", "repository_cleanup", "protected_postcheck", "final_evidence",
+)
+
+
+class StageTracker:
+    """Track only a fixed composition stage for safe unexpected-error codes."""
+
+    def __init__(self) -> None:
+        self.current: str | None = None
+
+    def set(self, stage: str) -> None:
+        if stage not in COMPOSITION_STAGES:
+            raise VerificationError("unknown_composition_stage")
+        self.current = stage
+
+    def unexpected(self) -> VerificationError:
+        if self.current not in COMPOSITION_STAGES:
+            return VerificationError("unexpected_unknown_stage")
+        return VerificationError(f"unexpected_{self.current}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +179,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-g-corrected-single-composed-acceptance.md",
+        "oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -190,11 +222,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-g-corrected-single-composed-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-h-staged-fake-rehearsal-and-final-real-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-g\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-h\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -338,7 +370,11 @@ def _docker(*args: str, timeout: float = 180) -> subprocess.CompletedProcess[byt
     return _run([*_docker_prefix(), *args], timeout=timeout)
 
 
-def _start_postgres(root: Path) -> tuple[str, str, bool]:
+def _start_postgres(
+    root: Path, *, tracker: StageTracker | None = None
+) -> tuple[str, str, bool]:
+    if tracker is not None:
+        tracker.set("postgres_image")
     image = "postgres:16"
     image_before = _docker("image", "inspect", image).returncode == 0
     if not image_before and _docker("pull", image).returncode != 0:
@@ -347,6 +383,8 @@ def _start_postgres(root: Path) -> tuple[str, str, bool]:
     _docker("rm", "-f", name, timeout=30)
     started = False
     try:
+        if tracker is not None:
+            tracker.set("postgres_start")
         result = _docker(
             "run",
             "-d",
@@ -705,6 +743,198 @@ class _FailureHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class _FakeQwenServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, server_address: tuple[str, int], token: str) -> None:
+        super().__init__(server_address, _FakeQwenHandler)
+        self.token = token
+        self.calls = 0
+        self.compiler_calls = 0
+        self.inference_calls = 0
+        self.stream_calls = 0
+        self.first_event_sent = threading.Event()
+        self._lock = threading.Lock()
+
+    def record(self, *, compiler: bool, streaming: bool) -> None:
+        with self._lock:
+            self.calls += 1
+            if compiler:
+                self.compiler_calls += 1
+            else:
+                self.inference_calls += 1
+                if streaming:
+                    self.stream_calls += 1
+
+
+class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
+    server: _FakeQwenServer
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _authorized(self) -> bool:
+        return self.headers.get("authorization") == f"Bearer {self.server.token}"
+
+    def _json(self, status: int, payload: object) -> None:
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if not self._authorized():
+            self._json(401, {"error": {"code": "unauthorized"}})
+            return
+        if self.path == "/health":
+            self._json(200, {"status": "ok"})
+            return
+        if self.path == "/v1/models":
+            self._json(200, {"object": "list", "data": [{"id": CODEX_MODEL, "object": "model"}]})
+            return
+        self._json(404, {"error": {"code": "not_found"}})
+
+    def _read_body(self) -> bytes | None:
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            self._json(400, {"error": {"code": "invalid_length"}})
+            return None
+        if length < 0 or length > RELAY_BODY_LIMIT:
+            self._json(413, {"error": {"code": "body_too_large"}})
+            return None
+        return self.rfile.read(length)
+
+    @staticmethod
+    def _compiled_index(payload: dict[str, object]) -> str:
+        messages = payload.get("messages")
+        user = messages[-1].get("content") if isinstance(messages, list) and messages else None
+        if not isinstance(user, str):
+            raise ValueError("compiler_input")
+        match = re.search(r"<source path='([^']+)' sha256=([0-9a-f]{64}) byte_length=(\\d+)>", user)
+        candidates_match = re.search(
+            r"<deterministic_candidates>\\n(.*?)\\n</deterministic_candidates>", user, re.S
+        )
+        if match is None or candidates_match is None:
+            raise ValueError("compiler_prompt")
+        candidates = json.loads(candidates_match.group(1))
+        if not isinstance(candidates, list):
+            raise ValueError("compiler_candidates")
+        dependencies = [
+            {
+                "path": item["path"],
+                "reference_confidence": 0.9,
+                "constitutional_priority": 1,
+                "classification": "P2",
+                "relationship": "bounded dependency",
+                "evidence": "supplied candidate",
+                "acquisition_urgency": "none",
+            }
+            for item in candidates
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        ]
+        result = {
+            "schema_version": "constitution-index-v1",
+            "compiler_version": "compiler-v2",
+            "prompt_policy_version": "constitutional-rank-v2",
+            "model": payload.get("model"),
+            "source_logical_path": match.group(1),
+            "source_sha256": match.group(2),
+            "source_byte_length": int(match.group(3)),
+            "summary": "bounded fake rehearsal",
+            "rules": [{
+                "rule_id": "fake-rule",
+                "strength": "must",
+                "statement": "bounded rehearsal",
+                "location": "source",
+                "evidence": "supplied source",
+            }],
+            "roles": ["agent"],
+            "authorities": ["local"],
+            "source_of_truth_boundaries": ["gateway"],
+            "ordering_constraints": [],
+            "exceptions": [],
+            "dependencies": dependencies,
+            "reread_triggers": ["change"],
+            "status": "success",
+        }
+        return json.dumps(result, separators=(",", ":"))
+
+    @staticmethod
+    def _response() -> dict[str, object]:
+        return {
+            "id": "fake-response",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": CODEX_MODEL,
+            "output": [{
+                "id": "fake-message",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "bounded fake response", "annotations": []}],
+            }],
+            "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+        }
+
+    def _stream(self) -> None:
+        response = self._response()
+        events = (
+            ("response.created", {"type": "response.created", "response": response}),
+            ("response.output_text.delta", {"type": "response.output_text.delta", "delta": "bounded fake response"}),
+            ("response.completed", {"type": "response.completed", "response": response}),
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        for index, (event, payload) in enumerate(events):
+            self.wfile.write(f"event: {event}\\ndata: {json.dumps(payload, separators=(',', ':'))}\\n\\n".encode())
+            self.wfile.flush()
+            if index == 0:
+                self.server.first_event_sent.set()
+                time.sleep(0.05)
+        self.wfile.write(b"data: [DONE]\\n\\n")
+        self.wfile.flush()
+
+    def do_POST(self) -> None:
+        if not self._authorized():
+            self._json(401, {"error": {"code": "unauthorized"}})
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._json(400, {"error": {"code": "invalid_json"}})
+            return
+        if not isinstance(payload, dict):
+            self._json(400, {"error": {"code": "invalid_json"}})
+            return
+        if self.path == "/v1/chat/completions":
+            try:
+                content = self._compiled_index(payload)
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                self._json(400, {"error": {"code": "compiler_input"}})
+                return
+            self.server.record(compiler=True, streaming=False)
+            self._json(200, {"id": "fake-compiler", "choices": [{"message": {"content": content}}]})
+            return
+        if self.path == "/v1/responses":
+            streaming = payload.get("stream") is True
+            self.server.record(compiler=False, streaming=streaming)
+            if streaming:
+                self._stream()
+            else:
+                self._json(200, self._response())
+            return
+        self._json(404, {"error": {"code": "not_found"}})
+
+
 class _QwenRelayServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -928,26 +1158,42 @@ def _qwen_relay_main() -> int:
 
 
 def _start_qwen_relay(
-    port: int, *, runtime: RuntimeReference, relay_token: str
+    port: int,
+    *,
+    runtime: RuntimeReference | None = None,
+    endpoint: str | None = None,
+    qwen_token: str | None = None,
+    relay_token: str,
 ) -> subprocess.Popen[bytes]:
+    source: Path | None = None
+    if runtime is not None:
+        endpoint = runtime.endpoint
+        source = runtime.credential_source
+    if not endpoint or not qwen_token:
+        if source is None:
+            raise VerificationError("qwen_relay_configuration")
+        qwen_token = ""
     env = {
         "PATH": "/usr/bin:/bin",
         "PYTHONPATH": str(REPO_ROOT),
-        "SLAIF_155F_QWEN_BASE_URL": runtime.endpoint,
+        "SLAIF_155F_QWEN_BASE_URL": endpoint,
         "SLAIF_155F_QWEN_RELAY_PORT": str(port),
         QWEN_RELAY_TOKEN_ENV: relay_token,
     }
+    selected_env = (
+        "SLAIF_155F_QWEN_BASE_URL",
+        "SLAIF_155F_QWEN_RELAY_PORT",
+        QWEN_RELAY_TOKEN_ENV,
+        QWEN_TOKEN_ENV,
+    )
+    if source is None:
+        env[QWEN_TOKEN_ENV] = qwen_token
     return _start_process(
         [sys.executable, str(Path(__file__).resolve()), "--qwen-relay"],
         cwd=REPO_ROOT,
         env=env,
-        source=runtime.credential_source,
-        selected_env=(
-            "SLAIF_155F_QWEN_BASE_URL",
-            "SLAIF_155F_QWEN_RELAY_PORT",
-            QWEN_RELAY_TOKEN_ENV,
-            QWEN_TOKEN_ENV,
-        ),
+        source=source,
+        selected_env=selected_env,
     )
 
 
@@ -974,6 +1220,14 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever, name="155f-failure", daemon=True)
     thread.start()
     return server, thread
+
+
+def _start_fake_qwen() -> tuple[_FakeQwenServer, threading.Thread, str]:
+    token = "fake-qwen-token"
+    server = _FakeQwenServer(("127.0.0.1", 0), token)
+    thread = threading.Thread(target=server.serve_forever, name="155f-fake-qwen", daemon=True)
+    thread.start()
+    return server, thread, token
 
 
 def _start_process(
@@ -1238,7 +1492,9 @@ def _assert_local_bound_privacy(
                 raise VerificationError("raw_client_alias_forwarded")
 
 
-def _assert_required_evidence(evidence: dict[str, object]) -> None:
+def _assert_required_evidence(
+    evidence: dict[str, object], *, require_post_cleanup_model: bool = True
+) -> None:
     required = (
         "session_a1_a2_equal",
         "session_b_different",
@@ -1251,8 +1507,9 @@ def _assert_required_evidence(evidence: dict[str, object]) -> None:
         "postgres_rows_observed",
         "hosted_tools_stripped",
         "privacy_observed",
-        "post_cleanup_model_ok",
     )
+    if require_post_cleanup_model:
+        required += ("post_cleanup_model_ok",)
     if any(evidence.get(name) is not True for name in required):
         raise VerificationError("required_composed_evidence_missing")
     if type(evidence.get("provider_calls")) is not int or evidence["provider_calls"] <= 0:
@@ -1269,11 +1526,24 @@ def _assert_required_evidence(evidence: dict[str, object]) -> None:
         raise VerificationError("local_forward_count_mismatch")
 
 
-def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
+def _run_composed_impl(
+    root: Path,
+    runtime: RuntimeReference,
+    codex_binary: Path,
+    *,
+    fake_qwen: bool = False,
+    tracker: StageTracker | None = None,
+) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
     from openai import OpenAI
 
-    postgres_url, container, pulled = _start_postgres(root)
+    tracker = tracker or StageTracker()
+    container = ""
+    pulled = False
+    fake_qwen_server: _FakeQwenServer | None = None
+    fake_qwen_thread: threading.Thread | None = None
+    fake_qwen_token: str | None = None
+    postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
     gateway = local = None
     qwen_relay = None
     relay = failure_server = None
@@ -1294,6 +1564,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
     )
+    tracker.set("migration")
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
     migration = _run(
@@ -1304,9 +1575,15 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
     )
     if migration.returncode != 0:
         raise VerificationError("migration_failed")
+    tracker.set("relay_start")
     relay, relay_thread = _start_relay(local_port)
+    tracker.set("failure_provider_start")
     failure_server, failure_thread = _start_failure_server()
+    if fake_qwen:
+        tracker.set("qwen_relay_start")
+        fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen()
     previous_environment = os.environ.copy()
+    tracker.set("database_seed")
     os.environ.update(gateway_env)
     try:
         seeded = asyncio.run(_seed_database(postgres_url, relay_port=relay.server_address[1], failure_port=failure_server.server_address[1]))
@@ -1332,10 +1609,21 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
     if (LOCAL_ROOT / ".venv").exists():
         raise VerificationError("local_checkout_venv_present_before_start")
     try:
+        tracker.set("qwen_relay_start")
         qwen_relay = _start_qwen_relay(
-            qwen_relay_port, runtime=runtime, relay_token=qwen_relay_token
+            qwen_relay_port,
+            runtime=None if fake_qwen else runtime,
+            endpoint=(
+                f"http://127.0.0.1:{fake_qwen_server.server_address[1]}/v1"
+                if fake_qwen_server is not None
+                else None
+            ),
+            qwen_token=fake_qwen_token,
+            relay_token=qwen_relay_token,
         )
+        tracker.set("qwen_relay_ready")
         _wait_http(f"http://127.0.0.1:{qwen_relay_port}/__155f_status")
+        tracker.set("local_start")
         local = _start_process(
             ["uv", "run", "--project", str(LOCAL_ROOT), "--frozen", "slaif-local-coding", "--config", str(local_config)],
             cwd=LOCAL_ROOT,
@@ -1343,13 +1631,17 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         )
         if (LOCAL_ROOT / ".venv").exists():
             raise VerificationError("local_checkout_venv_created")
+        tracker.set("gateway_start")
         gateway = _start_process(
             [sys.executable, "-m", "uvicorn", "slaif_gateway.main:app", "--host", "127.0.0.1", "--port", str(gateway_port), "--no-access-log", "--log-level", "warning"],
             cwd=REPO_ROOT,
             env=gateway_env,
         )
+        tracker.set("local_health")
         _wait_http(f"http://127.0.0.1:{local_port}/healthz")
+        tracker.set("local_readiness")
         _wait_http(f"http://127.0.0.1:{local_port}/readyz")
+        tracker.set("gateway_health")
         _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
         client = OpenAI(api_key=key_one.plaintext, base_url=f"http://127.0.0.1:{gateway_port}/v1", max_retries=0)
         session_a = str(uuid.uuid4())
@@ -1382,13 +1674,16 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
 
         baseline = _local_metrics(local_port)
         relay_start = len(relay.response_statuses)
+        tracker.set("gateway_models")
         models = client.models.list()
         if not any(item.id == CODEX_MODEL for item in models.data):
             raise VerificationError("gateway_model_visibility_failed")
+        tracker.set("ordinary_response")
         client.responses.create(
             **request_body("155f ordinary", session_a),
             tools=[{"type": "function", "name": "local_lookup", "description": "local", "parameters": {"type": "object"}}],
         )
+        tracker.set("stream_response")
         streamed = client.responses.create(
             **request_body("155f stream", session_a),
             stream=True,
@@ -1396,6 +1691,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         stream_events = list(streamed)
         if not any(getattr(event, "type", None) == "response.completed" for event in stream_events):
             raise VerificationError("stream_completion_event_missing")
+        tracker.set("image_response")
         client.responses.create(
             **request_body("155f image", session_a, image=True),
         )
@@ -1406,8 +1702,11 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             "tools": [{"type": "tool_search"}, {"type": "web_search"}],
             "extra_body": {"client_metadata": metadata(session_a)},
         }
+        tracker.set("constitution_root_first")
         client.responses.create(**project_body)
+        tracker.set("constitution_root_reuse")
         client.responses.create(**project_body)
+        tracker.set("zero_root_rehydration")
         no_root_body = {
             **request_body("155f zero root", session_a),
         }
@@ -1423,6 +1722,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         codex_env["SLAIF_CODEX_CAPTURE_API_KEY"] = key_one.plaintext
         capture._write_0149_model_catalog(codex_binary, catalog, environment=codex_env, model=CODEX_MODEL)
         first_index = len(relay.snapshot())
+        tracker.set("codex_session_a")
         first = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-1", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if first.returncode != 0:
             raise VerificationError("codex_session_a_failed")
@@ -1431,6 +1731,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         if len(first_capture) != 1:
             raise VerificationError("codex_session_a_request_count")
         second_index = len(relay.snapshot())
+        tracker.set("codex_session_a_resume")
         second = _run(capture._exec_resume_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-2", thread_id=thread), cwd=work, env=codex_env, timeout=180)
         if second.returncode != 0:
             raise VerificationError("codex_session_resume_failed")
@@ -1438,6 +1739,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         if len(second_capture) != 1:
             raise VerificationError("codex_session_resume_request_count")
         third_index = len(relay.snapshot())
+        tracker.set("codex_session_b")
         third = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-3", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if third.returncode != 0:
             raise VerificationError("codex_session_b_failed")
@@ -1451,6 +1753,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             raise VerificationError("signed_session_a_relationship_failed")
         if not session_b_value or session_b_value == session_a1:
             raise VerificationError("signed_session_b_isolation_failed")
+        tracker.set("replay_and_tamper")
         replay_status = _replay_request(relay, first_capture[0])
         if replay_status != 409:
             raise VerificationError("exact_replay_not_rejected")
@@ -1464,12 +1767,14 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             raise VerificationError("path_tamper_not_rejected")
         if _relay_request(relay, first_capture[0].path + "?tamper=1", first_capture[0].headers, first_capture[0].body) != 403:
             raise VerificationError("query_tamper_not_rejected")
+        tracker.set("second_gateway_key")
         second_client = OpenAI(api_key=key_two.plaintext, base_url=f"http://127.0.0.1:{gateway_port}/v1", max_retries=0)
         second_key_index = len(relay.snapshot())
         second_client.responses.create(**request_body("155f second key", session_a))
         second_key_capture = relay.snapshot()[second_key_index:]
         if len(second_key_capture) != 1 or second_key_capture[0].headers.get("x-slaif-session") in {None, session_a1}:
             raise VerificationError("signed_session_second_key_isolation_failed")
+        tracker.set("preprovider_negatives")
         over_quota_before = len(relay.snapshot())
         try:
             second_client.responses.create(**request_body("155f over quota", session_a))
@@ -1522,6 +1827,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             raise VerificationError("adapter_required_not_rejected")
         if len(relay.snapshot()) != adapter_required_before:
             raise VerificationError("adapter_required_forwarded")
+        tracker.set("controlled_provider_failure")
         local_before_failure = _local_metrics(local_port)
         before_failure = len(relay.snapshot())
         try:
@@ -1535,6 +1841,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         local_after_failure = _local_metrics(local_port)
         if local_after_failure != local_before_failure:
             raise VerificationError("failure_reached_local_cache")
+        tracker.set("accounting")
         asyncio.run(_verify_failure_accounting(postgres_url, key_one))
         relay_statuses = relay.response_statuses[relay_start:]
         local_forwarded_calls = local_after_failure.ingress_responses - baseline.ingress_responses
@@ -1548,6 +1855,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
         )
         if database_rows != relay_calls + 1:
             raise VerificationError("accounting_row_count_mismatch")
+        tracker.set("local_metrics")
         final_metrics = _local_metrics(local_port)
         if final_metrics.cache_hits <= baseline.cache_hits or final_metrics.rehydration_hits <= baseline.rehydration_hits or final_metrics.rehydration_injected <= baseline.rehydration_injected:
             raise VerificationError("cache_rehydration_evidence_missing")
@@ -1555,6 +1863,7 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             raise VerificationError("hosted_tool_strip_evidence_missing")
         if final_metrics.ingress_responses <= baseline.ingress_responses:
             raise VerificationError("provider_metrics_missing")
+        tracker.set("qwen_wire_evidence")
         qwen_status = _qwen_relay_status(qwen_relay_port)
         if (
             type(qwen_status.get("calls")) is not int
@@ -1571,9 +1880,17 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             - {"authorization", "content-type", "accept", "accept-encoding"}
         ):
             raise VerificationError("qwen_relay_boundary_failed")
+        if fake_qwen and (
+            fake_qwen_server is None
+            or not fake_qwen_server.first_event_sent.is_set()
+            or fake_qwen_server.compiler_calls <= 0
+            or fake_qwen_server.inference_calls <= 0
+        ):
+            raise VerificationError("fake_qwen_wire_evidence_missing")
         provider_calls = final_metrics.ingress_responses - baseline.ingress_responses
         if provider_calls <= 0:
             raise VerificationError("provider_call_count_missing")
+        tracker.set("privacy")
         _assert_local_bound_privacy(
             relay.snapshot(), raw_aliases=raw_aliases, service_token=service_token
         )
@@ -1601,42 +1918,72 @@ def _run_composed_impl(root: Path, runtime: RuntimeReference, codex_binary: Path
             "relay_calls": relay_calls,
             "qwen_calls": qwen_status["calls"],
             "local_forwarded_calls": local_forwarded_calls,
+            "fake_rehearsal": fake_qwen,
         }
         return evidence
     finally:
-        for process in (local, gateway, qwen_relay):
-            if process is not None:
-                process.terminate()
-                try:
-                    process.wait(timeout=20)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
-        for server, thread in ((relay, relay_thread), (failure_server, failure_thread)):
-            if server is not None:
-                server.shutdown()
-                server.server_close()
-            if thread is not None:
-                thread.join(timeout=10)
-        _docker("rm", "-f", container, timeout=30)
-        if pulled:
-            _docker("rmi", "postgres:16", timeout=60)
-        if _git("status", "--porcelain", cwd=LOCAL_ROOT):
-            raise VerificationError("local_dependency_changed")
-        if (LOCAL_ROOT / ".venv").exists():
-            raise VerificationError("local_checkout_venv_present_after_cleanup")
+        primary = sys.exc_info()[1]
+        primary_stage = tracker.current
+        try:
+            tracker.set("process_cleanup")
+            for process in (local, gateway, qwen_relay):
+                if process is not None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=10)
+            for server, thread in ((relay, relay_thread), (failure_server, failure_thread)):
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=10)
+            if fake_qwen_server is not None:
+                fake_qwen_server.shutdown()
+                fake_qwen_server.server_close()
+            if fake_qwen_thread is not None:
+                fake_qwen_thread.join(timeout=10)
+            tracker.set("container_cleanup")
+            if container:
+                _docker("rm", "-f", container, timeout=30)
+            if pulled:
+                _docker("rmi", "postgres:16", timeout=60)
+            tracker.set("repository_cleanup")
+            if _git("status", "--porcelain", cwd=LOCAL_ROOT):
+                raise VerificationError("local_dependency_changed")
+            if (LOCAL_ROOT / ".venv").exists():
+                raise VerificationError("local_checkout_venv_present_after_cleanup")
+        except Exception:
+            if primary is not None:
+                if isinstance(primary, VerificationError):
+                    raise primary
+                if primary_stage in COMPOSITION_STAGES:
+                    raise VerificationError(f"unexpected_{primary_stage}") from None
+                raise VerificationError("unexpected_unknown_stage") from None
+            raise
 
 
-def _run_composed(root: Path, runtime: RuntimeReference, codex_binary: Path) -> dict[str, object]:
+def _run_composed(
+    root: Path,
+    runtime: RuntimeReference,
+    codex_binary: Path,
+    *,
+    fake_qwen: bool = False,
+) -> dict[str, object]:
+    tracker = StageTracker()
     try:
-        return _run_composed_impl(root, runtime, codex_binary)
+        return _run_composed_impl(
+            root, runtime, codex_binary, fake_qwen=fake_qwen, tracker=tracker
+        )
     except VerificationError:
         raise
     except Exception:
-        raise VerificationError("unexpected_composition") from None
+        raise tracker.unexpected() from None
 
 
-def run() -> dict[str, object]:
+def run(*, fake_qwen: bool = False) -> dict[str, object]:
     stage = "topology"
     try:
         _verify_commit_topology()
@@ -1645,8 +1992,9 @@ def run() -> dict[str, object]:
         stage = "fixtures"
         _verify_fixtures()
         stage = "protected_preflight"
-        _verify_protected_model_health(runtime)
-        _source_qwen_credential_only_for_local(runtime)
+        if not fake_qwen:
+            _verify_protected_model_health(runtime)
+            _source_qwen_credential_only_for_local(runtime)
         with tempfile.TemporaryDirectory(prefix="slaif-155f-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
@@ -1666,12 +2014,13 @@ def run() -> dict[str, object]:
             if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
                 raise VerificationError("exact_relationship_fixture_mismatch")
             stage = "composition"
-            result = _run_composed(root, runtime, codex_binary)
-        stage = "protected_post_cleanup"
-        _verify_protected_model_health(runtime)
-        result["post_cleanup_model_ok"] = True
+            result = _run_composed(root, runtime, codex_binary, fake_qwen=fake_qwen)
+        if not fake_qwen:
+            stage = "protected_postcheck"
+            _verify_protected_model_health(runtime)
+            result["post_cleanup_model_ok"] = True
         stage = "evidence"
-        _assert_required_evidence(result)
+        _assert_required_evidence(result, require_post_cleanup_model=not fake_qwen)
         return result
     except VerificationError:
         raise
@@ -1682,12 +2031,15 @@ def run() -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qwen-relay", action="store_true")
+    parser.add_argument("--fake-rehearsal", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
     try:
-        result = run()
-        _assert_required_evidence(result)
+        result = run(fake_qwen=arguments.fake_rehearsal)
+        _assert_required_evidence(
+            result, require_post_cleanup_model=not arguments.fake_rehearsal
+        )
     except VerificationError as exc:
         print(f"RESULT=BLOCKED code={exc}")
         return 1
@@ -1695,7 +2047,10 @@ def main() -> int:
         print("RESULT=BLOCKED code=unexpected_failure")
         return 1
     del result
-    print("RESULT=OK status=real_composed_acceptance")
+    if arguments.fake_rehearsal:
+        print("FAKE_REHEARSAL=OK")
+    else:
+        print("RESULT=OK status=real_composed_acceptance")
     return 0
 
 

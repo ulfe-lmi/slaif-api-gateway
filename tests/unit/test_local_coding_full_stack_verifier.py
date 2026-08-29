@@ -69,6 +69,62 @@ def test_check_parser_handles_spaced_names_and_fails_mixed_statuses() -> None:
     assert not verifier._checks_are_green(("\n".join(rows) + "\n").encode())
 
 
+def test_stage_tracker_accepts_only_declared_stages_and_localizes_unknowns() -> None:
+    tracker = verifier.StageTracker()
+    for stage in verifier.COMPOSITION_STAGES:
+        tracker.set(stage)
+        assert str(tracker.unexpected()) == f"unexpected_{stage}"
+    with pytest.raises(verifier.VerificationError, match="unknown_composition_stage"):
+        tracker.set("not-a-stage")
+    unknown = verifier.StageTracker()
+    assert str(unknown.unexpected()) == "unexpected_unknown_stage"
+
+
+def test_composed_wrapper_sanitizes_unexpected_exception_at_unknown_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("private body and endpoint")
+
+    monkeypatch.setattr(verifier, "_run_composed_impl", fail)
+    with pytest.raises(verifier.VerificationError, match="unexpected_unknown_stage") as error:
+        verifier._run_composed(tmp_path, object(), Path("codex"))  # type: ignore[arg-type]
+    assert "private" not in str(error.value)
+
+
+def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
+    fake, thread, token = verifier._start_fake_qwen()
+    try:
+        base = f"http://127.0.0.1:{fake.server_address[1]}"
+        assert verifier.httpx.get(
+            f"{base}/health", headers={"Authorization": f"Bearer {token}"}, timeout=5
+        ).status_code == 200
+        response = verifier.httpx.post(
+            f"{base}/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": verifier.CODEX_MODEL, "stream": False},
+            timeout=5,
+        )
+        assert response.status_code == 200
+        stream = verifier.httpx.stream(
+            "POST",
+            f"{base}/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": verifier.CODEX_MODEL, "stream": True},
+            timeout=5,
+        )
+        with stream as result:
+            first = next(result.iter_raw())
+            assert b"response.created" in first
+            assert fake.first_event_sent.wait(timeout=1)
+        assert fake.inference_calls == 2
+        assert fake.stream_calls == 1
+    finally:
+        fake.shutdown()
+        fake.server_close()
+        thread.join(timeout=2)
+
+
 def test_composed_evidence_rejects_placeholder_counts() -> None:
     evidence = {name: True for name in (
         "session_a1_a2_equal", "session_b_different", "session_second_key_different",
@@ -396,7 +452,7 @@ def test_scrubbed_launcher_does_not_forward_source_script_exports() -> None:
 
 
 def test_verifier_output_is_fixed_status_only(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(verifier, "run", _complete_evidence)
+    monkeypatch.setattr(verifier, "run", lambda **_kwargs: _complete_evidence())
     monkeypatch.setattr(sys, "argv", ["verify_local_coding_full_stack.py"])
     assert verifier.main() == 0
     output = capsys.readouterr().out
