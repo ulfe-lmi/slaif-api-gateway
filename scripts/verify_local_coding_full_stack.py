@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-f verifier for the real Codex/Gateway/Local Coding path.
+"""Bounded 155-g verifier for the real Codex/Gateway/Local Coding path.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "6bb67f4ca19f231b2f214e30c964ea0aac685d3e"
-GATEWAY_IMPLEMENTATION_HEAD = "4eb768254fcde0a4108bcabb35f175a74bd07a3f"
-GATEWAY_ACTIVATION_HEAD = "7e6c8fa8c67f5957de1d740d7b592a5dfbb15358"
+GATEWAY_REPORT_HEAD = "63b8a459d8a1b50e22e47feaa0dff8efc8b6957b"
+GATEWAY_IMPLEMENTATION_HEAD = "feb55ced305839f0793597eebca2304d917517dc"
+GATEWAY_ACTIVATION_HEAD = "510a2a2e366ebd9bca97be2f13841e0c64ea1308"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,7 +48,7 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-f-real-codex-local-coding-qwen-acceptance.md"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-g-corrected-single-composed-acceptance.md"
 TASK_DB = "slaif_gateway_oap_155f_live"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -147,7 +147,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-f-real-codex-local-coding-qwen-acceptance.md",
+        "oap/orders/155-g-corrected-single-composed-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -190,11 +190,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-f-real-codex-local-coding-qwen-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-g-corrected-single-composed-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-f\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-g\n":
         raise VerificationError("active_selector_mismatch")
 
 
