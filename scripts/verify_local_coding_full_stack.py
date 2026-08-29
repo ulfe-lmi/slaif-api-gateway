@@ -2228,9 +2228,18 @@ def _run_composed_impl(
         codex_env["SLAIF_CODEX_CAPTURE_API_KEY"] = key_one.plaintext
         capture._write_0149_model_catalog(codex_binary, catalog, environment=codex_env, model=CODEX_MODEL)
         first_index = len(relay.snapshot())
+        first_sse_structure_index = len(relay.status()["sse_structures"])
         tracker.set("codex_session_a")
         first = _run(capture._exec_command_0149(codex_binary, workdir=work, port=gateway_port, model=CODEX_MODEL, model_catalog=catalog, output_path=root / "codex-out-1", ephemeral=False), cwd=REPO_ROOT, env=codex_env, timeout=180)
         if first.returncode != 0:
+            sse_structures = relay.status()["sse_structures"]
+            if (
+                isinstance(sse_structures, list)
+                and len(sse_structures) > first_sse_structure_index
+                and isinstance(sse_structures[-1], dict)
+                and sse_structures[-1] != _PINNED_CAPTURE_SSE_STRUCTURE
+            ):
+                raise VerificationError("codex_session_a_gateway_sse_mismatch")
             category = capture.classify_codex_failure(first.stderr, first.stdout)
             allowed_categories = {
                 "configuration_rejected",
