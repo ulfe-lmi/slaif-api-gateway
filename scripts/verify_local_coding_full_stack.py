@@ -1017,6 +1017,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.request_path_classes: set[str] = set()
         self.upstream_statuses: list[int] = []
         self.path_rejections = 0
+        self.path_rejection_classes: set[str] = set()
         self._lock = threading.Lock()
 
     def record_request(
@@ -1060,9 +1061,10 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         with self._lock:
             self.upstream_statuses.append(status)
 
-    def record_path_rejection(self) -> None:
+    def record_path_rejection(self, path: str) -> None:
         with self._lock:
             self.path_rejections += 1
+            self.path_rejection_classes.add(_safe_path_class(path))
 
     def record_success(self) -> None:
         with self._lock:
@@ -1101,6 +1103,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "request_path_classes": sorted(self.request_path_classes),
                 "upstream_statuses": list(self.upstream_statuses),
                 "path_rejections": self.path_rejections,
+                "path_rejection_classes": sorted(self.path_rejection_classes),
             }
 
 
@@ -1149,7 +1152,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         try:
             target = _qwen_target(self.server.endpoint, path)
         except VerificationError:
-            self.server.record_path_rejection()
+            self.server.record_path_rejection(path)
             self.send_error(404)
             return None
         outbound_headers = {
