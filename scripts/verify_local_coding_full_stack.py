@@ -953,6 +953,11 @@ def _stream_observation(
     client_completed: bool,
     failure_code: str | None = None,
 ) -> dict[str, object]:
+    response_completed = (
+        isinstance(structure, dict)
+        and isinstance(structure.get("event_sequence"), list)
+        and "response.completed" in structure["event_sequence"]
+    )
     return {
         "boundary": boundary,
         "http_status_class": (
@@ -962,6 +967,7 @@ def _stream_observation(
         "structure": structure,
         "client_completed": client_completed,
         "failure_code": failure_code,
+        "response_completed": response_completed,
         "valid_completion": _stream_has_valid_completion(structure),
     }
 
@@ -975,6 +981,10 @@ def _stream_observation_is_ambiguous(observation: dict[str, object]) -> bool:
         or not isinstance(structure, dict)
         or structure.get("invalid") is not False
         or structure.get("normal_close") is not True
+        or (
+            observation.get("response_completed") is True
+            and observation.get("valid_completion") is not True
+        )
     )
 
 
@@ -3149,7 +3159,13 @@ def _run_composed_stream_diagnostic(
         )
         accounting_verified = False
         try:
-            asyncio.run(_verify_accounting(postgres_url, (key,)))
+            asyncio.run(
+                _verify_accounting(
+                    postgres_url,
+                    (key,),
+                    (session, metadata["root_turn_id"], metadata["turn_id"], metadata["x-codex-installation-id"], metadata["x-codex-window-id"]),
+                )
+            )
             accounting_verified = True
         except VerificationError:
             accounting_verified = False

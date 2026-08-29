@@ -582,6 +582,34 @@ def test_stream_differential_classification_fails_closed_for_non_sse() -> None:
     )
 
 
+def test_stream_ownership_does_not_misclassify_invalid_completed_shape() -> None:
+    structure = verifier.json.loads(
+        verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)
+    )
+    structure["completed_usage_valid"] = False
+    direct = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=structure,
+        client_completed=False,
+    )
+    valid = {
+        "boundary": "local_output",
+        "http_status_class": "2xx",
+        "content_type_class": "sse",
+        "structure": verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        "client_completed": True,
+        "failure_code": None,
+        "valid_completion": True,
+        "response_completed": True,
+    }
+    assert direct["response_completed"] is True
+    assert verifier._classify_stream_differential(direct, valid, valid) == (
+        "ambiguous_stream_evidence"
+    )
+
+
 def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     first_sent = threading.Event()
     release = threading.Event()
