@@ -1453,6 +1453,12 @@ def _localize_constitution_failure(
     if delta["path_rejections"]:
         return VerificationError("constitution_qwen_path_404")
     if delta["calls"] <= 0:
+        relay_status = relay.status()
+        response_statuses = relay_status["response_statuses"]
+        if response_statuses and response_statuses[-1] >= 500:
+            return VerificationError("constitution_local_http_5xx")
+        if response_statuses and response_statuses[-1] >= 400:
+            return VerificationError("constitution_local_http_4xx")
         return VerificationError("constitution_local_before_qwen")
     if delta["compiler_calls"] <= 0:
         if delta["inference_calls"] > 0:
