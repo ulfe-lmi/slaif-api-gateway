@@ -494,6 +494,16 @@ def test_sse_structure_accepts_exact_pinned_capture_pair() -> None:
     verifier._assert_pinned_capture_sse_structure(_record_sse_structure(events))
 
 
+def test_sse_structure_rejects_unknown_event_type() -> None:
+    event = {
+        "type": "response.unreviewed",
+        "response": {"id": "resp_capture", "status": "in_progress"},
+    }
+    structure = _record_sse_structure([("response.unreviewed", event)])
+    assert structure["unknown_events"] is True
+    assert structure["event_sequence"] == ["other"]
+
+
 @pytest.mark.parametrize(
     "variant",
     ["reordered", "duplicated", "done", "wrong_status"],
