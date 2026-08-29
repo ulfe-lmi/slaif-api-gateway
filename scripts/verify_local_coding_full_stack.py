@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-j verifier for protected stream boundary differential evidence.
+"""Bounded 155-k verifier for protected stream boundary differential evidence.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,9 +32,9 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "9c29eb5bb5d95d75dd600c3b629c589d797ab1d8"
-GATEWAY_IMPLEMENTATION_HEAD = "621af9f74d0229db5bdb6d21b98e31b6dcefc73a"
-GATEWAY_ACTIVATION_HEAD = "6a9634aa56a18c6fefe9229839a7455fed65d832"
+GATEWAY_REPORT_HEAD = "37c84c9cf32fb63303fe1f1897ca97bb170abb2c"
+GATEWAY_IMPLEMENTATION_HEAD = "c2b7cdaeb5d7c595a4882c2bf841b1fc8704a42f"
+GATEWAY_ACTIVATION_HEAD = "5305d3832a911472d9dbf216cb3fea9e0d6e5942"
 LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 CODEX_VERSION = "0.149.0"
@@ -48,8 +48,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-j-protected-stream-boundary-differential-and-closure.md"
-TASK_DB = "slaif_gateway_oap_155j_diff"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
+TASK_DB = "slaif_gateway_oap_155k_diff"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
 QWEN_TOKEN_ENV = "QWEN3090_API_KEY"
@@ -196,7 +196,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-j-protected-stream-boundary-differential-and-closure.md",
+        "oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -207,7 +207,7 @@ def _verify_commit_topology() -> None:
     if _git("rev-parse", f"{GATEWAY_REPORT_HEAD}^1") != GATEWAY_IMPLEMENTATION_HEAD:
         raise VerificationError("gateway_report_parent_mismatch")
     changed = _git("diff-tree", "--no-commit-id", "--name-only", "-r", GATEWAY_REPORT_HEAD)
-    if changed != "oap/reports/155-i-redacted-fake-closure-and-protected-acceptance.md":
+    if changed != "oap/reports/155-j-protected-stream-boundary-differential-and-closure.md":
         raise VerificationError("gateway_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", GATEWAY_REPORT_HEAD, "HEAD"], cwd=REPO_ROOT).returncode != 0:
         raise VerificationError("gateway_report_ancestry_failed")
@@ -239,11 +239,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-j-protected-stream-boundary-differential-and-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-j\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-k\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -706,6 +706,7 @@ _PINNED_CAPTURE_SSE_STRUCTURE = {
     "terminal_output_shape": "empty_array",
     "first_event_before_upstream_completion": True,
     "normal_close": True,
+    "downstream_closed_early": False,
 }
 
 
@@ -732,6 +733,7 @@ class _SSEStructuralRecorder:
         self._unknown_events = False
         self._first_event_before_upstream_completion = False
         self._normal_close = False
+        self._downstream_closed_early = False
         self._invalid = False
 
     def mark_first_event_before_upstream_completion(self, value: bool = True) -> None:
@@ -739,6 +741,9 @@ class _SSEStructuralRecorder:
 
     def mark_normal_close(self, value: bool = True) -> None:
         self._normal_close = value
+
+    def mark_downstream_closed_early(self, value: bool = True) -> None:
+        self._downstream_closed_early = value
 
     def feed(self, chunk: bytes) -> None:
         if self._invalid:
@@ -896,6 +901,7 @@ class _SSEStructuralRecorder:
             "terminal_output_shape": self._terminal_output_shape,
             "first_event_before_upstream_completion": self._first_event_before_upstream_completion,
             "normal_close": self._normal_close,
+            "downstream_closed_early": self._downstream_closed_early,
         }
 
 
@@ -972,6 +978,12 @@ def _stream_observation(
     }
 
 
+def _relay_failure_code(status: object, current: str | None = None) -> str | None:
+    if isinstance(status, dict) and status.get("handler_error") is True:
+        return "handler_error"
+    return current
+
+
 def _stream_observation_is_ambiguous(observation: dict[str, object]) -> bool:
     structure = observation.get("structure")
     return (
@@ -1009,6 +1021,165 @@ def _classify_stream_differential(
     return "all_boundaries_completed"
 
 
+def _classify_direct_stream(direct_qwen: dict[str, object]) -> str | None:
+    if _stream_observation_is_ambiguous(direct_qwen):
+        return "ambiguous_stream_evidence"
+    if direct_qwen.get("valid_completion") is not True:
+        return "qwen_owned"
+    return None
+
+
+_STREAM_BOUNDARIES = ("direct_qwen", "local_output", "gateway_output")
+_STREAM_STATUS_CLASSES = frozenset({"2xx", "4xx", "5xx", "unknown"})
+_STREAM_CONTENT_TYPES = frozenset({"sse", "json", "other", "unknown"})
+_STREAM_DECISIONS = frozenset(
+    {
+        "ambiguous_stream_evidence",
+        "qwen_owned",
+        "local_owned",
+        "gateway_owned",
+        "official_client_observation",
+        "all_boundaries_completed",
+    }
+)
+_STREAM_FAILURE_CODES = frozenset(
+    {
+        "none",
+        "direct_qwen_client_stream_failed",
+        "composed_client_stream_failed",
+        "handler_error",
+        "unknown_failure",
+    }
+)
+_STREAM_TERMINAL_SHAPES = frozenset({"missing", "empty_array", "nonempty_array", "other"})
+
+
+def _safe_stream_summary(
+    observation: object, *, decision: str
+) -> dict[str, object]:
+    """Validate and project one observation into the fixed public schema."""
+    if not isinstance(observation, dict):
+        raise VerificationError("differential_summary_invalid")
+    boundary = observation.get("boundary")
+    status_class = observation.get("http_status_class")
+    content_type = observation.get("content_type_class")
+    structure = observation.get("structure")
+    if (
+        not isinstance(boundary, str)
+        or boundary not in _STREAM_BOUNDARIES
+        or not isinstance(status_class, str)
+        or status_class not in _STREAM_STATUS_CLASSES
+        or not isinstance(content_type, str)
+        or content_type not in _STREAM_CONTENT_TYPES
+        or not isinstance(structure, dict)
+    ):
+        raise VerificationError("differential_summary_invalid")
+    sequence = structure.get("event_sequence")
+    counts = structure.get("event_counts")
+    if (
+        not isinstance(sequence, list)
+        or len(sequence) > 64
+        or any(not isinstance(event, str) or event not in _SAFE_SSE_EVENT_TYPES for event in sequence)
+        or not isinstance(counts, dict)
+        or any(
+            not isinstance(event, str)
+            or event not in _SAFE_SSE_EVENT_TYPES
+            or type(count) is not int
+            or count < 0
+            or count > len(sequence)
+            for event, count in counts.items()
+        )
+        or counts != {event: sequence.count(event) for event in sorted(set(sequence))}
+    ):
+        raise VerificationError("differential_summary_invalid")
+    bool_fields = (
+        "invalid",
+        "done_sentinel",
+        "duplicates",
+        "unknown_events",
+        "response_id_relation",
+        "completed_status_completed",
+        "model_matches",
+        "completed_output_empty",
+        "completed_usage_valid",
+        "normal_close",
+        "downstream_closed_early",
+    )
+    if any(type(structure.get(field)) is not bool for field in bool_fields):
+        raise VerificationError("differential_summary_invalid")
+    if type(observation.get("response_completed")) is not bool:
+        raise VerificationError("differential_summary_invalid")
+    if type(observation.get("client_completed")) is not bool:
+        raise VerificationError("differential_summary_invalid")
+    if observation["response_completed"] != ("response.completed" in sequence):
+        raise VerificationError("differential_summary_invalid")
+    failure_code = observation.get("failure_code")
+    if failure_code is None:
+        failure_code = "none"
+    if not isinstance(failure_code, str) or failure_code not in _STREAM_FAILURE_CODES:
+        failure_code = "unknown_failure"
+    terminal_shape = structure.get("terminal_output_shape")
+    if terminal_shape not in _STREAM_TERMINAL_SHAPES:
+        raise VerificationError("differential_summary_invalid")
+    return {
+        "boundary": boundary,
+        "http_status_class": status_class,
+        "content_type_class": content_type,
+        "event_sequence": list(sequence),
+        "event_counts": dict(counts),
+        "invalid": structure["invalid"],
+        "response_completed": observation["response_completed"],
+        "duplicates": structure["duplicates"],
+        "unknown_events": structure["unknown_events"],
+        "done_sentinel": structure["done_sentinel"],
+        "response_id_relation": structure["response_id_relation"],
+        "completed_status_completed": structure["completed_status_completed"],
+        "model_matches": structure["model_matches"],
+        "completed_output_empty": structure["completed_output_empty"],
+        "terminal_output_shape": terminal_shape,
+        "completed_usage_valid": structure["completed_usage_valid"],
+        "normal_close": structure["normal_close"],
+        "downstream_closed_early": structure["downstream_closed_early"],
+        "official_client_completion": observation["client_completed"],
+        "failure_code": failure_code,
+        "decision": decision,
+    }
+
+
+def _stream_summary_lines(result: object) -> tuple[str, ...]:
+    if not isinstance(result, dict):
+        raise VerificationError("differential_summary_invalid")
+    decision = result.get("decision")
+    if not isinstance(decision, str) or decision not in _STREAM_DECISIONS:
+        raise VerificationError("differential_summary_invalid")
+    ran_boundaries = result.get("ran_boundaries")
+    if (
+        not isinstance(ran_boundaries, list)
+        or not ran_boundaries
+        or any(not isinstance(boundary, str) for boundary in ran_boundaries)
+        or len(ran_boundaries) != len(set(ran_boundaries))
+        or any(boundary not in _STREAM_BOUNDARIES for boundary in ran_boundaries)
+        or ran_boundaries != [boundary for boundary in _STREAM_BOUNDARIES if boundary in ran_boundaries]
+    ):
+        raise VerificationError("differential_summary_invalid")
+    summaries = []
+    for boundary in ran_boundaries:
+        observation = result.get(boundary)
+        if not isinstance(observation, dict) or observation.get("boundary") != boundary:
+            raise VerificationError("differential_summary_invalid")
+        summaries.append(_safe_stream_summary(observation, decision=decision))
+    return tuple(
+        [
+            *(
+                "STREAM_BOUNDARY "
+                + json.dumps(summary, sort_keys=True, separators=(",", ":"))
+                for summary in summaries
+            ),
+            "STREAM_DECISION " + json.dumps(decision, separators=(",", ":")),
+        ]
+    )
+
+
 def _stop_process(process: subprocess.Popen[bytes] | None) -> None:
     if process is None:
         return
@@ -1044,7 +1215,15 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.sse_boundaries: list[str] = []
         self.forwarded = 0
         self.rejected = 0
+        self.downstream_closed_early = False
+        self.upstream_truncated = False
+        self.handler_error = False
         self._capture_lock = threading.Lock()
+
+    def handle_error(self, _request: object, _client_address: object) -> None:
+        """Never emit stdlib handler tracebacks from the evidence relay."""
+        with self._capture_lock:
+            self.handler_error = True
 
     def remember(self, request: CapturedRequest) -> None:
         with self._capture_lock:
@@ -1065,6 +1244,14 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.sse_structures.append(structure)
             self.sse_boundaries.append(self.boundary_class)
 
+    def mark_downstream_closed_early(self) -> None:
+        with self._capture_lock:
+            self.downstream_closed_early = True
+
+    def mark_upstream_truncated(self) -> None:
+        with self._capture_lock:
+            self.upstream_truncated = True
+
     def status(self) -> dict[str, object]:
         with self._capture_lock:
             return {
@@ -1074,6 +1261,9 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
                 "response_path_classes": list(self.response_path_classes),
                 "sse_structures": list(self.sse_structures),
                 "sse_boundaries": list(self.sse_boundaries),
+                "downstream_closed_early": self.downstream_closed_early,
+                "upstream_truncated": self.upstream_truncated,
+                "handler_error": self.handler_error,
             }
 
     def snapshot(self) -> tuple[CapturedRequest, ...]:
@@ -1105,6 +1295,9 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
         captured = CapturedRequest(path=self.path, body=body, headers=headers)
         if self.server.capture_requests:
             self.server.remember(captured)
+        response_status: int | None = None
+        headers_sent = False
+        downstream_open = True
         try:
             with httpx.Client(timeout=300, follow_redirects=False) as client:
                 with client.stream(
@@ -1120,29 +1313,7 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                         )
                         else None
                     )
-                    self.send_response(response.status_code)
-                    for key, value in response.headers.items():
-                        if key.lower() not in {
-                            "content-length",
-                            "connection",
-                            "transfer-encoding",
-                        }:
-                            self.send_header(key, value)
-                    self.end_headers()
-                    first_chunk = True
-                    for chunk in response.iter_raw():
-                        if recorder is not None:
-                            if first_chunk:
-                                recorder.mark_first_event_before_upstream_completion()
-                            recorder.feed(chunk)
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                        first_chunk = False
-                    if recorder is not None:
-                        recorder.mark_normal_close()
-                        recorder.finish()
-                        self.server.remember_sse_structure(recorder.snapshot())
-                    status = response.status_code
+                    response_status = response.status_code
                     content_type = response.headers.get("content-type", "").lower()
                     content_type_class = (
                         "sse"
@@ -1151,11 +1322,56 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                         if "json" in content_type
                         else "other"
                     )
+                    try:
+                        self.send_response(response.status_code)
+                        for key, value in response.headers.items():
+                            if key.lower() not in {
+                                "content-length",
+                                "connection",
+                                "transfer-encoding",
+                            }:
+                                self.send_header(key, value)
+                        self.end_headers()
+                        headers_sent = True
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                        downstream_open = False
+                        self.server.mark_downstream_closed_early()
+                    first_chunk = True
+                    upstream_normal_close = False
+                    try:
+                        for chunk in response.iter_raw():
+                            if recorder is not None:
+                                if first_chunk:
+                                    recorder.mark_first_event_before_upstream_completion()
+                                recorder.feed(chunk)
+                            if downstream_open:
+                                try:
+                                    self.wfile.write(chunk)
+                                    self.wfile.flush()
+                                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                                    downstream_open = False
+                                    self.server.mark_downstream_closed_early()
+                            first_chunk = False
+                        upstream_normal_close = True
+                    finally:
+                        if recorder is not None:
+                            recorder.mark_normal_close(upstream_normal_close)
+                            if not downstream_open:
+                                recorder.mark_downstream_closed_early()
+                            self.server.remember_sse_structure(recorder.snapshot())
         except httpx.HTTPError:
+            self.server.mark_upstream_truncated()
             self.server.rejected += 1
-            self.send_error(502)
+            if response_status is not None:
+                self.server.remember_response(response_status, self.path, content_type_class)
+            if not headers_sent and downstream_open:
+                try:
+                    self.send_error(502)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    self.server.mark_downstream_closed_early()
             return
-        self.server.remember_response(status, self.path, content_type_class)
+        if response_status is not None:
+            self.server.remember_response(response_status, self.path, content_type_class)
 
     def do_GET(self) -> None:
         self._forward()
@@ -1460,7 +1676,15 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.stream_first_event_before_upstream_completion = False
         self.stream_normal_close = False
         self.sse_content_type_classes: list[str] = []
+        self.downstream_closed_early = False
+        self.upstream_truncated = False
+        self.handler_error = False
         self._lock = threading.Lock()
+
+    def handle_error(self, _request: object, _client_address: object) -> None:
+        """Keep relay disconnects out of stderr and out of evidence output."""
+        with self._lock:
+            self.handler_error = True
 
     def record_request(
         self,
@@ -1535,6 +1759,14 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         with self._lock:
             self.stream_normal_close = True
 
+    def record_downstream_closed_early(self) -> None:
+        with self._lock:
+            self.downstream_closed_early = True
+
+    def record_upstream_truncated(self) -> None:
+        with self._lock:
+            self.upstream_truncated = True
+
     def remember_sse_structure(self, structure: dict[str, object]) -> None:
         with self._lock:
             self.sse_structures.append(structure)
@@ -1572,6 +1804,9 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "stream_normal_close": self.stream_normal_close,
                 "sse_structures": list(self.sse_structures),
                 "sse_content_type_classes": list(self.sse_content_type_classes),
+                "downstream_closed_early": self.downstream_closed_early,
+                "upstream_truncated": self.upstream_truncated,
+                "handler_error": self.handler_error,
             }
 
 
@@ -1597,7 +1832,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:
-        if self.path == "/__155f_status":
+        if urlsplit(self.path).path == "/__155f_status" and not urlsplit(self.path).query:
             body = json.dumps(self.server.status(), separators=(",", ":")).encode("ascii")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1605,7 +1840,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path not in {"/health", "/v1/models"}:
+        if urlsplit(self.path).path not in {"/health", "/v1/models"}:
             self.send_error(404)
             return
         inbound_headers = {
@@ -1634,6 +1869,9 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
             if name in inbound_headers
         }
         outbound_headers["authorization"] = f"Bearer {self.server.qwen_token}"
+        response_status: int | None = None
+        headers_sent = False
+        downstream_open = True
         try:
             with httpx.Client(timeout=300, follow_redirects=False) as client:
                 with client.stream(method, target, headers=outbound_headers, content=body) as response:
@@ -1647,37 +1885,60 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                         )
                         else None
                     )
-                    self.send_response(response.status_code)
-                    for key, value in response.headers.items():
-                        if key.lower() not in {
-                            "content-length",
-                            "connection",
-                            "transfer-encoding",
-                        }:
-                            self.send_header(key, value)
-                    self.end_headers()
+                    response_status = response.status_code
+                    try:
+                        self.send_response(response.status_code)
+                        for key, value in response.headers.items():
+                            if key.lower() not in {
+                                "content-length",
+                                "connection",
+                                "transfer-encoding",
+                            }:
+                                self.send_header(key, value)
+                        self.end_headers()
+                        headers_sent = True
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                        downstream_open = False
+                        self.server.record_downstream_closed_early()
                     first_chunk = True
-                    for chunk in response.iter_raw():
-                        if first_chunk:
-                            self.server.record_stream_first_event()
+                    upstream_normal_close = False
+                    try:
+                        for chunk in response.iter_raw():
+                            if first_chunk:
+                                self.server.record_stream_first_event()
+                                if recorder is not None:
+                                    recorder.mark_first_event_before_upstream_completion()
                             if recorder is not None:
-                                recorder.mark_first_event_before_upstream_completion()
+                                recorder.feed(chunk)
+                            if downstream_open:
+                                try:
+                                    self.wfile.write(chunk)
+                                    self.wfile.flush()
+                                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                                    downstream_open = False
+                                    self.server.record_downstream_closed_early()
+                            first_chunk = False
+                        upstream_normal_close = True
+                    finally:
+                        if upstream_normal_close:
+                            self.server.record_stream_normal_close()
                         if recorder is not None:
-                            recorder.feed(chunk)
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                        first_chunk = False
-                    self.server.record_stream_normal_close()
-                    if recorder is not None:
-                        recorder.mark_normal_close()
-                        recorder.finish()
-                        self.server.remember_sse_structure(recorder.snapshot())
-                    status = response.status_code
-                    self.server.record_upstream_status(status)
+                            recorder.mark_normal_close(upstream_normal_close)
+                            if not downstream_open:
+                                recorder.mark_downstream_closed_early()
+                            self.server.remember_sse_structure(recorder.snapshot())
+                    self.server.record_upstream_status(response.status_code)
         except httpx.HTTPError:
-            self.send_error(502)
+            self.server.record_upstream_truncated()
+            if response_status is not None:
+                self.server.record_upstream_status(response_status)
+            if not headers_sent and downstream_open:
+                try:
+                    self.send_error(502)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    self.server.record_downstream_closed_early()
             return None
-        return status
+        return response_status
 
     def do_POST(self) -> None:
         try:
@@ -2960,7 +3221,7 @@ def _run_direct_stream_diagnostic(
             ),
             structure=structure,
             client_completed=client_completed,
-            failure_code=failure_code,
+            failure_code=_relay_failure_code(status, failure_code),
         )
     finally:
         _stop_process(relay)
@@ -3116,6 +3377,8 @@ def _run_composed_stream_diagnostic(
             failure_code = "composed_client_stream_failed"
         local_status = relay.status()
         gateway_status = gateway_output.status()
+        qwen_status = _qwen_relay_status(qwen_port)
+        qwen_failure_code = _relay_failure_code(qwen_status)
         local_structures = local_status.get("sse_structures")
         gateway_structures = gateway_status.get("sse_structures")
         local_output = _stream_observation(
@@ -3136,6 +3399,7 @@ def _run_composed_stream_diagnostic(
                 else None
             ),
             client_completed=True,
+            failure_code=_relay_failure_code(local_status, qwen_failure_code),
         )
         gateway_observation = _stream_observation(
             boundary="gateway_output",
@@ -3155,7 +3419,7 @@ def _run_composed_stream_diagnostic(
                 else None
             ),
             client_completed=client_completed,
-            failure_code=failure_code,
+            failure_code=_relay_failure_code(gateway_status, failure_code),
         )
         accounting_verified = False
         try:
@@ -3173,7 +3437,7 @@ def _run_composed_stream_diagnostic(
             "local_output": local_output,
             "gateway_output": gateway_observation,
             "accounting_verified": accounting_verified,
-            "qwen_status": _qwen_relay_status(qwen_port),
+            "qwen_status": qwen_status,
         }
     finally:
         _stop_process(local)
@@ -3200,11 +3464,18 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155j-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155k-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
         direct_qwen = _run_direct_stream_diagnostic(root, runtime)
+        direct_decision = _classify_direct_stream(direct_qwen)
+        if direct_decision is not None:
+            return {
+                "decision": direct_decision,
+                "ran_boundaries": ["direct_qwen"],
+                "direct_qwen": direct_qwen,
+            }
         composed = _run_composed_stream_diagnostic(root, runtime)
     local_output = composed["local_output"]
     gateway_output = composed["gateway_output"]
@@ -3215,6 +3486,7 @@ def run_stream_differential() -> dict[str, object]:
         raise VerificationError("differential_accounting_missing")
     return {
         "decision": decision,
+        "ran_boundaries": ["direct_qwen", "local_output", "gateway_output"],
         "direct_qwen": direct_qwen,
         "local_output": local_output,
         "gateway_output": gateway_output,
@@ -3302,7 +3574,12 @@ def main() -> int:
         except Exception:
             print("RESULT=BLOCKED code=unexpected_stream_differential")
             return 1
-        print(f"RESULT=DIFFERENTIAL decision={result['decision']}")
+        try:
+            for line in _stream_summary_lines(result):
+                print(line)
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
         return 0
     try:
         result = run(fake_qwen=arguments.fake_rehearsal)

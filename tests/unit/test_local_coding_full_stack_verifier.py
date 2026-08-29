@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import http.server
 import queue
+import socket
+import struct
 import subprocess
 import sys
 import types
@@ -134,6 +136,65 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ["docker", "info", "--format", "{{.ServerVersion}}"],
         ["sudo", "-n", "docker", "info", "--format", "{{.ServerVersion}}"],
     ]
+
+
+@pytest.mark.parametrize(
+    ("bad_field", "expected"),
+    [
+        ("parent", "gateway_report_parent_mismatch"),
+        ("path", "gateway_report_not_report_only"),
+    ],
+)
+def test_155k_topology_enforces_exact_prior_report_parent_and_report_only_path(
+    monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
+) -> None:
+    current_head = "current-155k-head"
+    local_head = verifier.LOCAL_REPORT_HEAD
+    report_path = "oap/reports/155-j-protected-stream-boundary-differential-and-closure.md"
+
+    def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
+        if args == ("rev-parse", "HEAD"):
+            return local_head if cwd == verifier.LOCAL_ROOT else current_head
+        if args == ("status", "--porcelain"):
+            return ""
+        if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
+            return verifier.GATEWAY_REPORT_HEAD
+        if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
+            return "oap/active\noap/orders/155-k-disconnect-safe-boundary-evidence-and-stream-closure.md"
+        if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
+            return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
+        if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
+            return "wrong-path" if bad_field == "path" else report_path
+        return ""
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if argv[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+        if argv[:3] == ["gh", "pr", "view"]:
+            pr = argv[3]
+            head = current_head if pr == "291" else local_head
+            payload = {
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": head,
+                "mergeStateStatus": "CLEAN",
+                "autoMergeRequest": None,
+            }
+            return subprocess.CompletedProcess(argv, 0, verifier.json.dumps(payload).encode(), b"")
+        if argv[:3] == ["gh", "pr", "checks"]:
+            output = "\n".join(f"check-{index}\tpass\t1s\thttps://example.invalid/{index}" for index in range(10))
+            return subprocess.CompletedProcess(argv, 0, (output + "\n").encode(), b"")
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(verifier, "_git", fake_git)
+    monkeypatch.setattr(verifier, "_run", fake_run)
+    with pytest.raises(verifier.VerificationError, match=expected):
+        verifier._verify_commit_topology()
+
+
+def test_155k_topology_anchors_are_the_155j_report_and_implementation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "37c84c9cf32fb63303fe1f1897ca97bb170abb2c"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "c2b7cdaeb5d7c595a4882c2bf841b1fc8704a42f"
 
 
 def test_check_parser_handles_spaced_names_and_fails_mixed_statuses() -> None:
@@ -620,6 +681,43 @@ def test_stream_ownership_does_not_misclassify_invalid_completed_shape() -> None
     )
 
 
+@pytest.mark.parametrize(
+    ("target", "client_completed", "expected"),
+    [
+        ("direct_qwen", True, "qwen_owned"),
+        ("local_output", True, "local_owned"),
+        ("gateway_output", True, "gateway_owned"),
+        ("gateway_output", False, "official_client_observation"),
+        (None, True, "all_boundaries_completed"),
+    ],
+)
+def test_stream_differential_decision_table_covers_each_nonambiguous_branch(
+    target: str | None, client_completed: bool, expected: str
+) -> None:
+    valid = {
+        "boundary": "direct_qwen",
+        "http_status_class": "2xx",
+        "content_type_class": "sse",
+        "structure": verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        "client_completed": True,
+        "failure_code": None,
+        "response_completed": True,
+        "valid_completion": True,
+    }
+    direct = dict(valid, boundary="direct_qwen")
+    local = dict(valid, boundary="local_output")
+    gateway = dict(valid, boundary="gateway_output", client_completed=client_completed)
+    if target is not None and not (target == "gateway_output" and not client_completed):
+        target_observation = {
+            "direct_qwen": direct,
+            "local_output": local,
+            "gateway_output": gateway,
+        }[target]
+        target_observation["valid_completion"] = False
+        target_observation["response_completed"] = False
+    assert verifier._classify_stream_differential(direct, local, gateway) == expected
+
+
 def test_qwen_relay_passes_sse_chunk_before_upstream_finishes() -> None:
     first_sent = threading.Event()
     release = threading.Event()
@@ -881,3 +979,359 @@ def test_verifier_output_is_fixed_status_only(monkeypatch: pytest.MonkeyPatch, c
     output = capsys.readouterr().out
     assert output == "RESULT=OK status=real_composed_acceptance\n"
     assert "private" not in output
+
+
+def _stream_result_for_summary(decision: str = "all_boundaries_completed") -> dict[str, object]:
+    observations = {}
+    for boundary in ("direct_qwen", "local_output", "gateway_output"):
+        observations[boundary] = verifier._stream_observation(
+            boundary=boundary,
+            status=200,
+            content_type_class="sse",
+            structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+            client_completed=True,
+        )
+    return {
+        **observations,
+        "decision": decision,
+        "ran_boundaries": ["direct_qwen", "local_output", "gateway_output"],
+    }
+
+
+def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = _stream_result_for_summary()
+    monkeypatch.setattr(verifier, "run_stream_differential", lambda: result)
+    monkeypatch.setattr(sys, "argv", ["verify_local_coding_full_stack.py", "--stream-differential"])
+    assert verifier.main() == 0
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert len(lines) == 4
+    assert captured.out == (
+        'STREAM_BOUNDARY {"boundary":"direct_qwen","completed_output_empty":true,'
+        '"completed_status_completed":true,"completed_usage_valid":true,'
+        '"content_type_class":"sse","decision":"all_boundaries_completed",'
+        '"done_sentinel":false,"downstream_closed_early":false,'
+        '"duplicates":false,'
+        '"event_counts":{"response.completed":1,"response.created":1},'
+        '"event_sequence":["response.created","response.completed"],'
+        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
+        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
+        '"response_completed":true,"response_id_relation":true,'
+        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
+        'STREAM_BOUNDARY {"boundary":"local_output","completed_output_empty":true,'
+        '"completed_status_completed":true,"completed_usage_valid":true,'
+        '"content_type_class":"sse","decision":"all_boundaries_completed",'
+        '"done_sentinel":false,"downstream_closed_early":false,'
+        '"duplicates":false,'
+        '"event_counts":{"response.completed":1,"response.created":1},'
+        '"event_sequence":["response.created","response.completed"],'
+        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
+        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
+        '"response_completed":true,"response_id_relation":true,'
+        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
+        'STREAM_BOUNDARY {"boundary":"gateway_output","completed_output_empty":true,'
+        '"completed_status_completed":true,"completed_usage_valid":true,'
+        '"content_type_class":"sse","decision":"all_boundaries_completed",'
+        '"done_sentinel":false,"downstream_closed_early":false,'
+        '"duplicates":false,'
+        '"event_counts":{"response.completed":1,"response.created":1},'
+        '"event_sequence":["response.created","response.completed"],'
+        '"failure_code":"none","http_status_class":"2xx","invalid":false,'
+        '"model_matches":true,"normal_close":true,"official_client_completion":true,'
+        '"response_completed":true,"response_id_relation":true,'
+        '"terminal_output_shape":"empty_array","unknown_events":false}\n'
+        'STREAM_DECISION "all_boundaries_completed"\n'
+    )
+    assert captured.err == ""
+    assert len(captured.out) < 4096
+    assert "resp_capture" not in captured.out
+    assert "response_field_names" not in captured.out
+    assert "all_boundaries_completed" in captured.out
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        "qwen_owned",
+        "local_owned",
+        "gateway_owned",
+        "official_client_observation",
+        "ambiguous_stream_evidence",
+    ],
+)
+def test_stream_differential_cli_emits_all_allowlisted_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    decision: str,
+) -> None:
+    monkeypatch.setattr(
+        verifier, "run_stream_differential", lambda: _stream_result_for_summary(decision)
+    )
+    monkeypatch.setattr(sys, "argv", ["verify_local_coding_full_stack.py", "--stream-differential"])
+    assert verifier.main() == 0
+    assert capsys.readouterr().out.endswith(f'STREAM_DECISION "{decision}"\n')
+
+
+def test_stream_differential_qwen_owned_emits_only_direct_boundary() -> None:
+    direct = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        client_completed=True,
+    )
+    direct_structure = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
+    direct_structure["event_sequence"] = ["response.created"]
+    direct_structure["event_counts"] = {"response.created": 1}
+    direct["structure"] = direct_structure
+    direct["response_completed"] = False
+    direct["valid_completion"] = False
+    result = {
+        "decision": "qwen_owned",
+        "ran_boundaries": ["direct_qwen"],
+        "direct_qwen": direct,
+    }
+    lines = verifier._stream_summary_lines(result)
+    assert len(lines) == 2
+    assert lines[0].startswith("STREAM_BOUNDARY ")
+    assert "local_output" not in lines[0]
+    assert lines[1] == 'STREAM_DECISION "qwen_owned"'
+
+
+def test_stream_differential_cli_qwen_owned_is_exact_and_does_not_claim_unrun_boundaries(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    direct = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE)),
+        client_completed=True,
+    )
+    direct["structure"]["event_sequence"] = ["response.created"]
+    direct["structure"]["event_counts"] = {"response.created": 1}
+    direct["response_completed"] = False
+    direct["valid_completion"] = False
+    result = {
+        "decision": "qwen_owned",
+        "ran_boundaries": ["direct_qwen"],
+        "direct_qwen": direct,
+    }
+    monkeypatch.setattr(verifier, "run_stream_differential", lambda: result)
+    monkeypatch.setattr(sys, "argv", ["verify_local_coding_full_stack.py", "--stream-differential"])
+    assert verifier.main() == 0
+    captured = capsys.readouterr()
+    expected = "\n".join(verifier._stream_summary_lines(result)) + "\n"
+    assert captured.out == expected
+    assert captured.err == ""
+    assert captured.out.count("STREAM_BOUNDARY ") == 1
+    assert "local_output" not in captured.out
+    assert "gateway_output" not in captured.out
+
+
+def test_stream_differential_stops_before_composed_on_qwen_owned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    direct = verifier._stream_observation(
+        boundary="direct_qwen",
+        status=200,
+        content_type_class="sse",
+        structure=verifier._PINNED_CAPTURE_SSE_STRUCTURE,
+        client_completed=True,
+    )
+    direct_structure = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
+    direct_structure["event_sequence"] = ["response.created"]
+    direct_structure["event_counts"] = {"response.created": 1}
+    direct["structure"] = direct_structure
+    direct["response_completed"] = False
+    direct["valid_completion"] = False
+    monkeypatch.setattr(verifier, "_run_direct_stream_diagnostic", lambda *_args: direct)
+    monkeypatch.setattr(
+        verifier,
+        "_run_composed_stream_diagnostic",
+        lambda *_args: pytest.fail("composed diagnostic must not run"),
+    )
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_read_runtime_reference", lambda: object())
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: tmp_path / "config")
+    result = verifier.run_stream_differential()
+    assert result["decision"] == "qwen_owned"
+    assert result["ran_boundaries"] == ["direct_qwen"]
+
+
+def test_relay_handle_error_is_safe_and_fail_closed() -> None:
+    forwarding = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    forwarding.handle_error(None, None)
+    assert forwarding.status()["handler_error"] is True
+    qwen = verifier._QwenRelayServer(
+        ("127.0.0.1", 0), endpoint="http://127.0.0.1/v1", relay_token="r", qwen_token="q"
+    )
+    qwen.handle_error(None, None)
+    assert qwen.status()["handler_error"] is True
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "direct_qwen",
+        "local_output",
+        "gateway_output",
+        "decision",
+    ],
+)
+def test_stream_summary_rejects_missing_boundary_or_decision(missing: str) -> None:
+    result = _stream_result_for_summary()
+    result.pop(missing)
+    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
+        verifier._stream_summary_lines(result)
+
+
+def test_stream_summary_rejects_inconsistent_event_counts() -> None:
+    result = _stream_result_for_summary()
+    structure = dict(result["direct_qwen"]["structure"])  # type: ignore[index]
+    structure["event_counts"] = {"response.created": 2}
+    result["direct_qwen"] = dict(result["direct_qwen"], structure=structure)  # type: ignore[arg-type]
+    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
+        verifier._stream_summary_lines(result)
+
+
+@pytest.mark.parametrize("response_completed", [True, False])
+def test_stream_summary_rejects_response_completed_sequence_mismatch(
+    response_completed: bool,
+) -> None:
+    result = _stream_result_for_summary()
+    observation = dict(result["direct_qwen"])
+    structure = verifier.json.loads(verifier.json.dumps(observation["structure"]))
+    if response_completed:
+        structure["event_sequence"] = ["response.created"]
+        structure["event_counts"] = {"response.created": 1}
+    observation["structure"] = structure
+    observation["response_completed"] = response_completed
+    result["direct_qwen"] = observation
+    with pytest.raises(verifier.VerificationError, match="differential_summary_invalid"):
+        verifier._stream_summary_lines(result)
+
+
+def test_forwarding_relay_drains_upstream_after_downstream_reset() -> None:
+    first_sent = threading.Event()
+    release = threading.Event()
+
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", "0")))
+            created = (
+                b'event: response.created\n'
+                b'data: {"type":"response.created","response":{"id":"resp_capture",'
+                b'"object":"response","status":"in_progress","model":"qwen3.8-27b"}}\n\n'
+            )
+            completed = (
+                b'event: response.completed\n'
+                b'data: {"type":"response.completed","response":{"id":"resp_capture",'
+                b'"object":"response","status":"completed","model":"qwen3.8-27b",'
+                b'"output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}\n\n'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(created)
+            self.wfile.flush()
+            first_sent.set()
+            release.wait(timeout=2)
+            self.wfile.write(completed)
+            self.wfile.flush()
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), upstream.server_address[1])
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    client = socket.create_connection(("127.0.0.1", relay.server_address[1]), timeout=2)
+    try:
+        client.sendall(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+            b"Content-Length: 2\r\nConnection: close\r\n\r\n{}"
+        )
+        received = b""
+        while b"response.created" not in received:
+            chunk = client.recv(4096)
+            assert chunk
+            received += chunk
+        assert b"response.created" in received
+        assert first_sent.wait(timeout=2)
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        client.close()
+        release.set()
+        deadline = verifier.time.monotonic() + 3
+        structure = None
+        while verifier.time.monotonic() < deadline:
+            structures = relay.status()["sse_structures"]
+            if structures:
+                structure = structures[-1]
+                break
+            verifier.time.sleep(0.02)
+        assert structure is not None
+        assert structure["event_sequence"] == ["response.created", "response.completed"]
+        assert structure["normal_close"] is True
+        assert structure["response_id_relation"] is True
+        assert relay.status()["upstream_truncated"] is False
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+        release.set()
+        relay.shutdown()
+        relay.server_close()
+        upstream.shutdown()
+        upstream.server_close()
+        relay_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_forwarding_relay_records_upstream_truncation_without_normal_close() -> None:
+    class Truncated(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", "256")
+            self.end_headers()
+            self.wfile.write(b"event: response.created\ndata: {}\n\n")
+            self.wfile.flush()
+            self.connection.close()
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Truncated)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), upstream.server_address[1])
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+    try:
+        response = verifier.httpx.post(
+            f"http://127.0.0.1:{relay.server_address[1]}/v1/responses",
+            content=b"{}",
+            timeout=5,
+        )
+        assert response.status_code == 200
+        deadline = verifier.time.monotonic() + 2
+        while verifier.time.monotonic() < deadline and not relay.status()["upstream_truncated"]:
+            verifier.time.sleep(0.02)
+        assert relay.status()["upstream_truncated"] is True
+        assert relay.status()["sse_structures"][-1]["normal_close"] is False
+    finally:
+        relay.shutdown()
+        relay.server_close()
+        upstream.shutdown()
+        upstream.server_close()
+        relay_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
