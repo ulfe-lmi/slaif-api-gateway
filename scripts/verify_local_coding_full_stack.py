@@ -506,6 +506,10 @@ def _gateway_environment(database_url: str, *, gateway_port: int, service_token:
 def _local_config(root: Path, *, local_port: int, runtime: RuntimeReference) -> Path:
     config = root / "local-coding.toml"
     body = f'''[server]\nlisten_host = "127.0.0.1"\nlisten_port = {local_port}\n\n[gateway_ingress]\nmode = "service_bearer_signed_identity_v1"\nservice_token_env = "{SERVICE_TOKEN_ENV}"\nsigning_secret_env = "{SIGNING_SECRET_ENV}"\n\n[upstream]\nbase_url = "{runtime.endpoint}"\napi_key_env = "{QWEN_TOKEN_ENV}"\nmodel = "{CODEX_MODEL}"\nconnect_timeout_seconds = 10\nrequest_timeout_seconds = 300\nwrite_timeout_seconds = 30\npool_timeout_seconds = 10\n\n[compiler]\nenabled = true\napi_key_env = "{QWEN_TOKEN_ENV}"\n\n[cache]\nbackend = "filesystem"\nroot = "{(root / "cache").as_posix()}"\nfallback_root = "{(root / "cache-fallback").as_posix()}"\n\n[constitution]\nenabled = true\nidentity_source = "signed_request"\n\n[observation]\n\n[[routes]]\nname = "qwen38-vision-codex"\nmodel = "{CODEX_MODEL}"\nmax_images_per_request = 1\nimage_overflow_policy = "retain_newest"\nresponses_tool_policy = "drop_disabled_codex_search"\nobservation_enabled = true\nconstitution_enabled = true\n'''
+    # This task-local TOML is required by the pinned Local process, is mode 0600,
+    # and is removed with the task root during teardown; it never contains a
+    # credential value.  The protected endpoint cannot be configured otherwise.
+    # codeql[py/clear-text-storage-sensitive-data]
     config.write_text(body, encoding="utf-8")
     config.chmod(0o600)
     return config
