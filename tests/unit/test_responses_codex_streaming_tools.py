@@ -167,46 +167,188 @@ def _reasoning_added_event() -> dict[str, object]:
     }
 
 
+def _reasoning_part_event(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+    return {
+        "type": event_type,
+        "item_id": "reasoning_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "part": {"type": "reasoning_text", "text": text},
+    }
+
+
+def _reasoning_text_event(
+    event_type: str, sequence_number: int, *, delta: str | None = None, text: str | None = None
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "type": event_type,
+        "item_id": "reasoning_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+    }
+    if delta is not None:
+        event["delta"] = delta
+    if text is not None:
+        event["text"] = text
+    return event
+
+
+def _reasoning_done_event(sequence_number: int, *, text: str = "bounded") -> dict[str, object]:
+    event = _reasoning_added_event()
+    event["type"] = "response.output_item.done"
+    event["sequence_number"] = sequence_number
+    event["item"] = {
+        "type": "reasoning",
+        "id": "reasoning_1",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": text}],
+        "encrypted_content": None,
+        "status": "completed",
+    }
+    return event
+
+
+def _strict_reasoning_validator() -> ResponsesStreamEventValidator:
+    return ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+
+
 def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
     added = _reasoning_added_event()
     assert not ResponsesStreamEventValidator(ResponsesStreamValidationProfile()).validate(added)
-    validator = ResponsesStreamEventValidator(
-        ResponsesStreamValidationProfile(codex_reasoning_events=True)
-    )
+    validator = _strict_reasoning_validator()
     assert validator.validate(added)
+    assert validator.validate(_reasoning_part_event("response.reasoning_part.added", 2))
     assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.delta", 3, delta="bound")
+    )
+    assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.delta", 4, delta="ed")
+    )
+    assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.done", 5, text="bounded")
+    )
+    assert validator.validate(
+        _reasoning_part_event("response.reasoning_part.done", 6, text="bounded")
+    )
+    assert validator.validate(_reasoning_done_event(7))
+
+
+def test_codex_0149_reasoning_lifecycle_tracks_nonzero_output_index() -> None:
+    validator = _strict_reasoning_validator()
+    events = [
+        _reasoning_added_event(),
+        _reasoning_part_event("response.reasoning_part.added", 2),
+        _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+        _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+        _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+        _reasoning_done_event(6),
+    ]
+    for event in events:
+        event["output_index"] = 4
+    assert all(validator.validate(event) for event in events)
+
+    mismatch = _strict_reasoning_validator()
+    assert mismatch.validate(_reasoning_added_event())
+    bad_delta = _reasoning_text_event("response.reasoning_text.delta", 2, delta="wrong-index")
+    bad_delta["output_index"] = 1
+    assert not mismatch.validate(bad_delta)
+
+
+def test_non_strict_reasoning_text_done_keeps_no_prior_delta_behavior() -> None:
+    validator = ResponsesStreamEventValidator(_profile())
+    assert validator.validate(_reasoning_added_event())
+    event = _reasoning_text_event("response.reasoning_text.done", 2, text="")
+    event.pop("sequence_number")
+    assert validator.validate(event)
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [_reasoning_part_event("response.reasoning_part.added", 1)],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_part_event("response.reasoning_part.added", 3),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_text_event("response.reasoning_text.delta", 2, delta="orphan"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.done", 3, text=""),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="wrong"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 4, text="bounded"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="wrong"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 6, text="bounded"),
+        ],
+        [_reasoning_added_event(), _reasoning_done_event(2)],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+            _reasoning_done_event(6, text="different"),
+        ],
+    ],
+)
+def test_codex_0149_reasoning_lifecycle_rejects_orphans_duplicates_and_reordering(
+    events: list[dict[str, object]],
+) -> None:
+    validator = _strict_reasoning_validator()
+    results = [validator.validate(event) for event in events]
+    assert results[-1] is False
+
+
+def test_codex_0149_reasoning_lifecycle_rejects_message_and_tool_smuggling() -> None:
+    validator = _strict_reasoning_validator()
+    assert not validator.validate(
         {
-            "type": "response.reasoning_part.added",
-            "item_id": "reasoning_1",
+            "type": "response.output_item.added",
             "output_index": 0,
-            "content_index": 0,
+            "sequence_number": 1,
+            "item": {"type": "message", "id": "message_1", "content": []},
+        }
+    )
+    assert not validator.validate(
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
             "sequence_number": 2,
-            "part": {"type": "reasoning_text", "text": ""},
+            "delta": "{}",
         }
     )
-    assert validator.validate(
-        {
-            "type": "response.reasoning_text.delta",
-            "item_id": "reasoning_1",
-            "output_index": 0,
-            "content_index": 0,
-            "sequence_number": 3,
-            "delta": "bounded",
-        }
-    )
-    assert validator.validate(
-        {
-            "type": "response.reasoning_part.done",
-            "item_id": "reasoning_1",
-            "output_index": 0,
-            "content_index": 0,
-            "sequence_number": 4,
-            "part": {"type": "reasoning_text", "text": "bounded"},
-        }
-    )
-    done = _reasoning_added_event()
-    done["type"] = "response.output_item.done"
-    assert validator.validate(done)
 
 
 @pytest.mark.parametrize(

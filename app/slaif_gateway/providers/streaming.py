@@ -98,6 +98,13 @@ class ResponsesStreamEventValidator:
         self._seen_item_ids: set[str] = set()
         self._seen_call_ids: set[str] = set()
         self._reasoning_deltas: dict[tuple[str, str, int], str] = {}
+        self._reasoning_output_indices: dict[str, int] = {}
+        self._reasoning_parts_added: set[tuple[str, int]] = set()
+        self._reasoning_delta_seen: set[tuple[str, int]] = set()
+        self._reasoning_text_done: set[tuple[str, int]] = set()
+        self._reasoning_parts_done: set[tuple[str, int]] = set()
+        self._reasoning_output_done: set[str] = set()
+        self._reasoning_last_sequence: int | None = None
         self._safe_event_counts: Counter[str] = Counter()
         self._safe_event_bytes: Counter[str] = Counter()
         self._encrypted_reasoning_bytes = 0
@@ -154,10 +161,7 @@ class ResponsesStreamEventValidator:
             return valid
         if self._profile.codex_reasoning_events:
             if event_type in {"response.output_item.added", "response.output_item.done"}:
-                item = payload.get("item")
-                if not isinstance(item, Mapping) or item.get("type") != "reasoning":
-                    return False
-                valid = self._validate_output_item(payload, event_type)
+                valid = self._validate_codex_reasoning_output_item(payload, event_type)
             elif event_type in {
                 "response.reasoning_part.added", "response.reasoning_part.done",
             }:
@@ -165,9 +169,15 @@ class ResponsesStreamEventValidator:
             elif event_type in {
                 "response.reasoning_text.delta", "response.reasoning_text.done",
             }:
-                valid = self._validate_reasoning_event(payload, event_type)
+                valid = self._validate_reasoning_event(payload, event_type, strict_codex=True)
+            elif event_type in {"response.created", "response.in_progress", "response.completed"}:
+                valid = self._validate_existing_text_event(payload, event_type)
             else:
-                return self._validate_existing_text_event(payload, event_type)
+                # This exact Codex profile is not a general message/tool
+                # compatibility switch.  In particular, a message, function,
+                # custom, or hosted-tool item cannot be smuggled into the
+                # reasoning lifecycle.
+                return False
             if valid:
                 self._safe_event_counts[event_type] += 1
                 self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
@@ -542,7 +552,13 @@ class ResponsesStreamEventValidator:
         state.delta_text += delta
         return True
 
-    def _validate_reasoning_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
+    def _validate_reasoning_event(
+        self,
+        payload: Mapping[str, Any],
+        event_type: str,
+        *,
+        strict_codex: bool = False,
+    ) -> bool:
         common = {"type", "item_id", "output_index", "sequence_number"}
         if event_type == "response.reasoning_summary_part.added":
             allowed = common | {"summary_index", "part"}
@@ -559,12 +575,19 @@ class ResponsesStreamEventValidator:
         item_id = payload.get("item_id")
         if not _bounded_identifier(item_id, required=True):
             return False
-        if not _required_index(payload, "output_index") or not _optional_index(
-            payload, "sequence_number"
-        ):
+        if not _required_index(payload, "output_index"):
+            return False
+        if strict_codex:
+            if not self._accept_reasoning_sequence(payload):
+                return False
+        elif not _optional_index(payload, "sequence_number"):
             return False
         state = self._active_items.get(str(item_id))
         if state is None or state.item_type != "reasoning":
+            return False
+        if strict_codex and int(payload["output_index"]) != self._reasoning_output_indices.get(
+            str(item_id)
+        ):
             return False
 
         if event_type == "response.reasoning_summary_part.added":
@@ -576,6 +599,8 @@ class ResponsesStreamEventValidator:
             )
 
         is_content = event_type in ("response.reasoning_text.delta", "response.reasoning_text.done")
+        if strict_codex and (not is_content or int(payload["content_index"]) != 0):
+            return False
         index_name = "content_index" if is_content else "summary_index"
         if not _required_index(payload, index_name):
             return False
@@ -589,11 +614,98 @@ class ResponsesStreamEventValidator:
             return False
         if field == "text":
             prior = self._reasoning_deltas.get(key)
+            if strict_codex:
+                strict_key = (str(item_id), int(payload["content_index"]))
+                if (
+                    strict_key not in self._reasoning_parts_added
+                    or strict_key not in self._reasoning_delta_seen
+                    or strict_key in self._reasoning_text_done
+                    or strict_key in self._reasoning_parts_done
+                    or value != (prior or "")
+                ):
+                    return False
+                self._reasoning_text_done.add(strict_key)
+                return True
             return prior is None or prior == value
+        if strict_codex:
+            strict_key = (str(item_id), int(payload["content_index"]))
+            if (
+                strict_key not in self._reasoning_parts_added
+                or strict_key in self._reasoning_text_done
+                or strict_key in self._reasoning_parts_done
+            ):
+                return False
         combined = self._reasoning_deltas.get(key, "") + value
         if len(combined.encode("utf-8")) > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
             return False
         self._reasoning_deltas[key] = combined
+        if strict_codex:
+            self._reasoning_delta_seen.add((str(item_id), int(payload["content_index"])))
+        return True
+
+    def _validate_codex_reasoning_output_item(
+        self, payload: Mapping[str, Any], event_type: str
+    ) -> bool:
+        """Validate the exact vLLM/OpenAI reasoning-item state transition."""
+        if not _only_fields(payload, {"type", "output_index", "item", "sequence_number"}):
+            return False
+        if not _required_index(payload, "output_index") or not _required_index(
+            payload, "sequence_number"
+        ):
+            return False
+        item = payload.get("item")
+        if not isinstance(item, Mapping):
+            return False
+        if set(item) != {
+            "type", "id", "summary", "content", "encrypted_content", "status"
+        }:
+            return False
+        item_id = item.get("id")
+        if not _bounded_identifier(item_id, required=True):
+            return False
+        assert isinstance(item_id, str)
+        output_index = int(payload["output_index"])
+        if item.get("type") != "reasoning" or item.get("summary") != []:
+            return False
+        if item.get("encrypted_content") is not None:
+            return False
+        if not self._accept_reasoning_sequence(payload):
+            return False
+
+        if event_type == "response.output_item.added":
+            if item.get("status") != "in_progress" or item.get("content") is not None:
+                return False
+            if item_id in self._seen_item_ids or item_id in self._reasoning_output_indices:
+                return False
+            self._seen_item_ids.add(item_id)
+            self._reasoning_output_indices[item_id] = output_index
+            self._active_items[item_id] = _StreamItemState("reasoning", None, None, None)
+            return True
+
+        if item.get("status") != "completed" or item_id in self._reasoning_output_done:
+            return False
+        if self._reasoning_output_indices.get(item_id) != output_index:
+            return False
+        key = (item_id, 0)
+        if key not in self._reasoning_parts_done:
+            return False
+        if item_id not in self._active_items:
+            return False
+        reasoning_text = self._reasoning_deltas.get((item_id, "content", 0), "")
+        if item.get("content") != [{"type": "reasoning_text", "text": reasoning_text}]:
+            return False
+        del self._active_items[item_id]
+        self._reasoning_output_done.add(item_id)
+        return True
+
+    def _accept_reasoning_sequence(self, payload: Mapping[str, Any]) -> bool:
+        sequence = payload.get("sequence_number")
+        if not _required_index(payload, "sequence_number"):
+            return False
+        assert isinstance(sequence, int)
+        if self._reasoning_last_sequence is not None and sequence <= self._reasoning_last_sequence:
+            return False
+        self._reasoning_last_sequence = sequence
         return True
 
     def _validate_reasoning_part_event(
@@ -609,15 +721,37 @@ class ResponsesStreamEventValidator:
             return False
         if not _required_index(payload, "output_index") or not _required_index(
             payload, "content_index"
-        ) or not _optional_index(payload, "sequence_number"):
+        ) or not self._accept_reasoning_sequence(payload):
             return False
         state = self._active_items.get(str(item_id))
         if state is None or state.item_type != "reasoning":
             return False
+        output_index = int(payload["output_index"])
+        content_index = int(payload["content_index"])
+        if output_index != self._reasoning_output_indices.get(str(item_id)) or content_index != 0:
+            return False
+        key = (str(item_id), content_index)
         part = payload.get("part")
-        return isinstance(part, Mapping) and _validate_reasoning_text_part(
+        if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
             part, expected_type="reasoning_text"
-        )
+        ):
+            return False
+        if event_type == "response.reasoning_part.added":
+            if key in self._reasoning_parts_added or key in self._reasoning_parts_done:
+                return False
+            if part.get("text") != "":
+                return False
+            self._reasoning_parts_added.add(key)
+            return True
+        if key not in self._reasoning_parts_added or key in self._reasoning_parts_done:
+            return False
+        if key not in self._reasoning_text_done:
+            return False
+        expected = self._reasoning_deltas.get((str(item_id), "content", content_index), "")
+        if part.get("text") != expected:
+            return False
+        self._reasoning_parts_done.add(key)
+        return True
 
 
 def _only_fields(value: Mapping[str, Any], allowed: set[str]) -> bool:
