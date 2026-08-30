@@ -156,9 +156,9 @@ def test_qualification_rejection_hook_writes_one_exact_safe_shape(monkeypatch, t
     root.mkdir()
     root.chmod(0o700)
     artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
     event = {
         "type": "response.unreviewed",
         "secret": PRIVATE_CANARY,
@@ -227,9 +227,9 @@ def test_qualification_rejection_hook_is_disabled_without_exact_task_env(
     root = tmp_path / "qualification"
     root.mkdir()
     root.chmod(0o700)
-    monkeypatch.delenv("SLAIF_155Q_QUALIFICATION", raising=False)
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(root / "rejection.json"))
+    monkeypatch.delenv("SLAIF_155R_QUALIFICATION", raising=False)
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(root / "rejection.json"))
     _record_qualification_rejection(
         {"type": "response.unreviewed"},
         profile=ResponsesStreamValidationProfile(),
@@ -248,9 +248,9 @@ def test_qualification_rejection_hook_rejects_unsafe_root(monkeypatch, tmp_path:
     else:
         root.symlink_to(target, target_is_directory=True)
     artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
     _record_qualification_rejection(
         {"type": "response.unreviewed"},
         profile=ResponsesStreamValidationProfile(),
@@ -266,9 +266,9 @@ def test_qualification_rejection_hook_rejects_symlink_or_wrong_parent(monkeypatc
     target = tmp_path / "target.json"
     symlink = root / "symlink.json"
     symlink.symlink_to(target)
-    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(symlink))
+    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(symlink))
     _record_qualification_rejection(
         {"type": "response.unreviewed"},
         profile=ResponsesStreamValidationProfile(),
@@ -276,7 +276,7 @@ def test_qualification_rejection_hook_rejects_symlink_or_wrong_parent(monkeypatc
     )
     assert symlink.is_symlink()
     outside = tmp_path / "outside.json"
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(outside))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(outside))
     _record_qualification_rejection(
         {"type": "response.unreviewed"},
         profile=ResponsesStreamValidationProfile(),
@@ -290,9 +290,9 @@ def test_qualification_rejection_hook_bounds_names_fields_and_nesting(monkeypatc
     root.mkdir()
     root.chmod(0o700)
     artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
     event = {
         "type": "Ω" * 200,
         "bad key": "value",
@@ -318,9 +318,9 @@ def test_qualification_rejection_hook_skips_oversized_safe_output(monkeypatch, t
     root.mkdir()
     root.chmod(0o700)
     artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
     monkeypatch.setattr("slaif_gateway.services.responses_gateway._QUALIFICATION_MAX_BYTES", 1)
     _record_qualification_rejection(
         {"type": "response.unreviewed"},

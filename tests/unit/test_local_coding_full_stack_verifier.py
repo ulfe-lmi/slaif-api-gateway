@@ -145,12 +145,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155q_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155q-head"
+    current_head = "current-155r-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
+    report_path = "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -160,7 +160,7 @@ def test_155q_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md"
+            return "oap/active\noap/orders/155-r-retained-event-qualification-and-final-stream.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,14 +192,14 @@ def test_155q_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155q_topology_anchors_are_the_155p_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "306ecb186b5c12db991a684e7c04e5c9f174eba2"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "a8a2a7a8a2e84fbe7dd42658173dd6358f709444"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "e1951b03cf316ade79b81c872395eb698051c51d"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
+def test_155r_topology_anchors_are_the_155q_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "a5154d68db3999c3df7c8d03cb13eed86c7fcea2"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "a3db9c88065a0cb5d7c0af797332752024d0f289"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "a08655180dcd280529ca798b3509d4f28e7f8ab7"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
 
 
-def test_155q_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155r_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005l")
     assert verifier.LOCAL_REPORT_HEAD == "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
     assert verifier.LOCAL_REPORT_PARENT == "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
@@ -207,7 +207,7 @@ def test_155q_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-l-exact-composed-stream-owner-and-acceptance-closure.md"
 
 
-def test_155q_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
+def test_155r_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
     baseline = verifier._read_pinned_direct_baseline()
     assert verifier._terminal_completion_valid(baseline) is True
     rebuilt = verifier._safe_stream_summary(
@@ -224,7 +224,7 @@ def test_155q_parses_immutable_direct_baseline_with_independent_verdicts() -> No
 
 
 @pytest.mark.parametrize("mutation", ["altered", "duplicate"])
-def test_155q_rejects_altered_or_multiple_direct_baseline_lines(
+def test_155r_rejects_altered_or_multiple_direct_baseline_lines(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
 ) -> None:
     source = verifier.DIRECT_BASELINE_REPORT.read_text(encoding="utf-8")
@@ -1199,7 +1199,7 @@ def test_stream_differential_cli_emits_exact_bounded_summary_for_each_boundary(
         '"event_counts":{"response.completed":1,"response.created":1},'
         '"event_trace":[{"count":1,"event":"response.created"},'
         '{"count":1,"event":"response.completed"}],"event_trace_overflow":false,'
-        '"event_vocabulary_reviewed":true,"evidence_source":"current_155q",'
+        '"event_vocabulary_reviewed":true,"evidence_source":"current_155r",'
         '"failure_code":"none","first_event_before_upstream_completion":true,'
         '"handler_error":false,"http_status_class":"2xx","invalid":false,'
         '"model_matches":true,"normal_close":true,"normalization_reason":"none",'
@@ -1398,7 +1398,13 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
                 "event_type": "response.unreviewed",
                 "top_level_fields": [],
                 "nested_object_fields": [],
-                "validator_profile": {},
+                "validator_profile": {
+                    "codex_streaming_tool_events": False,
+                    "codex_encrypted_reasoning_replay": False,
+                    "web_search": False,
+                    "declared_client_tools_class": "none",
+                    "web_search_max_tool_calls_class": "none",
+                },
                 "rejection": {
                     "outcome": "validator_rejected",
                     "code": "responses_stream_event_not_supported",
@@ -1414,7 +1420,7 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
     assert result["qualification_rejection"]["schema"] == "responses_stream_rejection_v1"
     assert any(line.startswith("QUALIFICATION_REJECTION ") for line in verifier._stream_summary_lines(result))
     for boundary in ("local_output", "gateway_output"):
-        assert result[boundary]["evidence_source"] == "current_155q"
+        assert result[boundary]["evidence_source"] == "current_155r"
         assert result[boundary]["ran_current_invocation"] is True
 
 
@@ -1436,9 +1442,62 @@ def test_composed_only_qualification_mode_is_the_only_hook_mode(
 def test_fake_qualification_requires_no_rejection_artifact(tmp_path: Path) -> None:
     verifier._assert_fake_qualification_artifact_absent(tmp_path)
     artifact = tmp_path / "qualification-rejection.json"
-    artifact.write_text('{"schema":"responses_stream_rejection_v1"}', encoding="ascii")
+    artifact.write_text(
+        verifier.json.dumps(_canonical_qualification_artifact()), encoding="ascii"
+    )
     with pytest.raises(verifier.VerificationError, match="fake_rejection_artifact_present"):
         verifier._assert_fake_qualification_artifact_absent(tmp_path)
+
+
+def _canonical_qualification_artifact() -> dict[str, object]:
+    return {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": "response.unreviewed",
+        "top_level_fields": [
+            {"name": "response", "type": "object"},
+            {"name": "type", "type": "string"},
+        ],
+        "nested_object_fields": [
+            {"name": "a", "fields": []},
+            {"name": "response", "fields": [{"name": "id", "type": "string"}]}
+        ],
+        "validator_profile": {
+            "codex_streaming_tool_events": False,
+            "codex_encrypted_reasoning_replay": False,
+            "web_search": False,
+            "declared_client_tools_class": "none",
+            "web_search_max_tool_calls_class": "none",
+        },
+        "rejection": {
+            "outcome": "validator_rejected",
+            "code": "responses_stream_event_not_supported",
+        },
+    }
+
+
+@pytest.mark.parametrize("mutation", ["top_duplicate", "top_order", "nested_duplicate", "nested_order", "class_mismatch"])
+def test_qualification_sanitizer_requires_writer_canonical_shape(mutation: str) -> None:
+    artifact = _canonical_qualification_artifact()
+    if mutation == "top_duplicate":
+        artifact["top_level_fields"].append({"name": "type", "type": "string"})
+    elif mutation == "top_order":
+        artifact["top_level_fields"].reverse()
+    elif mutation == "nested_duplicate":
+        artifact["nested_object_fields"].append(
+            {"name": "response", "fields": [{"name": "id", "type": "string"}]}
+        )
+    elif mutation == "nested_order":
+        artifact["nested_object_fields"].reverse()
+    else:
+        artifact["validator_profile"]["declared_client_tools_class"] = "other"
+        artifact["validator_profile"]["web_search_max_tool_calls_class"] = "many"
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
+        verifier._sanitize_qualification_rejection(artifact)
+
+
+def test_qualification_sanitizer_accepts_only_canonical_writer_shape() -> None:
+    artifact = _canonical_qualification_artifact()
+    assert verifier._sanitize_qualification_rejection(artifact) == artifact
 
 
 def test_relay_handle_error_is_safe_and_fail_closed() -> None:

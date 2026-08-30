@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-q verifier for protected stream boundary qualification.
+"""Bounded 155-r verifier for protected stream boundary qualification.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -14,6 +14,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import socket
 import stat
@@ -32,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005l").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "306ecb186b5c12db991a684e7c04e5c9f174eba2"
-GATEWAY_IMPLEMENTATION_HEAD = "a8a2a7a8a2e84fbe7dd42658173dd6358f709444"
-GATEWAY_ACTIVATION_HEAD = "e1951b03cf316ade79b81c872395eb698051c51d"
-GATEWAY_REPORT_PATH = "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
+GATEWAY_REPORT_HEAD = "a5154d68db3999c3df7c8d03cb13eed86c7fcea2"
+GATEWAY_IMPLEMENTATION_HEAD = "a3db9c88065a0cb5d7c0af797332752024d0f289"
+GATEWAY_ACTIVATION_HEAD = "a08655180dcd280529ca798b3509d4f28e7f8ab7"
+GATEWAY_REPORT_PATH = "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
 LOCAL_REPORT_HEAD = "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
 LOCAL_REPORT_PARENT = "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -51,13 +52,13 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md"
-TASK_DB = "slaif_gateway_oap_155q_diff"
-SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ARTIFACT"
-SAFE_OUTPUT_ROOT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ROOT"
-QUALIFICATION_HOOK_ENV = "SLAIF_155Q_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Q_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155Q_REJECTION_ROOT"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-r-retained-event-qualification-and-final-stream.md"
+TASK_DB = "slaif_gateway_oap_155r_diff"
+SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155R_SAFE_OUTPUT_ARTIFACT"
+SAFE_OUTPUT_ROOT_ENV = "SLAIF_155R_SAFE_OUTPUT_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155R_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155R_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155R_REJECTION_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -213,7 +214,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md",
+        "oap/orders/155-r-retained-event-qualification-and-final-stream.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -264,11 +265,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-r-retained-event-qualification-and-final-stream.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-q\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-r\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -733,9 +734,109 @@ def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
         value = json.loads(payload)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError("qualification_artifact_invalid") from exc
-    if not isinstance(value, dict) or value.get("schema") != "responses_stream_rejection_v1":
+    try:
+        return _sanitize_qualification_rejection(value)
+    except VerificationError:
+        raise
+    except Exception as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+
+
+_QUALIFICATION_FIELD_TYPES = frozenset(
+    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
+)
+_QUALIFICATION_DECLARED_TOOL_CLASSES = frozenset({"none", "bounded", "many"})
+_QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
+_QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
+
+
+def _sanitize_qualification_name(value: object, *, event: bool = False) -> str:
+    if value == "other":
+        return "other"
+    if not isinstance(value, str):
+        raise VerificationError("qualification_artifact_invalid")
+    pattern = _QUALIFICATION_EVENT_RE if event else _QUALIFICATION_NAME_RE
+    if pattern.fullmatch(value) is None:
         raise VerificationError("qualification_artifact_invalid")
     return value
+
+
+def _sanitize_qualification_fields(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) > 32:
+        raise VerificationError("qualification_artifact_invalid")
+    fields: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"name", "type"}:
+            raise VerificationError("qualification_artifact_invalid")
+        name = _sanitize_qualification_name(item["name"])
+        field_type = item["type"]
+        if not isinstance(field_type, str) or field_type not in _QUALIFICATION_FIELD_TYPES:
+            raise VerificationError("qualification_artifact_invalid")
+        fields.append({"name": name, "type": field_type})
+    canonical = sorted(fields, key=lambda item: item["name"])
+    if fields != canonical or len({item["name"] for item in fields}) != len(fields):
+        raise VerificationError("qualification_artifact_invalid")
+    return fields
+
+
+def _sanitize_qualification_rejection(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "event_type", "top_level_fields", "nested_object_fields",
+        "validator_profile", "rejection",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    if value["schema"] != "responses_stream_rejection_v1":
+        raise VerificationError("qualification_artifact_invalid")
+    nested_value = value["nested_object_fields"]
+    if not isinstance(nested_value, list) or len(nested_value) > 32:
+        raise VerificationError("qualification_artifact_invalid")
+    nested: list[dict[str, object]] = []
+    for item in nested_value:
+        if not isinstance(item, dict) or set(item) != {"name", "fields"}:
+            raise VerificationError("qualification_artifact_invalid")
+        nested.append(
+            {
+                "name": _sanitize_qualification_name(item["name"]),
+                "fields": _sanitize_qualification_fields(item["fields"]),
+            }
+        )
+    profile = value["validator_profile"]
+    if not isinstance(profile, dict) or set(profile) != {
+        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
+        "declared_client_tools_class", "web_search_max_tool_calls_class",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    if any(type(profile[name]) is not bool for name in (
+        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
+    )) or profile["declared_client_tools_class"] not in _QUALIFICATION_DECLARED_TOOL_CLASSES or profile[
+        "web_search_max_tool_calls_class"
+    ] not in _QUALIFICATION_WEB_SEARCH_CLASSES:
+        raise VerificationError("qualification_artifact_invalid")
+    rejection = value["rejection"]
+    if not isinstance(rejection, dict) or set(rejection) != {"outcome", "code"}:
+        raise VerificationError("qualification_artifact_invalid")
+    if rejection["outcome"] != "validator_rejected" or rejection["code"] not in {
+        "responses_stream_event_not_supported", "responses_stream_provider_failure", "other",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    canonical_nested = sorted(nested, key=lambda item: str(item["name"]))
+    if nested != canonical_nested or len({item["name"] for item in nested}) != len(nested):
+        raise VerificationError("qualification_artifact_invalid")
+    return {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": _sanitize_qualification_name(value["event_type"], event=True),
+        "top_level_fields": _sanitize_qualification_fields(value["top_level_fields"]),
+        "nested_object_fields": nested,
+        "validator_profile": {
+            "codex_streaming_tool_events": profile["codex_streaming_tool_events"],
+            "codex_encrypted_reasoning_replay": profile["codex_encrypted_reasoning_replay"],
+            "web_search": profile["web_search"],
+            "declared_client_tools_class": profile["declared_client_tools_class"],
+            "web_search_max_tool_calls_class": profile["web_search_max_tool_calls_class"],
+        },
+        "rejection": {"outcome": "validator_rejected", "code": rejection["code"]},
+    }
 
 
 def _assert_fake_qualification_artifact_absent(root: Path) -> None:
@@ -1309,7 +1410,7 @@ _STREAM_FAILURE_CODES = frozenset(
 )
 _STREAM_TERMINAL_SHAPES = frozenset({"missing", "empty_array", "nonempty_array", "other"})
 _STREAM_NORMALIZATION_STATUSES = frozenset({"complete", "degraded", "invalid"})
-_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155q", "not_run"})
+_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155r", "not_run"})
 _STREAM_NORMALIZATION_REASONS = frozenset(
     {
         "none",
@@ -1338,7 +1439,7 @@ def _minimal_stream_summary(
     return {
         "boundary": boundary,
         "ran": ran,
-        "evidence_source": "current_155q" if ran else "not_run",
+        "evidence_source": "current_155r" if ran else "not_run",
         "ran_current_invocation": ran,
         "http_status_class": "unknown",
         "content_type_class": "unknown",
@@ -1544,7 +1645,7 @@ def _safe_stream_summary(
                 and observation.get("ran_current_invocation") is not False
             )
             or (
-                observation.get("evidence_source") == "current_155q"
+                observation.get("evidence_source") == "current_155r"
                 and (
                     observation.get("ran") is not True
                     or observation.get("ran_current_invocation") is not True
@@ -1686,7 +1787,7 @@ def _safe_stream_summary(
         "evidence_source": (
             observation.get("evidence_source")
             if observation.get("evidence_source") in _STREAM_EVIDENCE_SOURCES
-            else "current_155q"
+            else "current_155r"
         ),
         "ran_current_invocation": True,
         "http_status_class": status_class,
@@ -1800,7 +1901,8 @@ def _stream_summary_lines(result: object) -> tuple[str, ...]:
             )
         )
     qualification_rejection = source.get("qualification_rejection")
-    if isinstance(qualification_rejection, dict):
+    if qualification_rejection is not None:
+        qualification_rejection = _sanitize_qualification_rejection(qualification_rejection)
         lines.append(
             "QUALIFICATION_REJECTION "
             + json.dumps(
@@ -2886,14 +2988,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155q-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155r-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155q-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155r-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -2901,7 +3003,7 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
 def _start_fake_qwen() -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
     server = _FakeQwenServer(("127.0.0.1", 0), token)
-    thread = threading.Thread(target=server.serve_forever, name="155q-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155r-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -4380,7 +4482,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155r-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -4539,7 +4641,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155r-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -4646,7 +4748,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="slaif-155r-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             stage = "local_config_preflight"
