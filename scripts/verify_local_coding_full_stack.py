@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-o verifier for protected stream boundary hop evidence.
+"""Bounded 155-q verifier for protected stream boundary qualification.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,12 +32,12 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "e26ac23ce352d7318615a4b01f4662f2bc3a165b"
-GATEWAY_IMPLEMENTATION_HEAD = "bd0cfd976bfd570561d7943be2d62686d4d48972"
-GATEWAY_ACTIVATION_HEAD = "e201051303aa8cb43e2cfc102e58e4c153fc908f"
-GATEWAY_REPORT_PATH = "oap/reports/155-n-fake-composed-stage-localization-and-closure.md"
-LOCAL_REPORT_HEAD = "6ee2a51aa7b03d4df46e0662d88cc33fd0ef7db8"
-LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
+GATEWAY_REPORT_HEAD = "306ecb186b5c12db991a684e7c04e5c9f174eba2"
+GATEWAY_IMPLEMENTATION_HEAD = "a8a2a7a8a2e84fbe7dd42658173dd6358f709444"
+GATEWAY_ACTIVATION_HEAD = "e1951b03cf316ade79b81c872395eb698051c51d"
+GATEWAY_REPORT_PATH = "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
+LOCAL_REPORT_HEAD = "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
+LOCAL_SIGNED_CONTRACT_HEAD = "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
 CODEX_VERSION = "0.149.0"
 CODEX_MODEL = "qwen3.8-27b"
 FAILURE_MODEL = "155f-synthetic-provider-failure"
@@ -49,10 +49,10 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-o-hop-evidence-and-error-owner-closure.md"
-TASK_DB = "slaif_gateway_oap_155o_diff"
-SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155O_SAFE_OUTPUT_ARTIFACT"
-SAFE_OUTPUT_ROOT_ENV = "SLAIF_155O_SAFE_OUTPUT_ROOT"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md"
+TASK_DB = "slaif_gateway_oap_155q_diff"
+SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ARTIFACT"
+SAFE_OUTPUT_ROOT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -208,7 +208,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-o-hop-evidence-and-error-owner-closure.md",
+        "oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -251,11 +251,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-o-hop-evidence-and-error-owner-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-q-qualify-rejected-qwen-event-and-final-stream.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-o\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-q\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1275,7 +1275,7 @@ _STREAM_FAILURE_CODES = frozenset(
 )
 _STREAM_TERMINAL_SHAPES = frozenset({"missing", "empty_array", "nonempty_array", "other"})
 _STREAM_NORMALIZATION_STATUSES = frozenset({"complete", "degraded", "invalid"})
-_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155o", "not_run"})
+_STREAM_EVIDENCE_SOURCES = frozenset({"pinned_155l", "current_155q", "not_run"})
 _STREAM_NORMALIZATION_REASONS = frozenset(
     {
         "none",
@@ -1304,7 +1304,7 @@ def _minimal_stream_summary(
     return {
         "boundary": boundary,
         "ran": ran,
-        "evidence_source": "current_155o" if ran else "not_run",
+        "evidence_source": "current_155q" if ran else "not_run",
         "ran_current_invocation": ran,
         "http_status_class": "unknown",
         "content_type_class": "unknown",
@@ -1510,7 +1510,7 @@ def _safe_stream_summary(
                 and observation.get("ran_current_invocation") is not False
             )
             or (
-                observation.get("evidence_source") == "current_155o"
+                observation.get("evidence_source") == "current_155q"
                 and (
                     observation.get("ran") is not True
                     or observation.get("ran_current_invocation") is not True
@@ -1652,7 +1652,7 @@ def _safe_stream_summary(
         "evidence_source": (
             observation.get("evidence_source")
             if observation.get("evidence_source") in _STREAM_EVIDENCE_SOURCES
-            else "current_155o"
+            else "current_155q"
         ),
         "ran_current_invocation": True,
         "http_status_class": status_class,
@@ -2842,14 +2842,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155f-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155q-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155f-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155q-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -2857,7 +2857,7 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
 def _start_fake_qwen() -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
     server = _FakeQwenServer(("127.0.0.1", 0), token)
-    thread = threading.Thread(target=server.serve_forever, name="155f-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155q-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -4323,7 +4323,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155o-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -4482,7 +4482,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155o-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -4574,7 +4574,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155f-", dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="slaif-155q-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             stage = "local_config_preflight"
