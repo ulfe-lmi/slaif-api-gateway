@@ -55,6 +55,9 @@ ORDER_PATH = REPO_ROOT / "oap/orders/155-q-qualify-rejected-qwen-event-and-final
 TASK_DB = "slaif_gateway_oap_155q_diff"
 SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ARTIFACT"
 SAFE_OUTPUT_ROOT_ENV = "SLAIF_155Q_SAFE_OUTPUT_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155Q_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Q_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155Q_REJECTION_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -717,6 +720,22 @@ async def _seed_database(
 def _gateway_environment(database_url: str, *, gateway_port: int, service_token: str, signing_secret: str, derivation_secret: str, encryption_key: str) -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(REPO_ROOT / "app"), "PYTHONDONTWRITEBYTECODE": "1", "APP_ENV": "test", "DATABASE_URL": database_url, "GATEWAY_KEY_PREFIX": "sk-slaif-", "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-", "ACTIVE_HMAC_KEY_VERSION": "1", "TOKEN_HMAC_SECRET_V1": "155f-gateway-hmac-secret-012345678901", "ADMIN_SESSION_SECRET": "155f-admin-secret-012345678901", "ONE_TIME_SECRET_ENCRYPTION_KEY": encryption_key, "ENABLE_REDIS_RATE_LIMITS": "false", "ENABLE_ADMIN_DASHBOARD": "false", "ENABLE_EMAIL_DELIVERY": "false", "ENABLE_METRICS": "true", "LOG_LEVEL": "WARNING", "STRUCTURED_LOGS": "true", "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token, "LOCAL_CODING_SERVICE_TOKEN": service_token, "LOCAL_CODING_SIGNING_SECRET_V1": signing_secret, "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": derivation_secret, "SLAIF_155F_FAILURE_KEY": "synthetic-failure-key", "UVICORN_ACCESS_LOG": "false", "APP_BASE_URL": f"http://127.0.0.1:{gateway_port}"}
     return env
+
+
+def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
+    artifact = root / "qualification-rejection.json"
+    if not artifact.exists() or artifact.is_symlink():
+        return None
+    try:
+        payload = artifact.read_bytes()
+        if len(payload) > 64 * 1024:
+            raise VerificationError("qualification_artifact_too_large")
+        value = json.loads(payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+    if not isinstance(value, dict) or value.get("schema") != "responses_stream_rejection_v1":
+        raise VerificationError("qualification_artifact_invalid")
+    return value
 
 
 def _local_config(
@@ -3388,6 +3407,7 @@ def _run_composed_impl(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
+    qualification_hook: bool = False,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
@@ -3427,6 +3447,14 @@ def _run_composed_impl(
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
     )
+    if qualification_hook:
+        gateway_env.update(
+            {
+                QUALIFICATION_HOOK_ENV: "1",
+                QUALIFICATION_ROOT_ENV: str(root),
+                QUALIFICATION_ARTIFACT_ENV: str(root / "qualification-rejection.json"),
+            }
+        )
     tracker.set("migration")
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
@@ -4215,6 +4243,9 @@ def _run_composed_stream_diagnostic(
         except Exception:
             failure_code = "composed_client_stream_failed"
         tracker.set("boundary_capture")
+        qualification_rejection = _read_qualification_rejection(root)
+        if fake_qwen and qualification_rejection is not None:
+            raise VerificationError("fake_rejection_artifact_present")
         local_status = relay.status()
         gateway_status = gateway_output.status()
         qwen_status = _qwen_relay_status(qwen_port)
@@ -4286,6 +4317,7 @@ def _run_composed_stream_diagnostic(
             "qwen_status_before": qwen_status_before,
             "local_status": local_status,
             "gateway_status": gateway_status,
+            "qualification_rejection": qualification_rejection,
         }
     finally:
         primary = sys.exc_info()[1]
@@ -4560,11 +4592,17 @@ def _run_composed(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
+    qualification_hook: bool = False,
 ) -> dict[str, object]:
     tracker = StageTracker()
     try:
         return _run_composed_impl(
-            root, runtime, codex_binary, fake_qwen=fake_qwen, tracker=tracker
+            root,
+            runtime,
+            codex_binary,
+            fake_qwen=fake_qwen,
+            qualification_hook=qualification_hook,
+            tracker=tracker,
         )
     except VerificationError:
         raise
@@ -4603,7 +4641,13 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
             if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
                 raise VerificationError("exact_relationship_fixture_mismatch")
             stage = "composition"
-            result = _run_composed(root, runtime, codex_binary, fake_qwen=fake_qwen)
+            result = _run_composed(
+                root,
+                runtime,
+                codex_binary,
+                fake_qwen=fake_qwen,
+                qualification_hook=True,
+            )
         if not fake_qwen:
             stage = "protected_postcheck"
             _verify_protected_model_health(runtime)

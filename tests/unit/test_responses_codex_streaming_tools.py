@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import stat
 import subprocess
 import uuid
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from slaif_gateway.services.responses_request_policy import (
     codex_client_tool_declarations,
     responses_codex_streaming_tool_events_allowed,
 )
+from slaif_gateway.services.responses_gateway import _record_qualification_rejection
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
     enforce_responses_route_capabilities,
@@ -147,6 +149,93 @@ def _encrypted_profile() -> ResponsesStreamValidationProfile:
         codex_encrypted_reasoning_replay=True,
         declared_client_tools=DECLARATIONS,
     )
+
+
+def test_qualification_rejection_hook_writes_one_exact_safe_shape(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "qualification"
+    root.mkdir()
+    root.chmod(0o700)
+    artifact = root / "rejection.json"
+    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    event = {
+        "type": "response.unreviewed",
+        "secret": PRIVATE_CANARY,
+        "response": {
+            "id": "resp_private",
+            "status": "in_progress",
+            "usage": {"input_tokens": 3},
+            "text": "private response text",
+        },
+    }
+    _record_qualification_rejection(
+        event,
+        profile=ResponsesStreamValidationProfile(
+            codex_streaming_tool_events=True,
+            declared_client_tools=frozenset({("functions", "exec", "custom")}),
+        ),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    first = artifact.read_bytes()
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    assert PRIVATE_CANARY.encode() not in first
+    assert b"resp_private" not in first
+    assert b"private response text" not in first
+    assert json.loads(first) == {
+        "event_type": "response.unreviewed",
+        "nested_object_fields": [
+            {
+                "fields": [
+                    {"name": "id", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": "text", "type": "string"},
+                    {"name": "usage", "type": "object"},
+                ],
+                "name": "response",
+            }
+        ],
+        "rejection": {
+            "code": "responses_stream_event_not_supported",
+            "outcome": "validator_rejected",
+        },
+        "schema": "responses_stream_rejection_v1",
+        "top_level_fields": [
+            {"name": "response", "type": "object"},
+            {"name": "secret", "type": "string"},
+            {"name": "type", "type": "string"},
+        ],
+        "validator_profile": {
+            "codex_encrypted_reasoning_replay": False,
+            "codex_streaming_tool_events": True,
+            "declared_client_tools_class": "bounded",
+            "web_search": False,
+            "web_search_max_tool_calls_class": "none",
+        },
+    }
+    _record_qualification_rejection(
+        {"type": "response.other", "secret": "changed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_provider_failure",
+    )
+    assert artifact.read_bytes() == first
+
+
+def test_qualification_rejection_hook_is_disabled_without_exact_task_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "qualification"
+    root.mkdir()
+    root.chmod(0o700)
+    monkeypatch.delenv("SLAIF_155Q_QUALIFICATION", raising=False)
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(root / "rejection.json"))
+    _record_qualification_rejection(
+        {"type": "response.unreviewed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert not (root / "rejection.json").exists()
 
 
 def _done_reasoning(
