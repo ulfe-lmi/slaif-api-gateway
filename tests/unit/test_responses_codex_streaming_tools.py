@@ -216,6 +216,180 @@ def _strict_reasoning_validator() -> ResponsesStreamEventValidator:
     )
 
 
+def _message_added_event() -> dict[str, object]:
+    return {
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "sequence_number": 2,
+        "item": {
+            "type": "message",
+            "id": "message_1",
+            "status": "in_progress",
+            "role": "assistant",
+            "content": [],
+            "phase": None,
+        },
+    }
+
+
+def _message_content_part(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+    return {
+        "type": event_type,
+        "item_id": "message_1",
+        "output_index": 1,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "part": {
+            "type": "output_text",
+            "text": text,
+            "annotations": [],
+            "logprobs": [] if event_type == "response.content_part.added" else None,
+        },
+    }
+
+
+def _message_text_event(event_type: str, sequence_number: int, value: str) -> dict[str, object]:
+    event: dict[str, object] = {
+        "type": event_type,
+        "item_id": "message_1",
+        "output_index": 1,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "logprobs": [],
+    }
+    event["delta" if event_type == "response.output_text.delta" else "text"] = value
+    return event
+
+
+def _message_done_event(sequence_number: int, text: str = "answer") -> dict[str, object]:
+    return {
+        "type": "response.output_item.done",
+        "output_index": 1,
+        "sequence_number": sequence_number,
+        "item": {
+            "type": "message",
+            "id": "message_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": [],
+                    "logprobs": None,
+                }
+            ],
+            "phase": None,
+            "summary": [],
+        },
+    }
+
+
+def _strict_response_event(event_type: str, sequence_number: int) -> dict[str, object]:
+    response = {"id": "response_1", "status": "in_progress"}
+    if event_type == "response.completed":
+        response.update(
+            {
+                "status": "completed",
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        )
+    return {"type": event_type, "sequence_number": sequence_number, "response": response}
+
+
+def test_codex_0149_message_text_lifecycle_is_exactly_scoped() -> None:
+    validator = _strict_reasoning_validator()
+    events = [
+        _strict_response_event("response.created", 0),
+        _strict_response_event("response.in_progress", 1),
+        _message_added_event(),
+        _message_content_part("response.content_part.added", 3),
+        _message_text_event("response.output_text.delta", 4, "ans"),
+        _message_text_event("response.output_text.delta", 5, "wer"),
+        _message_text_event("response.output_text.done", 6, "answer"),
+        _message_content_part("response.content_part.done", 7, "answer"),
+        _message_done_event(8),
+        _strict_response_event("response.completed", 9),
+    ]
+    assert all(validator.validate(event) for event in events)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].pop("phase"),
+        lambda event: event["item"].update(phase="final_answer"),
+        lambda event: event["item"].update(content=[{"type": "output_text", "text": "x"}]),
+        lambda event: event["item"].update(type="function_call"),
+    ],
+)
+def test_codex_0149_message_added_rejects_non_exact_shapes(mutation) -> None:
+    event = _message_added_event()
+    mutation(event)
+    assert not _strict_reasoning_validator().validate(event)
+
+
+def test_codex_0149_message_lifecycle_rejects_reordering_and_wrong_terminal_shapes() -> None:
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert validator.validate(_strict_response_event("response.in_progress", 1))
+    assert validator.validate(_message_added_event())
+    assert not validator.validate(_message_content_part("response.content_part.done", 3))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert not validator.validate(_message_text_event("response.output_text.done", 5, "wrong"))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    assert not validator.validate(_message_content_part("response.content_part.done", 6))
+
+
+def test_codex_0149_message_lifecycle_enforces_event_specific_logprobs() -> None:
+    validator = _strict_reasoning_validator()
+    added = _message_content_part("response.content_part.added", 3)
+    added["part"]["logprobs"] = None
+    assert validator.validate(_message_added_event())
+    assert not validator.validate(added)
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    done_part = _message_content_part("response.content_part.done", 6, "answer")
+    done_part["part"]["logprobs"] = []
+    assert not validator.validate(done_part)
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    assert validator.validate(_message_content_part("response.content_part.done", 6, "answer"))
+    terminal = _message_done_event(7)
+    terminal["item"]["content"][0]["logprobs"] = []
+    assert not validator.validate(terminal)
+
+
+def test_codex_0149_completed_requires_usage_and_no_active_output() -> None:
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert not validator.validate(_strict_response_event("response.completed", 1))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert validator.validate(_message_added_event())
+    missing_usage = _strict_response_event("response.completed", 3)
+    missing_usage["response"].pop("usage")
+    assert not validator.validate(missing_usage)
+
+
 def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
     added = _reasoning_added_event()
     assert not ResponsesStreamEventValidator(ResponsesStreamValidationProfile()).validate(added)
