@@ -238,6 +238,98 @@ def test_qualification_rejection_hook_is_disabled_without_exact_task_env(
     assert not (root / "rejection.json").exists()
 
 
+@pytest.mark.parametrize("unsafe_root", ["mode", "symlink"])
+def test_qualification_rejection_hook_rejects_unsafe_root(monkeypatch, tmp_path: Path, unsafe_root: str) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    root = target if unsafe_root == "mode" else tmp_path / "root-link"
+    if unsafe_root == "mode":
+        root.chmod(0o755)
+    else:
+        root.symlink_to(target, target_is_directory=True)
+    artifact = root / "rejection.json"
+    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    _record_qualification_rejection(
+        {"type": "response.unreviewed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert not artifact.exists()
+
+
+def test_qualification_rejection_hook_rejects_symlink_or_wrong_parent(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+    target = tmp_path / "target.json"
+    symlink = root / "symlink.json"
+    symlink.symlink_to(target)
+    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(symlink))
+    _record_qualification_rejection(
+        {"type": "response.unreviewed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert symlink.is_symlink()
+    outside = tmp_path / "outside.json"
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(outside))
+    _record_qualification_rejection(
+        {"type": "response.unreviewed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert not outside.exists()
+
+
+def test_qualification_rejection_hook_bounds_names_fields_and_nesting(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+    artifact = root / "rejection.json"
+    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    event = {
+        "type": "Ω" * 200,
+        "bad key": "value",
+        "x" * 65: "value",
+        **{f"field_{index}": {f"nested_{index}": {"deeper": "discarded"}} for index in range(64)},
+    }
+    _record_qualification_rejection(
+        event,
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    payload = json.loads(artifact.read_bytes())
+    assert payload["event_type"] == "other"
+    assert len(payload["top_level_fields"]) <= 32
+    assert len(payload["nested_object_fields"]) <= 32
+    assert all(len(item["fields"]) <= 32 for item in payload["nested_object_fields"])
+    assert "bad key" not in (verifier_repr := json.dumps(payload))
+    assert "Ω" not in verifier_repr
+
+
+def test_qualification_rejection_hook_skips_oversized_safe_output(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+    artifact = root / "rejection.json"
+    monkeypatch.setenv("SLAIF_155Q_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ROOT", str(root))
+    monkeypatch.setenv("SLAIF_155Q_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.setattr("slaif_gateway.services.responses_gateway._QUALIFICATION_MAX_BYTES", 1)
+    _record_qualification_rejection(
+        {"type": "response.unreviewed"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert not artifact.exists()
+
+
 def _done_reasoning(
     *,
     item_id: str = "rs_1",

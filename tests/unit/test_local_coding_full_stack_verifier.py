@@ -1420,6 +1420,14 @@ def test_composed_only_qualification_mode_is_the_only_hook_mode(
     assert calls == [(True, False), (True, True)]
 
 
+def test_fake_qualification_requires_no_rejection_artifact(tmp_path: Path) -> None:
+    verifier._assert_fake_qualification_artifact_absent(tmp_path)
+    artifact = tmp_path / "qualification-rejection.json"
+    artifact.write_text('{"schema":"responses_stream_rejection_v1"}', encoding="ascii")
+    with pytest.raises(verifier.VerificationError, match="fake_rejection_artifact_present"):
+        verifier._assert_fake_qualification_artifact_absent(tmp_path)
+
+
 def test_relay_handle_error_is_safe_and_fail_closed() -> None:
     forwarding = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
     forwarding.handle_error(None, None)

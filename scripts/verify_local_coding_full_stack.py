@@ -738,6 +738,11 @@ def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
     return value
 
 
+def _assert_fake_qualification_artifact_absent(root: Path) -> None:
+    if _read_qualification_rejection(root) is not None:
+        raise VerificationError("fake_rejection_artifact_present")
+
+
 def _local_config(
     root: Path, *, local_port: int, qwen_relay_port: int, qwen_relay_token: str
 ) -> Path:
@@ -4244,8 +4249,8 @@ def _run_composed_stream_diagnostic(
             failure_code = "composed_client_stream_failed"
         tracker.set("boundary_capture")
         qualification_rejection = _read_qualification_rejection(root)
-        if fake_qwen and qualification_rejection is not None:
-            raise VerificationError("fake_rejection_artifact_present")
+        if fake_qwen:
+            _assert_fake_qualification_artifact_absent(root)
         local_status = relay.status()
         gateway_status = gateway_output.status()
         qwen_status = _qwen_relay_status(qwen_port)
