@@ -1393,13 +1393,26 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
                 "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE],
                 "path_rejections": 0,
             },
+            "qualification_rejection": {
+                "schema": "responses_stream_rejection_v1",
+                "event_type": "response.unreviewed",
+                "top_level_fields": [],
+                "nested_object_fields": [],
+                "validator_profile": {},
+                "rejection": {
+                    "outcome": "validator_rejected",
+                    "code": "responses_stream_event_not_supported",
+                },
+            },
         },
     )
-    result = verifier.run_composed_only(fake_qwen=True)
+    result = verifier.run_composed_only(fake_qwen=True, qualification_hook=True)
     assert result["decision"] == "terminal_boundaries_completed"
     assert result["ran_boundaries"] == ["direct_qwen", "local_output", "gateway_output"]
     assert result["direct_qwen"]["evidence_source"] == "pinned_155l"
     assert result["direct_qwen"]["ran_current_invocation"] is False
+    assert result["qualification_rejection"]["schema"] == "responses_stream_rejection_v1"
+    assert any(line.startswith("QUALIFICATION_REJECTION ") for line in verifier._stream_summary_lines(result))
     for boundary in ("local_output", "gateway_output"):
         assert result[boundary]["evidence_source"] == "current_155q"
         assert result[boundary]["ran_current_invocation"] is True

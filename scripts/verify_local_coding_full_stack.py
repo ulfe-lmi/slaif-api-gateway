@@ -1799,6 +1799,16 @@ def _stream_summary_lines(result: object) -> tuple[str, ...]:
                 separators=(",", ":"),
             )
         )
+    qualification_rejection = source.get("qualification_rejection")
+    if isinstance(qualification_rejection, dict):
+        lines.append(
+            "QUALIFICATION_REJECTION "
+            + json.dumps(
+                qualification_rejection,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
     lines.append("STREAM_DECISION " + json.dumps(decision, separators=(",", ":")))
     return tuple(lines)
 
@@ -4582,6 +4592,7 @@ def _run_composed_only_impl(
         "gateway_output": gateway_output,
         "composed_path": composed_path,
         "accounting_verified": composed.get("accounting_verified") is True,
+        "qualification_rejection": composed.get("qualification_rejection"),
     }
 
 
