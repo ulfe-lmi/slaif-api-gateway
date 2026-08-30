@@ -192,6 +192,27 @@ from slaif_gateway.services.responses_streaming_live_burn import (
 )
 
 
+from slaif_gateway.services.route_resolution import RouteResolutionService
+from slaif_gateway.services.routing_errors import RouteResolutionError
+from slaif_gateway.services.upstream_payloads import (
+    build_conversation_items_create_upstream_body,
+    build_conversation_items_query_params,
+    build_conversation_update_upstream_body,
+    build_responses_compact_upstream_body,
+    build_responses_input_items_query_params,
+    build_responses_input_tokens_upstream_body,
+    build_responses_upstream_body,
+)
+from slaif_gateway.services.upstream_request_contracts import (
+    normalize_conversation_items_create_upstream_request,
+    normalize_conversation_items_query_request,
+    normalize_conversation_update_upstream_request,
+    normalize_responses_compact_upstream_request,
+    normalize_responses_input_tokens_upstream_request,
+    normalize_responses_upstream_request,
+)
+
+
 _QUALIFICATION_HOOK_ENV = "SLAIF_155Q_QUALIFICATION"
 _QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Q_REJECTION_ARTIFACT"
 _QUALIFICATION_ROOT_ENV = "SLAIF_155Q_REJECTION_ROOT"
@@ -233,10 +254,7 @@ def _qualification_fields(value: Mapping[str, object]) -> list[dict[str, str]]:
     for key, item in list(value.items())[:_QUALIFICATION_MAX_FIELDS]:
         safe_key = _qualification_name(key)
         fields[safe_key] = _qualification_type_class(item)
-    return [
-        {"name": name, "type": fields[name]}
-        for name in sorted(fields)
-    ]
+    return [{"name": name, "type": fields[name]} for name in sorted(fields)]
 
 
 def _qualification_profile(profile: ResponsesStreamValidationProfile) -> dict[str, object]:
@@ -303,8 +321,7 @@ def _record_qualification_rejection(
         "event_type": event_type,
         "top_level_fields": _qualification_fields(event),
         "nested_object_fields": [
-            {"name": name, "fields": nested[name]}
-            for name in sorted(nested)
+            {"name": name, "fields": nested[name]} for name in sorted(nested)
         ],
         "validator_profile": _qualification_profile(profile),
         "rejection": {"outcome": "validator_rejected", "code": rejection_code},
@@ -324,25 +341,7 @@ def _record_qualification_rejection(
             os.fsync(output.fileno())
     except (FileExistsError, OSError, UnicodeEncodeError):
         return
-from slaif_gateway.services.route_resolution import RouteResolutionService
-from slaif_gateway.services.routing_errors import RouteResolutionError
-from slaif_gateway.services.upstream_payloads import (
-    build_conversation_items_create_upstream_body,
-    build_conversation_items_query_params,
-    build_conversation_update_upstream_body,
-    build_responses_compact_upstream_body,
-    build_responses_input_items_query_params,
-    build_responses_input_tokens_upstream_body,
-    build_responses_upstream_body,
-)
-from slaif_gateway.services.upstream_request_contracts import (
-    normalize_conversation_items_create_upstream_request,
-    normalize_conversation_items_query_request,
-    normalize_conversation_update_upstream_request,
-    normalize_responses_compact_upstream_request,
-    normalize_responses_input_tokens_upstream_request,
-    normalize_responses_upstream_request,
-)
+
 
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
