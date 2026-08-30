@@ -30,14 +30,16 @@ from urllib.parse import urlsplit
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding").resolve()
+LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005l").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
 GATEWAY_REPORT_HEAD = "306ecb186b5c12db991a684e7c04e5c9f174eba2"
 GATEWAY_IMPLEMENTATION_HEAD = "a8a2a7a8a2e84fbe7dd42658173dd6358f709444"
 GATEWAY_ACTIVATION_HEAD = "e1951b03cf316ade79b81c872395eb698051c51d"
 GATEWAY_REPORT_PATH = "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
 LOCAL_REPORT_HEAD = "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
-LOCAL_SIGNED_CONTRACT_HEAD = "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
+LOCAL_REPORT_PARENT = "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
+LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
+LOCAL_REPORT_PATH = "oap/reports/005-l-exact-composed-stream-owner-and-acceptance-closure.md"
 CODEX_VERSION = "0.149.0"
 CODEX_MODEL = "qwen3.8-27b"
 FAILURE_MODEL = "155f-synthetic-provider-failure"
@@ -227,6 +229,14 @@ def _verify_commit_topology() -> None:
         raise VerificationError("local_report_head_mismatch")
     if _git("status", "--porcelain", cwd=LOCAL_ROOT):
         raise VerificationError("local_dependency_not_clean")
+    if _git("rev-parse", f"{LOCAL_REPORT_HEAD}^1", cwd=LOCAL_ROOT) != LOCAL_REPORT_PARENT:
+        raise VerificationError("local_report_parent_mismatch")
+    local_report_changed = _git(
+        "diff-tree", "--no-commit-id", "--name-only", "-r", LOCAL_REPORT_HEAD,
+        cwd=LOCAL_ROOT,
+    )
+    if local_report_changed != LOCAL_REPORT_PATH:
+        raise VerificationError("local_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", LOCAL_SIGNED_CONTRACT_HEAD, LOCAL_REPORT_HEAD], cwd=LOCAL_ROOT).returncode != 0:
         raise VerificationError("local_signed_contract_ancestry_failed")
     for pr, expected in (("291", current_head), ("7", LOCAL_REPORT_HEAD)):

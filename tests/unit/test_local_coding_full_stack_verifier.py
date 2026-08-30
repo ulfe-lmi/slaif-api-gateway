@@ -199,6 +199,14 @@ def test_155q_topology_anchors_are_the_155p_report_and_activation() -> None:
     assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-p-restore-artifacts-and-local-handoff.md"
 
 
+def test_155q_topology_anchors_exact_local_report_parent_and_path() -> None:
+    assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005l")
+    assert verifier.LOCAL_REPORT_HEAD == "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
+    assert verifier.LOCAL_REPORT_PARENT == "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
+    assert verifier.LOCAL_SIGNED_CONTRACT_HEAD == "356be8345dd71d6fddf829278651d18e485731d4"
+    assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-l-exact-composed-stream-owner-and-acceptance-closure.md"
+
+
 def test_155q_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
     baseline = verifier._read_pinned_direct_baseline()
     assert verifier._terminal_completion_valid(baseline) is True
