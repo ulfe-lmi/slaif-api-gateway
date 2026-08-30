@@ -151,6 +151,80 @@ def _encrypted_profile() -> ResponsesStreamValidationProfile:
     )
 
 
+def _reasoning_added_event() -> dict[str, object]:
+    return {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "reasoning",
+            "id": "reasoning_1",
+            "summary": [],
+            "content": None,
+            "encrypted_content": None,
+            "status": "in_progress",
+        },
+    }
+
+
+def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
+    added = _reasoning_added_event()
+    assert not ResponsesStreamEventValidator(ResponsesStreamValidationProfile()).validate(added)
+    validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+    assert validator.validate(added)
+    assert validator.validate(
+        {
+            "type": "response.reasoning_part.added",
+            "item_id": "reasoning_1",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 2,
+            "part": {"type": "reasoning_text", "text": ""},
+        }
+    )
+    assert validator.validate(
+        {
+            "type": "response.reasoning_text.delta",
+            "item_id": "reasoning_1",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 3,
+            "delta": "bounded",
+        }
+    )
+    assert validator.validate(
+        {
+            "type": "response.reasoning_part.done",
+            "item_id": "reasoning_1",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 4,
+            "part": {"type": "reasoning_text", "text": "bounded"},
+        }
+    )
+    done = _reasoning_added_event()
+    done["type"] = "response.output_item.done"
+    assert validator.validate(done)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(type="function_call"),
+        lambda event: event["item"].update(extra="authority"),
+        lambda event: event.update(output_index="0"),
+    ],
+)
+def test_codex_0149_reasoning_item_rejects_non_exact_shapes(mutation) -> None:
+    event = _reasoning_added_event()
+    mutation(event)
+    assert not ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    ).validate(event)
+
+
 def test_qualification_rejection_hook_writes_one_exact_safe_shape(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "qualification"
     root.mkdir()

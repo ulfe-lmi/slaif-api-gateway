@@ -66,6 +66,7 @@ class ResponsesStreamValidationProfile:
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
     web_search: bool = False
     web_search_max_tool_calls: int | None = None
+    codex_reasoning_events: bool = False
 
 
 @dataclass(slots=True)
@@ -147,6 +148,26 @@ class ResponsesStreamEventValidator:
             return False
         if self._profile.web_search:
             valid = self._validate_web_search_event(payload, event_type)
+            if valid:
+                self._safe_event_counts[event_type] += 1
+                self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
+            return valid
+        if self._profile.codex_reasoning_events:
+            if event_type in {"response.output_item.added", "response.output_item.done"}:
+                item = payload.get("item")
+                if not isinstance(item, Mapping) or item.get("type") != "reasoning":
+                    return False
+                valid = self._validate_output_item(payload, event_type)
+            elif event_type in {
+                "response.reasoning_part.added", "response.reasoning_part.done",
+            }:
+                valid = self._validate_reasoning_part_event(payload, event_type)
+            elif event_type in {
+                "response.reasoning_text.delta", "response.reasoning_text.done",
+            }:
+                valid = self._validate_reasoning_event(payload, event_type)
+            else:
+                return self._validate_existing_text_event(payload, event_type)
             if valid:
                 self._safe_event_counts[event_type] += 1
                 self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
@@ -574,6 +595,29 @@ class ResponsesStreamEventValidator:
             return False
         self._reasoning_deltas[key] = combined
         return True
+
+    def _validate_reasoning_part_event(
+        self, payload: Mapping[str, Any], event_type: str
+    ) -> bool:
+        if not _only_fields(
+            payload,
+            {"type", "item_id", "output_index", "content_index", "part", "sequence_number"},
+        ):
+            return False
+        item_id = payload.get("item_id")
+        if not _bounded_identifier(item_id, required=True):
+            return False
+        if not _required_index(payload, "output_index") or not _required_index(
+            payload, "content_index"
+        ) or not _optional_index(payload, "sequence_number"):
+            return False
+        state = self._active_items.get(str(item_id))
+        if state is None or state.item_type != "reasoning":
+            return False
+        part = payload.get("part")
+        return isinstance(part, Mapping) and _validate_reasoning_text_part(
+            part, expected_type="reasoning_text"
+        )
 
 
 def _only_fields(value: Mapping[str, Any], allowed: set[str]) -> bool:
