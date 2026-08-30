@@ -3407,7 +3407,6 @@ def _run_composed_impl(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
-    qualification_hook: bool = False,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
@@ -3447,14 +3446,6 @@ def _run_composed_impl(
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
     )
-    if qualification_hook:
-        gateway_env.update(
-            {
-                QUALIFICATION_HOOK_ENV: "1",
-                QUALIFICATION_ROOT_ENV: str(root),
-                QUALIFICATION_ARTIFACT_ENV: str(root / "qualification-rejection.json"),
-            }
-        )
     tracker.set("migration")
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
@@ -4061,6 +4052,7 @@ def _run_composed_stream_diagnostic(
     runtime: RuntimeReference | None,
     *,
     fake_qwen: bool = False,
+    qualification_hook: bool = False,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     from openai import OpenAI
@@ -4088,6 +4080,14 @@ def _run_composed_stream_diagnostic(
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
     )
+    if qualification_hook:
+        gateway_env.update(
+            {
+                QUALIFICATION_HOOK_ENV: "1",
+                QUALIFICATION_ROOT_ENV: str(root),
+                QUALIFICATION_ARTIFACT_ENV: str(root / "qualification-rejection.json"),
+            }
+        )
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
     relay = failure_server = qwen_relay = local = gateway = gateway_output = None
@@ -4508,7 +4508,7 @@ def _classify_composed_boundaries(
 
 
 def _run_composed_only_impl(
-    *, fake_qwen: bool, tracker: StageTracker
+    *, fake_qwen: bool, qualification_hook: bool, tracker: StageTracker
 ) -> dict[str, object]:
     """Run only the composed boundary using the immutable direct baseline."""
     tracker.set("topology")
@@ -4530,7 +4530,11 @@ def _run_composed_only_impl(
         tracker.set("local_config")
         _validate_local_config(root, runtime)
         composed = _run_composed_stream_diagnostic(
-            root, runtime, fake_qwen=fake_qwen, tracker=tracker
+            root,
+            runtime,
+            fake_qwen=fake_qwen,
+            qualification_hook=qualification_hook,
+            tracker=tracker,
         )
     local_output = _safe_stream_summary(
         composed.get("local_output"),
@@ -4576,10 +4580,16 @@ def _run_composed_only_impl(
     }
 
 
-def run_composed_only(*, fake_qwen: bool = False) -> dict[str, object]:
+def run_composed_only(
+    *, fake_qwen: bool = False, qualification_hook: bool = False
+) -> dict[str, object]:
     tracker = StageTracker()
     try:
-        return _run_composed_only_impl(fake_qwen=fake_qwen, tracker=tracker)
+        return _run_composed_only_impl(
+            fake_qwen=fake_qwen,
+            qualification_hook=qualification_hook,
+            tracker=tracker,
+        )
     except VerificationError:
         raise
     except Exception:
@@ -4592,7 +4602,6 @@ def _run_composed(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
-    qualification_hook: bool = False,
 ) -> dict[str, object]:
     tracker = StageTracker()
     try:
@@ -4601,7 +4610,6 @@ def _run_composed(
             runtime,
             codex_binary,
             fake_qwen=fake_qwen,
-            qualification_hook=qualification_hook,
             tracker=tracker,
         )
     except VerificationError:
@@ -4646,7 +4654,6 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
                 runtime,
                 codex_binary,
                 fake_qwen=fake_qwen,
-                qualification_hook=True,
             )
         if not fake_qwen:
             stage = "protected_postcheck"
@@ -4668,6 +4675,8 @@ def main() -> int:
     parser.add_argument("--stream-differential", action="store_true")
     parser.add_argument("--composed-only", action="store_true")
     parser.add_argument("--composed-only-fake", action="store_true")
+    parser.add_argument("--qualification-composed", action="store_true")
+    parser.add_argument("--qualification-composed-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
@@ -4686,9 +4695,23 @@ def main() -> int:
             print(f"RESULT=BLOCKED code={exc}")
             return 1
         return 0
-    if arguments.composed_only or arguments.composed_only_fake:
+    if (
+        arguments.composed_only
+        or arguments.composed_only_fake
+        or arguments.qualification_composed
+        or arguments.qualification_composed_fake
+    ):
         try:
-            result = run_composed_only(fake_qwen=arguments.composed_only_fake)
+            result = run_composed_only(
+                fake_qwen=(
+                    arguments.composed_only_fake
+                    or arguments.qualification_composed_fake
+                ),
+                qualification_hook=(
+                    arguments.qualification_composed
+                    or arguments.qualification_composed_fake
+                ),
+            )
             _emit_stream_summary(_stream_summary_lines(result))
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")

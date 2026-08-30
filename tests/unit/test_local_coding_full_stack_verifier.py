@@ -1405,6 +1405,21 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
         assert result[boundary]["ran_current_invocation"] is True
 
 
+def test_composed_only_qualification_mode_is_the_only_hook_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def fake_impl(*, fake_qwen: bool, qualification_hook: bool, tracker):
+        calls.append((fake_qwen, qualification_hook))
+        return {"decision": "ambiguous_stream_evidence"}
+
+    monkeypatch.setattr(verifier, "_run_composed_only_impl", fake_impl)
+    verifier.run_composed_only(fake_qwen=True)
+    verifier.run_composed_only(fake_qwen=True, qualification_hook=True)
+    assert calls == [(True, False), (True, True)]
+
+
 def test_relay_handle_error_is_safe_and_fail_closed() -> None:
     forwarding = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
     forwarding.handle_error(None, None)
