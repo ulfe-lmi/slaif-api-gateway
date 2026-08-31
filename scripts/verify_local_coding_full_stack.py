@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-w verifier for the live Codex done-item closure.
+"""Bounded 155-x verifier for preserved qualification output and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "307a491e511638779c4ecc67a7f9f09dbff1143f"
-GATEWAY_IMPLEMENTATION_HEAD = "ce664052266b7a1cbd43b8083eaea22d3fa9c0fd"
-GATEWAY_ACTIVATION_HEAD = "43cfcd97af6b1d8a6eb5b31a2db0a6f8217da0b6"
-GATEWAY_REPORT_PATH = "oap/reports/155-v-failure-localization-summary-and-protected-closure.md"
+GATEWAY_REPORT_HEAD = "5385d066d2a869afd217e354996fe2027770a276"
+GATEWAY_IMPLEMENTATION_HEAD = "b7b7f7ec00ec365fb245185a7e7588aa6c41ccbc"
+GATEWAY_ACTIVATION_HEAD = "fe7d641352bedaad5bd217c17f03e61299742fb2"
+GATEWAY_REPORT_PATH = "oap/reports/155-w-live-function-done-shape-and-final-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-w-live-function-done-shape-and-final-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155w_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-x-preserved-qualification-output-and-final-closure.md"
+TASK_DB = "slaif_gateway_oap_155x_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -62,9 +62,9 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
-QUALIFICATION_HOOK_ENV = "SLAIF_155W_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155W_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155W_REJECTION_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155X_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155X_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155X_REJECTION_ROOT"
 QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
 QUALIFICATION_SUMMARY_NAME = "qualification-summary.json"
 QUALIFICATION_MAX_BYTES = 64 * 1024
@@ -253,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-w-live-function-done-shape-and-final-acceptance.md",
+        "oap/orders/155-x-preserved-qualification-output-and-final-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-w-live-function-done-shape-and-final-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-x-preserved-qualification-output-and-final-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-w\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-x\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -4176,14 +4176,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155w-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155x-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155w-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155x-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -4202,7 +4202,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155w-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155x-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -6723,7 +6723,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155w-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155x-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -6831,7 +6831,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155w-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -6990,7 +6990,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155w-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7092,7 +7092,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155w-", dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             stage = "local_config_preflight"
@@ -7166,7 +7166,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155w-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155x-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
