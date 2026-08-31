@@ -20,12 +20,12 @@ from slaif_gateway.modules.clients.codex_0149 import (
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.providers.errors import ProviderError
+from slaif_gateway.providers import streaming as streaming_module
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
 )
-from slaif_gateway.providers import streaming as streaming_module
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
 from slaif_gateway.services.policy_errors import RequestPolicyError
@@ -36,8 +36,10 @@ from slaif_gateway.services.responses_request_policy import (
     codex_replay_request_candidates,
     responses_codex_streaming_tool_events_allowed,
 )
-from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
 from slaif_gateway.services.responses_gateway import (
+    _build_safe_responses_upstream_body,
+    _codex_local_pair_omits_prompt_cache_key,
+    _codex_reasoning_events_enabled,
     _derive_pair_local_codex_top_level_profile,
 )
 from slaif_gateway.services.responses_request_policy import (
@@ -246,6 +248,47 @@ def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> 
     )
     assert not _codex_reasoning_events_enabled(
         client_module_id="openai-default", server_context=local_context
+    )
+
+
+def test_codex_0149_local_pair_drops_only_prompt_cache_key_for_upstream() -> None:
+    policy_result = SimpleNamespace(
+        effective_body={
+            "model": "classroom-codex",
+            "input": "bounded input",
+            "instructions": "bounded instructions",
+            "prompt_cache_key": "bounded-cache-key",
+            "stream": True,
+        }
+    )
+    original = copy.deepcopy(policy_result.effective_body)
+    generic_body = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="classroom-codex",
+    )
+    local_body = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="classroom-codex",
+        omit_prompt_cache_key=True,
+    )
+    assert policy_result.effective_body == original
+    assert local_body == {
+        key: value
+        for key, value in generic_body.items()
+        if key != "prompt_cache_key"
+    }
+    assert generic_body["prompt_cache_key"] == "bounded-cache-key"
+    assert _codex_local_pair_omits_prompt_cache_key(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+    )
+    assert not _codex_local_pair_omits_prompt_cache_key(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context=None,
+    )
+    assert not _codex_local_pair_omits_prompt_cache_key(
+        client_module_id="openai-default",
+        local_coding_server_context={"identity_mode": "static"},
     )
 
 

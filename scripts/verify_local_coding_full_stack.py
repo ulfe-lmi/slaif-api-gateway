@@ -75,12 +75,28 @@ COMPOSITION_STAGES = (
     "gateway_start", "qwen_relay_ready", "local_health", "local_readiness",
     "gateway_health", "gateway_models", "ordinary_response", "stream_response",
     "client_stream", "boundary_capture",
+    "tool_codex_execution", "tool_roundtrip_failure_localization",
+    "tool_roundtrip_boundary_capture", "tool_roundtrip_privacy_aliases",
+    "tool_roundtrip_signed_identity_headers", "tool_roundtrip_signed_key_forwarding",
+    "tool_roundtrip_sse_validation",
+    "tool_roundtrip_qwen_boundary",
+    "tool_roundtrip_accounting",
     "image_response", "constitution_root_first", "constitution_root_reuse",
     "zero_root_rehydration", "codex_session_a", "codex_session_a_resume",
     "codex_session_b", "replay_and_tamper", "second_gateway_key",
     "preprovider_negatives", "controlled_provider_failure", "accounting",
     "local_metrics", "qwen_wire_evidence", "privacy", "process_cleanup",
     "container_cleanup", "repository_cleanup", "protected_postcheck", "final_evidence",
+)
+_SAFE_UNEXPECTED_EXCEPTION_CLASSES = frozenset(
+    {
+        "AttributeError",
+        "IndexError",
+        "KeyError",
+        "OSError",
+        "TypeError",
+        "ValueError",
+    }
 )
 
 
@@ -100,10 +116,19 @@ class StageTracker:
             return VerificationError("unexpected_unknown_stage")
         return VerificationError(f"unexpected_{self.current}")
 
-    def unexpected_composed(self) -> VerificationError:
+    def unexpected_composed(
+        self, exception: BaseException | None = None
+    ) -> VerificationError:
         if self.current not in COMPOSITION_STAGES:
             return VerificationError("unexpected_composed_unknown_stage")
-        return VerificationError(f"unexpected_composed_{self.current}")
+        if exception is None:
+            return VerificationError(f"unexpected_composed_{self.current}")
+        exception_class = type(exception).__name__
+        if exception_class not in _SAFE_UNEXPECTED_EXCEPTION_CLASSES:
+            exception_class = "Other"
+        return VerificationError(
+            f"unexpected_composed_{self.current}_{exception_class}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -974,6 +999,18 @@ _SAFE_RAW_METADATA_KEY_CLASSES = {
     "x-codex-window-id": "window",
     "x-codex-turn-metadata": "turn_metadata",
 }
+_SAFE_PRIVACY_BODY_PATH_CLASSES = frozenset(
+    {
+        "prompt_cache_key",
+        "instructions",
+        "metadata",
+        "reasoning",
+        "tools",
+        "tool_choice",
+        "input_non_internal",
+        "other",
+    }
+)
 _SSE_CAPTURE_LIMIT = 64 * 1024
 _ERROR_CAPTURE_LIMIT = 16 * 1024
 _SSE_EVENT_RUN_LIMIT = 128
@@ -3097,6 +3134,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.outbound_header_names: set[str] = set()
         self.request_path_classes: set[str] = set()
         self.upstream_statuses: list[int] = []
+        self.inference_statuses: list[int] = []
         self.path_rejections = 0
         self.path_rejection_classes: set[str] = set()
         self.sse_structures: list[dict[str, object]] = []
@@ -3150,9 +3188,11 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
             )
             self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
 
-    def record_upstream_status(self, status: int) -> None:
+    def record_upstream_status(self, status: int, *, inference: bool = False) -> None:
         with self._lock:
             self.upstream_statuses.append(status)
+            if inference:
+                self.inference_statuses.append(status)
 
     def record_path_rejection(self, path: str) -> None:
         with self._lock:
@@ -3225,6 +3265,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "outbound_header_names": sorted(self.outbound_header_names),
                 "request_path_classes": sorted(self.request_path_classes),
                 "upstream_statuses": list(self.upstream_statuses),
+                "inference_statuses": list(self.inference_statuses),
                 "path_rejections": self.path_rejections,
                 "path_rejection_classes": sorted(self.path_rejection_classes),
                 "first_event_before_upstream_completion": self.stream_first_event_before_upstream_completion,
@@ -3282,7 +3323,13 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         self._forward_upstream("GET", self.path, inbound_headers, b"")
 
     def _forward_upstream(
-        self, method: str, path: str, inbound_headers: dict[str, str], body: bytes
+        self,
+        method: str,
+        path: str,
+        inbound_headers: dict[str, str],
+        body: bytes,
+        *,
+        inference: bool = False,
     ) -> int | None:
         try:
             target = _qwen_target(self.server.endpoint, path)
@@ -3354,11 +3401,15 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                             if not downstream_open:
                                 recorder.mark_downstream_closed_early()
                             self.server.remember_sse_structure(recorder.snapshot())
-                    self.server.record_upstream_status(response.status_code)
+                    self.server.record_upstream_status(
+                        response.status_code, inference=inference
+                    )
         except httpx.HTTPError:
             self.server.record_upstream_truncated()
             if response_status is not None:
-                self.server.record_upstream_status(response_status)
+                self.server.record_upstream_status(
+                    response_status, inference=inference
+                )
             if not headers_sent and downstream_open:
                 try:
                     self.send_error(502)
@@ -3400,7 +3451,13 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
         if not self.server.qwen_token:
             self.send_error(503)
             return
-        status = self._forward_upstream("POST", self.path, inbound_headers, body)
+        status = self._forward_upstream(
+            "POST",
+            self.path,
+            inbound_headers,
+            body,
+            inference=(not compiler and _safe_path_class(self.path) == "v1_responses"),
+        )
         if status is not None and 200 <= status < 300:
             self.server.record_success()
 
@@ -4117,6 +4174,47 @@ def _safe_local_bound_privacy_findings(
             return any(contains_alias(child, aliases) for child in value)
         return isinstance(value, str) and any(alias in value for alias in aliases)
 
+    def body_path_class(payload: dict[str, object], aliases: set[str]) -> str | None:
+        for field in (
+            "prompt_cache_key",
+            "instructions",
+            "metadata",
+            "reasoning",
+            "tools",
+            "tool_choice",
+        ):
+            if field in payload and contains_alias(payload[field], aliases):
+                return field
+        input_items = payload.get("input")
+        if isinstance(input_items, list):
+            input_without_internal = [
+                {
+                    key: child
+                    for key, child in item.items()
+                    if key != "internal_chat_message_metadata_passthrough"
+                }
+                if isinstance(item, dict)
+                else item
+                for item in input_items
+            ]
+            if contains_alias(input_without_internal, aliases):
+                return "input_non_internal"
+        body_without_known = {
+            key: value
+            for key, value in payload.items()
+            if key not in {
+                "client_metadata",
+                "prompt_cache_key",
+                "instructions",
+                "metadata",
+                "reasoning",
+                "tools",
+                "tool_choice",
+                "input",
+            }
+        }
+        return "other" if contains_alias(body_without_known, aliases) else None
+
     for target_turn, request in enumerate(requests):
         for source_turn, aliases_by_class in enumerate(raw_aliases_by_turn):
             if not aliases_by_class:
@@ -4160,25 +4258,14 @@ def _safe_local_bound_privacy_findings(
                         }
                     )
                     continue
-                body_without_known = dict(payload)
-                body_without_known.pop("client_metadata", None)
-                if isinstance(input_items, list):
-                    body_without_known["input"] = [
-                        {
-                            key: child
-                            for key, child in item.items()
-                            if key != "internal_chat_message_metadata_passthrough"
-                        }
-                        if isinstance(item, dict)
-                        else item
-                        for item in input_items
-                    ]
-                if contains_alias(body_without_known, aliases):
+                safe_body_path_class = body_path_class(payload, aliases)
+                if safe_body_path_class is not None:
                     findings.append(
                         {
                             "source_turn": source_turn,
                             "target_turn": target_turn,
                             "location_class": "other_json_body_path",
+                            "body_path_class": safe_body_path_class,
                             "alias_key_class": alias_class,
                         }
                     )
@@ -4199,7 +4286,7 @@ def _safe_local_bound_privacy_findings(
                             }
                         )
                         break
-                del payload, body_without_known
+                del payload
     return findings
 
 
@@ -4258,8 +4345,8 @@ def _run_composed_impl(
         postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
     except VerificationError:
         raise
-    except Exception:
-        raise tracker.unexpected_composed() from None
+    except Exception as exc:
+        raise tracker.unexpected_composed(exc) from None
     gateway = local = None
     qwen_relay = None
     relay = failure_server = None
@@ -4894,6 +4981,7 @@ def _run_composed_codex_tool_roundtrip(
     fake_qwen_server: _FakeQwenServer,
     qwen_port: int,
     service_token: str,
+    tracker: StageTracker,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
 
@@ -4913,6 +5001,7 @@ def _run_composed_codex_tool_roundtrip(
         environment=environment,
         model=CODEX_MODEL,
     )
+    tracker.set("tool_codex_execution")
     result = _run(
         capture._exec_command_0149(
             codex_binary,
@@ -4931,6 +5020,7 @@ def _run_composed_codex_tool_roundtrip(
         timeout=180,
     )
     if result.returncode != 0:
+        tracker.set("tool_roundtrip_failure_localization")
         codex_failure_category = capture.classify_codex_failure(
             result.stderr, result.stdout
         )
@@ -4975,6 +5065,7 @@ def _run_composed_codex_tool_roundtrip(
         del accounting_statuses, codex_failure_category, request_projections
         raise VerificationError(failure_code)
 
+    tracker.set("tool_roundtrip_boundary_capture")
     gateway_requests = gateway_output.snapshot()
     local_requests = relay.snapshot()
     if len(local_requests) != 2 or len(gateway_requests) != 2:
@@ -4999,7 +5090,9 @@ def _run_composed_codex_tool_roundtrip(
     if tool_result_counts != [0, 1]:
         raise VerificationError("composed_tool_roundtrip_tool_result_count")
 
+    tracker.set("tool_roundtrip_privacy_aliases")
     raw_aliases_by_turn: list[dict[str, set[str]]] = []
+    raw_aliases: set[str] = set()
     for request in gateway_requests:
         try:
             payload = json.loads(request.body)
@@ -5008,10 +5101,11 @@ def _run_composed_codex_tool_roundtrip(
         aliases_by_class: dict[str, set[str]] = {}
         metadata = payload.get("client_metadata") if isinstance(payload, dict) else None
         if isinstance(metadata, dict):
-            for key, value in metadata.items():
-                alias_class = _SAFE_RAW_METADATA_KEY_CLASSES.get(key)
+            for metadata_key, value in metadata.items():
+                alias_class = _SAFE_RAW_METADATA_KEY_CLASSES.get(metadata_key)
                 if alias_class is not None and isinstance(value, str):
                     aliases_by_class.setdefault(alias_class, set()).add(value)
+                    raw_aliases.add(value)
         raw_aliases_by_turn.append(aliases_by_class)
         del payload
     privacy_findings = _safe_local_bound_privacy_findings(
@@ -5022,6 +5116,7 @@ def _run_composed_codex_tool_roundtrip(
     if privacy_findings:
         finding = privacy_findings[0]
         location = finding.get("location_class")
+        body_path = finding.get("body_path_class")
         alias_class = finding.get("alias_key_class")
         source_turn = finding.get("source_turn")
         target_turn = finding.get("target_turn")
@@ -5036,14 +5131,24 @@ def _run_composed_codex_tool_roundtrip(
                 "other_json_body_path",
                 "non_x_slaif_header",
             }
+            or (
+                location == "other_json_body_path"
+                and body_path not in _SAFE_PRIVACY_BODY_PATH_CLASSES
+            )
             or alias_class not in set(_SAFE_RAW_METADATA_KEY_CLASSES.values())
         ):
             raise VerificationError("composed_tool_roundtrip_privacy_invalid")
         raise VerificationError(
             f"composed_tool_roundtrip_privacy_source_{source_turn}_target_{target_turn}_"
-            f"{location}_{alias_class}"
+            f"{location}_{body_path if location == 'other_json_body_path' else 'none'}_{alias_class}"
         )
-    del privacy_findings, raw_aliases_by_turn
+    _assert_local_bound_privacy(
+        local_requests,
+        raw_aliases=raw_aliases,
+        service_token=service_token,
+    )
+    del privacy_findings, raw_aliases, raw_aliases_by_turn
+    tracker.set("tool_roundtrip_signed_identity_headers")
     signed_header_facts = [
         {
             "service_bearer": request.headers.get("authorization")
@@ -5076,6 +5181,7 @@ def _run_composed_codex_tool_roundtrip(
     ):
         raise VerificationError("composed_tool_roundtrip_signed_headers_invalid")
     del signed_header_facts
+    tracker.set("tool_roundtrip_signed_key_forwarding")
     if any(
         key.plaintext.encode("utf-8") in request.body
         or key.plaintext in request.headers.get("authorization", "")
@@ -5083,6 +5189,7 @@ def _run_composed_codex_tool_roundtrip(
     ):
         raise VerificationError("composed_tool_roundtrip_gateway_key_forwarded")
 
+    tracker.set("tool_roundtrip_sse_validation")
     local_status = relay.status()
     gateway_status = gateway_output.status()
     qwen_status = _qwen_relay_status(qwen_port)
@@ -5096,6 +5203,7 @@ def _run_composed_codex_tool_roundtrip(
         local_status.get("sse_structures"),
         error_code="composed_tool_roundtrip_local_sse_invalid",
     )
+    tracker.set("tool_roundtrip_qwen_boundary")
     _assert_two_turn_sse_structures(
         qwen_status.get("sse_structures"),
         error_code="composed_tool_roundtrip_qwen_sse_invalid",
@@ -5121,6 +5229,7 @@ def _run_composed_codex_tool_roundtrip(
         or fake_status.get("message_lifecycle_count") != 1
     ):
         raise VerificationError("composed_tool_roundtrip_boundary_invalid")
+    tracker.set("tool_roundtrip_accounting")
     accounting_rows = asyncio.run(_verify_accounting(postgres_url, (key,), ()))
     if accounting_rows != 2:
         raise VerificationError("composed_tool_roundtrip_accounting_rows")
@@ -5204,15 +5313,43 @@ def _localize_composed_codex_failure(
     gateway_shapes = gateway_structures if isinstance(gateway_structures, list) else []
     if codex_failure_category in launch_categories or gateway_requests == 0:
         return "composed_tool_roundtrip_launch_config"
-    if (
+    qwen_codes = statuses(qwen_status.get("inference_statuses"))
+    if qwen_codes and qwen_codes[0] >= 400:
+        return "composed_tool_roundtrip_first_qwen_rejection"
+    local_first_failed = (
+        local_requests >= 1 and len(local_codes) >= 1 and local_codes[0] >= 400
+    )
+    gateway_first_failed = (
         gateway_requests == 1
         and (not gateway_codes or gateway_codes[0] >= 400)
     ) or (
         gateway_shapes
         and isinstance(gateway_shapes[0], dict)
         and gateway_shapes[0].get("error_event") is True
-    ):
-        return "composed_tool_roundtrip_first_gateway_rejection"
+    )
+    if local_first_failed:
+        return "composed_tool_roundtrip_first_local_rejection"
+    if gateway_first_failed:
+        code_class = "other"
+        param_class = "other"
+        if gateway_error_code_classes and isinstance(gateway_error_code_classes, list):
+            candidate = gateway_error_code_classes[0]
+            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_CODE_CLASSES:
+                code_class = candidate
+        if gateway_error_param_classes and isinstance(gateway_error_param_classes, list):
+            candidate = gateway_error_param_classes[0]
+            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_PARAM_CLASSES:
+                param_class = candidate
+        projection_class = (
+            _safe_roundtrip_projection_class(request_projections[0])
+            if isinstance(request_projections, list) and request_projections
+            else "other"
+        )
+        ownership = "post_local" if local_requests >= 1 else "pre_local"
+        return (
+            f"composed_tool_roundtrip_first_gateway_{ownership}_"
+            f"{code_class}_{param_class}_{projection_class}"
+        )
     if (
         local_requests >= 2
         and len(local_codes) >= 2
@@ -5313,8 +5450,8 @@ def _run_composed_stream_diagnostic(
         postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
     except VerificationError:
         raise
-    except Exception:
-        raise tracker.unexpected_composed() from None
+    except Exception as exc:
+        raise tracker.unexpected_composed(exc) from None
     gateway_port = _free_port()
     local_port = 18031
     qwen_port = _free_port()
@@ -5471,6 +5608,7 @@ def _run_composed_stream_diagnostic(
                 fake_qwen_server=fake_qwen_server,
                 qwen_port=qwen_port,
                 service_token=service_token,
+                tracker=tracker,
             )
         client = OpenAI(
             api_key=key.plaintext,
@@ -5616,11 +5754,11 @@ def _run_composed_stream_diagnostic(
                 if isinstance(primary, VerificationError):
                     raise primary
                 tracker.current = primary_stage
-                raise tracker.unexpected_composed() from None
-            raise tracker.unexpected_composed() from None
+                raise tracker.unexpected_composed(primary) from None
+            raise tracker.unexpected_composed(primary) from None
         if primary is not None and not isinstance(primary, VerificationError):
             tracker.current = primary_stage
-            raise tracker.unexpected_composed() from None
+            raise tracker.unexpected_composed(primary) from None
 
 
 def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
@@ -5861,8 +5999,8 @@ def run_composed_only(*, fake_qwen: bool = False) -> dict[str, object]:
         )
     except VerificationError:
         raise
-    except Exception:
-        raise tracker.unexpected_composed() from None
+    except Exception as exc:
+        raise tracker.unexpected_composed(exc) from None
 
 
 def _run_composed(

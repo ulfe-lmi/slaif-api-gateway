@@ -281,6 +281,7 @@ def _build_safe_responses_upstream_body(
     *,
     policy_result: ResponsesPolicyResult,
     upstream_model: str,
+    omit_prompt_cache_key: bool = False,
 ) -> dict[str, object]:
     try:
         normalized_request = normalize_responses_upstream_request(
@@ -288,7 +289,10 @@ def _build_safe_responses_upstream_body(
             requested_model=policy_result.effective_body["model"],
             upstream_model=upstream_model,
         )
-        return build_responses_upstream_body(normalized_request)
+        upstream_body = build_responses_upstream_body(normalized_request)
+        if omit_prompt_cache_key:
+            upstream_body.pop("prompt_cache_key", None)
+        return upstream_body
     except (TypeError, ValueError) as exc:
         raise OpenAICompatibleError(
             "Request contains fields that are not approved for upstream forwarding.",
@@ -398,6 +402,17 @@ def _derive_pair_local_codex_top_level_profile(
         else codex_0149_declared_tool_taxonomy(effective_body)
     )
     return declarations, codex_0149_streaming_tool_events_requested(effective_body)
+
+
+def _codex_local_pair_omits_prompt_cache_key(
+    *,
+    client_module_id: str,
+    local_coding_server_context: Mapping[str, object] | None,
+) -> bool:
+    return (
+        client_module_id == CODEX_0149_CLIENT_MODULE_ID
+        and local_coding_server_context is not None
+    )
 
 
 def _build_safe_responses_compact_upstream_body(
@@ -1194,6 +1209,10 @@ async def handle_response_create(
     upstream_body = _build_safe_responses_upstream_body(
         policy_result=policy_result,
         upstream_model=route.resolved_model,
+        omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
+            client_module_id=client_module.module_id,
+            local_coding_server_context=local_coding_server_context,
+        ),
     )
     external_pricing_lookup = None
     if external_web_search_admission is not None:

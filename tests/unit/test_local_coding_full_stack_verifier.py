@@ -265,12 +265,28 @@ def test_stage_tracker_accepts_only_declared_stages_and_localizes_unknowns() -> 
 
 def test_stage_tracker_composed_codes_are_fixed_and_private_free() -> None:
     tracker = verifier.StageTracker()
-    assert {"client_stream", "boundary_capture"}.issubset(verifier.COMPOSITION_STAGES)
+    assert {
+        "client_stream",
+        "boundary_capture",
+        "tool_roundtrip_privacy_aliases",
+        "tool_roundtrip_signed_identity_headers",
+        "tool_roundtrip_sse_validation",
+        "tool_roundtrip_qwen_boundary",
+    }.issubset(verifier.COMPOSITION_STAGES)
     for stage in verifier.COMPOSITION_STAGES:
         tracker.set(stage)
         assert str(tracker.unexpected_composed()) == f"unexpected_composed_{stage}"
     unknown = verifier.StageTracker()
     assert str(unknown.unexpected_composed()) == "unexpected_composed_unknown_stage"
+    tracker.set("tool_roundtrip_privacy_aliases")
+    assert (
+        str(tracker.unexpected_composed(TypeError("not retained")))
+        == "unexpected_composed_tool_roundtrip_privacy_aliases_TypeError"
+    )
+    assert (
+        str(tracker.unexpected_composed(RuntimeError("not retained")))
+        == "unexpected_composed_tool_roundtrip_privacy_aliases_Other"
+    )
 
 
 def test_composed_wrapper_sanitizes_unexpected_exception_at_unknown_stage(
@@ -387,6 +403,24 @@ def test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted() -> None:
         fake.server_close()
 
 
+def test_composed_roundtrip_does_not_shadow_seeded_key_in_metadata_loop() -> None:
+    tree = ast.parse(Path(verifier.__file__).read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_run_composed_codex_tool_roundtrip"
+    )
+    assert all(
+        not (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == "key"
+        )
+        for node in ast.walk(function)
+    )
+
+
 def test_fake_qwen_tool_roundtrip_function_requires_known_local_tool() -> None:
     responses: list[tuple[int, str]] = []
     handler_instance = object.__new__(verifier._FakeQwenHandler)
@@ -447,7 +481,36 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
         ({"gateway_requests": 0}, "composed_tool_roundtrip_launch_config"),
         (
             {"gateway_requests": 1, "gateway_statuses": [400]},
-            "composed_tool_roundtrip_first_gateway_rejection",
+            "composed_tool_roundtrip_first_gateway_pre_local_other_other_other",
+        ),
+        (
+            {
+                "gateway_requests": 1,
+                "gateway_statuses": [400],
+                "local_requests": 1,
+                "local_statuses": [400],
+            },
+            "composed_tool_roundtrip_first_local_rejection",
+        ),
+        (
+            {
+                "gateway_requests": 1,
+                "gateway_statuses": [400],
+                "local_requests": 1,
+                "local_statuses": [200],
+            },
+            "composed_tool_roundtrip_first_gateway_post_local_other_other_other",
+        ),
+        (
+            {
+                "gateway_requests": 1,
+                "gateway_statuses": [502],
+                "qwen_status": {
+                    "upstream_statuses": [200, 500],
+                    "inference_statuses": [500],
+                },
+            },
+            "composed_tool_roundtrip_first_qwen_rejection",
         ),
         (
             {
@@ -721,6 +784,7 @@ def test_local_bound_privacy_classifier_preserves_source_target_and_locations() 
             "source_turn": 0,
             "target_turn": 1,
             "location_class": "other_json_body_path",
+            "body_path_class": "prompt_cache_key",
             "alias_key_class": "session",
         },
     ]
