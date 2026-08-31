@@ -164,6 +164,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_request_envelope_requested,
     responses_codex_streaming_tool_events_allowed,
     responses_codex_streaming_tool_events_requested,
+    responses_codex_tool_roundtrip_requested,
     responses_custom_tools_requested,
     responses_file_input_requested,
     responses_function_tools_requested,
@@ -382,6 +383,7 @@ def _derive_pair_local_codex_top_level_profile(
     client_module_id: str,
     local_coding_server_context: Mapping[str, object] | None,
     effective_body: Mapping[str, object],
+    declared_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
     """Derive 0.149 top-level tool facts only after Local route resolution."""
 
@@ -390,7 +392,11 @@ def _derive_pair_local_codex_top_level_profile(
         or local_coding_server_context is None
     ):
         return frozenset(), False
-    declarations = codex_0149_declared_tool_taxonomy(effective_body)
+    declarations = (
+        declared_tool_taxonomy
+        if declared_tool_taxonomy is not None
+        else codex_0149_declared_tool_taxonomy(effective_body)
+    )
     return declarations, codex_0149_streaming_tool_events_requested(effective_body)
 
 
@@ -922,6 +928,14 @@ async def handle_response_create(
         raise _openai_error_from_client_module_error(exc) from exc
     body = normalized_client_request.body
     _ensure_client_module_pair_exists(client_module.module_id)
+    codex_0149_full_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None
+    if client_module.module_id == CODEX_0149_CLIENT_MODULE_ID:
+        try:
+            taxonomy = codex_0149_declared_tool_taxonomy(body)
+            if taxonomy:
+                codex_0149_full_tool_taxonomy = taxonomy
+        except ModuleSelectionError as exc:
+            raise _openai_error_from_client_module_error(exc) from exc
     adapter_managed_candidates = frozenset(
         normalized_client_request.adapter_managed_declaration_candidates
     )
@@ -957,6 +971,17 @@ async def handle_response_create(
     codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(body)
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
+    )
+    codex_0149_continuation_taxonomy = (
+        codex_0149_full_tool_taxonomy
+        if (
+            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            and allow_codex_request_envelope
+            and allow_codex_client_tools
+            and allow_codex_streaming_tool_events
+            and responses_codex_tool_roundtrip_requested(body)
+        )
+        else None
     )
     codex_encrypted_reasoning_replay_requested = (
         responses_codex_encrypted_reasoning_replay_requested(body)
@@ -998,11 +1023,15 @@ async def handle_response_create(
             adapter_managed_declaration_shapes=(
                 normalized_client_request.adapter_managed_declaration_shapes
             ),
+            codex_top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
-    replay_candidates = codex_replay_request_candidates(policy_result.effective_body)
+    replay_candidates = codex_replay_request_candidates(
+        policy_result.effective_body,
+        top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+    )
     replay_authorization = await _verify_owned_codex_replay_references(
         candidates=replay_candidates,
         authenticated_key=authenticated_key,
@@ -1051,6 +1080,7 @@ async def handle_response_create(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
             effective_body=policy_result.effective_body,
+            declared_tool_taxonomy=codex_0149_full_tool_taxonomy,
         )
     )
     if pair_local_codex_streaming_tools:

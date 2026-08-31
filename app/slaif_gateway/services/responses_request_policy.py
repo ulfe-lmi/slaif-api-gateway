@@ -205,6 +205,7 @@ class ResponsesRequestPolicy:
         allow_external_tool_request: bool = False,
         adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
         adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
+        codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     ) -> ResponsesPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
@@ -257,6 +258,18 @@ class ResponsesRequestPolicy:
                 "The 'model' field must be a non-empty string.",
             )
 
+        continuation_taxonomy = (
+            codex_top_level_tool_taxonomy
+            if (
+                allow_codex_request_envelope
+                and allow_codex_client_tools
+                and allow_codex_streaming_tool_events
+                and effective_body.get("stream") is True
+                and _input_contains_codex_tool_roundtrip(effective_body.get("input"))
+            )
+            else None
+        )
+
         canonical_input, input_material_bytes = self._validate_input(
             effective_body.get("input"),
             allow_codex_request_envelope=allow_codex_request_envelope,
@@ -265,6 +278,7 @@ class ResponsesRequestPolicy:
             allow_codex_encrypted_reasoning_replay=allow_codex_encrypted_reasoning_replay,
             allow_codex_compaction_replay=allow_codex_compaction_replay,
             codex_client_tool_taxonomy=codex_client_tool_taxonomy,
+            codex_top_level_tool_taxonomy=continuation_taxonomy,
         )
         effective_body["input"] = canonical_input
         instructions = self._validate_optional_string(
@@ -281,7 +295,10 @@ class ResponsesRequestPolicy:
                 "responses_conversation_previous_response_not_supported",
                 "Responses conversation and previous_response_id cannot be combined in this gateway.",
             )
-        if codex_replay_request_candidates(effective_body) and (
+        if codex_replay_request_candidates(
+            effective_body,
+            top_level_tool_taxonomy=continuation_taxonomy,
+        ) and (
             "conversation" in effective_body or "previous_response_id" in effective_body
         ):
             _raise(
@@ -613,6 +630,7 @@ class ResponsesRequestPolicy:
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_compaction_replay: bool = False,
         codex_client_tool_taxonomy: str | None = None,
+        codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -637,6 +655,7 @@ class ResponsesRequestPolicy:
                 allow_codex_encrypted_reasoning_replay=(allow_codex_encrypted_reasoning_replay),
                 allow_codex_compaction_replay=allow_codex_compaction_replay,
                 codex_client_tool_taxonomy=codex_client_tool_taxonomy,
+                codex_top_level_tool_taxonomy=codex_top_level_tool_taxonomy,
             )
 
         _raise(
@@ -856,6 +875,7 @@ class ResponsesRequestPolicy:
         allow_codex_encrypted_reasoning_replay: bool = False,
         allow_codex_compaction_replay: bool = False,
         codex_client_tool_taxonomy: str | None = None,
+        codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -963,15 +983,19 @@ class ResponsesRequestPolicy:
                 )
             canonical_items.append(canonical_item)
         if codex_tool_call_items and not codex_client_tool_items:
-            _raise(
-                "input",
-                "responses_codex_tool_roundtrip_invalid",
-                "Codex tool-call continuation requires the exact client-tool declarations.",
-            )
-        if codex_client_tool_items or codex_reasoning_items:
+            if codex_top_level_tool_taxonomy is None:
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool-call continuation requires the exact client-tool declarations.",
+                )
+        if codex_client_tool_items or codex_reasoning_items or (
+            codex_tool_call_items and codex_top_level_tool_taxonomy is not None
+        ):
             self._validate_codex_tool_roundtrip_items(
                 canonical_items,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
+                top_level_tool_taxonomy=codex_top_level_tool_taxonomy,
             )
         return canonical_items, total_material_bytes
 
@@ -1677,8 +1701,39 @@ class ResponsesRequestPolicy:
         items: list[dict[str, Any]],
         *,
         allow_codex_streaming_tool_events: bool,
+        top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     ) -> None:
-        declarations = _codex_declarations_from_input_items(items)
+        input_declarations = _codex_declarations_from_input_items(items)
+        if top_level_tool_taxonomy is not None:
+            if any(
+                not isinstance(declaration, tuple)
+                or len(declaration) != 3
+                or declaration[0] != "functions"
+                or not isinstance(declaration[1], str)
+                or not isinstance(declaration[2], str)
+                or declaration[2] not in {"function", "custom"}
+                or (
+                    _FUNCTION_TOOL_NAME_PATTERN.fullmatch(declaration[1]) is None
+                    if declaration[2] == "function"
+                    else _CUSTOM_TOOL_NAME_PATTERN.fullmatch(declaration[1]) is None
+                )
+                for declaration in top_level_tool_taxonomy
+            ):
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex top-level tool taxonomy is invalid.",
+                )
+            top_level_declarations = set(top_level_tool_taxonomy)
+            if input_declarations and input_declarations != top_level_declarations:
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool declaration sources conflict.",
+                )
+            declarations = input_declarations or top_level_declarations
+        else:
+            declarations = input_declarations
         calls: dict[str, tuple[str, str, str]] = {}
         outputs: dict[str, str] = {}
         item_ids: set[str] = set()
@@ -3953,15 +4008,25 @@ def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
 
 def codex_replay_request_candidates(
     body: Mapping[str, Any],
+    *,
+    top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
     """Extract only validated IDs and approved identities from canonical input."""
 
     input_value = body.get("input")
     if not isinstance(input_value, list):
         return ()
-    declarations = _codex_declarations_from_input_items(
+    input_declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
     )
+    if top_level_tool_taxonomy is not None:
+        _validate_top_level_tool_taxonomy(top_level_tool_taxonomy)
+        top_level_declarations = set(top_level_tool_taxonomy)
+        if input_declarations and input_declarations != top_level_declarations:
+            raise ValueError("codex_tool_declaration_sources_conflict")
+        declarations = input_declarations or top_level_declarations
+    else:
+        declarations = input_declarations
     candidates: list[CodexReplayRequestCandidate | CodexCompactionReplayCandidate] = []
     for item in input_value:
         if not isinstance(item, Mapping):
@@ -4025,6 +4090,26 @@ def codex_replay_request_candidates(
                 )
             )
     return tuple(candidates)
+
+
+def _validate_top_level_tool_taxonomy(
+    taxonomy: frozenset[tuple[str, str, str]],
+) -> None:
+    if not isinstance(taxonomy, frozenset) or any(
+        not isinstance(declaration, tuple)
+        or len(declaration) != 3
+        or declaration[0] != "functions"
+        or not isinstance(declaration[1], str)
+        or not isinstance(declaration[2], str)
+        or declaration[2] not in {"function", "custom"}
+        or (
+            _FUNCTION_TOOL_NAME_PATTERN.fullmatch(declaration[1]) is None
+            if declaration[2] == "function"
+            else _CUSTOM_TOOL_NAME_PATTERN.fullmatch(declaration[1]) is None
+        )
+        for declaration in taxonomy
+    ):
+        raise ValueError("codex_top_level_tool_taxonomy_invalid")
 
 
 def responses_codex_client_tools_allowed(policy: object) -> bool:
@@ -4454,6 +4539,31 @@ def _input_contains_function_call_output(value: Any) -> bool:
         if isinstance(item, Mapping) and item.get("type") == "function_call_output":
             return True
     return False
+
+
+def _input_contains_codex_tool_roundtrip(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    item_types = [
+        item.get("type")
+        for item in value
+        if isinstance(item, Mapping)
+    ]
+    function_pair_count = sum(
+        item_types[index : index + 2] == ["function_call", "function_call_output"]
+        for index in range(len(item_types) - 1)
+    )
+    custom_pair_count = sum(
+        item_types[index : index + 2]
+        == ["custom_tool_call", "custom_tool_call_output"]
+        for index in range(len(item_types) - 1)
+    )
+    return function_pair_count == 1 and custom_pair_count == 0
+
+
+def responses_codex_tool_roundtrip_requested(body: Mapping[str, Any]) -> bool:
+    """Detect one adjacent Codex call/output continuation pair."""
+    return body.get("stream") is True and _input_contains_codex_tool_roundtrip(body.get("input"))
 
 
 def _input_contains_custom_tool_call_output(value: Any) -> bool:

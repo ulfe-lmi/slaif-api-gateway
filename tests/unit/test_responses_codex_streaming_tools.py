@@ -12,8 +12,13 @@ from pathlib import Path
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_CLIENT_MODULE_ID,
+    CODEX_0149_POLICY_SPEC,
+    codex_0149_declared_tool_taxonomy,
+)
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
-from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_ID
+from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
@@ -28,6 +33,7 @@ from slaif_gateway.services.codex_replay_service import CodexReplayReferenceErro
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_client_tool_declarations,
+    codex_replay_request_candidates,
     responses_codex_streaming_tool_events_allowed,
 )
 from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
@@ -37,6 +43,7 @@ from slaif_gateway.services.responses_gateway import (
 from slaif_gateway.services.responses_request_policy import (
     responses_codex_client_tools_requested,
     responses_codex_streaming_tool_events_requested,
+    responses_codex_tool_roundtrip_requested,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
@@ -69,6 +76,10 @@ DECLARATIONS = frozenset(
 
 def _policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+def _policy_0149(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -279,6 +290,198 @@ def test_codex_0149_top_level_tools_activate_only_after_exact_local_resolution()
     )
     assert non_local_declarations == frozenset()
     assert non_local_streaming is False
+
+
+def test_codex_0149_top_level_taxonomy_validates_continuation_and_replay() -> None:
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "name": "wait",
+        "arguments": '{"value":"ok"}',
+        "call_id": "call_1",
+    }
+    output = {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [call, output],
+        "tools": [_function("wait")],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    policy = _policy_0149(Settings())
+    result = policy.apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    candidates = codex_replay_request_candidates(
+        result.effective_body,
+        top_level_tool_taxonomy=taxonomy,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "function_call"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+            codex_top_level_tool_taxonomy=frozenset({("functions", "other", "function")}),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [output, call],
+            },
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_codex_0149_continuation_detector_rejects_custom_or_multiple_pairs() -> None:
+    call = {"type": "function_call"}
+    output = {"type": "function_call_output"}
+    body = {"input": [call, output], "stream": True}
+    assert responses_codex_tool_roundtrip_requested(body)
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, output, call, output], "stream": True}
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {
+            "input": [
+                {"type": "custom_tool_call"},
+                {"type": "custom_tool_call_output"},
+            ],
+            "stream": True,
+        }
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, {"type": "message"}, output], "stream": True}
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, output], "stream": False}
+    )
+    assert not responses_codex_tool_roundtrip_requested({"input": [call, output]})
+
+
+def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_authority() -> None:
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "name": "wait",
+        "arguments": '{"value":"ok"}',
+        "call_id": "call_1",
+    }
+    output = {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [call, output],
+        "tools": [_function("wait")],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    policy = _policy_0149(Settings())
+    common = {
+        "allow_codex_request_envelope": True,
+        "allow_codex_client_tools": True,
+        "allow_codex_streaming_tool_events": True,
+        "adapter_managed_declaration_candidates": frozenset({"tool_search"}),
+    }
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(body, **common)
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **common,
+            codex_top_level_tool_taxonomy=frozenset(
+                {("functions", "not_declared", "function")}
+            ),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [
+                    {"type": "additional_tools", "role": "developer", "tools": []},
+                    call,
+                    output,
+                ],
+            },
+            **common,
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **{**common, "allow_codex_streaming_tool_events": False},
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_input_tool_item_not_supported"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [call, {**output, "call_id": "call_other"}],
+            },
+            **common,
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(ModuleSelectionError):
+        codex_0149_declared_tool_taxonomy(
+            {**body, "tools": [_function("wait"), _function("wait")]}
+        )
+
+    with pytest.raises(ValueError, match="codex_top_level_tool_taxonomy_invalid"):
+        codex_replay_request_candidates(
+            body,
+            top_level_tool_taxonomy=frozenset({("functions", "bad/name", "function")}),
+        )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **common,
+            codex_top_level_tool_taxonomy=frozenset(
+                {("functions", "wait", "function"), ("collaboration", "wait", "function")}
+            ),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
 
 
 def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
