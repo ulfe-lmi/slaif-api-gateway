@@ -247,7 +247,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md",
+        "oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
