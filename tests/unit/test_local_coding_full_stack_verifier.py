@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155u_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155v_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
     current_head = "current-155r-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
+    report_path = "oap/reports/155-u-evidence-lifecycle-and-protected-tool-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155u_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md"
+            return "oap/active\noap/orders/155-v-failure-localization-summary-and-protected-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155u_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155u_topology_anchors_are_the_155t_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "9046ccda503d0393ab5df155fdf028810d1726f5"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "bb45e0813a15b41541c5b1ef48537fa835995106"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "19d4b2f3d8ea7c26980eaab5f60b1125d0bd4cc8"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
+def test_155v_topology_anchors_are_the_155u_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "5cc47a716d3a426ea0f87882951a1491c810dae7"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "a3af8dca0f40c5a67b57556db25cb8d4e5c83828"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "4e9a6bd5281f691b6e446b5e70a771d4ee1e19f5"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-u-evidence-lifecycle-and-protected-tool-closure.md"
 
 
-def test_155u_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155v_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -606,15 +606,30 @@ def test_sanitized_rejection_survives_composed_cleanup_and_absent_reread(
     monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
     monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
     monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="unclassified",
+        gateway_requests=0,
+        gateway_status={},
+        local_requests=0,
+        local_status={},
+        qwen_status={},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=rejection,
+        artifact_equal=True,
+    )
     monkeypatch.setattr(
         verifier,
         "_run_composed_stream_diagnostic",
         lambda *_args, **_kwargs: {
             "codex_exit_success": False,
             "qualification_rejection": rejection,
+            "qualification_summary": summary,
         },
     )
     monkeypatch.setattr(verifier, "_read_qualification_rejection", lambda _root: None)
+    monkeypatch.setattr(verifier, "_read_preclassification_summary", lambda _root: summary)
     result = verifier._run_dedicated_codex_tool_roundtrip(
         fake_qwen=True,
         qualification_hook=True,
@@ -684,14 +699,270 @@ def test_qualification_cli_returns_failure_for_safe_rejection(
         },
         "rejection": {"outcome": "validator_rejected", "code": "other"},
     }
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="unclassified",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [400]},
+        local_requests=0,
+        local_status={},
+        qwen_status={},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=rejection,
+        artifact_equal=True,
+    )
     monkeypatch.setattr(
         verifier,
         "run_codex_tool_roundtrip_qualification",
-        lambda **_kwargs: {"qualification_rejection": rejection},
+        lambda **_kwargs: {"qualification_rejection": rejection, "qualification_summary": summary},
     )
     monkeypatch.setattr(sys, "argv", ["verify", "--tool-roundtrip-qualification"])
     assert verifier.main() == 1
     assert capsys.readouterr().out.startswith("QUALIFICATION=REJECTED ")
+
+
+def test_preclassification_summary_write_read_handles_short_writes_and_qwen_stream_facts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="mock_http_status_rejected",
+        gateway_requests=2,
+        gateway_status={"response_statuses": [200, 503], "response_content_type_classes": ["sse", "json"]},
+        local_requests=2,
+        local_status={"response_statuses": [200, 503], "response_content_type_classes": ["sse", "json"]},
+        qwen_status={
+            "inference_calls": 2,
+            "inference_statuses": [200, 503],
+            "inference_content_type_classes": ["sse", "json"],
+            "path_rejections": 0,
+            "stream_normal_close": True,
+        },
+        request_projections=[],
+        accounting_statuses={
+            "query_ok": True,
+            "reservation_finalized": 1,
+            "reservation_released": 1,
+            "reservation_pending": 0,
+            "ledger_finalized": 1,
+            "ledger_failed": 1,
+            "ledger_estimated": 0,
+            "ledger_pending": 0,
+        },
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    original_write = verifier.os.write
+
+    def short_write(fd: int, payload: bytes) -> int:
+        return original_write(fd, payload[:1])
+
+    monkeypatch.setattr(verifier.os, "write", short_write)
+    assert verifier._write_preclassification_summary(tmp_path, summary) == summary
+    assert verifier._read_preclassification_summary(tmp_path) == summary
+    assert summary["qwen"]["normal_close"] is True
+    assert summary["qwen"]["content_type_classes"] == ["sse", "json"]
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {},
+        {"gateway_statuses": ["bad"]},
+        {"qwen_status": {"inference_statuses": [None]}},
+        {"accounting_statuses": {"reservation_finalized": {"raw": "value"}}},
+        {"request_projections": [{"unexpected": "private"}]},
+    ],
+)
+def test_failure_localizer_totalizes_partial_safe_facts_without_keyerror(
+    facts: dict[str, object],
+) -> None:
+    base: dict[str, object] = {
+        "codex_failure_category": "unclassified",
+        "gateway_requests": 1,
+        "gateway_statuses": [200],
+        "gateway_structures": [],
+        "local_requests": 0,
+        "local_statuses": [],
+        "request_projections": [],
+        "gateway_error_code_classes": [],
+        "gateway_error_param_classes": [],
+        "qwen_status": {},
+        "fake_status": {},
+        "accounting_statuses": {},
+    }
+    base.update(facts)
+    assert isinstance(verifier._localize_composed_codex_failure(**base), str)
+
+
+def test_fake_provider_failure_mode_is_opt_in_and_counts_inference_only() -> None:
+    fake, thread, token = verifier._start_fake_qwen(
+        tool_roundtrip_mode=True, provider_failure_mode=True
+    )
+    try:
+        response = verifier.httpx.post(
+            f"http://127.0.0.1:{fake.server_address[1]}/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": verifier.CODEX_MODEL, "stream": True},
+            timeout=5,
+        )
+        assert response.status_code == 503
+        status = fake.status()
+        assert status["provider_failure_mode"] is True
+        assert status["inference_calls"] == 1
+        assert status["tool_roundtrip_turns"] == 0
+    finally:
+        fake.shutdown()
+        fake.server_close()
+        thread.join(timeout=5)
+
+
+def test_summary_only_cli_evidence_is_nonzero_and_safe(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="loopback_request_failed",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [502]},
+        local_requests=1,
+        local_status={"response_statuses": [502]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [503]},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "run_codex_tool_roundtrip_qualification",
+        lambda **_kwargs: {
+            "codex_exit_success": False,
+            "qualification_rejection": None,
+            "qualification_summary": summary,
+            "failure_code": "composed_tool_roundtrip_first_qwen_rejection",
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["verify", "--tool-roundtrip-qualification"])
+    assert verifier.main() == 1
+    output = capsys.readouterr().out
+    assert output.startswith("QUALIFICATION=FAILED ")
+    assert "qualification_summary" not in output
+    assert "private" not in output
+    assert '"summary"' in output
+
+
+def test_outer_dedicated_runner_retains_summary_after_localizer_exception(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="unclassified",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [502]},
+        local_requests=1,
+        local_status={"response_statuses": [502]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [503]},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
+    monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+
+    def fail_after_summary(root: Path, *_args: object, **_kwargs: object) -> dict[str, object]:
+        verifier._write_preclassification_summary(root, summary)
+        raise KeyError("private diagnostic value")
+
+    monkeypatch.setattr(verifier, "_run_composed_stream_diagnostic", fail_after_summary)
+    result = verifier._run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True, qualification_hook=True
+    )
+    assert result["codex_exit_success"] is False
+    assert result["failure_code"] == "qualification_failure_localization"
+    assert result["qualification_rejection"] is None
+    assert result["qualification_summary"] == summary
+
+    monkeypatch.setattr(
+        verifier, "run_codex_tool_roundtrip_qualification", lambda **_kwargs: result
+    )
+    monkeypatch.setattr(sys, "argv", ["verify", "--tool-roundtrip-qualification"])
+    assert verifier.main() == 1
+    output = capsys.readouterr().out
+    assert output.startswith("QUALIFICATION=FAILED ")
+    assert "private diagnostic value" not in output
+
+
+def test_outer_dedicated_runner_adopts_summary_from_normal_failure_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="mock_response_failed",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [502]},
+        local_requests=1,
+        local_status={"response_statuses": [502]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [503]},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
+    monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(
+        verifier,
+        "_run_composed_stream_diagnostic",
+        lambda *_args, **_kwargs: {"codex_exit_success": False, "failure_code": "safe_failure"},
+    )
+    monkeypatch.setattr(verifier, "_read_preclassification_summary", lambda _root: summary)
+    result = verifier._run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True, qualification_hook=True
+    )
+    assert result["codex_exit_success"] is False
+    assert result["qualification_summary"] == summary
+
+
+@pytest.mark.parametrize(
+    ("marker", "category"),
+    [
+        (b"unknown variant `disabled`", "web_search_config_rejected"),
+        (b"error loading config", "configuration_rejected"),
+        (b"usage: codex exec", "argument_rejected"),
+        (b"missing environment variable", "dummy_auth_environment_rejected"),
+        (b"internal app-server channel closed", "app_server_channel_closed"),
+        (b"error sending request for url", "loopback_request_failed"),
+    ],
+)
+def test_summary_preserves_every_known_codex_failure_category(
+    marker: bytes, category: str
+) -> None:
+    import scripts.capture_codex_protocol as capture
+
+    assert capture.classify_codex_failure(marker) == category
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_codex_failure_projection",
+        codex_failure_category=category,
+        gateway_requests=0,
+        gateway_status={},
+        local_requests=0,
+        local_status={},
+        qwen_status={},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    assert summary["codex_failure_category"] == category
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-u verifier for Codex envelope and function-call qualification.
+"""Bounded 155-v verifier for Codex failure localization and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "9046ccda503d0393ab5df155fdf028810d1726f5"
-GATEWAY_IMPLEMENTATION_HEAD = "bb45e0813a15b41541c5b1ef48537fa835995106"
-GATEWAY_ACTIVATION_HEAD = "19d4b2f3d8ea7c26980eaab5f60b1125d0bd4cc8"
-GATEWAY_REPORT_PATH = "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
+GATEWAY_REPORT_HEAD = "5cc47a716d3a426ea0f87882951a1491c810dae7"
+GATEWAY_IMPLEMENTATION_HEAD = "a3af8dca0f40c5a67b57556db25cb8d4e5c83828"
+GATEWAY_ACTIVATION_HEAD = "4e9a6bd5281f691b6e446b5e70a771d4ee1e19f5"
+GATEWAY_REPORT_PATH = "oap/reports/155-u-evidence-lifecycle-and-protected-tool-closure.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md"
-TASK_DB = "slaif_gateway_oap_155u_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-v-failure-localization-summary-and-protected-closure.md"
+TASK_DB = "slaif_gateway_oap_155v_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -62,11 +62,13 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
-QUALIFICATION_HOOK_ENV = "SLAIF_155U_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155U_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155U_REJECTION_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155V_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155V_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155V_REJECTION_ROOT"
 QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
+QUALIFICATION_SUMMARY_NAME = "qualification-summary.json"
 QUALIFICATION_MAX_BYTES = 64 * 1024
+QUALIFICATION_SUMMARY_MAX_BYTES = 16 * 1024
 QUALIFICATION_MAX_FIELDS = 32
 QUALIFICATION_FIELD_TYPES = frozenset(
     {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
@@ -90,6 +92,10 @@ COMPOSITION_STAGES = (
     "gateway_health", "gateway_models", "ordinary_response", "stream_response",
     "client_stream", "boundary_capture",
     "tool_codex_execution", "tool_roundtrip_failure_localization",
+    "tool_roundtrip_codex_failure_projection", "tool_roundtrip_gateway_snapshot",
+    "tool_roundtrip_local_snapshot", "tool_roundtrip_qwen_projection",
+    "tool_roundtrip_request_projection", "tool_roundtrip_accounting_projection",
+    "tool_roundtrip_qualification_artifact", "tool_roundtrip_failure_decision",
     "tool_roundtrip_boundary_capture", "tool_roundtrip_privacy_aliases",
     "tool_roundtrip_signed_identity_headers", "tool_roundtrip_signed_key_forwarding",
     "tool_roundtrip_sse_validation",
@@ -247,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md",
+        "oap/orders/155-v-failure-localization-summary-and-protected-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -298,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-v-failure-localization-summary-and-protected-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-u\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-v\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -984,6 +990,373 @@ def _retain_sanitized_qualification_rejection(
         retained = reread
     result["qualification_rejection"] = retained
     return result
+
+
+_SUMMARY_SCHEMA = "qualification_preclassification_v1"
+_SUMMARY_STAGES = frozenset(COMPOSITION_STAGES)
+_SUMMARY_FAILURE_CATEGORIES = frozenset(
+    {
+        "configuration_rejected",
+        "argument_rejected",
+        "argument_separator_rejected",
+        "argument_or_configuration_rejected",
+        "dummy_auth_environment_rejected",
+        "workdir_rejected",
+        "custom_provider_auth_rejected",
+        "loopback_connection_failed",
+        "loopback_request_failed",
+        "web_search_config_rejected",
+        "app_server_channel_closed",
+        "mock_stream_rejected",
+        "mock_stream_closed_early",
+        "mock_stream_idle_timeout",
+        "mock_completed_event_rejected",
+        "mock_response_failed",
+        "mock_http_status_rejected",
+        "incomplete_event_sequence",
+        "turn_failed",
+        "error_event",
+        "nonzero_after_turn_completed",
+        "unclassified",
+        "other",
+    }
+)
+_SUMMARY_STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "other"})
+_SUMMARY_CONTENT_TYPES = frozenset({"sse", "json", "other", "none"})
+_SUMMARY_BOOL_KEYS = frozenset(
+    {
+        "disconnect",
+        "truncated",
+        "handler_error",
+        "path_error",
+        "normal_close",
+        "zero_pending",
+        "query_ok",
+        "artifact_present",
+        "artifact_equal",
+        "artifact_digest_present",
+    }
+)
+_SUMMARY_COUNT_KEYS = frozenset(
+    {
+        "request_count",
+        "response_count",
+        "inference_count",
+        "row_count",
+        "reservation_finalized",
+        "reservation_released",
+        "reservation_pending",
+        "ledger_finalized",
+        "ledger_failed",
+        "ledger_estimated",
+        "ledger_pending",
+    }
+)
+_SUMMARY_BOUNDARIES = frozenset({"gateway", "local", "qwen", "accounting"})
+
+
+def _safe_summary_count(value: object) -> str:
+    if type(value) is int and 0 <= value <= 2:
+        return str(value)
+    return "other"
+
+
+def _safe_summary_status_classes(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value[:8]:
+        if type(item) is int and 100 <= item <= 599:
+            result.append(f"{item // 100}xx")
+        else:
+            result.append("other")
+    return result
+
+
+def _safe_summary_content_classes(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item if item in _SUMMARY_CONTENT_TYPES else "other" for item in value[:8]]
+
+
+def _safe_summary_bool(value: object) -> bool:
+    return value is True
+
+
+def _safe_summary_section(
+    *,
+    request_count: object,
+    response_statuses: object,
+    content_types: object,
+    booleans: dict[str, object],
+) -> dict[str, object]:
+    section: dict[str, object] = {
+        "request_count": _safe_summary_count(request_count),
+        "response_count": _safe_summary_count(
+            len(response_statuses) if isinstance(response_statuses, list) else "other"
+        ),
+        "status_classes": _safe_summary_status_classes(response_statuses),
+        "content_type_classes": _safe_summary_content_classes(content_types),
+    }
+    for name in sorted(_SUMMARY_BOOL_KEYS & set(booleans)):
+        section[name] = _safe_summary_bool(booleans[name])
+    return section
+
+
+def _safe_preclassification_summary(
+    *,
+    stage: object,
+    codex_failure_category: object,
+    gateway_requests: object,
+    gateway_status: object,
+    local_requests: object,
+    local_status: object,
+    qwen_status: object,
+    request_projections: object,
+    accounting_statuses: object,
+    qualification_rejection: object,
+    artifact_equal: object,
+) -> dict[str, object]:
+    gateway = gateway_status if isinstance(gateway_status, dict) else {}
+    local = local_status if isinstance(local_status, dict) else {}
+    qwen = qwen_status if isinstance(qwen_status, dict) else {}
+    accounting = accounting_statuses if isinstance(accounting_statuses, dict) else {}
+    category = (
+        codex_failure_category
+        if isinstance(codex_failure_category, str)
+        and codex_failure_category in _SUMMARY_FAILURE_CATEGORIES
+        else "other"
+    )
+    safe_stage = stage if isinstance(stage, str) and stage in _SUMMARY_STAGES else "other"
+    projections = request_projections if isinstance(request_projections, list) else []
+    profile = (
+        _safe_roundtrip_projection_class(projections[0])
+        if projections
+        else "other"
+    )
+    accounting_section = {
+        "query_ok": accounting.get("query_ok") is True,
+        "row_count": _safe_summary_count(
+            accounting.get("reservation_finalized", 0)
+            + accounting.get("reservation_released", 0)
+            if all(
+                type(accounting.get(name)) is int
+                for name in ("reservation_finalized", "reservation_released")
+            )
+            else "other"
+        ),
+    }
+    for name in sorted(
+        {
+            "reservation_finalized",
+            "reservation_released",
+            "reservation_pending",
+            "ledger_finalized",
+            "ledger_failed",
+            "ledger_estimated",
+            "ledger_pending",
+        }
+    ):
+        accounting_section[name] = _safe_summary_count(accounting.get(name, "other"))
+    accounting_section["zero_pending"] = all(
+        accounting_section[name] == "0"
+        for name in ("reservation_pending", "ledger_pending")
+    )
+    return {
+        "schema": _SUMMARY_SCHEMA,
+        "stage": safe_stage,
+        "codex_failure_category": category,
+        "gateway": _safe_summary_section(
+            request_count=gateway_requests,
+            response_statuses=gateway.get("response_statuses"),
+            content_types=gateway.get("response_content_type_classes"),
+            booleans={
+                "disconnect": gateway.get("downstream_closed_early"),
+                "truncated": gateway.get("upstream_truncated"),
+                "handler_error": gateway.get("handler_error"),
+            },
+        ),
+        "local": _safe_summary_section(
+            request_count=local_requests,
+            response_statuses=local.get("response_statuses"),
+            content_types=local.get("response_content_type_classes"),
+            booleans={
+                "disconnect": local.get("downstream_closed_early"),
+                "truncated": local.get("upstream_truncated"),
+                "handler_error": local.get("handler_error"),
+            },
+        ),
+        "qwen": {
+            "inference_count": _safe_summary_count(qwen.get("inference_calls")),
+            "status_classes": _safe_summary_status_classes(
+                qwen.get("inference_statuses")
+            ),
+            "content_type_classes": _safe_summary_content_classes(
+                qwen.get("inference_content_type_classes")
+            ),
+            "path_error": qwen.get("path_rejections") not in (0, False),
+            "normal_close": qwen.get("stream_normal_close") is True,
+            "handler_error": qwen.get("handler_error") is True,
+            "truncated": qwen.get("upstream_truncated") is True,
+        },
+        "request_profile_class": profile,
+        "qualification_rejection": {
+            "present": isinstance(qualification_rejection, dict),
+            "artifact_equal": artifact_equal is True,
+            "artifact_digest_present": isinstance(qualification_rejection, dict),
+        },
+        "accounting": accounting_section,
+    }
+
+
+def _validate_task_summary_root(root: Path) -> None:
+    try:
+        root_stat = root.lstat()
+        common = os.path.commonpath((str(root.resolve()), "/tmp"))
+    except (OSError, ValueError) as exc:
+        raise VerificationError("qualification_summary_root_invalid") from exc
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_IMODE(root_stat.st_mode) != 0o700
+        or root_stat.st_uid != os.getuid()
+        or common != "/tmp"
+        or root.is_symlink()
+    ):
+        raise VerificationError("qualification_summary_root_invalid")
+
+
+def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "stage", "codex_failure_category", "gateway", "local", "qwen",
+        "request_profile_class", "qualification_rejection", "accounting",
+    }:
+        raise VerificationError("qualification_summary_invalid")
+    if value["schema"] != _SUMMARY_SCHEMA:
+        raise VerificationError("qualification_summary_invalid")
+    if value["stage"] not in _SUMMARY_STAGES or value["codex_failure_category"] not in _SUMMARY_FAILURE_CATEGORIES:
+        raise VerificationError("qualification_summary_invalid")
+    if value["request_profile_class"] not in {
+        "top_level_function_pair_without_additional_tools", "other"
+    }:
+        raise VerificationError("qualification_summary_invalid")
+    for boundary in ("gateway", "local"):
+        section = value[boundary]
+        if not isinstance(section, dict) or set(section) - {
+            "request_count", "response_count", "status_classes", "content_type_classes",
+            "disconnect", "truncated", "handler_error",
+        }:
+            raise VerificationError("qualification_summary_invalid")
+        if any(
+            section.get(name) not in {"0", "1", "2", "other"}
+            for name in ("request_count", "response_count")
+        ) or not isinstance(section.get("status_classes"), list) or not isinstance(section.get("content_type_classes"), list):
+            raise VerificationError("qualification_summary_invalid")
+        if any(item not in _SUMMARY_STATUS_CLASSES for item in section["status_classes"]):
+            raise VerificationError("qualification_summary_invalid")
+        if any(item not in _SUMMARY_CONTENT_TYPES for item in section["content_type_classes"]):
+            raise VerificationError("qualification_summary_invalid")
+        if any(type(section.get(name)) is not bool for name in ("disconnect", "truncated", "handler_error")):
+            raise VerificationError("qualification_summary_invalid")
+    qwen = value["qwen"]
+    if not isinstance(qwen, dict) or set(qwen) != {
+        "inference_count", "status_classes", "content_type_classes", "path_error",
+        "normal_close", "handler_error", "truncated",
+    }:
+        raise VerificationError("qualification_summary_invalid")
+    if qwen["inference_count"] not in {"0", "1", "2", "other"} or any(
+        item not in _SUMMARY_STATUS_CLASSES for item in qwen["status_classes"]
+    ) or any(item not in _SUMMARY_CONTENT_TYPES for item in qwen["content_type_classes"]):
+        raise VerificationError("qualification_summary_invalid")
+    if any(type(qwen[name]) is not bool for name in ("path_error", "normal_close", "handler_error", "truncated")):
+        raise VerificationError("qualification_summary_invalid")
+    rejection = value["qualification_rejection"]
+    if not isinstance(rejection, dict) or set(rejection) != {"present", "artifact_equal", "artifact_digest_present"} or any(type(rejection[name]) is not bool for name in rejection):
+        raise VerificationError("qualification_summary_invalid")
+    accounting = value["accounting"]
+    accounting_names = {
+        "query_ok", "row_count", "reservation_finalized", "reservation_released",
+        "reservation_pending", "ledger_finalized", "ledger_failed", "ledger_estimated",
+        "ledger_pending", "zero_pending",
+    }
+    if not isinstance(accounting, dict) or set(accounting) != accounting_names:
+        raise VerificationError("qualification_summary_invalid")
+    if any(accounting[name] not in {"0", "1", "2", "other"} for name in accounting_names - {"query_ok", "zero_pending"}) or any(type(accounting[name]) is not bool for name in ("query_ok", "zero_pending")):
+        raise VerificationError("qualification_summary_invalid")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def _write_preclassification_summary(root: Path, summary: object) -> dict[str, object]:
+    _validate_task_summary_root(root)
+    safe = _sanitize_preclassification_summary(summary)
+    payload = json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    if len(payload) > QUALIFICATION_SUMMARY_MAX_BYTES:
+        raise VerificationError("qualification_summary_too_large")
+    path = root / QUALIFICATION_SUMMARY_NAME
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o600)
+        try:
+            offset = 0
+            while offset < len(payload):
+                written = os.write(fd, payload[offset:])
+                if written <= 0:
+                    raise OSError("short summary write")
+                offset += written
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.chmod(path, 0o600, follow_symlinks=False)
+        directory_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except FileExistsError as exc:
+        raise VerificationError("qualification_summary_overwrite") from exc
+    except (OSError, ValueError) as exc:
+        raise VerificationError("qualification_summary_write_failed") from exc
+    return safe
+
+
+def _read_preclassification_summary(root: Path) -> dict[str, object] | None:
+    _validate_task_summary_root(root)
+    path = root / QUALIFICATION_SUMMARY_NAME
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise VerificationError("qualification_summary_invalid") from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_uid != os.getuid()
+        or path.is_symlink()
+    ):
+        raise VerificationError("qualification_summary_invalid")
+    try:
+        payload = path.read_bytes()
+        if len(payload) > QUALIFICATION_SUMMARY_MAX_BYTES:
+            raise VerificationError("qualification_summary_too_large")
+        return _sanitize_preclassification_summary(json.loads(payload))
+    except VerificationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError("qualification_summary_invalid") from exc
+
+
+def _safe_qualification_failure_code(exception: BaseException) -> str:
+    """Return a fixed code without exposing arbitrary exception text."""
+    if isinstance(exception, VerificationError):
+        candidate = str(exception)
+        if (
+            re.fullmatch(r"[a-z0-9_]{1,128}", candidate) is not None
+            and candidate.startswith(("qualification_", "composed_tool_roundtrip_", "unexpected_"))
+        ):
+            return candidate
+    return "qualification_failure_localization"
 
 
 def _qualification_count_class(value: object) -> str:
@@ -2684,11 +3057,13 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
         *,
         tool_roundtrip_mode: bool = False,
         qualification_rejection_mode: bool = False,
+        provider_failure_mode: bool = False,
     ) -> None:
         super().__init__(server_address, _FakeQwenHandler)
         self.token = token
         self.tool_roundtrip_mode = tool_roundtrip_mode
         self.qualification_rejection_mode = qualification_rejection_mode
+        self.provider_failure_mode = provider_failure_mode
         self.calls = 0
         self.compiler_calls = 0
         self.inference_calls = 0
@@ -2728,6 +3103,7 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
                 "stream_calls": self.stream_calls,
                 "tool_roundtrip_mode": self.tool_roundtrip_mode,
                 "qualification_rejection_mode": self.qualification_rejection_mode,
+                "provider_failure_mode": self.provider_failure_mode,
                 "tool_roundtrip_turns": self.tool_roundtrip_turns,
                 "tool_result_observed": self.tool_result_observed,
                 "function_lifecycle_count": self.function_lifecycle_count,
@@ -3347,6 +3723,9 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/v1/responses":
             streaming = payload.get("stream") is True
             self.server.record(compiler=False, streaming=streaming)
+            if self.server.provider_failure_mode:
+                self._json(503, {"error": {"code": "provider_transport_failure"}})
+                return
             if streaming:
                 self._stream(payload)
             else:
@@ -3391,6 +3770,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.stream_first_event_before_upstream_completion = False
         self.stream_normal_close = False
         self.sse_content_type_classes: list[str] = []
+        self.inference_content_type_classes: list[str] = []
         self.downstream_closed_early = False
         self.upstream_truncated = False
         self.handler_error = False
@@ -3488,15 +3868,18 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         with self._lock:
             self.sse_structures.append(structure)
 
-    def remember_content_type(self, content_type: str) -> None:
+    def remember_content_type(self, content_type: str, *, inference: bool = False) -> None:
         with self._lock:
-            self.sse_content_type_classes.append(
+            content_type_class = (
                 "sse"
                 if content_type.startswith("text/event-stream")
                 else "json"
                 if "json" in content_type
                 else "other"
             )
+            self.sse_content_type_classes.append(content_type_class)
+            if inference:
+                self.inference_content_type_classes.append(content_type_class)
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -3522,6 +3905,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "stream_normal_close": self.stream_normal_close,
                 "sse_structures": list(self.sse_structures),
                 "sse_content_type_classes": list(self.sse_content_type_classes),
+                "inference_content_type_classes": list(self.inference_content_type_classes),
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -3600,7 +3984,8 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
             with httpx.Client(timeout=300, follow_redirects=False) as client:
                 with client.stream(method, target, headers=outbound_headers, content=body) as response:
                     self.server.remember_content_type(
-                        response.headers.get("content-type", "").lower()
+                        response.headers.get("content-type", "").lower(),
+                        inference=inference,
                     )
                     recorder = (
                         _SSEStructuralRecorder()
@@ -3806,7 +4191,10 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
 
 
 def _start_fake_qwen(
-    *, tool_roundtrip_mode: bool = False, qualification_rejection_mode: bool = False
+    *,
+    tool_roundtrip_mode: bool = False,
+    qualification_rejection_mode: bool = False,
+    provider_failure_mode: bool = False,
 ) -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
     server = _FakeQwenServer(
@@ -3814,6 +4202,7 @@ def _start_fake_qwen(
         token,
         tool_roundtrip_mode=tool_roundtrip_mode,
         qualification_rejection_mode=qualification_rejection_mode,
+        provider_failure_mode=provider_failure_mode,
     )
     thread = threading.Thread(target=server.serve_forever, name="155r-fake-qwen", daemon=True)
     thread.start()
@@ -5395,19 +5784,25 @@ def _run_composed_codex_tool_roundtrip(
         timeout=180,
     )
     if result.returncode != 0:
-        tracker.set("tool_roundtrip_failure_localization")
+        tracker.set("tool_roundtrip_codex_failure_projection")
         codex_failure_category = capture.classify_codex_failure(
             result.stderr, result.stdout
         )
+        tracker.set("tool_roundtrip_gateway_snapshot")
         gateway_status = gateway_output.status()
+        gateway_requests = gateway_output.snapshot()
+        tracker.set("tool_roundtrip_local_snapshot")
         local_status = relay.status()
+        local_requests_snapshot = relay.snapshot()
+        tracker.set("tool_roundtrip_qwen_projection")
         qwen_status = _qwen_relay_status(qwen_port)
         fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
-        gateway_requests = gateway_output.snapshot()
+        tracker.set("tool_roundtrip_request_projection")
         request_projections = [
             _safe_roundtrip_request_projection(request.body)
             for request in gateway_requests
         ]
+        tracker.set("tool_roundtrip_accounting_projection")
         try:
             accounting_statuses = asyncio.run(
                 _safe_roundtrip_accounting_status_counts(postgres_url, key)
@@ -5423,12 +5818,32 @@ def _run_composed_codex_tool_roundtrip(
                 "ledger_estimated": 0,
                 "ledger_pending": 0,
             }
+        tracker.set("tool_roundtrip_qualification_artifact")
+        qualification_rejection = (
+            _read_qualification_rejection(root) if qualification_hook else None
+        )
+        if qualification_hook:
+            summary = _safe_preclassification_summary(
+                stage=tracker.current,
+                codex_failure_category=codex_failure_category,
+                gateway_requests=len(gateway_requests),
+                gateway_status=gateway_status,
+                local_requests=len(local_requests_snapshot),
+                local_status=local_status,
+                qwen_status=qwen_status,
+                request_projections=request_projections,
+                accounting_statuses=accounting_statuses,
+                qualification_rejection=qualification_rejection,
+                artifact_equal=qualification_rejection is not None,
+            )
+            _write_preclassification_summary(root, summary)
+        tracker.set("tool_roundtrip_failure_decision")
         failure_code = _localize_composed_codex_failure(
             codex_failure_category=codex_failure_category,
-            gateway_requests=len(gateway_output.snapshot()),
+            gateway_requests=len(gateway_requests),
             gateway_statuses=gateway_status.get("response_statuses"),
             gateway_structures=gateway_status.get("sse_structures"),
-            local_requests=len(relay.snapshot()),
+            local_requests=len(local_requests_snapshot),
             local_statuses=local_status.get("response_statuses"),
             request_projections=request_projections,
             gateway_error_code_classes=gateway_status.get("error_code_classes"),
@@ -5437,11 +5852,8 @@ def _run_composed_codex_tool_roundtrip(
             fake_status=fake_status,
             accounting_statuses=accounting_statuses,
         )
-        qualification_rejection = (
-            _read_qualification_rejection(root) if qualification_hook else None
-        )
-        if qualification_hook and qualification_rejection is not None:
-            local_requests = relay.snapshot()
+        if qualification_hook:
+            local_requests = local_requests_snapshot
             turn_counts = (
                 len(gateway_requests),
                 len(local_requests),
@@ -5494,6 +5906,11 @@ def _run_composed_codex_tool_roundtrip(
                 ],
                 "accounting_ledger_failed": qualification_accounting["ledger_failed"],
                 "failure_code": failure_code,
+                "qualification_summary": (
+                    _read_preclassification_summary(root)
+                    if qualification_hook
+                    else None
+                ),
             }
         del accounting_statuses, codex_failure_category, request_projections
         raise VerificationError(failure_code)
@@ -5748,95 +6165,122 @@ def _localize_composed_codex_failure(
         "incomplete_event_sequence",
     }
 
-    def statuses(value: object) -> list[int]:
-        return [status for status in value if type(status) is int] if isinstance(value, list) else []
+    def bounded_count(value: object) -> int | None:
+        return value if type(value) is int and 0 <= value <= 2 else None
 
+    def statuses(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [
+            f"{status // 100}xx" if type(status) is int and 100 <= status <= 599 else "other"
+            for status in value[:8]
+        ]
+
+    def failed_at(value: list[str], index: int) -> bool:
+        return index < len(value) and value[index] in {"4xx", "5xx"}
+
+    def safe_structures(value: object) -> list[dict[str, bool]]:
+        if not isinstance(value, list):
+            return []
+        return [
+            {
+                "invalid": item.get("invalid") is True,
+                "error_event": item.get("error_event") is True,
+            }
+            for item in value[:4]
+            if isinstance(item, dict)
+        ]
+
+    def safe_error_class(value: object, *, parameter: bool = False) -> str:
+        if parameter:
+            return value if value in _SAFE_GATEWAY_ERROR_PARAM_CLASSES else "other"
+        return value if value in _SAFE_GATEWAY_ERROR_CODE_CLASSES else "other"
+
+    def safe_projection(value: object) -> str:
+        try:
+            return _safe_roundtrip_projection_class(value)
+        except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+            return "other"
+
+    category = codex_failure_category if isinstance(codex_failure_category, str) else "other"
+    gateway_count = bounded_count(gateway_requests)
+    local_count = bounded_count(local_requests)
     gateway_codes = statuses(gateway_statuses)
     local_codes = statuses(local_statuses)
-    gateway_shapes = gateway_structures if isinstance(gateway_structures, list) else []
-    if codex_failure_category in launch_categories or gateway_requests == 0:
+    gateway_shapes = safe_structures(gateway_structures)
+    safe_qwen = qwen_status if isinstance(qwen_status, dict) else {}
+    safe_fake = fake_status if isinstance(fake_status, dict) else {}
+    safe_accounting = accounting_statuses if isinstance(accounting_statuses, dict) else {}
+    if category in launch_categories or gateway_count == 0:
         return "composed_tool_roundtrip_launch_config"
-    qwen_codes = statuses(qwen_status.get("inference_statuses"))
-    if qwen_codes and qwen_codes[0] >= 400:
+    qwen_codes = statuses(safe_qwen.get("inference_statuses"))
+    if qwen_codes and qwen_codes[0] in {"4xx", "5xx"}:
         return "composed_tool_roundtrip_first_qwen_rejection"
     local_first_failed = (
-        local_requests >= 1 and len(local_codes) >= 1 and local_codes[0] >= 400
+        local_count is not None and local_count >= 1 and failed_at(local_codes, 0)
     )
     gateway_first_failed = (
-        gateway_requests == 1
-        and (not gateway_codes or gateway_codes[0] >= 400)
+        gateway_count == 1
+        and (not gateway_codes or failed_at(gateway_codes, 0))
     ) or (
         gateway_shapes
-        and isinstance(gateway_shapes[0], dict)
-        and gateway_shapes[0].get("error_event") is True
+        and gateway_shapes[0]["error_event"]
     )
     if local_first_failed:
         return "composed_tool_roundtrip_first_local_rejection"
     if gateway_first_failed:
         code_class = "other"
         param_class = "other"
-        if gateway_error_code_classes and isinstance(gateway_error_code_classes, list):
-            candidate = gateway_error_code_classes[0]
-            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_CODE_CLASSES:
-                code_class = candidate
-        if gateway_error_param_classes and isinstance(gateway_error_param_classes, list):
-            candidate = gateway_error_param_classes[0]
-            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_PARAM_CLASSES:
-                param_class = candidate
-        projection_class = (
-            _safe_roundtrip_projection_class(request_projections[0])
-            if isinstance(request_projections, list) and request_projections
-            else "other"
-        )
-        ownership = "post_local" if local_requests >= 1 else "pre_local"
+        if isinstance(gateway_error_code_classes, list) and gateway_error_code_classes:
+            code_class = safe_error_class(gateway_error_code_classes[0])
+        if isinstance(gateway_error_param_classes, list) and gateway_error_param_classes:
+            param_class = safe_error_class(gateway_error_param_classes[0], parameter=True)
+        projections = request_projections if isinstance(request_projections, list) else []
+        projection_class = safe_projection(projections[0]) if projections else "other"
+        ownership = "post_local" if local_count is not None and local_count >= 1 else "pre_local"
         return (
             f"composed_tool_roundtrip_first_gateway_{ownership}_"
             f"{code_class}_{param_class}_{projection_class}"
         )
     if (
-        local_requests >= 2
-        and len(local_codes) >= 2
-        and local_codes[1] >= 400
+        local_count is not None
+        and local_count >= 2
+        and failed_at(local_codes, 1)
     ):
         return "composed_tool_roundtrip_second_turn_local_rejection"
     if (
-        gateway_requests >= 2
-        and len(gateway_codes) >= 2
-        and gateway_codes[1] >= 400
+        gateway_count is not None
+        and gateway_count >= 2
+        and failed_at(gateway_codes, 1)
     ):
         code_class = "other"
         param_class = "other"
         projection_class = "other"
-        if isinstance(gateway_error_code_classes, list) and len(gateway_error_code_classes) >= 2:
-            candidate = gateway_error_code_classes[1]
-            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_CODE_CLASSES:
-                code_class = candidate
-        if isinstance(gateway_error_param_classes, list) and len(gateway_error_param_classes) >= 2:
-            candidate = gateway_error_param_classes[1]
-            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_PARAM_CLASSES:
-                param_class = candidate
-        if isinstance(request_projections, list) and len(request_projections) >= 2:
-            second_projection = request_projections[1]
-            projection_class = _safe_roundtrip_projection_class(second_projection)
+        if isinstance(gateway_error_code_classes, list) and len(gateway_error_code_classes) > 1:
+            code_class = safe_error_class(gateway_error_code_classes[1])
+        if isinstance(gateway_error_param_classes, list) and len(gateway_error_param_classes) > 1:
+            param_class = safe_error_class(gateway_error_param_classes[1], parameter=True)
+        if isinstance(request_projections, list) and len(request_projections) > 1:
+            projection_class = safe_projection(request_projections[1])
         return (
             "composed_tool_roundtrip_second_turn_gateway_"
             f"{code_class}_{param_class}_{projection_class}"
         )
     if codex_failure_category in stream_categories or any(
-        isinstance(structure, dict) and structure.get("invalid") is True
+        structure["invalid"]
         for structure in gateway_shapes
     ):
         return "composed_tool_roundtrip_codex_stream_parse"
     # Keep the remaining facts in the bounded decision input so a future
     # reviewer can distinguish a final-message failure without retaining data.
     _ = (
-        qwen_status.get("inference_calls"),
-        qwen_status.get("successful_calls"),
-        fake_status.get("function_lifecycle_count"),
-        fake_status.get("message_lifecycle_count"),
-        accounting_statuses.get("reservation_finalized"),
-        accounting_statuses.get("ledger_finalized"),
-        accounting_statuses.get("ledger_failed"),
+        safe_qwen.get("inference_calls"),
+        safe_qwen.get("successful_calls"),
+        safe_fake.get("function_lifecycle_count"),
+        safe_fake.get("message_lifecycle_count"),
+        safe_accounting.get("reservation_finalized"),
+        safe_accounting.get("ledger_finalized"),
+        safe_accounting.get("ledger_failed"),
     )
     return "composed_tool_roundtrip_final_message_failure"
 
@@ -5926,6 +6370,7 @@ def _run_composed_stream_diagnostic(
     fake_qwen: bool = False,
     tool_roundtrip_mode: bool = False,
     qualification_rejection_mode: bool = False,
+    provider_failure_mode: bool = False,
     codex_binary: Path | None = None,
     tracker: StageTracker | None = None,
     qualification_hook: bool = False,
@@ -5987,6 +6432,7 @@ def _run_composed_stream_diagnostic(
             fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen(
                 tool_roundtrip_mode=tool_roundtrip_mode,
                 qualification_rejection_mode=qualification_rejection_mode,
+                provider_failure_mode=provider_failure_mode,
             )
         previous_environment = os.environ.copy()
         tracker.set("database_seed")
@@ -6266,7 +6712,11 @@ def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str
 
 
 def _run_dedicated_codex_tool_roundtrip(
-    *, fake_qwen: bool, qualification_hook: bool, qualification_rejection_mode: bool = False
+    *,
+    fake_qwen: bool,
+    qualification_hook: bool,
+    qualification_rejection_mode: bool = False,
+    provider_failure_mode: bool = False,
 ) -> dict[str, object]:
     """Run one dedicated Codex tool roundtrip, with optional disposable hook."""
     _verify_commit_topology()
@@ -6275,22 +6725,47 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155u-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155v-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
         codex_binary = _install_codex(root)
-        result = _run_composed_stream_diagnostic(
-            root,
-            runtime,
-            fake_qwen=fake_qwen,
-            tool_roundtrip_mode=True,
-            qualification_rejection_mode=qualification_rejection_mode,
-            codex_binary=codex_binary,
-            qualification_hook=qualification_hook,
-            tracker=StageTracker(),
-        )
+        try:
+            result = _run_composed_stream_diagnostic(
+                root,
+                runtime,
+                fake_qwen=fake_qwen,
+                tool_roundtrip_mode=True,
+                qualification_rejection_mode=qualification_rejection_mode,
+                provider_failure_mode=provider_failure_mode,
+                codex_binary=codex_binary,
+                qualification_hook=qualification_hook,
+                tracker=StageTracker(),
+            )
+        except Exception as exception:
+            summary = _read_preclassification_summary(root) if qualification_hook else None
+            if qualification_hook and summary is not None:
+                result = {
+                    "codex_exit_success": False,
+                    "failure_code": _safe_qualification_failure_code(exception),
+                    "qualification_rejection": _read_qualification_rejection(root),
+                    "qualification_summary": summary,
+                }
+            else:
+                if isinstance(exception, VerificationError):
+                    raise
+                raise VerificationError(_safe_qualification_failure_code(exception)) from None
         reread_rejection = _read_qualification_rejection(root)
+        reread_summary = _read_preclassification_summary(root) if qualification_hook else None
+        retained_summary = result.get("qualification_summary")
+        if retained_summary is not None:
+            retained_summary = _sanitize_preclassification_summary(retained_summary)
+            if reread_summary is not None and reread_summary != retained_summary:
+                raise VerificationError("qualification_summary_inconsistent")
+        elif reread_summary is not None:
+            retained_summary = reread_summary
+        elif qualification_hook and result.get("codex_exit_success") is not True:
+            raise VerificationError("qualification_summary_missing")
         if fake_qwen and qualification_hook and qualification_rejection_mode:
             if (
                 result.get("codex_exit_success") is not False
@@ -6298,18 +6773,24 @@ def _run_dedicated_codex_tool_roundtrip(
             ):
                 raise VerificationError("forced_fake_rejection_missing")
         elif fake_qwen and qualification_hook:
-            _assert_fake_qualification_artifact_absent(root)
-            if result.get("codex_exit_success") is not True:
-                raise VerificationError("fake_tool_roundtrip_failed")
+            if result.get("codex_exit_success") is True:
+                _assert_fake_qualification_artifact_absent(root)
+                if reread_summary is not None:
+                    raise VerificationError("fake_summary_present")
+            elif reread_rejection is None and reread_summary is None:
+                raise VerificationError("qualification_evidence_missing")
         elif qualification_hook and result.get("codex_exit_success") is not True and reread_rejection is None and result.get("qualification_rejection") is None:
-            raise VerificationError("qualification_artifact_missing")
+            if reread_summary is None:
+                raise VerificationError("qualification_evidence_missing")
         _retain_sanitized_qualification_rejection(result, reread_rejection)
+        if qualification_hook:
+            result["qualification_summary"] = retained_summary
     if not fake_qwen:
         post_runtime = _read_runtime_reference()
         _source_qwen_credential_only_for_local(post_runtime)
         _verify_protected_model_health(post_runtime)
     if not fake_qwen and qualification_hook and result.get("codex_exit_success") is not True:
-        if result.get("qualification_rejection") is None:
+        if result.get("qualification_rejection") is None and result.get("qualification_summary") is None:
             raise VerificationError("qualification_retained_evidence_missing")
     return result
 
@@ -6328,6 +6809,15 @@ def run_codex_tool_roundtrip_forced_fake_rejection() -> dict[str, object]:
         fake_qwen=True,
         qualification_hook=True,
         qualification_rejection_mode=True,
+    )
+
+
+def run_codex_tool_roundtrip_fake_provider_failure() -> dict[str, object]:
+    """Run the composed fake path with an upstream transport failure."""
+    return _run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True,
+        qualification_hook=True,
+        provider_failure_mode=True,
     )
 
 
@@ -6653,6 +7143,7 @@ def main() -> int:
     parser.add_argument("--tool-roundtrip-qualification", action="store_true")
     parser.add_argument("--tool-roundtrip-qualification-fake", action="store_true")
     parser.add_argument("--tool-roundtrip-qualification-fake-rejection", action="store_true")
+    parser.add_argument("--tool-roundtrip-qualification-fake-provider-failure", action="store_true")
     parser.add_argument("--tool-roundtrip-protected", action="store_true")
     parser.add_argument("--tool-roundtrip-protected-fake", action="store_true")
     arguments = parser.parse_args()
@@ -6677,7 +7168,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155u-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155v-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
@@ -6692,24 +7183,43 @@ def main() -> int:
         arguments.tool_roundtrip_qualification
         or arguments.tool_roundtrip_qualification_fake
         or arguments.tool_roundtrip_qualification_fake_rejection
+        or arguments.tool_roundtrip_qualification_fake_provider_failure
     ):
         try:
             if arguments.tool_roundtrip_qualification_fake_rejection:
                 result = run_codex_tool_roundtrip_forced_fake_rejection()
+            elif arguments.tool_roundtrip_qualification_fake_provider_failure:
+                result = run_codex_tool_roundtrip_fake_provider_failure()
             else:
                 result = run_codex_tool_roundtrip_qualification(
                     fake_qwen=arguments.tool_roundtrip_qualification_fake
                 )
             rejection = result.get("qualification_rejection")
-            if rejection is None:
+            summary = result.get("qualification_summary")
+            if (
+                result.get("codex_exit_success") is True
+                and rejection is None
+                and summary is None
+            ):
                 print(
                     "QUALIFICATION=PASSED turns=2 function=1 message=1 accounting_rows=2"
                 )
             else:
-                rejection = _sanitize_qualification_rejection(rejection)
+                if summary is None:
+                    raise VerificationError("qualification_evidence_missing")
+                summary = _sanitize_preclassification_summary(summary)
+                evidence: dict[str, object] = {
+                    "failure_code": _safe_qualification_failure_code(
+                        VerificationError(str(result.get("failure_code", "qualification_failed")))
+                    ),
+                    "summary": summary,
+                }
+                if rejection is not None:
+                    evidence["rejection"] = _sanitize_qualification_rejection(rejection)
+                outcome = "REJECTED" if rejection is not None else "FAILED"
                 print(
-                    "QUALIFICATION=REJECTED "
-                    + json.dumps(rejection, sort_keys=True, separators=(",", ":"))
+                    f"QUALIFICATION={outcome} "
+                    + json.dumps(evidence, sort_keys=True, separators=(",", ":"))
                 )
                 return 1
         except VerificationError as exc:
