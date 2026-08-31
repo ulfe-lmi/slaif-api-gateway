@@ -379,6 +379,7 @@ def test_temporary_rejection_writer_rejects_absent_enable_symlink_parent_and_ove
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tmp_path.chmod(0o700)
+    target = tmp_path / "target.json"
     artifact = tmp_path / "rejection.json"
     monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
     monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
@@ -391,25 +392,35 @@ def test_temporary_rejection_writer_rejects_absent_enable_symlink_parent_and_ove
     assert not artifact.exists()
 
     monkeypatch.setenv("SLAIF_155S_QUALIFICATION", "1")
-    symlink = tmp_path / "symlink.json"
-    symlink.symlink_to(tmp_path / "target.json")
-    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(symlink))
+    artifact.symlink_to(target)
     _record_qualification_rejection(
         {"type": "response.other"},
         profile=ResponsesStreamValidationProfile(),
         rejection_code="other",
     )
-    assert symlink.is_symlink()
+    assert artifact.is_symlink()
 
-    outside = tmp_path / "outside.json"
-    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(outside))
+    wrong_parent = tmp_path / "wrong-parent"
+    wrong_parent.mkdir(mode=0o700)
+    wrong_artifact = wrong_parent / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(wrong_artifact))
+    _record_qualification_rejection(
+        {"type": "response.other"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="other",
+    )
+    assert not wrong_artifact.exists()
+
+    artifact.unlink()
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
     monkeypatch.setattr("slaif_gateway.services.responses_gateway._QUALIFICATION_MAX_BYTES", 1)
     _record_qualification_rejection(
         {"type": "response.other"},
         profile=ResponsesStreamValidationProfile(),
         rejection_code="other",
     )
-    assert not outside.exists()
+    assert not artifact.exists()
 
     non_tmp_root = Path("/var/tmp") / f"slaif-155s-writer-{uuid.uuid4().hex}"
     non_tmp_root.mkdir(mode=0o700)
