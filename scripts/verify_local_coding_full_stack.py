@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-t verifier for Codex envelope and function-call qualification.
+"""Bounded 155-u verifier for Codex envelope and function-call qualification.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.

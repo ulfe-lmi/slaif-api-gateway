@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155u_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
     current_head = "current-155r-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
+    report_path = "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -202,7 +202,7 @@ def test_155u_topology_anchors_are_the_155t_report_and_activation() -> None:
     assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
 
 
-def test_155s_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155u_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
