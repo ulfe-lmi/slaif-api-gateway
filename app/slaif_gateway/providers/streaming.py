@@ -922,7 +922,11 @@ class ResponsesStreamEventValidator:
         ):
             return False
         usage = response.get("usage")
-        if not isinstance(usage, Mapping) or not _validate_completed_usage(usage):
+        if (
+            not isinstance(usage, Mapping)
+            or not _validate_completed_usage(usage, strict_vllm_responses=True)
+            or not _validate_codex_completed_output(response.get("output"))
+        ):
             return False
         if not self._accept_strict_sequence(payload):
             return False
@@ -1061,7 +1065,9 @@ def _validate_response_completed_event(payload: Mapping[str, Any]) -> bool:
     return status is None or status in {"completed", "incomplete"}
 
 
-def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
+def _validate_completed_usage(
+    usage: Mapping[str, Any], *, strict_vllm_responses: bool = False
+) -> bool:
     if not _only_fields(
         usage,
         {
@@ -1082,11 +1088,48 @@ def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
         ):
             return False
     input_details = usage.get("input_tokens_details")
-    if input_details is not None and not isinstance(input_details, Mapping):
+    if strict_vllm_responses:
+        if not isinstance(input_details, Mapping) or set(input_details) != {
+            "cached_tokens", "input_tokens_per_turn", "cached_tokens_per_turn"
+        }:
+            return False
+        if not _validate_nonnegative_count(input_details.get("cached_tokens")):
+            return False
+        if not _validate_per_turn_counts(input_details.get("input_tokens_per_turn")):
+            return False
+        if not _validate_per_turn_counts(input_details.get("cached_tokens_per_turn")):
+            return False
+        if len(input_details["input_tokens_per_turn"]) != len(
+            input_details["cached_tokens_per_turn"]
+        ):
+            return False
+    elif input_details is not None and not isinstance(input_details, Mapping):
         return False
     output_details = usage.get("output_tokens_details")
+    if strict_vllm_responses:
+        if not isinstance(output_details, Mapping) or set(output_details) != {
+            "reasoning_tokens",
+            "tool_output_tokens",
+            "output_tokens_per_turn",
+            "tool_output_tokens_per_turn",
+        }:
+            return False
+        if not _validate_nonnegative_count(output_details.get("reasoning_tokens")):
+            return False
+        if not _validate_nonnegative_count(output_details.get("tool_output_tokens")):
+            return False
+        if not _validate_per_turn_counts(output_details.get("output_tokens_per_turn")):
+            return False
+        if not _validate_per_turn_counts(output_details.get("tool_output_tokens_per_turn")):
+            return False
+        if len(output_details["output_tokens_per_turn"]) != len(
+            output_details["tool_output_tokens_per_turn"]
+        ):
+            return False
+        return usage["input_tokens"] + usage["output_tokens"] == usage["total_tokens"]
     if output_details is not None and not isinstance(output_details, Mapping):
         return False
+    if output_details is not None and "reasoning_tokens" in output_details:
         reasoning_tokens = output_details.get("reasoning_tokens")
         if (
             isinstance(reasoning_tokens, bool)
@@ -1095,6 +1138,73 @@ def _validate_completed_usage(usage: Mapping[str, Any]) -> bool:
         ):
             return False
     return True
+
+
+def _validate_nonnegative_count(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= _MAX_STREAM_TOKEN_COUNT
+    )
+
+
+def _validate_per_turn_counts(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) <= _MAX_STREAM_CONTENT_PARTS
+        and all(_validate_nonnegative_count(count) for count in value)
+    )
+
+
+def _validate_codex_completed_output(output: Any) -> bool:
+    if not isinstance(output, list) or not output or len(output) > _MAX_STREAM_CONTENT_PARTS:
+        return False
+    return all(_validate_codex_completed_output_item(item) for item in output)
+
+
+def _validate_codex_completed_output_item(item: Any) -> bool:
+    if not isinstance(item, Mapping):
+        return False
+    item_type = item.get("type")
+    if not _bounded_identifier(item.get("id"), required=True):
+        return False
+    if item_type == "reasoning":
+        if set(item) != {"type", "id", "summary", "content", "encrypted_content", "status"}:
+            return False
+        if (
+            item.get("status") is not None
+            or item.get("summary") != []
+            or item.get("encrypted_content") is not None
+        ):
+            return False
+        content = item.get("content")
+        if not isinstance(content, list) or len(content) > _MAX_STREAM_CONTENT_PARTS:
+            return False
+        return all(
+            isinstance(part, Mapping)
+            and set(part) == {"type", "text"}
+            and part.get("type") == "reasoning_text"
+            and isinstance(part.get("text"), str)
+            and _bounded_utf8(part["text"], _MAX_STREAM_ITEM_TEXT_BYTES)
+            for part in content
+        )
+    if item_type != "message" or set(item) != {
+        "type", "id", "status", "role", "content", "phase"
+    }:
+        return False
+    if (
+        item.get("status") != "completed"
+        or item.get("role") != "assistant"
+        or item.get("phase") is not None
+    ):
+        return False
+    content = item.get("content")
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and len(content) <= _MAX_STREAM_CONTENT_PARTS
+        and all(_validate_codex_output_text_part(part, logprobs=None) for part in content)
+    )
 
 
 def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> bool:

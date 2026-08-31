@@ -291,15 +291,54 @@ def _strict_response_event(event_type: str, sequence_number: int) -> dict[str, o
         response.update(
             {
                 "status": "completed",
-                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "parser_reasoning_1",
+                        "status": None,
+                        "summary": [],
+                        "content": [{"type": "reasoning_text", "text": "bounded"}],
+                        "encrypted_content": None,
+                    },
+                    {
+                        "type": "message",
+                        "id": "parser_message_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "answer",
+                                "annotations": [],
+                                "logprobs": None,
+                            }
+                        ],
+                        "phase": None,
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "input_tokens_per_turn": [1],
+                        "cached_tokens_per_turn": [0],
+                    },
+                    "output_tokens": 1,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "tool_output_tokens": 0,
+                        "output_tokens_per_turn": [1],
+                        "tool_output_tokens_per_turn": [0],
+                    },
+                    "total_tokens": 2,
+                },
             }
         )
     return {"type": event_type, "sequence_number": sequence_number, "response": response}
 
 
-def test_codex_0149_message_text_lifecycle_is_exactly_scoped() -> None:
-    validator = _strict_reasoning_validator()
-    events = [
+def _strict_message_prefix_events() -> list[dict[str, object]]:
+    return [
         _strict_response_event("response.created", 0),
         _strict_response_event("response.in_progress", 1),
         _message_added_event(),
@@ -309,8 +348,12 @@ def test_codex_0149_message_text_lifecycle_is_exactly_scoped() -> None:
         _message_text_event("response.output_text.done", 6, "answer"),
         _message_content_part("response.content_part.done", 7, "answer"),
         _message_done_event(8),
-        _strict_response_event("response.completed", 9),
     ]
+
+
+def test_codex_0149_message_text_lifecycle_is_exactly_scoped() -> None:
+    validator = _strict_reasoning_validator()
+    events = _strict_message_prefix_events() + [_strict_response_event("response.completed", 9)]
     assert all(validator.validate(event) for event in events)
 
 
@@ -388,6 +431,33 @@ def test_codex_0149_completed_requires_usage_and_no_active_output() -> None:
     missing_usage = _strict_response_event("response.completed", 3)
     missing_usage["response"].pop("usage")
     assert not validator.validate(missing_usage)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda response: response.update(output="not-a-list"),
+        lambda response: response.update(output=[]),
+        lambda response: response["output"].__setitem__(0, {"type": "function_call"}),
+        lambda response: response["output"].__setitem__(0, {**response["output"][0], "status": "completed"}),
+        lambda response: response["usage"]["input_tokens_details"].update(cached_tokens=-1),
+        lambda response: response["usage"]["output_tokens_details"].update(reasoning_tokens=-1),
+        lambda response: response["usage"]["output_tokens_details"].update(tool_output_tokens="0"),
+        lambda response: response["usage"]["input_tokens_details"].update(
+            input_tokens_per_turn=[0] * 65
+        ),
+        lambda response: response["usage"]["output_tokens_details"].update(
+            tool_output_tokens_per_turn=[0, 1]
+        ),
+        lambda response: response["usage"].update(total_tokens=3),
+    ],
+)
+def test_codex_0149_completed_output_and_usage_reject_malformed_facts(mutation) -> None:
+    validator = _strict_reasoning_validator()
+    assert all(validator.validate(event) for event in _strict_message_prefix_events())
+    completed = _strict_response_event("response.completed", 9)
+    mutation(completed["response"])
+    assert not validator.validate(completed)
 
 
 def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
