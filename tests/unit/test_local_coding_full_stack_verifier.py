@@ -431,7 +431,17 @@ def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
     event = {
         "type": "response.output_item.added",
         "sequence_number": 1,
-        "item": {"type": "function_call", "status": "in_progress"},
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "id": "qualification_function",
+            "status": "in_progress",
+            "name": "shell_command",
+            "arguments": "synthetic-argument-canary",
+            "call_id": "qualification_call",
+            "caller": None,
+            "namespace": "functions",
+        },
     }
     responses_gateway._record_qualification_rejection(
         event, profile=exact, rejection_code="responses_stream_event_not_supported"
@@ -441,6 +451,7 @@ def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
     assert b"shell_command" not in first
     assert b"qualification_function" not in first
     assert b"qualification_call" not in first
+    assert b"synthetic-argument-canary" not in first
     assert b"printf" not in first
     responses_gateway._record_qualification_rejection(
         {**event, "type": "response.other"},
