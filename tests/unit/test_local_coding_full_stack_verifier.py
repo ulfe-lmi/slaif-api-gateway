@@ -404,6 +404,45 @@ def test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted() -> None:
         fake.server_close()
 
 
+def test_forced_fake_rejection_emits_full_bounded_function_item() -> None:
+    fake = verifier._FakeQwenServer(
+        ("127.0.0.1", 0),
+        "synthetic-token",
+        qualification_rejection_mode=True,
+    )
+    try:
+        events: list[tuple[str, dict[str, object]]] = []
+        handler = object.__new__(verifier._FakeQwenHandler)
+        handler.server = fake
+        handler._write_stream_events = lambda value: events.extend(value)
+        handler._json = lambda *_args: pytest.fail("known reviewed tool missing")
+        handler._stream_qualification_rejection(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "shell_command",
+                        "parameters": {"type": "object"},
+                    }
+                ]
+            }
+        )
+        assert len(events) == 2
+        item = events[1][1]["item"]
+        assert item == {
+            "type": "function_call",
+            "id": "qualification_function",
+            "status": "in_progress",
+            "name": "shell_command",
+            "arguments": "",
+            "call_id": "qualification_call",
+            "caller": None,
+            "namespace": "functions",
+        }
+    finally:
+        fake.server_close()
+
+
 def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
