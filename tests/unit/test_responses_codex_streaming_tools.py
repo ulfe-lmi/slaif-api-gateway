@@ -29,6 +29,7 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_streaming_tool_events_allowed,
 )
 from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
+from slaif_gateway.services.responses_gateway import _record_qualification_rejection
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
     enforce_responses_route_capabilities,
@@ -227,6 +228,203 @@ def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> 
     assert not _codex_reasoning_events_enabled(
         client_module_id="openai-default", server_context=local_context
     )
+
+
+def test_temporary_rejection_hook_records_only_bounded_safe_classes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    artifact = tmp_path / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
+    _record_qualification_rejection(
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "opaque-item",
+            "delta": "private-argument",
+            "response": {"id": "opaque-response", "status": "in_progress"},
+        },
+        profile=ResponsesStreamValidationProfile(
+            codex_reasoning_events=True,
+            codex_streaming_tool_events=True,
+            declared_client_tools=frozenset({("functions", "exec", "custom")}),
+        ),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    assert artifact.stat().st_mode & 0o777 == 0o600
+    safe = json.loads(artifact.read_text(encoding="utf-8"))
+    assert safe == {
+        "event_type": "response.function_call_arguments.delta",
+        "nested_object_fields": [
+            {
+                "fields": [
+                    {"name": "id", "type": "string"},
+                    {"name": "status", "type": "string"},
+                ],
+                "name": "response",
+            }
+        ],
+        "rejection": {
+            "code": "responses_stream_event_not_supported",
+            "outcome": "validator_rejected",
+        },
+        "schema": "responses_stream_rejection_v1",
+        "top_level_fields": [
+            {"name": "delta", "type": "string"},
+            {"name": "item_id", "type": "string"},
+            {"name": "response", "type": "object"},
+            {"name": "type", "type": "string"},
+        ],
+        "validator_profile": {
+            "codex_encrypted_reasoning_replay": False,
+            "codex_streaming_tool_events": True,
+            "declared_client_tools_class": "bounded",
+            "web_search": False,
+            "web_search_max_tool_calls_class": "none",
+        },
+    }
+    rendered = artifact.read_text(encoding="utf-8")
+    assert "private-argument" not in rendered
+    assert "opaque-item" not in rendered
+
+
+def test_temporary_rejection_hook_is_inert_or_write_once_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    artifact = tmp_path / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
+    profile = ResponsesStreamValidationProfile()
+    _record_qualification_rejection(
+        {"type": "response.other"}, profile=profile, rejection_code="other"
+    )
+    original = artifact.read_bytes()
+    _record_qualification_rejection(
+        {"type": "response.completed"}, profile=profile, rejection_code="other"
+    )
+    assert artifact.read_bytes() == original
+
+    unsafe_root = tmp_path / "unsafe"
+    unsafe_root.mkdir()
+    unsafe_root.chmod(0o755)
+    unsafe_artifact = unsafe_root / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(unsafe_root))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(unsafe_artifact))
+    _record_qualification_rejection(
+        {"type": "response.completed"}, profile=profile, rejection_code="other"
+    )
+    assert not unsafe_artifact.exists()
+
+
+def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
+    profile = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=frozenset({("functions", "exec", "custom")}),
+    )
+    validator = ResponsesStreamEventValidator(profile)
+    tool_added = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "custom_tool_call",
+            "id": "tool-item-1",
+            "status": "in_progress",
+            "namespace": "functions",
+            "name": "exec",
+            "call_id": "tool-call-1",
+            "input": "",
+        },
+    }
+    tool_delta = {
+        "type": "response.custom_tool_call_input.delta",
+        "item_id": "tool-item-1",
+        "call_id": "tool-call-1",
+        "output_index": 0,
+        "sequence_number": 2,
+        "delta": "bounded",
+    }
+    assert validator.validate(tool_added) is False
+    assert validator.validate(tool_delta) is False
+    ordinary_validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+    assert all(ordinary_validator.validate(event) for event in _strict_message_prefix_events())
+
+
+def test_temporary_rejection_writer_maps_invalid_names_and_never_leaks_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    artifact = tmp_path / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_QUALIFICATION", "1")
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
+    raw_marker = "private-writer-marker"
+    _record_qualification_rejection(
+        {"type": "Ω" * 200, "bad key": raw_marker, "x" * 65: raw_marker},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="responses_stream_event_not_supported",
+    )
+    rendered = artifact.read_text(encoding="utf-8")
+    assert '"name":"other"' in rendered
+    assert "Ω" not in rendered and "bad key" not in rendered and raw_marker not in rendered
+
+
+def test_temporary_rejection_writer_rejects_absent_enable_symlink_parent_and_oversize(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    artifact = tmp_path / "rejection.json"
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(artifact))
+    monkeypatch.delenv("SLAIF_155S_QUALIFICATION", raising=False)
+    _record_qualification_rejection(
+        {"type": "response.other"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="other",
+    )
+    assert not artifact.exists()
+
+    monkeypatch.setenv("SLAIF_155S_QUALIFICATION", "1")
+    symlink = tmp_path / "symlink.json"
+    symlink.symlink_to(tmp_path / "target.json")
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(symlink))
+    _record_qualification_rejection(
+        {"type": "response.other"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="other",
+    )
+    assert symlink.is_symlink()
+
+    outside = tmp_path / "outside.json"
+    monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(outside))
+    monkeypatch.setattr("slaif_gateway.services.responses_gateway._QUALIFICATION_MAX_BYTES", 1)
+    _record_qualification_rejection(
+        {"type": "response.other"},
+        profile=ResponsesStreamValidationProfile(),
+        rejection_code="other",
+    )
+    assert not outside.exists()
+
+    non_tmp_root = Path("/var/tmp") / f"slaif-155s-writer-{uuid.uuid4().hex}"
+    non_tmp_root.mkdir(mode=0o700)
+    try:
+        non_tmp_artifact = non_tmp_root / "rejection.json"
+        monkeypatch.setenv("SLAIF_155S_REJECTION_ROOT", str(non_tmp_root))
+        monkeypatch.setenv("SLAIF_155S_REJECTION_ARTIFACT", str(non_tmp_artifact))
+        _record_qualification_rejection(
+            {"type": "response.other"},
+            profile=ResponsesStreamValidationProfile(),
+            rejection_code="other",
+        )
+        assert not non_tmp_artifact.exists()
+    finally:
+        non_tmp_root.rmdir()
 
 
 def _message_added_event() -> dict[str, object]:

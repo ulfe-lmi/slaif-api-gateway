@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-r verifier for protected stream boundary qualification.
+"""Bounded 155-s verifier for protected Codex tool-stream qualification.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -14,6 +14,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import socket
 import stat
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from collections.abc import Mapping
 import time
 import uuid
 from dataclasses import dataclass
@@ -30,16 +32,16 @@ from urllib.parse import urlsplit
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005l").resolve()
+LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "a5154d68db3999c3df7c8d03cb13eed86c7fcea2"
-GATEWAY_IMPLEMENTATION_HEAD = "a3db9c88065a0cb5d7c0af797332752024d0f289"
-GATEWAY_ACTIVATION_HEAD = "a08655180dcd280529ca798b3509d4f28e7f8ab7"
-GATEWAY_REPORT_PATH = "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
-LOCAL_REPORT_HEAD = "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
-LOCAL_REPORT_PARENT = "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
+GATEWAY_REPORT_HEAD = "2527030f5bbb90a7f0f354eb5347caee333ce4a7"
+GATEWAY_IMPLEMENTATION_HEAD = "19d9686636b0fbf27ab96d41c610a37dad3c087a"
+GATEWAY_ACTIVATION_HEAD = "62f8063c9f4fc304f5b835741b1a263202285b56"
+GATEWAY_REPORT_PATH = "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
+LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
+LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
-LOCAL_REPORT_PATH = "oap/reports/005-l-exact-composed-stream-owner-and-acceptance-closure.md"
+LOCAL_REPORT_PATH = "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
 CODEX_VERSION = "0.149.0"
 CODEX_MODEL = "qwen3.8-27b"
 FAILURE_MODEL = "155f-synthetic-provider-failure"
@@ -51,8 +53,11 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-r-retained-event-qualification-and-final-stream.md"
-TASK_DB = "slaif_gateway_oap_155r_diff"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155s_tool_stream"
+QUALIFICATION_HOOK_ENV = "SLAIF_155S_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155S_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155S_REJECTION_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -208,7 +213,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-r-retained-event-qualification-and-final-stream.md",
+        "oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -259,11 +264,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-r-retained-event-qualification-and-final-stream.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-r\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-s\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -712,9 +717,144 @@ async def _seed_database(
         await engine.dispose()
 
 
-def _gateway_environment(database_url: str, *, gateway_port: int, service_token: str, signing_secret: str, derivation_secret: str, encryption_key: str) -> dict[str, str]:
+def _gateway_environment(
+    database_url: str,
+    *,
+    gateway_port: int,
+    service_token: str,
+    signing_secret: str,
+    derivation_secret: str,
+    encryption_key: str,
+    qualification_artifact: Path | None = None,
+) -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(REPO_ROOT / "app"), "PYTHONDONTWRITEBYTECODE": "1", "APP_ENV": "test", "DATABASE_URL": database_url, "GATEWAY_KEY_PREFIX": "sk-slaif-", "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-", "ACTIVE_HMAC_KEY_VERSION": "1", "TOKEN_HMAC_SECRET_V1": "155f-gateway-hmac-secret-012345678901", "ADMIN_SESSION_SECRET": "155f-admin-secret-012345678901", "ONE_TIME_SECRET_ENCRYPTION_KEY": encryption_key, "ENABLE_REDIS_RATE_LIMITS": "false", "ENABLE_ADMIN_DASHBOARD": "false", "ENABLE_EMAIL_DELIVERY": "false", "ENABLE_METRICS": "true", "LOG_LEVEL": "WARNING", "STRUCTURED_LOGS": "true", "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token, "LOCAL_CODING_SERVICE_TOKEN": service_token, "LOCAL_CODING_SIGNING_SECRET_V1": signing_secret, "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": derivation_secret, "SLAIF_155F_FAILURE_KEY": "synthetic-failure-key", "UVICORN_ACCESS_LOG": "false", "APP_BASE_URL": f"http://127.0.0.1:{gateway_port}"}
+    if qualification_artifact is not None:
+        env[QUALIFICATION_ARTIFACT_ENV] = str(qualification_artifact)
     return env
+
+
+_QUALIFICATION_FIELD_TYPES = frozenset(
+    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
+)
+_QUALIFICATION_DECLARED_TOOL_CLASSES = frozenset({"none", "bounded", "many"})
+_QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
+_QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
+
+
+def _sanitize_qualification_name(value: object, *, event: bool = False) -> str:
+    if value == "other":
+        return "other"
+    if not isinstance(value, str):
+        raise VerificationError("qualification_artifact_invalid")
+    pattern = _QUALIFICATION_EVENT_RE if event else _QUALIFICATION_NAME_RE
+    if pattern.fullmatch(value) is None:
+        raise VerificationError("qualification_artifact_invalid")
+    return value
+
+
+def _sanitize_qualification_fields(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) > 32:
+        raise VerificationError("qualification_artifact_invalid")
+    fields: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"name", "type"}:
+            raise VerificationError("qualification_artifact_invalid")
+        name = _sanitize_qualification_name(item["name"])
+        field_type = item["type"]
+        if not isinstance(field_type, str) or field_type not in _QUALIFICATION_FIELD_TYPES:
+            raise VerificationError("qualification_artifact_invalid")
+        fields.append({"name": name, "type": field_type})
+    if fields != sorted(fields, key=lambda item: item["name"]):
+        raise VerificationError("qualification_artifact_invalid")
+    if len({item["name"] for item in fields}) != len(fields):
+        raise VerificationError("qualification_artifact_invalid")
+    return fields
+
+
+def _sanitize_qualification_rejection(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "event_type", "top_level_fields", "nested_object_fields",
+        "validator_profile", "rejection",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    if value["schema"] != "responses_stream_rejection_v1":
+        raise VerificationError("qualification_artifact_invalid")
+    nested_value = value["nested_object_fields"]
+    if not isinstance(nested_value, list) or len(nested_value) > 32:
+        raise VerificationError("qualification_artifact_invalid")
+    nested: list[dict[str, object]] = []
+    for item in nested_value:
+        if not isinstance(item, dict) or set(item) != {"name", "fields"}:
+            raise VerificationError("qualification_artifact_invalid")
+        nested.append(
+            {
+                "name": _sanitize_qualification_name(item["name"]),
+                "fields": _sanitize_qualification_fields(item["fields"]),
+            }
+        )
+    if nested != sorted(nested, key=lambda item: item["name"]):
+        raise VerificationError("qualification_artifact_invalid")
+    if len({item["name"] for item in nested}) != len(nested):
+        raise VerificationError("qualification_artifact_invalid")
+    profile = value["validator_profile"]
+    if not isinstance(profile, dict) or set(profile) != {
+        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
+        "declared_client_tools_class", "web_search_max_tool_calls_class",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    if any(
+        type(profile[name]) is not bool
+        for name in ("codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search")
+    ):
+        raise VerificationError("qualification_artifact_invalid")
+    if profile["declared_client_tools_class"] not in _QUALIFICATION_DECLARED_TOOL_CLASSES:
+        raise VerificationError("qualification_artifact_invalid")
+    if profile["web_search_max_tool_calls_class"] not in _QUALIFICATION_WEB_SEARCH_CLASSES:
+        raise VerificationError("qualification_artifact_invalid")
+    rejection = value["rejection"]
+    if not isinstance(rejection, dict) or set(rejection) != {"outcome", "code"}:
+        raise VerificationError("qualification_artifact_invalid")
+    if rejection["outcome"] != "validator_rejected" or rejection["code"] not in {
+        "responses_stream_event_not_supported", "responses_stream_provider_failure", "other",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    return {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": _sanitize_qualification_name(value["event_type"], event=True),
+        "top_level_fields": _sanitize_qualification_fields(value["top_level_fields"]),
+        "nested_object_fields": nested,
+        "validator_profile": {
+            "codex_streaming_tool_events": profile["codex_streaming_tool_events"],
+            "codex_encrypted_reasoning_replay": profile["codex_encrypted_reasoning_replay"],
+            "web_search": profile["web_search"],
+            "declared_client_tools_class": profile["declared_client_tools_class"],
+            "web_search_max_tool_calls_class": profile["web_search_max_tool_calls_class"],
+        },
+        "rejection": {"outcome": "validator_rejected", "code": rejection["code"]},
+    }
+
+
+def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
+    artifact = root / "rejection.json"
+    try:
+        artifact_stat = artifact.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+    if not stat.S_ISREG(artifact_stat.st_mode) or stat.S_IMODE(artifact_stat.st_mode) != 0o600:
+        raise VerificationError("qualification_artifact_invalid")
+    try:
+        payload = artifact.read_bytes()
+        if len(payload) > 64 * 1024:
+            raise VerificationError("qualification_artifact_too_large")
+        value = json.loads(payload)
+    except VerificationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+    return _sanitize_qualification_rejection(value)
 
 
 def _local_config(
@@ -3540,6 +3680,7 @@ def _run_composed_impl(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
+    qualification_hook: bool = False,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
@@ -3578,7 +3719,16 @@ def _run_composed_impl(
         signing_secret=signing_secret,
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
+        qualification_artifact=(root / "rejection.json") if qualification_hook else None,
     )
+    if qualification_hook:
+        gateway_env.update(
+            {
+                QUALIFICATION_HOOK_ENV: "1",
+                QUALIFICATION_ROOT_ENV: str(root),
+                QUALIFICATION_ARTIFACT_ENV: str(root / "rejection.json"),
+            }
+        )
     tracker.set("migration")
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
@@ -4180,6 +4330,196 @@ def _run_direct_stream_diagnostic(
         _stop_process(relay)
 
 
+def _run_codex_tool_qualification(
+    root: Path,
+    runtime: RuntimeReference | None,
+    codex_binary: Path,
+    *,
+    fake_qwen: bool,
+    tracker: StageTracker,
+) -> dict[str, object]:
+    """Run the one-process 155-s qualification without the product matrix."""
+
+    import scripts.capture_codex_protocol as capture
+
+    tracker.set("postgres_image")
+    postgres_url, container, pulled = _start_postgres(root, tracker=tracker)
+    gateway = local = qwen_relay = None
+    relay = gateway_output = None
+    fake_qwen_server: _FakeQwenServer | None = None
+    fake_qwen_thread: threading.Thread | None = None
+    relay_thread = gateway_output_thread = None
+    qwen_relay_port = _free_port()
+    gateway_port = _free_port()
+    local_port = 18031
+    qwen_relay_token = "synthetic-qwen-relay-token"
+    service_token = secrets.token_urlsafe(32)
+    signing_secret = secrets.token_urlsafe(32)
+    derivation_secret = secrets.token_urlsafe(32)
+    encryption_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    qualification_artifact = root / "rejection.json"
+    gateway_env = _gateway_environment(
+        postgres_url,
+        gateway_port=gateway_port,
+        service_token=service_token,
+        signing_secret=signing_secret,
+        derivation_secret=derivation_secret,
+        encryption_key=encryption_key,
+        qualification_artifact=qualification_artifact,
+    )
+    gateway_env.update(
+        {
+            QUALIFICATION_HOOK_ENV: "1",
+            QUALIFICATION_ROOT_ENV: str(root),
+        }
+    )
+    try:
+        tracker.set("migration")
+        migration = _run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=REPO_ROOT,
+            env={**os.environ, **gateway_env},
+            timeout=120,
+        )
+        if migration.returncode != 0:
+            raise VerificationError("qualification_migration_failed")
+        relay, relay_thread = _start_relay(local_port)
+        if fake_qwen:
+            tracker.set("qwen_relay_start")
+            fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen()
+        else:
+            fake_qwen_token = None
+        previous_environment = os.environ.copy()
+        os.environ.update(gateway_env)
+        try:
+            seeded = asyncio.run(
+                _seed_database(
+                    postgres_url,
+                    relay_port=relay.server_address[1],
+                    failure_port=relay.server_address[1],
+                    differential=True,
+                )
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environment)
+        key = seeded[0]
+        qwen_relay = _start_qwen_relay(
+            qwen_relay_port,
+            runtime=None if fake_qwen else runtime,
+            endpoint=(
+                f"http://127.0.0.1:{fake_qwen_server.server_address[1]}/v1"
+                if fake_qwen_server is not None
+                else None
+            ),
+            qwen_token=fake_qwen_token,
+            relay_token=qwen_relay_token,
+        )
+        _wait_http(f"http://127.0.0.1:{qwen_relay_port}/__155f_status")
+        local_config = _local_config(
+            root,
+            local_port=local_port,
+            qwen_relay_port=qwen_relay_port,
+            qwen_relay_token=qwen_relay_token,
+        )
+        tracker.set("local_start")
+        local_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONPATH": str(LOCAL_ROOT / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            SERVICE_TOKEN_ENV: service_token,
+            SIGNING_SECRET_ENV: signing_secret,
+            "UV_PROJECT_ENVIRONMENT": str(root / "local-venv"),
+            QWEN_RELAY_TOKEN_ENV: qwen_relay_token,
+        }
+        local = _start_process(
+            ["uv", "run", "--project", str(LOCAL_ROOT), "--frozen", "slaif-local-coding", "--config", str(local_config)],
+            cwd=LOCAL_ROOT,
+            env=local_env,
+        )
+        tracker.set("gateway_start")
+        gateway = _start_process(
+            [sys.executable, "-m", "uvicorn", "slaif_gateway.main:app", "--host", "127.0.0.1", "--port", str(gateway_port), "--no-access-log", "--log-level", "warning"],
+            cwd=REPO_ROOT,
+            env=gateway_env,
+        )
+        _wait_http(f"http://127.0.0.1:{local_port}/healthz")
+        _wait_http(f"http://127.0.0.1:{local_port}/readyz")
+        _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
+        gateway_output, gateway_output_thread = _start_relay(
+            gateway_port, capture_requests=False, boundary_class="gateway_output"
+        )
+        workdir = root / "codex-work"
+        codex_home = root / "codex-home"
+        catalog = root / "codex-model-catalog.json"
+        workdir.mkdir(mode=0o700)
+        codex_home.mkdir(mode=0o700)
+        (workdir / "QUALIFICATION.txt").write_text("bounded qualification\n", encoding="utf-8")
+        codex_env = capture._isolated_environment(codex_home)
+        codex_env["OPENAI_API_KEY"] = key.plaintext
+        codex_env["SLAIF_CODEX_CAPTURE_API_KEY"] = key.plaintext
+        capture._write_0149_model_catalog(
+            codex_binary, catalog, environment=codex_env, model=CODEX_MODEL
+        )
+        tracker.set("codex_session_a")
+        command = capture._exec_command_0149(
+            codex_binary,
+            workdir=workdir,
+            port=gateway_output.server_address[1],
+            model=CODEX_MODEL,
+            model_catalog=catalog,
+            output_path=root / "codex-output",
+            instruction=(
+                "Use the provided shell_command function to read QUALIFICATION.txt, "
+                "then return its contents."
+            ),
+        )
+        result = _run(command, cwd=workdir, env=codex_env, timeout=180)
+        rejection = _read_qualification_rejection(root)
+        if fake_qwen and rejection is not None:
+            raise VerificationError("fake_rejection_artifact_present")
+        qwen_status = _qwen_relay_status(qwen_relay_port)
+        return {
+            "codex_returncode_class": "zero" if result.returncode == 0 else "nonzero",
+            "local_request_count": len(relay.snapshot()),
+            "qwen_inference_call_count": qwen_status.get("inference_calls", 0),
+            "qualification_rejection": rejection,
+            "fake_rehearsal": fake_qwen,
+        }
+    finally:
+        primary = sys.exc_info()[1]
+        try:
+            tracker.set("process_cleanup")
+            for process in (local, gateway, qwen_relay):
+                _stop_process(process)
+            for server, thread in (
+                (relay, relay_thread),
+                (gateway_output, gateway_output_thread),
+            ):
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=10)
+            if fake_qwen_server is not None:
+                fake_qwen_server.shutdown()
+                fake_qwen_server.server_close()
+            if fake_qwen_thread is not None:
+                fake_qwen_thread.join(timeout=10)
+            tracker.set("container_cleanup")
+            if container:
+                _docker("rm", "-f", container, timeout=30)
+            if pulled:
+                _docker("rmi", "postgres:16", timeout=60)
+            tracker.set("repository_cleanup")
+            _verify_repository_cleanup()
+        except Exception:
+            if primary is None:
+                raise VerificationError("qualification_cleanup_failed") from None
+        if primary is not None:
+            raise primary
+
+
 def _run_composed_stream_diagnostic(
     root: Path,
     runtime: RuntimeReference | None,
@@ -4718,6 +5058,7 @@ def _run_composed(
     codex_binary: Path,
     *,
     fake_qwen: bool = False,
+    qualification_hook: bool = False,
 ) -> dict[str, object]:
     tracker = StageTracker()
     try:
@@ -4726,6 +5067,7 @@ def _run_composed(
             runtime,
             codex_binary,
             fake_qwen=fake_qwen,
+            qualification_hook=qualification_hook,
             tracker=tracker,
         )
     except VerificationError:
@@ -4784,6 +5126,54 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         raise VerificationError(f"unexpected_{stage}") from None
 
 
+def _validate_qualification_result(
+    result: Mapping[str, object], *, fake_qwen: bool
+) -> dict[str, object]:
+    rejection = result.get("qualification_rejection")
+    if rejection is not None:
+        rejection = _sanitize_qualification_rejection(rejection)
+    if fake_qwen:
+        if rejection is not None:
+            raise VerificationError("fake_rejection_artifact_present")
+    elif (
+        rejection is None
+        or result.get("local_request_count") != 1
+        or result.get("qwen_inference_call_count") != 1
+        or result.get("codex_returncode_class") != "nonzero"
+    ):
+        raise VerificationError("qualification_evidence_incomplete")
+    return {
+        "codex_returncode_class": result.get("codex_returncode_class"),
+        "local_request_count": result.get("local_request_count"),
+        "qwen_inference_call_count": result.get("qwen_inference_call_count"),
+        "qualification_rejection": rejection,
+        "fake_rehearsal": fake_qwen,
+    }
+
+
+def run_qualification(*, fake_qwen: bool = False) -> dict[str, object]:
+    """Run exactly one Codex process qualification, with no client matrix."""
+
+    _verify_commit_topology()
+    runtime = None if fake_qwen else _read_runtime_reference()
+    _verify_fixtures()
+    if not fake_qwen:
+        _verify_protected_model_health(runtime)
+    with tempfile.TemporaryDirectory(prefix="slaif-155s-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        root.chmod(0o700)
+        _validate_local_config(root, runtime)
+        codex_binary = _install_codex(root)
+        result = _run_codex_tool_qualification(
+            root,
+            runtime,
+            codex_binary,
+            fake_qwen=fake_qwen,
+            tracker=StageTracker(),
+        )
+    return _validate_qualification_result(result, fake_qwen=fake_qwen)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qwen-relay", action="store_true")
@@ -4791,9 +5181,26 @@ def main() -> int:
     parser.add_argument("--stream-differential", action="store_true")
     parser.add_argument("--composed-only", action="store_true")
     parser.add_argument("--composed-only-fake", action="store_true")
+    parser.add_argument("--qualification", action="store_true")
+    parser.add_argument("--qualification-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
+    if arguments.qualification or arguments.qualification_fake:
+        try:
+            result = run_qualification(fake_qwen=arguments.qualification_fake)
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
+        print(
+            "QUALIFICATION_REJECTION "
+            + json.dumps(
+                result["qualification_rejection"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
     if arguments.stream_differential:
         try:
             result = run_stream_differential()

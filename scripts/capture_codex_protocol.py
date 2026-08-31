@@ -1582,6 +1582,7 @@ def _exec_command_0149(
     model_catalog: Path,
     output_path: Path,
     ephemeral: bool = True,
+    instruction: str = "Return the word synthetic.",
 ) -> list[str]:
     base_url = f'"http://127.0.0.1:{port}/v1"'
     command = [
@@ -1610,7 +1611,7 @@ def _exec_command_0149(
         "check_for_update_on_startup=false",
         "-o",
         str(output_path),
-        "Return the word synthetic.",
+        instruction,
     ]
     if ephemeral:
         command.insert(5, "--ephemeral")

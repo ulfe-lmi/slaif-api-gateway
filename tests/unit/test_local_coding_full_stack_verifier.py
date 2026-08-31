@@ -56,6 +56,138 @@ def test_runtime_reference_repr_and_str_redact_both_private_values() -> None:
     assert "source-canary" not in str(reference)
 
 
+def _valid_qualification_artifact() -> dict[str, object]:
+    return {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": "response.unknown",
+        "top_level_fields": [
+            {"name": "response", "type": "object"},
+            {"name": "type", "type": "string"},
+        ],
+        "nested_object_fields": [
+            {"name": "response", "fields": [{"name": "status", "type": "string"}]}
+        ],
+        "validator_profile": {
+            "codex_streaming_tool_events": True,
+            "codex_encrypted_reasoning_replay": False,
+            "web_search": False,
+            "declared_client_tools_class": "bounded",
+            "web_search_max_tool_calls_class": "none",
+        },
+        "rejection": {
+            "outcome": "validator_rejected",
+            "code": "responses_stream_event_not_supported",
+        },
+    }
+
+
+def test_qualification_artifact_sanitizer_rebuilds_only_canonical_schema(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "rejection.json"
+    artifact.write_text(verifier.json.dumps(_valid_qualification_artifact()), encoding="utf-8")
+    artifact.chmod(0o600)
+    safe = verifier._read_qualification_rejection(tmp_path)
+    assert safe == _valid_qualification_artifact()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value["top_level_fields"].append({"name": "type", "type": "string"}),
+        lambda value: value["top_level_fields"].reverse(),
+        lambda value: value["top_level_fields"].__setitem__(0, {"name": "bad key", "type": "string"}),
+        lambda value: value["top_level_fields"].__setitem__(0, {"name": "x" * 65, "type": "string"}),
+        lambda value: value["top_level_fields"].__setitem__(0, {"name": "Ω", "type": "string"}),
+        lambda value: value["top_level_fields"].__setitem__(0, {"name": "type", "type": "invalid"}),
+        lambda value: value["validator_profile"].__setitem__("declared_client_tools_class", "other"),
+    ],
+)
+def test_qualification_artifact_sanitizer_rejects_tampered_names_order_and_classes(
+    tmp_path: Path, mutation
+) -> None:
+    value = _valid_qualification_artifact()
+    mutation(value)
+    artifact = tmp_path / "rejection.json"
+    artifact.write_text(verifier.json.dumps(value), encoding="utf-8")
+    artifact.chmod(0o600)
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
+        verifier._read_qualification_rejection(tmp_path)
+
+
+def test_qualification_artifact_sanitizer_rejects_unsafe_path_state(tmp_path: Path) -> None:
+    artifact = tmp_path / "rejection.json"
+    artifact.write_text(verifier.json.dumps(_valid_qualification_artifact()), encoding="utf-8")
+    artifact.chmod(0o644)
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
+        verifier._read_qualification_rejection(tmp_path)
+
+
+def test_qualification_mode_launches_one_codex_process_and_no_openai_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Path, object, Path, bool]] = []
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
+    monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+
+    def launch(root, runtime, binary, *, fake_qwen, tracker):
+        calls.append((root, runtime, binary, fake_qwen))
+        return {"codex_returncode_class": "nonzero", "qualification_rejection": None}
+
+    monkeypatch.setattr(verifier, "_run_codex_tool_qualification", launch)
+    result = verifier.run_qualification(fake_qwen=True)
+    assert result["codex_returncode_class"] == "nonzero"
+    assert len(calls) == 1
+    assert calls[0][3] is True
+
+
+def test_qualification_result_requires_exact_protected_predicates() -> None:
+    good = {
+        "codex_returncode_class": "nonzero",
+        "local_request_count": 1,
+        "qwen_inference_call_count": 1,
+        "qualification_rejection": _valid_qualification_artifact(),
+    }
+    assert verifier._validate_qualification_result(good, fake_qwen=False)[
+        "qualification_rejection"
+    ] == good["qualification_rejection"]
+    for field, value in (
+        ("qualification_rejection", None),
+        ("local_request_count", 0),
+        ("qwen_inference_call_count", 2),
+        ("codex_returncode_class", "zero"),
+    ):
+        bad = dict(good)
+        bad[field] = value
+        with pytest.raises(verifier.VerificationError, match="qualification_evidence_incomplete"):
+            verifier._validate_qualification_result(bad, fake_qwen=False)
+    with pytest.raises(verifier.VerificationError, match="fake_rejection_artifact_present"):
+        verifier._validate_qualification_result(
+            {"qualification_rejection": _valid_qualification_artifact()}, fake_qwen=True
+        )
+
+
+def test_qualification_cli_emits_one_canonical_safe_rejection_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = {
+        "codex_returncode_class": "nonzero",
+        "local_request_count": 1,
+        "qwen_inference_call_count": 1,
+        "qualification_rejection": _valid_qualification_artifact(),
+    }
+    monkeypatch.setattr(verifier, "run_qualification", lambda **_kwargs: result)
+    monkeypatch.setattr(sys, "argv", ["verify", "--qualification"])
+    assert verifier.main() == 0
+    assert capsys.readouterr().out == (
+        "QUALIFICATION_REJECTION "
+        + verifier.json.dumps(result["qualification_rejection"], sort_keys=True, separators=(",", ":"))
+        + "\n"
+    )
+
+
 def test_codex_0149_production_normalizer_accepts_only_reviewed_candidate_shapes() -> None:
     from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE
 
@@ -150,7 +282,7 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
 ) -> None:
     current_head = "current-155r-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
+    report_path = "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -160,7 +292,7 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-r-retained-event-qualification-and-final-stream.md"
+            return "oap/active\noap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,19 +324,19 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155r_topology_anchors_are_the_155q_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "a5154d68db3999c3df7c8d03cb13eed86c7fcea2"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "a3db9c88065a0cb5d7c0af797332752024d0f289"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "a08655180dcd280529ca798b3509d4f28e7f8ab7"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-q-qualify-rejected-qwen-event-and-final-stream.md"
+def test_155s_topology_anchors_are_the_155r_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "2527030f5bbb90a7f0f354eb5347caee333ce4a7"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "19d9686636b0fbf27ab96d41c610a37dad3c087a"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "62f8063c9f4fc304f5b835741b1a263202285b56"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
 
 
-def test_155r_topology_anchors_exact_local_report_parent_and_path() -> None:
-    assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005l")
-    assert verifier.LOCAL_REPORT_HEAD == "1a87ce1c6628885e567cecc8f4a9e78ce7078341"
-    assert verifier.LOCAL_REPORT_PARENT == "2d1e362f4e1bf7eb6b4f29f9f116ed612fce9e78"
+def test_155s_topology_anchors_exact_local_report_parent_and_path() -> None:
+    assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
+    assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
+    assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
     assert verifier.LOCAL_SIGNED_CONTRACT_HEAD == "356be8345dd71d6fddf829278651d18e485731d4"
-    assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-l-exact-composed-stream-owner-and-acceptance-closure.md"
+    assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
 
 
 def test_155r_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
