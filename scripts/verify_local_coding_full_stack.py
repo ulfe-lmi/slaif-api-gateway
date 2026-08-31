@@ -874,6 +874,55 @@ def _safe_gateway_error_param_class(value: object) -> str:
     return "other"
 
 
+def _safe_roundtrip_projection_class(value: object) -> str:
+    if not isinstance(value, dict) or value.get("stream_class") != "true":
+        return "other"
+    counts = value.get("top_level_tool_type_counts")
+    input_types = value.get("input_item_type_sequence")
+    if not isinstance(counts, dict) or not isinstance(input_types, list):
+        return "other"
+    if any(
+        not isinstance(tool_type, str)
+        or tool_type not in {"function", "custom", "namespace", "tool_search", "web_search", "other"}
+        or type(count) is not int
+        or count < 0
+        or count > 64
+        for tool_type, count in counts.items()
+    ):
+        return "other"
+    if any(
+        not isinstance(item_type, str)
+        or item_type
+        not in {
+            "message",
+            "reasoning",
+            "additional_tools",
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "other",
+        }
+        for item_type in input_types
+    ):
+        return "other"
+    has_adjacent_function_pair = any(
+        input_types[index : index + 2] == ["function_call", "function_call_output"]
+        for index in range(len(input_types) - 1)
+    )
+    has_bounded_top_level_tool = (
+        counts.get("function", 0) + counts.get("custom", 0) > 0
+        and counts.get("other", 0) == 0
+    )
+    if (
+        has_bounded_top_level_tool
+        and has_adjacent_function_pair
+        and "additional_tools" not in input_types
+    ):
+        return "top_level_function_pair_without_additional_tools"
+    return "other"
+
+
 _SAFE_SSE_EVENT_TYPES = frozenset(
     {
         "response.created",
@@ -5038,6 +5087,7 @@ def _localize_composed_codex_failure(
     ):
         code_class = "other"
         param_class = "other"
+        projection_class = "other"
         if isinstance(gateway_error_code_classes, list) and len(gateway_error_code_classes) >= 2:
             candidate = gateway_error_code_classes[1]
             if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_CODE_CLASSES:
@@ -5048,13 +5098,10 @@ def _localize_composed_codex_failure(
                 param_class = candidate
         if isinstance(request_projections, list) and len(request_projections) >= 2:
             second_projection = request_projections[1]
-            if isinstance(second_projection, dict):
-                input_types = second_projection.get("input_item_type_sequence")
-                if not isinstance(input_types, list):
-                    code_class = "other"
+            projection_class = _safe_roundtrip_projection_class(second_projection)
         return (
             "composed_tool_roundtrip_second_turn_gateway_"
-            f"{code_class}_{param_class}"
+            f"{code_class}_{param_class}_{projection_class}"
         )
     if codex_failure_category in stream_categories or any(
         isinstance(structure, dict) and structure.get("invalid") is True

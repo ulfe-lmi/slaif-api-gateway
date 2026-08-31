@@ -476,7 +476,29 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
                 "gateway_error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
                 "gateway_error_param_classes": ["none", "input"],
             },
-            "composed_tool_roundtrip_second_turn_gateway_codex_tool_roundtrip_invalid_input",
+            "composed_tool_roundtrip_second_turn_gateway_codex_tool_roundtrip_invalid_input_other",
+        ),
+        (
+            {
+                "gateway_requests": 2,
+                "gateway_statuses": [200, 400],
+                "local_requests": 2,
+                "local_statuses": [200, 200],
+                "gateway_error_code_classes": ["none", "replay_reference_not_found"],
+                "gateway_error_param_classes": ["none", "input"],
+                "request_projections": [
+                    {},
+                    {
+                        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+                        "input_item_type_sequence": [
+                            "function_call",
+                            "function_call_output",
+                        ],
+                        "stream_class": "true",
+                    },
+                ],
+            },
+            "composed_tool_roundtrip_second_turn_gateway_replay_reference_not_found_input_top_level_function_pair_without_additional_tools",
         ),
         (
             {
@@ -531,6 +553,11 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
         "input_item_type_sequence": ["function_call", "function_call_output"],
         "stream_class": "true",
     }
+    assert (
+        verifier._safe_roundtrip_projection_class(projection)
+        == "top_level_function_pair_without_additional_tools"
+    )
+    assert verifier._safe_roundtrip_projection_class({}) == "other"
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:
