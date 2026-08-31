@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "e7fedae6562cdfd7df6a605128e5bc93fc224119"
-GATEWAY_IMPLEMENTATION_HEAD = "ce725def4b931c2bf86770d8c6bd75c7e37247ef"
-GATEWAY_ACTIVATION_HEAD = "ad3ab547052d8a7600db9802e25da45bbf4b07da"
-GATEWAY_REPORT_PATH = "oap/reports/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
+GATEWAY_REPORT_HEAD = "9046ccda503d0393ab5df155fdf028810d1726f5"
+GATEWAY_IMPLEMENTATION_HEAD = "bb45e0813a15b41541c5b1ef48537fa835995106"
+GATEWAY_ACTIVATION_HEAD = "19d4b2f3d8ea7c26980eaab5f60b1125d0bd4cc8"
+GATEWAY_REPORT_PATH = "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md"
-TASK_DB = "slaif_gateway_oap_155t_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md"
+TASK_DB = "slaif_gateway_oap_155u_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -62,9 +62,9 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
-QUALIFICATION_HOOK_ENV = "SLAIF_155T_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155T_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155T_REJECTION_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155U_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155U_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155U_REJECTION_ROOT"
 QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
 QUALIFICATION_MAX_BYTES = 64 * 1024
 QUALIFICATION_MAX_FIELDS = 32
@@ -298,7 +298,7 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-u-evidence-lifecycle-and-protected-tool-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
@@ -969,6 +969,21 @@ def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
 def _assert_fake_qualification_artifact_absent(root: Path) -> None:
     if _read_qualification_rejection(root) is not None:
         raise VerificationError("fake_rejection_artifact_present")
+
+
+def _retain_sanitized_qualification_rejection(
+    result: dict[str, object], reread: dict[str, object] | None
+) -> dict[str, object]:
+    """Keep the inner sanitized result authoritative across temp-root cleanup."""
+    retained = result.get("qualification_rejection")
+    if retained is not None:
+        retained = _sanitize_qualification_rejection(retained)
+        if reread is not None and reread != retained:
+            raise VerificationError("qualification_evidence_inconsistent")
+    else:
+        retained = reread
+    result["qualification_rejection"] = retained
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -2652,10 +2667,12 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
         token: str,
         *,
         tool_roundtrip_mode: bool = False,
+        qualification_rejection_mode: bool = False,
     ) -> None:
         super().__init__(server_address, _FakeQwenHandler)
         self.token = token
         self.tool_roundtrip_mode = tool_roundtrip_mode
+        self.qualification_rejection_mode = qualification_rejection_mode
         self.calls = 0
         self.compiler_calls = 0
         self.inference_calls = 0
@@ -2694,6 +2711,7 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
                 "inference_calls": self.inference_calls,
                 "stream_calls": self.stream_calls,
                 "tool_roundtrip_mode": self.tool_roundtrip_mode,
+                "qualification_rejection_mode": self.qualification_rejection_mode,
                 "tool_roundtrip_turns": self.tool_roundtrip_turns,
                 "tool_result_observed": self.tool_result_observed,
                 "function_lifecycle_count": self.function_lifecycle_count,
@@ -2874,6 +2892,9 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         return json.dumps(values, separators=(",", ":"))
 
     def _stream(self, payload: dict[str, object]) -> None:
+        if self.server.qualification_rejection_mode:
+            self._stream_qualification_rejection()
+            return
         if self.server.tool_roundtrip_mode:
             input_items = payload.get("input")
             result_count = (
@@ -2902,6 +2923,34 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 self._stream_message()
             return
         self._stream_message()
+
+    def _stream_qualification_rejection(self) -> None:
+        self._write_stream_events(
+            (
+                (
+                    "response.created",
+                    {
+                        "type": "response.created",
+                        "sequence_number": 0,
+                        "response": {
+                            "id": "resp_qualification",
+                            "object": "response",
+                            "status": "in_progress",
+                            "model": CODEX_MODEL,
+                        },
+                    },
+                ),
+                (
+                    "response.output_item.unknown",
+                    {
+                        "type": "response.output_item.unknown",
+                        "sequence_number": 1,
+                        "output_index": 0,
+                        "item": {"type": "unknown"},
+                    },
+                ),
+            )
+        )
 
     def _stream_function(self, payload: dict[str, object]) -> None:
         tool_name = next(
@@ -3719,11 +3768,14 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
 
 
 def _start_fake_qwen(
-    *, tool_roundtrip_mode: bool = False
+    *, tool_roundtrip_mode: bool = False, qualification_rejection_mode: bool = False
 ) -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
     server = _FakeQwenServer(
-        ("127.0.0.1", 0), token, tool_roundtrip_mode=tool_roundtrip_mode
+        ("127.0.0.1", 0),
+        token,
+        tool_roundtrip_mode=tool_roundtrip_mode,
+        qualification_rejection_mode=qualification_rejection_mode,
     )
     thread = threading.Thread(target=server.serve_forever, name="155r-fake-qwen", daemon=True)
     thread.start()
@@ -5835,6 +5887,7 @@ def _run_composed_stream_diagnostic(
     *,
     fake_qwen: bool = False,
     tool_roundtrip_mode: bool = False,
+    qualification_rejection_mode: bool = False,
     codex_binary: Path | None = None,
     tracker: StageTracker | None = None,
     qualification_hook: bool = False,
@@ -5894,7 +5947,8 @@ def _run_composed_stream_diagnostic(
         if fake_qwen:
             tracker.set("qwen_relay_start")
             fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen(
-                tool_roundtrip_mode=tool_roundtrip_mode
+                tool_roundtrip_mode=tool_roundtrip_mode,
+                qualification_rejection_mode=qualification_rejection_mode,
             )
         previous_environment = os.environ.copy()
         tracker.set("database_seed")
@@ -6174,7 +6228,7 @@ def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str
 
 
 def _run_dedicated_codex_tool_roundtrip(
-    *, fake_qwen: bool, qualification_hook: bool
+    *, fake_qwen: bool, qualification_hook: bool, qualification_rejection_mode: bool = False
 ) -> dict[str, object]:
     """Run one dedicated Codex tool roundtrip, with optional disposable hook."""
     _verify_commit_topology()
@@ -6183,7 +6237,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155t-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155u-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -6193,18 +6247,25 @@ def _run_dedicated_codex_tool_roundtrip(
             runtime,
             fake_qwen=fake_qwen,
             tool_roundtrip_mode=True,
+            qualification_rejection_mode=qualification_rejection_mode,
             codex_binary=codex_binary,
             qualification_hook=qualification_hook,
             tracker=StageTracker(),
         )
-        rejection = _read_qualification_rejection(root)
-        if fake_qwen and qualification_hook:
+        reread_rejection = _read_qualification_rejection(root)
+        if fake_qwen and qualification_hook and qualification_rejection_mode:
+            if (
+                result.get("codex_exit_success") is not False
+                or result.get("qualification_rejection") is None
+            ):
+                raise VerificationError("forced_fake_rejection_missing")
+        elif fake_qwen and qualification_hook:
             _assert_fake_qualification_artifact_absent(root)
             if result.get("codex_exit_success") is not True:
                 raise VerificationError("fake_tool_roundtrip_failed")
-        elif qualification_hook and result.get("codex_exit_success") is not True and rejection is None:
+        elif qualification_hook and result.get("codex_exit_success") is not True and reread_rejection is None and result.get("qualification_rejection") is None:
             raise VerificationError("qualification_evidence_incomplete")
-        result["qualification_rejection"] = rejection
+        _retain_sanitized_qualification_rejection(result, reread_rejection)
     if not fake_qwen:
         post_runtime = _read_runtime_reference()
         _source_qwen_credential_only_for_local(post_runtime)
@@ -6220,6 +6281,15 @@ def run_codex_tool_roundtrip_qualification(*, fake_qwen: bool = False) -> dict[s
     return _run_dedicated_codex_tool_roundtrip(
         fake_qwen=fake_qwen,
         qualification_hook=True,
+    )
+
+
+def run_codex_tool_roundtrip_forced_fake_rejection() -> dict[str, object]:
+    """Run the real composed fake path with one deliberately invalid event."""
+    return _run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True,
+        qualification_hook=True,
+        qualification_rejection_mode=True,
     )
 
 
@@ -6544,6 +6614,7 @@ def main() -> int:
     parser.add_argument("--tool-roundtrip-fake", action="store_true")
     parser.add_argument("--tool-roundtrip-qualification", action="store_true")
     parser.add_argument("--tool-roundtrip-qualification-fake", action="store_true")
+    parser.add_argument("--tool-roundtrip-qualification-fake-rejection", action="store_true")
     parser.add_argument("--tool-roundtrip-protected", action="store_true")
     parser.add_argument("--tool-roundtrip-protected-fake", action="store_true")
     arguments = parser.parse_args()
@@ -6568,7 +6639,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155t-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155u-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
@@ -6582,11 +6653,15 @@ def main() -> int:
     if (
         arguments.tool_roundtrip_qualification
         or arguments.tool_roundtrip_qualification_fake
+        or arguments.tool_roundtrip_qualification_fake_rejection
     ):
         try:
-            result = run_codex_tool_roundtrip_qualification(
-                fake_qwen=arguments.tool_roundtrip_qualification_fake
-            )
+            if arguments.tool_roundtrip_qualification_fake_rejection:
+                result = run_codex_tool_roundtrip_forced_fake_rejection()
+            else:
+                result = run_codex_tool_roundtrip_qualification(
+                    fake_qwen=arguments.tool_roundtrip_qualification_fake
+                )
             rejection = result.get("qualification_rejection")
             if rejection is None:
                 print(

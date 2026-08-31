@@ -195,11 +195,11 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155t_topology_anchors_are_the_155s_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "e7fedae6562cdfd7df6a605128e5bc93fc224119"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "ce725def4b931c2bf86770d8c6bd75c7e37247ef"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "ad3ab547052d8a7600db9802e25da45bbf4b07da"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
+def test_155u_topology_anchors_are_the_155t_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "9046ccda503d0393ab5df155fdf028810d1726f5"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "bb45e0813a15b41541c5b1ef48537fa835995106"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "19d4b2f3d8ea7c26980eaab5f60b1125d0bd4cc8"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-t-codex-envelope-activation-and-function-roundtrip.md"
 
 
 def test_155s_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -504,6 +504,60 @@ def test_qualification_reader_rejects_foreign_owner(
     monkeypatch.setattr(Path, "lstat", foreign_lstat)
     with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
         verifier._read_qualification_rejection(root)
+
+
+def test_sanitized_rejection_survives_composed_cleanup_and_absent_reread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rejection = {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": "response.output_item.added",
+        "top_level_fields": [
+            {"name": "item", "type": "object"},
+            {"name": "type", "type": "string"},
+        ],
+        "nested_object_fields": [
+            {"name": "item", "fields": [{"name": "type", "type": "string"}]}
+        ],
+        "validator_profile": {
+            "codex_reasoning_events": True,
+            "codex_0149_function_tool_events": True,
+            "codex_streaming_tool_events": True,
+            "codex_encrypted_reasoning_replay": False,
+            "web_search": False,
+            "declared_client_tools_class": "bounded",
+            "web_search_max_tool_calls_class": "none",
+        },
+        "rejection": {
+            "outcome": "validator_rejected",
+            "code": "responses_stream_event_not_supported",
+        },
+    }
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
+    monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(
+        verifier,
+        "_run_composed_stream_diagnostic",
+        lambda *_args, **_kwargs: {
+            "codex_exit_success": False,
+            "qualification_rejection": rejection,
+        },
+    )
+    monkeypatch.setattr(verifier, "_read_qualification_rejection", lambda _root: None)
+    result = verifier._run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True,
+        qualification_hook=True,
+        qualification_rejection_mode=True,
+    )
+    assert result["qualification_rejection"] == rejection
+
+
+def test_qualification_rejection_dual_evidence_must_match() -> None:
+    result = {"qualification_rejection": {"unexpected": True}}
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
+        verifier._retain_sanitized_qualification_rejection(result, None)
 
 
 def test_dedicated_tool_roundtrip_modes_select_hook_and_hook_free_paths(
