@@ -302,7 +302,7 @@ def _verify_commit_topology() -> None:
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-t\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-u\n":
         raise VerificationError("active_selector_mismatch")
 
 
