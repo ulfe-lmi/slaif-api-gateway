@@ -29,7 +29,10 @@ from slaif_gateway.services.responses_request_policy import (
     codex_client_tool_declarations,
     responses_codex_streaming_tool_events_allowed,
 )
-from slaif_gateway.services.responses_gateway import _record_qualification_rejection
+from slaif_gateway.services.responses_gateway import (
+    _codex_reasoning_events_enabled,
+    _record_qualification_rejection,
+)
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
     enforce_responses_route_capabilities,
@@ -213,6 +216,23 @@ def _reasoning_done_event(sequence_number: int, *, text: str = "bounded") -> dic
 def _strict_reasoning_validator() -> ResponsesStreamEventValidator:
     return ResponsesStreamEventValidator(
         ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+
+
+def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> None:
+    local_context = {"server_module_id": "local-coding-v1"}
+    assert _codex_reasoning_events_enabled(
+        client_module_id="codex-0.149-responses-v1", server_context=local_context
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="codex-0.149-responses-v1",
+        server_context={"server_module_id": "openai-responses-v1"},
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="openai-default", server_context=local_context
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="codex-0.149-responses-v1", server_context=None
     )
 
 

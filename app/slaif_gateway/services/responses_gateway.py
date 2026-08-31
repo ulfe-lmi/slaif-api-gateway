@@ -487,14 +487,29 @@ def _build_local_coding_server_context(
             code="local_coding_identity_unavailable",
         ) from exc
     if identity is None:
-        return {"identity_mode": "static", "route": contract.route_name}
+        return {
+            "identity_mode": "static",
+            "route": contract.route_name,
+            "server_module_id": LOCAL_CODING_SERVER_MODULE_ID,
+        }
     return {
         "identity_mode": identity.identity_mode,
         "principal": identity.principal,
         "session": identity.session,
         "repository": identity.repository,
         "route": identity.route,
+        "server_module_id": LOCAL_CODING_SERVER_MODULE_ID,
     }
+
+
+def _codex_reasoning_events_enabled(
+    *, client_module_id: str, server_context: Mapping[str, object] | None
+) -> bool:
+    return (
+        client_module_id == "codex-0.149-responses-v1"
+        and isinstance(server_context, Mapping)
+        and server_context.get("server_module_id") == LOCAL_CODING_SERVER_MODULE_ID
+    )
 
 
 def _build_safe_responses_compact_upstream_body(
@@ -1297,8 +1312,9 @@ async def handle_response_create(
                     live_burn_budget=quota.live_burn_budget,
                     stream_validation_profile=ResponsesStreamValidationProfile(
                         codex_streaming_tool_events=codex_streaming_tool_events_requested,
-                        codex_reasoning_events=(
-                            client_module.module_id == "codex-0.149-responses-v1"
+                        codex_reasoning_events=_codex_reasoning_events_enabled(
+                            client_module_id=client_module.module_id,
+                            server_context=local_coding_server_context,
                         ),
 
                         codex_encrypted_reasoning_replay=(
