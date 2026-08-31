@@ -986,6 +986,22 @@ def _retain_sanitized_qualification_rejection(
     return result
 
 
+def _qualification_count_class(value: object) -> str:
+    if type(value) is int and 0 <= value <= 2:
+        return str(value)
+    return "other"
+
+
+def _qualification_turn_count_error(counts: tuple[object, object, object]) -> VerificationError:
+    gateway, local, qwen = counts
+    return VerificationError(
+        "qualification_turn_counts_"
+        f"g{_qualification_count_class(gateway)}_"
+        f"l{_qualification_count_class(local)}_"
+        f"q{_qualification_count_class(qwen)}"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CapturedRequest:
     path: str
@@ -2941,12 +2957,12 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                     },
                 ),
                 (
-                    "response.output_item.unknown",
+                    "response.output_item.added",
                     {
-                        "type": "response.output_item.unknown",
+                        "type": "response.output_item.added",
                         "sequence_number": 1,
                         "output_index": 0,
-                        "item": {"type": "unknown"},
+                        "item": {"type": "function_call"},
                     },
                 ),
             )
@@ -5413,7 +5429,7 @@ def _run_composed_codex_tool_roundtrip(
                 any(count not in (1, 2) for count in turn_counts)
                 or len(set(turn_counts)) != 1
             ):
-                raise VerificationError("qualification_evidence_incomplete")
+                raise _qualification_turn_count_error(turn_counts)
             function_call_output_count = 0
             for request in local_requests:
                 try:
@@ -6264,7 +6280,7 @@ def _run_dedicated_codex_tool_roundtrip(
             if result.get("codex_exit_success") is not True:
                 raise VerificationError("fake_tool_roundtrip_failed")
         elif qualification_hook and result.get("codex_exit_success") is not True and reread_rejection is None and result.get("qualification_rejection") is None:
-            raise VerificationError("qualification_evidence_incomplete")
+            raise VerificationError("qualification_artifact_missing")
         _retain_sanitized_qualification_rejection(result, reread_rejection)
     if not fake_qwen:
         post_runtime = _read_runtime_reference()
@@ -6272,7 +6288,7 @@ def _run_dedicated_codex_tool_roundtrip(
         _verify_protected_model_health(post_runtime)
     if not fake_qwen and qualification_hook and result.get("codex_exit_success") is not True:
         if result.get("qualification_rejection") is None:
-            raise VerificationError("qualification_evidence_incomplete")
+            raise VerificationError("qualification_retained_evidence_missing")
     return result
 
 

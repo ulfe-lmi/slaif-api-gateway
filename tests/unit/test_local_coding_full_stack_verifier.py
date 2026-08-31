@@ -560,6 +560,23 @@ def test_qualification_rejection_dual_evidence_must_match() -> None:
         verifier._retain_sanitized_qualification_rejection(result, None)
 
 
+@pytest.mark.parametrize(
+    ("counts", "expected"),
+    [
+        ((1, 1, 2), "qualification_turn_counts_g1_l1_q2"),
+        ((0, 2, 1), "qualification_turn_counts_g0_l2_q1"),
+        ((3, 1, 1), "qualification_turn_counts_gother_l1_q1"),
+        (("bad", 1, 1), "qualification_turn_counts_gother_l1_q1"),
+    ],
+)
+def test_qualification_turn_count_error_is_bounded(
+    counts: tuple[object, object, object], expected: str
+) -> None:
+    error = verifier._qualification_turn_count_error(counts)
+    assert str(error) == expected
+    assert "bad" not in str(error)
+
+
 def test_dedicated_tool_roundtrip_modes_select_hook_and_hook_free_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
