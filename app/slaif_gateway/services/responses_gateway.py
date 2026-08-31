@@ -209,7 +209,6 @@ from slaif_gateway.services.upstream_request_contracts import (
 )
 
 
-
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
 RESPONSES_INPUT_TOKENS_ENDPOINT = "/v1/responses/input_tokens"
