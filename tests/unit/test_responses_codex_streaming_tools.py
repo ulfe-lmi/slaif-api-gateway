@@ -759,6 +759,27 @@ def test_codex_0149_function_lifecycle_rejects_reordering_and_inner_index_smuggl
     assert all(validator.validate(event) for event in events[:6])
     assert not validator.validate(events[6])
 
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(output_index=0),
+        lambda event: event["item"].update(sequence_number=6),
+        lambda event: event.pop("output_index"),
+        lambda event: event.update(output_index=1),
+        lambda event: event.pop("sequence_number"),
+        lambda event: event.update(sequence_number=2),
+    ],
+)
+def test_codex_0149_done_requires_exact_event_coordinates_and_no_inner_coordinates(
+    mutation,
+) -> None:
+    events = _strict_function_events()
+    mutation(events[6])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
     events = _strict_function_events()
     events[6].pop("output_index")
     validator = ResponsesStreamEventValidator(_strict_function_profile())
