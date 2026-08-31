@@ -563,7 +563,12 @@ def _start_postgres(
 
 
 async def _seed_database(
-    database_url: str, *, relay_port: int, failure_port: int, differential: bool = False
+    database_url: str,
+    *,
+    relay_port: int,
+    failure_port: int,
+    differential: bool = False,
+    tool_roundtrip_only: bool = False,
 ) -> tuple[SeededKey, ...]:
     sys.path.insert(0, str(REPO_ROOT / "app"))
     from datetime import UTC, datetime, timedelta
@@ -602,15 +607,16 @@ async def _seed_database(
                 timeout_seconds=300,
                 max_retries=0,
             )
-            await provider_configs.create_provider_config(
-                provider="synthetic-failure",
-                display_name="155f failure",
-                base_url=f"http://127.0.0.1:{failure_port}/v1",
-                api_key_env_var="SLAIF_155F_FAILURE_KEY",
-                enabled=True,
-                timeout_seconds=10,
-                max_retries=0,
-            )
+            if not tool_roundtrip_only:
+                await provider_configs.create_provider_config(
+                    provider="synthetic-failure",
+                    display_name="155f failure",
+                    base_url=f"http://127.0.0.1:{failure_port}/v1",
+                    api_key_env_var="SLAIF_155F_FAILURE_KEY",
+                    enabled=True,
+                    timeout_seconds=10,
+                    max_retries=0,
+                )
             capabilities = default_responses_capabilities()
             capabilities.update(
                 {
@@ -645,23 +651,24 @@ async def _seed_database(
                     },
                 },
             )
-            failure_capabilities = default_responses_capabilities()
-            await ModelRoutesRepository(session).create_model_route(
-                requested_model=FAILURE_MODEL,
-                provider="synthetic-failure",
-                upstream_model=FAILURE_MODEL,
-                match_type="exact",
-                endpoint="/v1/responses",
-                priority=1,
-                visible_in_models=False,
-                supports_streaming=False,
-                capabilities={"responses": failure_capabilities},
-            )
+            if not tool_roundtrip_only:
+                failure_capabilities = default_responses_capabilities()
+                await ModelRoutesRepository(session).create_model_route(
+                    requested_model=FAILURE_MODEL,
+                    provider="synthetic-failure",
+                    upstream_model=FAILURE_MODEL,
+                    match_type="exact",
+                    endpoint="/v1/responses",
+                    priority=1,
+                    visible_in_models=False,
+                    supports_streaming=False,
+                    capabilities={"responses": failure_capabilities},
+                )
             pricing = PricingRulesRepository(session)
-            for provider, model in (
-                ("local-coding", CODEX_MODEL),
-                ("synthetic-failure", FAILURE_MODEL),
-            ):
+            pricing_rows = [("local-coding", CODEX_MODEL)]
+            if not tool_roundtrip_only:
+                pricing_rows.append(("synthetic-failure", FAILURE_MODEL))
+            for provider, model in pricing_rows:
                 await pricing.create_pricing_rule(
                     provider=provider,
                     upstream_model=model,
@@ -674,7 +681,7 @@ async def _seed_database(
                 )
             service = KeyService(settings=Settings(), gateway_keys_repository=GatewayKeysRepository(session), one_time_secrets_repository=OneTimeSecretsRepository(session), audit_repository=AuditRepository(session), model_routes_repository=ModelRoutesRepository(session))
             policy = {"version": 1, "local_coding_repository_scope": "155f-repository", "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"], "client_module": {"id": CODEX_MODULE_ID, "version": CODEX_MODULE_VERSION, "fixture_sha256": CODEX_FIXTURE_SHA256}}
-            key_input = dict(owner_id=owner.id, cohort_id=cohort.id, valid_from=now - timedelta(minutes=1), valid_until=now + timedelta(hours=1), cost_limit_eur=Decimal("20"), token_limit_total=2_000_000, request_limit_total=50, allowed_models=[CODEX_MODEL, FAILURE_MODEL], allowed_endpoints=["/v1/models", "/v1/responses"], responses_policy=policy)
+            key_input = dict(owner_id=owner.id, cohort_id=cohort.id, valid_from=now - timedelta(minutes=1), valid_until=now + timedelta(hours=1), cost_limit_eur=Decimal("20"), token_limit_total=2_000_000, request_limit_total=50, allowed_models=[CODEX_MODEL] if tool_roundtrip_only else [CODEX_MODEL, FAILURE_MODEL], allowed_endpoints=["/v1/models", "/v1/responses"], responses_policy=policy)
             created = await service.create_gateway_key(CreateGatewayKeyInput(**key_input, note="155f disposable key"))
             if differential:
                 await session.commit()
@@ -790,6 +797,8 @@ _SAFE_SSE_EVENT_TYPES = frozenset(
         "response.in_progress",
         "response.output_item.added",
         "response.output_item.done",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
         "response.content_part.added",
         "response.content_part.done",
         "response.output_text.delta",
@@ -3309,8 +3318,8 @@ def _start_fake_qwen(
     return server, thread, token
 
 
-def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
-    """Run one actual Codex process against the opt-in two-turn fake Qwen."""
+def _run_codex_tool_roundtrip_direct_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
+    """Unit smoke: run Codex directly against the opt-in fake Qwen."""
     import scripts.capture_codex_protocol as capture
 
     fake, thread, token = _start_fake_qwen(tool_roundtrip_mode=True)
@@ -4521,11 +4530,256 @@ def _run_direct_stream_diagnostic(
         _stop_process(relay)
 
 
+def _run_composed_codex_tool_roundtrip(
+    *,
+    root: Path,
+    codex_binary: Path,
+    key: SeededKey,
+    postgres_url: str,
+    relay: _ForwardingRelay,
+    gateway_output: _ForwardingRelay,
+    fake_qwen_server: _FakeQwenServer,
+    qwen_port: int,
+    service_token: str,
+) -> dict[str, object]:
+    import scripts.capture_codex_protocol as capture
+
+    home = root / "codex-home"
+    work = root / "codex-work"
+    catalog = root / "codex-catalog.json"
+    home.mkdir(mode=0o700)
+    work.mkdir(mode=0o700)
+    (work / "SYNTHETIC_TASK.md").write_text(
+        "bounded local tool task\n", encoding="utf-8"
+    )
+    environment = capture._isolated_environment(home)
+    environment["SLAIF_CODEX_CAPTURE_API_KEY"] = key.plaintext
+    capture._write_0149_model_catalog(
+        codex_binary,
+        catalog,
+        environment=environment,
+        model=CODEX_MODEL,
+    )
+    result = _run(
+        capture._exec_command_0149(
+            codex_binary,
+            workdir=work,
+            port=gateway_output.server_address[1],
+            model=CODEX_MODEL,
+            model_catalog=catalog,
+            output_path=root / "codex-output.json",
+            ephemeral=True,
+            instruction=(
+                "Use one local shell command to read SYNTHETIC_TASK.md, then report completion."
+            ),
+        ),
+        cwd=REPO_ROOT,
+        env=environment,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        raise VerificationError("composed_tool_roundtrip_codex_failed")
+
+    gateway_requests = gateway_output.snapshot()
+    local_requests = relay.snapshot()
+    if len(local_requests) != 2 or len(gateway_requests) != 2:
+        raise VerificationError("composed_tool_roundtrip_request_count")
+    tool_result_counts: list[int] = []
+    for request in local_requests:
+        try:
+            payload = json.loads(request.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise VerificationError("composed_tool_roundtrip_body_invalid") from exc
+        items = payload.get("input") if isinstance(payload, dict) else None
+        tool_result_counts.append(
+            sum(
+                1
+                for item in items
+                if isinstance(item, dict) and item.get("type") == "function_call_output"
+            )
+            if isinstance(items, list)
+            else 0
+        )
+        del payload
+    if tool_result_counts != [0, 1]:
+        raise VerificationError("composed_tool_roundtrip_tool_result_count")
+
+    raw_aliases: set[str] = set()
+    for request in gateway_requests:
+        try:
+            payload = json.loads(request.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise VerificationError("composed_tool_roundtrip_gateway_body_invalid") from exc
+        metadata = payload.get("client_metadata") if isinstance(payload, dict) else None
+        if isinstance(metadata, dict):
+            raw_aliases.update(
+                value for value in metadata.values() if isinstance(value, str)
+            )
+        del payload
+    _assert_local_bound_privacy(
+        local_requests,
+        raw_aliases=raw_aliases,
+        service_token=service_token,
+    )
+    signed_header_facts = [
+        {
+            "service_bearer": request.headers.get("authorization")
+            == f"Bearer {service_token}",
+            "session_header_class": (
+                "opaque"
+                if isinstance(request.headers.get("x-slaif-session"), str)
+                and len(request.headers["x-slaif-session"]) <= 256
+                else "missing_or_invalid"
+            ),
+            "signature_header_class": (
+                "v1_hex"
+                if isinstance(request.headers.get("x-slaif-signature"), str)
+                and request.headers["x-slaif-signature"].startswith("v1=")
+                and len(request.headers["x-slaif-signature"]) == 67
+                and all(
+                    char in "0123456789abcdef"
+                    for char in request.headers["x-slaif-signature"][3:]
+                )
+                else "missing_or_invalid"
+            ),
+        }
+        for request in local_requests
+    ]
+    if any(
+        not fact["service_bearer"]
+        or fact["session_header_class"] != "opaque"
+        or fact["signature_header_class"] != "v1_hex"
+        for fact in signed_header_facts
+    ):
+        raise VerificationError("composed_tool_roundtrip_signed_headers_invalid")
+    del signed_header_facts
+    if any(
+        key.plaintext.encode("utf-8") in request.body
+        or key.plaintext in request.headers.get("authorization", "")
+        for request in local_requests
+    ):
+        raise VerificationError("composed_tool_roundtrip_gateway_key_forwarded")
+
+    local_status = relay.status()
+    gateway_status = gateway_output.status()
+    qwen_status = _qwen_relay_status(qwen_port)
+    fake_status = fake_qwen_server.status()
+    _assert_two_turn_sse_structures(
+        gateway_status.get("sse_structures"),
+        error_code="composed_tool_roundtrip_gateway_sse_invalid",
+    )
+    _assert_function_then_message_structure(gateway_status.get("sse_structures"))
+    _assert_two_turn_sse_structures(
+        local_status.get("sse_structures"),
+        error_code="composed_tool_roundtrip_local_sse_invalid",
+    )
+    _assert_two_turn_sse_structures(
+        qwen_status.get("sse_structures"),
+        error_code="composed_tool_roundtrip_qwen_sse_invalid",
+    )
+    if (
+        local_status.get("response_statuses") != [200, 200]
+        or gateway_status.get("response_statuses") != [200, 200]
+        or local_status.get("handler_error") is True
+        or local_status.get("downstream_closed_early") is True
+        or local_status.get("upstream_truncated") is True
+        or gateway_status.get("handler_error") is True
+        or gateway_status.get("downstream_closed_early") is True
+        or gateway_status.get("upstream_truncated") is True
+        or qwen_status.get("inference_calls") != 2
+        or qwen_status.get("successful_calls") != 2
+        or qwen_status.get("handler_error") is True
+        or qwen_status.get("upstream_truncated") is True
+        or qwen_status.get("downstream_closed_early") is True
+        or not set(qwen_status.get("tool_types", [])).issubset({"function", "custom"})
+        or fake_status.get("tool_roundtrip_turns") != 2
+        or fake_status.get("tool_result_observed") != 1
+        or fake_status.get("function_lifecycle_count") != 1
+        or fake_status.get("message_lifecycle_count") != 1
+    ):
+        raise VerificationError("composed_tool_roundtrip_boundary_invalid")
+    accounting_rows = asyncio.run(_verify_accounting(postgres_url, (key,), ()))
+    if accounting_rows != 2:
+        raise VerificationError("composed_tool_roundtrip_accounting_rows")
+    return {
+        "codex_exit_success": True,
+        "gateway_to_local_turns": 2,
+        "local_to_qwen_inference_turns": 2,
+        "function_call_output_count": 1,
+        "function_lifecycle_count": 1,
+        "message_lifecycle_count": 1,
+        "accounting_rows": accounting_rows,
+    }
+
+
+def _assert_two_turn_sse_structures(
+    structures: object, *, error_code: str
+) -> None:
+    if (
+        not isinstance(structures, list)
+        or len(structures) != 2
+        or any(
+            not isinstance(structure, dict)
+            or structure.get("invalid") is not False
+            or not _stream_has_valid_completion(structure)
+            or not isinstance(structure.get("event_counts"), dict)
+            or structure["event_counts"].get("response.created") != 1
+            or structure["event_counts"].get("response.completed") != 1
+            or structure.get("duplicates") is not False
+            or structure.get("unknown_events") is not False
+            or structure.get("error_event") is not False
+            or structure.get("response_completed") is not True
+            or structure.get("completed_usage_valid") is not True
+            or structure.get("normal_close") is not True
+            or structure.get("downstream_closed_early") is not False
+            for structure in structures
+        )
+    ):
+        raise VerificationError(error_code)
+
+
+def _assert_function_then_message_structure(structures: object) -> None:
+    if not isinstance(structures, list) or len(structures) != 2:
+        raise VerificationError("composed_tool_roundtrip_lifecycle_missing")
+    first, second = structures
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
+    first_counts = first.get("event_counts")
+    second_counts = second.get("event_counts")
+    if not isinstance(first_counts, dict) or not isinstance(second_counts, dict):
+        raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
+    def count(counts: dict[object, object], event: str) -> int | None:
+        value = counts.get(event, 0)
+        return value if type(value) is int and 0 <= value <= _SSE_EVENT_COUNT_LIMIT else None
+
+    if (
+        count(first_counts, "response.output_item.added") != 1
+        or count(first_counts, "response.function_call_arguments.done") != 1
+        or count(first_counts, "response.output_item.done") != 1
+        or (count(first_counts, "response.function_call_arguments.delta") or 0) < 1
+        or count(first_counts, "response.output_text.delta") != 0
+        or count(first_counts, "response.output_text.done") != 0
+        or count(first_counts, "response.content_part.added") != 0
+        or count(first_counts, "response.content_part.done") != 0
+        or count(second_counts, "response.output_item.added") != 1
+        or count(second_counts, "response.content_part.added") != 1
+        or (count(second_counts, "response.output_text.delta") or 0) < 1
+        or count(second_counts, "response.output_text.done") != 1
+        or count(second_counts, "response.content_part.done") != 1
+        or count(second_counts, "response.output_item.done") != 1
+        or count(second_counts, "response.function_call_arguments.delta") != 0
+        or count(second_counts, "response.function_call_arguments.done") != 0
+    ):
+        raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
+
+
 def _run_composed_stream_diagnostic(
     root: Path,
     runtime: RuntimeReference | None,
     *,
     fake_qwen: bool = False,
+    tool_roundtrip_mode: bool = False,
+    codex_binary: Path | None = None,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     from openai import OpenAI
@@ -4573,10 +4827,15 @@ def _run_composed_stream_diagnostic(
         tracker.set("relay_start")
         relay, relay_thread = _start_relay(local_port)
         tracker.set("failure_provider_start")
-        failure_server, failure_thread = _start_failure_server()
+        if tool_roundtrip_mode:
+            failure_server = failure_thread = None
+        else:
+            failure_server, failure_thread = _start_failure_server()
         if fake_qwen:
             tracker.set("qwen_relay_start")
-            fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen()
+            fake_qwen_server, fake_qwen_thread, fake_qwen_token = _start_fake_qwen(
+                tool_roundtrip_mode=tool_roundtrip_mode
+            )
         previous_environment = os.environ.copy()
         tracker.set("database_seed")
         os.environ.update(gateway_env)
@@ -4585,8 +4844,13 @@ def _run_composed_stream_diagnostic(
                 _seed_database(
                     postgres_url,
                     relay_port=relay.server_address[1],
-                    failure_port=failure_server.server_address[1],
+                    failure_port=(
+                        failure_server.server_address[1]
+                        if failure_server is not None
+                        else relay.server_address[1]
+                    ),
                     differential=True,
+                    tool_roundtrip_only=tool_roundtrip_mode,
                 )
             )
         finally:
@@ -4668,9 +4932,23 @@ def _run_composed_stream_diagnostic(
         tracker.set("gateway_start")
         gateway_output, gateway_output_thread = _start_relay(
             gateway_port,
-            capture_requests=False,
+            capture_requests=tool_roundtrip_mode,
             boundary_class="gateway_output",
         )
+        if tool_roundtrip_mode:
+            if codex_binary is None or fake_qwen_server is None:
+                raise VerificationError("composed_tool_roundtrip_setup_invalid")
+            return _run_composed_codex_tool_roundtrip(
+                root=root,
+                codex_binary=codex_binary,
+                key=key,
+                postgres_url=postgres_url,
+                relay=relay,
+                gateway_output=gateway_output,
+                fake_qwen_server=fake_qwen_server,
+                qwen_port=qwen_port,
+                service_token=service_token,
+            )
         client = OpenAI(
             api_key=key.plaintext,
             base_url=f"http://127.0.0.1:{gateway_output.server_address[1]}/v1",
@@ -4820,6 +5098,17 @@ def _run_composed_stream_diagnostic(
         if primary is not None and not isinstance(primary, VerificationError):
             tracker.current = primary_stage
             raise tracker.unexpected_composed() from None
+
+
+def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
+    """Required fake gate: Codex through Gateway, Local, relay, and fake Qwen."""
+    return _run_composed_stream_diagnostic(
+        root,
+        None,
+        fake_qwen=True,
+        tool_roundtrip_mode=True,
+        codex_binary=codex_binary,
+    )
 
 
 def run_stream_differential() -> dict[str, object]:

@@ -398,6 +398,48 @@ def test_fake_qwen_tool_roundtrip_function_requires_known_local_tool() -> None:
     assert responses == [(400, "known_local_tool_missing")]
 
 
+def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycle() -> None:
+    def structure(*events: str) -> dict[str, object]:
+        return {"event_counts": {event: events.count(event) for event in set(events)}}
+
+    valid = [
+        structure(
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ),
+        structure(
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+        ),
+    ]
+    verifier._assert_function_then_message_structure(valid)
+
+    invalid_first = valid[0]["event_counts"].copy()
+    invalid_first["response.output_text.delta"] = 1
+    with pytest.raises(verifier.VerificationError, match="composed_tool_roundtrip_lifecycle_invalid"):
+        verifier._assert_function_then_message_structure(
+            [{"event_counts": invalid_first}, valid[1]]
+        )
+
+    invalid_second = valid[1]["event_counts"].copy()
+    invalid_second["response.function_call_arguments.done"] = 1
+    with pytest.raises(verifier.VerificationError, match="composed_tool_roundtrip_lifecycle_invalid"):
+        verifier._assert_function_then_message_structure(
+            [valid[0], {"event_counts": invalid_second}]
+        )
+
+    with pytest.raises(verifier.VerificationError, match="composed_tool_roundtrip_lifecycle_invalid"):
+        verifier._assert_function_then_message_structure(
+            [{"event_counts": {"response.output_item.added": "1"}}, valid[1]]
+        )
+
+
 def test_composed_evidence_rejects_placeholder_counts() -> None:
     evidence = {name: True for name in (
         "session_a1_a2_equal", "session_b_different", "session_second_key_different",

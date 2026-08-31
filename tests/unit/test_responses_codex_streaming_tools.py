@@ -457,7 +457,7 @@ def test_codex_0149_function_terminal_matches_semantics_not_stream_ids() -> None
     assert not validator.validate(events[-1])
 
 
-def test_codex_0149_function_terminal_rejects_multiple_completed_states() -> None:
+def test_codex_0149_function_branch_rejects_a_second_function_item_immediately() -> None:
     events = _strict_function_events()
     second = copy.deepcopy(events[2:7])
     for event in second:
@@ -475,8 +475,7 @@ def test_codex_0149_function_terminal_rejects_multiple_completed_states() -> Non
     events[-1]["sequence_number"] = 13
     validator = ResponsesStreamEventValidator(_strict_function_profile())
     assert all(validator.validate(event) for event in events[:7])
-    assert all(validator.validate(event) for event in second)
-    assert not validator.validate(events[-1])
+    assert not validator.validate(second[0])
 
 
 @pytest.mark.parametrize(
@@ -514,6 +513,65 @@ def test_codex_0149_function_lifecycle_rejects_reordering_and_missing_inner_indi
     validator = ResponsesStreamEventValidator(_strict_function_profile())
     assert all(validator.validate(event) for event in events[:6])
     assert not validator.validate(events[6])
+
+
+def test_codex_0149_function_branch_fails_closed_for_lifecycle_boundaries() -> None:
+    events = _strict_function_events()
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert not validator.validate(events[2])
+    assert validator.validate(events[0])
+    assert validator.validate(events[1])
+    assert not validator.validate(events[4])
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events)
+    assert not validator.validate(events[2])
+
+    events = _strict_function_events()
+    events[3]["delta"] = ""
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+    events = _strict_function_events()
+    events[5].pop("name")
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:5])
+    assert not validator.validate(events[5])
+
+    events = _strict_function_events()
+    events[6]["item"]["call_id"] = "other_call"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"]["name"] = "other"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    terminal = _strict_function_events()[-1]
+    assert validator.validate(terminal) is False
+
+    smuggled = _strict_function_events()[2]
+    for item_type in ("custom_tool_call", "mcp_call", "web_search_call"):
+        smuggled = copy.deepcopy(smuggled)
+        smuggled["item"]["type"] = item_type
+        validator = ResponsesStreamEventValidator(_strict_function_profile())
+        assert validator.validate(_strict_function_events()[0])
+        assert validator.validate(_strict_function_events()[1])
+        assert not validator.validate(smuggled)
+    assert not ResponsesStreamEventValidator(_strict_function_profile()).validate(
+        {"type": "response.unknown"}
+    )
 
 
 def _message_added_event() -> dict[str, object]:

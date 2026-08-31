@@ -592,6 +592,8 @@ class ResponsesStreamEventValidator:
         self, payload: Mapping[str, Any], event_type: str
     ) -> bool:
         """Validate the exact 0.149 function-call lifecycle, in sequence."""
+        if self._strict_response_id is None or self._strict_response_completed:
+            return False
         if event_type in {"response.output_item.added", "response.output_item.done"}:
             return self._validate_codex_function_output_item(payload, event_type)
         if event_type == "response.function_call_arguments.delta":
@@ -614,7 +616,9 @@ class ResponsesStreamEventValidator:
             ):
                 return False
             delta = payload.get("delta")
-            if not isinstance(delta, str) or not _bounded_utf8(delta, _MAX_STREAM_DELTA_BYTES):
+            if not isinstance(delta, str) or not _bounded_utf8(
+                delta, _MAX_STREAM_DELTA_BYTES, nonempty=True
+            ):
                 return False
             if not _bounded_utf8(
                 state.delta_text + delta, _MAX_STREAM_CUMULATIVE_ITEM_BYTES
@@ -714,7 +718,7 @@ class ResponsesStreamEventValidator:
                 or item.get("arguments") != ""
                 or item_id in self._seen_item_ids
                 or call_id in self._seen_call_ids
-                or len(self._function_output_indices) >= _MAX_STREAM_CONTENT_PARTS
+                or bool(self._function_output_indices)
                 or self._resolve_declared_tool(None, name, "function") is None
             ):
                 return False
