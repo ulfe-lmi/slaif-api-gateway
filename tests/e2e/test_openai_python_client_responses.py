@@ -47,6 +47,123 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def _codex_vllm_usage(input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "input_tokens": input_tokens,
+        "input_tokens_details": {
+            "cached_tokens": 0,
+            "input_tokens_per_turn": [input_tokens],
+            "cached_tokens_per_turn": [0],
+        },
+        "output_tokens": output_tokens,
+        "output_tokens_details": {
+            "reasoning_tokens": 0,
+            "tool_output_tokens": 0,
+            "output_tokens_per_turn": [output_tokens],
+            "tool_output_tokens_per_turn": [0],
+        },
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def _codex_standard_stream(response: dict[str, object]) -> str:
+    response_id = response["id"]
+    stream_item_id = "stream_message_1"
+    return "".join(
+        _sse(event)
+        for event in (
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {"id": response_id, "status": "in_progress"},
+            },
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": stream_item_id,
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                    "phase": None,
+                },
+            },
+            {
+                "type": "response.content_part.added",
+                "sequence_number": 2,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                    "logprobs": [],
+                },
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 3,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "answer",
+                "logprobs": [],
+            },
+            {
+                "type": "response.output_text.done",
+                "sequence_number": 4,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": "answer",
+                "logprobs": [],
+            },
+            {
+                "type": "response.content_part.done",
+                "sequence_number": 5,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "answer",
+                    "annotations": [],
+                    "logprobs": None,
+                },
+            },
+            {
+                "type": "response.output_item.done",
+                "sequence_number": 6,
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": stream_item_id,
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "answer",
+                            "annotations": [],
+                            "logprobs": None,
+                        }
+                    ],
+                    "phase": None,
+                    "summary": [],
+                },
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 7,
+                "response": response,
+            },
+        )
+    )
+
+
 def _assert_strict_bounded_no_external_facts(state: object) -> None:
     reservation = state.reservation
     assert reservation.quota_mode == "strict_bounded"
@@ -443,20 +560,27 @@ def test_openai_python_client_codex_0149_signed_thread_namespace_e2e(
         "created_at": 123,
         "status": "completed",
         "model": "qwen3.8-27b",
-        "output": [],
-        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        "output": [
+            {
+                "type": "message",
+                "id": "parser_message_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+            }
+        ],
+        "usage": _codex_vllm_usage(3, 2),
         "store": False,
     }
-    sse = (
-        _sse(
-            {
-                "type": "response.created",
-                "sequence_number": 0,
-                "response": {"id": completed["id"], "status": "in_progress"},
-            }
-        )
-        + _sse({"type": "response.completed", "sequence_number": 1, "response": completed})
-    )
+    sse = _codex_standard_stream(completed)
     tools = [
         {
             "type": "tool_search",
@@ -528,7 +652,16 @@ def test_openai_python_client_codex_0149_signed_thread_namespace_e2e(
             )
 
     assert first.id == third.id == fourth.id == "codex-0149-signed-response"
-    assert [event.type for event in second_events] == ["response.created", "response.completed"]
+    assert [event.type for event in second_events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
     assert len(local_route.calls) == 4
     observed = [call.request for call in local_route.calls]
     sessions = [request.headers["x-slaif-session"] for request in observed]
@@ -748,32 +881,27 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
         "created_at": 123,
         "status": "completed",
         "model": "qwen3.8-27b",
-        "output": [],
-        "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+        "output": [
+            {
+                "type": "message",
+                "id": "parser_message_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+            }
+        ],
+        "usage": _codex_vllm_usage(4, 3),
         "store": False,
     }
-    sse = (
-        _sse(
-            {
-                "type": "response.created",
-                "sequence_number": 0,
-                "response": {
-                    "id": completed["id"],
-                    "object": "response",
-                    "created_at": 123,
-                    "status": "in_progress",
-                    "model": "qwen3.8-27b",
-                },
-            }
-        )
-        + _sse(
-            {
-                "type": "response.completed",
-                "sequence_number": 1,
-                "response": completed,
-            }
-        )
-    )
+    sse = _codex_standard_stream(completed)
 
     with _run_uvicorn_server(app, gateway_port):
         with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
@@ -813,7 +941,16 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
             )
             events = list(stream)
 
-    assert [event.type for event in events] == ["response.created", "response.completed"]
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
     assert events[-1].response.usage.total_tokens == 7
     assert len(local_route.calls) == 1
     upstream_body = json.loads(local_route.calls[0].request.content)
