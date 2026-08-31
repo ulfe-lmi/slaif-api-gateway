@@ -55,6 +55,11 @@ from slaif_gateway.modules.clients.registry import (
     normalize_default_client_request,
     resolve_responses_client_module,
 )
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_CLIENT_MODULE_ID,
+    codex_0149_declared_tool_taxonomy,
+    codex_0149_streaming_tool_events_requested,
+)
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
@@ -370,6 +375,23 @@ def _codex_reasoning_events_enabled(
         client_module_id == "codex-0.149-responses-v1"
         and server_context is not None
     )
+
+
+def _derive_pair_local_codex_top_level_profile(
+    *,
+    client_module_id: str,
+    local_coding_server_context: Mapping[str, object] | None,
+    effective_body: Mapping[str, object],
+) -> tuple[frozenset[tuple[str, str, str]], bool]:
+    """Derive 0.149 top-level tool facts only after Local route resolution."""
+
+    if (
+        client_module_id != CODEX_0149_CLIENT_MODULE_ID
+        or local_coding_server_context is None
+    ):
+        return frozenset(), False
+    declarations = codex_0149_declared_tool_taxonomy(effective_body)
+    return declarations, codex_0149_streaming_tool_events_requested(effective_body)
 
 
 def _build_safe_responses_compact_upstream_body(
@@ -1024,6 +1046,64 @@ async def handle_response_create(
         route=route,
         settings=settings,
     )
+    pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
+        _derive_pair_local_codex_top_level_profile(
+            client_module_id=client_module.module_id,
+            local_coding_server_context=local_coding_server_context,
+            effective_body=policy_result.effective_body,
+        )
+    )
+    if pair_local_codex_streaming_tools:
+        if not allow_codex_streaming_tool_events:
+            raise OpenAICompatibleError(
+                "Codex streaming tool events are not enabled for this gateway key.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="responses_codex_streaming_tool_events_not_allowed",
+            )
+        try:
+            enforce_responses_route_capabilities(
+                route_capabilities=route.capabilities,
+                streaming_requested=policy_result.effective_body.get("stream") is True,
+                route_supports_streaming=route.supports_streaming,
+                json_mode_requested=responses_text_format_type(policy_result.effective_body)
+                == TEXT_FORMAT_JSON_OBJECT,
+                structured_output_requested=responses_text_format_type(
+                    policy_result.effective_body
+                )
+                == TEXT_FORMAT_JSON_SCHEMA,
+                function_tools_requested=(
+                    responses_function_tools_requested(policy_result.effective_body)
+                    and not codex_client_tools_requested
+                ),
+                custom_tools_requested=(
+                    responses_custom_tools_requested(policy_result.effective_body)
+                    and not codex_client_tools_requested
+                ),
+                image_input_requested=responses_image_input_requested(
+                    policy_result.effective_body
+                ),
+                file_input_requested=responses_file_input_requested(
+                    policy_result.effective_body
+                ),
+                input_token_count_requested=False,
+                stored_responses_requested=policy_result.effective_body.get("store") is True,
+                previous_response_id_requested=previous_response_id_requested(
+                    policy_result.effective_body
+                ),
+                compact_requested=False,
+                conversations_requested=conversation_requested(policy_result.effective_body),
+                codex_request_envelope_requested=codex_request_envelope_requested,
+                codex_client_tools_requested=codex_client_tools_requested,
+                codex_streaming_tool_events_requested=True,
+                codex_encrypted_reasoning_replay_requested=(
+                    codex_encrypted_reasoning_event_requested
+                ),
+                codex_extended_limits_requested=codex_extended_limits_requested,
+                codex_compaction_requested=codex_compaction_replay_requested,
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
     try:
         enforce_openai_compatible_request_boundary(
             policy_result.effective_body,
@@ -1171,7 +1251,10 @@ async def handle_response_create(
                     upstream_body=upstream_body,
                     live_burn_budget=quota.live_burn_budget,
                     stream_validation_profile=ResponsesStreamValidationProfile(
-                        codex_streaming_tool_events=codex_streaming_tool_events_requested,
+                        codex_streaming_tool_events=(
+                            codex_streaming_tool_events_requested
+                            or pair_local_codex_streaming_tools
+                        ),
                         codex_reasoning_events=_codex_reasoning_events_enabled(
                             client_module_id=client_module.module_id,
                             server_context=local_coding_server_context,
@@ -1180,8 +1263,10 @@ async def handle_response_create(
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
                         ),
-                            declared_client_tools=codex_client_tool_declarations(
-                                policy_result.effective_body
+                            declared_client_tools=(
+                                pair_local_codex_top_level_tools
+                                if pair_local_codex_streaming_tools
+                                else codex_client_tool_declarations(policy_result.effective_body)
                             ),
                             web_search=external_web_search_admission is not None,
                             web_search_max_tool_calls=(

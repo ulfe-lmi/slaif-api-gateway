@@ -160,7 +160,7 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
+            return "oap/active\noap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -192,11 +192,11 @@ def test_155r_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155s_topology_anchors_are_the_155r_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "2527030f5bbb90a7f0f354eb5347caee333ce4a7"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "19d9686636b0fbf27ab96d41c610a37dad3c087a"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "62f8063c9f4fc304f5b835741b1a263202285b56"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
+def test_155t_topology_anchors_are_the_155s_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "e7fedae6562cdfd7df6a605128e5bc93fc224119"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "ce725def4b931c2bf86770d8c6bd75c7e37247ef"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "ad3ab547052d8a7600db9802e25da45bbf4b07da"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
 
 
 def test_155s_topology_anchors_exact_local_report_parent_and_path() -> None:

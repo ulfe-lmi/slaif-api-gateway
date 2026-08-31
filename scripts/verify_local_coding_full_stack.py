@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-s verifier for protected Codex tool-stream qualification.
+"""Bounded 155-t verifier for Codex envelope and function-call qualification.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -32,10 +32,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "2527030f5bbb90a7f0f354eb5347caee333ce4a7"
-GATEWAY_IMPLEMENTATION_HEAD = "19d9686636b0fbf27ab96d41c610a37dad3c087a"
-GATEWAY_ACTIVATION_HEAD = "62f8063c9f4fc304f5b835741b1a263202285b56"
-GATEWAY_REPORT_PATH = "oap/reports/155-r-retained-event-qualification-and-final-stream.md"
+GATEWAY_REPORT_HEAD = "e7fedae6562cdfd7df6a605128e5bc93fc224119"
+GATEWAY_IMPLEMENTATION_HEAD = "ce725def4b931c2bf86770d8c6bd75c7e37247ef"
+GATEWAY_ACTIVATION_HEAD = "ad3ab547052d8a7600db9802e25da45bbf4b07da"
+GATEWAY_REPORT_PATH = "oap/reports/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -51,8 +51,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155s_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md"
+TASK_DB = "slaif_gateway_oap_155t_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -208,7 +208,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md",
+        "oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -259,11 +259,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-s-real-codex-tool-stream-lifecycle-and-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-t-codex-envelope-activation-and-function-roundtrip.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-s\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-t\n":
         raise VerificationError("active_selector_mismatch")
 
 

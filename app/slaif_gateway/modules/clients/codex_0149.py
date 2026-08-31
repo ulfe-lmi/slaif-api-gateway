@@ -114,6 +114,7 @@ _CODEX_0149_CLIENT_METADATA_KEYS = frozenset(
 )
 _CODEX_0149_MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _CODEX_0149_TOOL_CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+CODEX_0149_DECLARED_TOOL_NAMESPACE = "functions"
 
 
 def _codex_0149_taxonomy_for(
@@ -121,6 +122,48 @@ def _codex_0149_taxonomy_for(
 ) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None:
     _ = value
     return None
+
+
+def codex_0149_declared_tool_taxonomy(
+    body: Mapping[str, object],
+) -> frozenset[tuple[str, str, str]]:
+    """Return the bounded taxonomy of observed top-level local tools."""
+
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return frozenset()
+    declarations: set[tuple[str, str, str]] = set()
+    for tool in tools:
+        if not isinstance(tool, Mapping):
+            continue
+        tool_type = tool.get("type")
+        if tool_type not in {"function", "custom"}:
+            continue
+        name = tool.get("name")
+        if not isinstance(name, str) or not _SAFE_TOKEN.fullmatch(name):
+            raise _error(
+                "The Codex 0.149 local tool declaration has no bounded name",
+                "codex_0149_tool_declaration",
+            )
+        declaration = (CODEX_0149_DECLARED_TOOL_NAMESPACE, name, str(tool_type))
+        if declaration in declarations:
+            raise _error(
+                "The Codex 0.149 local tool declaration is duplicated",
+                "codex_0149_tool_declaration",
+            )
+        declarations.add(declaration)
+    if len(declarations) > 32:
+        raise _error(
+            "The Codex 0.149 local tool declaration set is too large",
+            "codex_0149_tool_declaration",
+        )
+    return frozenset(declarations)
+
+
+def codex_0149_streaming_tool_events_requested(body: Mapping[str, object]) -> bool:
+    """Require the exact 0.149 local declarations on a streaming request."""
+
+    return body.get("stream") is True and bool(codex_0149_declared_tool_taxonomy(body))
 
 
 CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(

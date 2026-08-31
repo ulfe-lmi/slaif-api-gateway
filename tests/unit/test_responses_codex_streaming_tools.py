@@ -13,6 +13,7 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_ID
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
@@ -29,6 +30,13 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_streaming_tool_events_allowed,
 )
 from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
+from slaif_gateway.services.responses_gateway import (
+    _derive_pair_local_codex_top_level_profile,
+)
+from slaif_gateway.services.responses_request_policy import (
+    responses_codex_client_tools_requested,
+    responses_codex_streaming_tool_events_requested,
+)
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
     enforce_responses_route_capabilities,
@@ -227,6 +235,49 @@ def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> 
     assert not _codex_reasoning_events_enabled(
         client_module_id="openai-default", server_context=local_context
     )
+
+
+def test_codex_0149_top_level_tools_activate_only_after_exact_local_resolution() -> None:
+    body = {
+        "model": "classroom-codex",
+        "input": "hello",
+        "stream": True,
+        "tools": [
+            _function("wait"),
+            {
+                "type": "custom",
+                "name": "exec",
+                "description": "bounded-exec",
+                "format": {"type": "grammar", "syntax": "lark"},
+            },
+        ],
+    }
+
+    # These are the unchanged pre-policy additional_tools facts; top-level
+    # declarations are not treated as that namespace.
+    assert responses_codex_client_tools_requested(body) is False
+    assert responses_codex_streaming_tool_events_requested(body) is False
+
+    local_declarations, local_streaming = _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+        effective_body=body,
+    )
+    assert local_declarations == frozenset(
+        {
+            ("functions", "wait", "function"),
+            ("functions", "exec", "custom"),
+        }
+    )
+    assert local_streaming is True
+
+    non_local_declarations, non_local_streaming = _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context=None,
+        effective_body=body,
+    )
+    assert non_local_declarations == frozenset()
+    assert non_local_streaming is False
 
 
 def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
