@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155v_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155w_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155r-head"
+    current_head = "current-155w-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-u-evidence-lifecycle-and-protected-tool-closure.md"
+    report_path = "oap/reports/155-v-failure-localization-summary-and-protected-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155v_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-v-failure-localization-summary-and-protected-closure.md"
+            return "oap/active\noap/orders/155-w-live-function-done-shape-and-final-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155v_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155v_topology_anchors_are_the_155u_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "5cc47a716d3a426ea0f87882951a1491c810dae7"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "a3af8dca0f40c5a67b57556db25cb8d4e5c83828"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "4e9a6bd5281f691b6e446b5e70a771d4ee1e19f5"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-u-evidence-lifecycle-and-protected-tool-closure.md"
+def test_155w_topology_anchors_are_the_155v_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "307a491e511638779c4ecc67a7f9f09dbff1143f"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "ce664052266b7a1cbd43b8083eaea22d3fa9c0fd"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "43cfcd97af6b1d8a6eb5b31a2db0a6f8217da0b6"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-v-failure-localization-summary-and-protected-closure.md"
 
 
-def test_155v_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155w_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
