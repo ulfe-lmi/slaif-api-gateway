@@ -322,14 +322,20 @@ def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
             first = next(chunks)
             assert b"response.created" in first
             body = first + b"".join(chunks)
-            assert b"response.output_text.delta" not in body
+            assert b"response.output_text.delta" in body
             assert body.count(b"event: response.created") == 1
             assert body.count(b"event: response.completed") == 1
+            assert body.count(b"event: response.output_item.added") == 1
+            assert body.count(b"event: response.content_part.added") == 1
+            assert body.count(b"event: response.output_text.done") == 1
+            assert body.count(b"event: response.content_part.done") == 1
+            assert body.count(b"event: response.output_item.done") == 1
             assert b"data: [DONE]" not in body
             assert b'"status":"in_progress"' in body
             assert b'"status":"completed"' in body
-            assert b'"output":[]' in body
-            assert b'"total_tokens":0' in body
+            assert b'"output":[{' in body
+            assert b'"input_tokens_per_turn":[2]' in body
+            assert b'"output_tokens_per_turn":[2]' in body
             assert fake.first_event_sent.wait(timeout=1)
         assert fake.inference_calls == 2
         assert fake.stream_calls == 1
@@ -548,7 +554,7 @@ def test_gateway_facing_relay_records_pinned_capture_sse_structure() -> None:
             assert b"response.completed" in first + b"".join(chunks)
         structures = relay.status()["sse_structures"]
         assert isinstance(structures, list) and len(structures) == 1
-        verifier._assert_pinned_capture_sse_structure(structures[0])
+        assert structures[0] == verifier._FAKE_STANDARD_SSE_STRUCTURE
     finally:
         relay.shutdown()
         relay.server_close()
