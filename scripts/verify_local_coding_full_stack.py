@@ -790,6 +790,90 @@ class CapturedRequest:
     headers: dict[str, str]
 
 
+def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
+    """Project one transient request to allowlisted type/count facts only."""
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {
+            "top_level_tool_type_counts": {},
+            "input_item_type_sequence": [],
+            "stream_class": "invalid",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "top_level_tool_type_counts": {},
+            "input_item_type_sequence": [],
+            "stream_class": "invalid",
+        }
+    tools = payload.get("tools")
+    counts: dict[str, int] = {}
+    if isinstance(tools, list):
+        for tool in tools[:64]:
+            tool_type = tool.get("type") if isinstance(tool, dict) else None
+            safe_type = (
+                tool_type
+                if isinstance(tool_type, str)
+                and tool_type in {"function", "custom", "namespace", "tool_search", "web_search"}
+                else "other"
+            )
+            counts[safe_type] = min(counts.get(safe_type, 0) + 1, 64)
+    input_items = payload.get("input")
+    item_types: list[str] = []
+    if isinstance(input_items, list):
+        for item in input_items[:128]:
+            item_type = item.get("type") if isinstance(item, dict) else None
+            item_types.append(
+                item_type
+                if isinstance(item_type, str)
+                and item_type
+                in {
+                    "message",
+                    "reasoning",
+                    "additional_tools",
+                    "function_call",
+                    "function_call_output",
+                    "custom_tool_call",
+                    "custom_tool_call_output",
+                }
+                else "other"
+            )
+    stream = payload.get("stream")
+    return {
+        "top_level_tool_type_counts": dict(sorted(counts.items())),
+        "input_item_type_sequence": item_types,
+        "stream_class": (
+            "true" if stream is True else "false" if stream is False else "other"
+        ),
+    }
+
+
+def _safe_gateway_error_code_class(value: object) -> str:
+    if value == "responses_input_tool_item_not_supported":
+        return "input_tool_item_not_supported"
+    if value == "responses_codex_tool_roundtrip_invalid":
+        return "codex_tool_roundtrip_invalid"
+    if value == "responses_codex_streaming_tool_events_not_allowed":
+        return "codex_streaming_tool_events_not_allowed"
+    if value == "responses_codex_replay_reference_not_found":
+        return "replay_reference_not_found"
+    return "other"
+
+
+def _safe_gateway_error_param_class(value: object) -> str:
+    if not isinstance(value, str):
+        return "other"
+    for prefix, safe_class in (
+        ("input", "input"),
+        ("stream", "stream"),
+        ("tools", "tools"),
+        ("tool_choice", "tool_choice"),
+    ):
+        if value == prefix or value.startswith(f"{prefix}[") or value.startswith(f"{prefix}."):
+            return safe_class
+    return "other"
+
+
 _SAFE_SSE_EVENT_TYPES = frozenset(
     {
         "response.created",
@@ -819,7 +903,21 @@ _SAFE_ERROR_VALUE_CLASSES = frozenset(
         "codex_0149_request_invalid", "codex_0149_identity_shape",
     }
 )
+_SAFE_GATEWAY_ERROR_CODE_CLASSES = frozenset(
+    {
+        "none",
+        "input_tool_item_not_supported",
+        "codex_tool_roundtrip_invalid",
+        "codex_streaming_tool_events_not_allowed",
+        "replay_reference_not_found",
+        "other",
+    }
+)
+_SAFE_GATEWAY_ERROR_PARAM_CLASSES = frozenset(
+    {"none", "input", "stream", "tools", "tool_choice", "other"}
+)
 _SSE_CAPTURE_LIMIT = 64 * 1024
+_ERROR_CAPTURE_LIMIT = 16 * 1024
 _SSE_EVENT_RUN_LIMIT = 128
 _SSE_EVENT_COUNT_LIMIT = _SSE_CAPTURE_LIMIT
 _PINNED_CAPTURE_SSE_STRUCTURE = {
@@ -2044,6 +2142,8 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.response_path_classes: list[str] = []
         self.sse_structures: list[dict[str, object]] = []
         self.sse_boundaries: list[str] = []
+        self.error_code_classes: list[str] = []
+        self.error_param_classes: list[str] = []
         self.forwarded = 0
         self.rejected = 0
         self.downstream_closed_early = False
@@ -2075,6 +2175,24 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.sse_structures.append(structure)
             self.sse_boundaries.append(self.boundary_class)
 
+    def remember_error_body(self, body: bytes) -> None:
+        try:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
+        error = payload.get("error") if isinstance(payload, dict) else None
+        error = error if isinstance(error, dict) else {}
+        code_class = _safe_gateway_error_code_class(error.get("code"))
+        param_class = _safe_gateway_error_param_class(error.get("param"))
+        with self._capture_lock:
+            self.error_code_classes.append(code_class)
+            self.error_param_classes.append(param_class)
+
+    def remember_no_error(self) -> None:
+        with self._capture_lock:
+            self.error_code_classes.append("none")
+            self.error_param_classes.append("none")
+
     def mark_downstream_closed_early(self) -> None:
         with self._capture_lock:
             self.downstream_closed_early = True
@@ -2094,6 +2212,8 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
                 "response_path_classes": list(self.response_path_classes),
                 "sse_structures": list(self.sse_structures),
                 "sse_boundaries": list(self.sse_boundaries),
+                "error_code_classes": list(self.error_code_classes),
+                "error_param_classes": list(self.error_param_classes),
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -2155,6 +2275,7 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                         if "json" in content_type
                         else "other"
                     )
+                    error_body = bytearray()
                     try:
                         self.send_response(response.status_code)
                         for key, value in response.headers.items():
@@ -2177,6 +2298,9 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                                 if first_chunk:
                                     recorder.mark_first_event_before_upstream_completion()
                                 recorder.feed(chunk)
+                            elif response_status >= 400 and len(error_body) < _ERROR_CAPTURE_LIMIT:
+                                remaining = _ERROR_CAPTURE_LIMIT - len(error_body)
+                                error_body.extend(chunk[:remaining])
                             if downstream_open:
                                 try:
                                     self.wfile.write(chunk)
@@ -2192,6 +2316,16 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                             if not downstream_open:
                                 recorder.mark_downstream_closed_early()
                             self.server.remember_sse_structure(recorder.snapshot())
+                            if response_status is not None and response_status >= 400:
+                                self.server.remember_error_body(bytes(error_body))
+                            else:
+                                self.server.remember_no_error()
+                            del error_body
+                        elif response_status is not None and response_status >= 400:
+                            self.server.remember_error_body(bytes(error_body))
+                            del error_body
+                        elif response_status is not None:
+                            self.server.remember_no_error()
         except httpx.HTTPError:
             self.server.mark_upstream_truncated()
             self.server.rejected += 1
@@ -4644,6 +4778,12 @@ def _run_composed_codex_tool_roundtrip(
         local_status = relay.status()
         qwen_status = _qwen_relay_status(qwen_port)
         fake_status = fake_qwen_server.status()
+        gateway_requests = gateway_output.snapshot()
+        request_projections = [
+            _safe_roundtrip_request_projection(request.body)
+            for request in gateway_requests
+        ]
+        del gateway_requests
         try:
             accounting_statuses = asyncio.run(
                 _safe_roundtrip_accounting_status_counts(postgres_url, key)
@@ -4665,11 +4805,14 @@ def _run_composed_codex_tool_roundtrip(
             gateway_structures=gateway_status.get("sse_structures"),
             local_requests=len(relay.snapshot()),
             local_statuses=local_status.get("response_statuses"),
+            request_projections=request_projections,
+            gateway_error_code_classes=gateway_status.get("error_code_classes"),
+            gateway_error_param_classes=gateway_status.get("error_param_classes"),
             qwen_status=qwen_status,
             fake_status=fake_status,
             accounting_statuses=accounting_statuses,
         )
-        del accounting_statuses, codex_failure_category
+        del accounting_statuses, codex_failure_category, request_projections
         raise VerificationError(failure_code)
 
     gateway_requests = gateway_output.snapshot()
@@ -4838,6 +4981,9 @@ def _localize_composed_codex_failure(
     gateway_structures: object,
     local_requests: int,
     local_statuses: object,
+    request_projections: object,
+    gateway_error_code_classes: object,
+    gateway_error_param_classes: object,
     qwen_status: dict[str, object],
     fake_status: dict[str, object],
     accounting_statuses: dict[str, int | bool],
@@ -4890,7 +5036,26 @@ def _localize_composed_codex_failure(
         and len(gateway_codes) >= 2
         and gateway_codes[1] >= 400
     ):
-        return "composed_tool_roundtrip_second_turn_gateway_rejection"
+        code_class = "other"
+        param_class = "other"
+        if isinstance(gateway_error_code_classes, list) and len(gateway_error_code_classes) >= 2:
+            candidate = gateway_error_code_classes[1]
+            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_CODE_CLASSES:
+                code_class = candidate
+        if isinstance(gateway_error_param_classes, list) and len(gateway_error_param_classes) >= 2:
+            candidate = gateway_error_param_classes[1]
+            if isinstance(candidate, str) and candidate in _SAFE_GATEWAY_ERROR_PARAM_CLASSES:
+                param_class = candidate
+        if isinstance(request_projections, list) and len(request_projections) >= 2:
+            second_projection = request_projections[1]
+            if isinstance(second_projection, dict):
+                input_types = second_projection.get("input_item_type_sequence")
+                if not isinstance(input_types, list):
+                    code_class = "other"
+        return (
+            "composed_tool_roundtrip_second_turn_gateway_"
+            f"{code_class}_{param_class}"
+        )
     if codex_failure_category in stream_categories or any(
         isinstance(structure, dict) and structure.get("invalid") is True
         for structure in gateway_shapes

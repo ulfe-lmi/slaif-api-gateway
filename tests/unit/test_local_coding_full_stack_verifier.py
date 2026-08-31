@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import http.server
+import json
 import queue
 import socket
 import struct
@@ -472,8 +473,10 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
                 "gateway_statuses": [200, 400],
                 "local_requests": 2,
                 "local_statuses": [200, 200],
+                "gateway_error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
+                "gateway_error_param_classes": ["none", "input"],
             },
-            "composed_tool_roundtrip_second_turn_gateway_rejection",
+            "composed_tool_roundtrip_second_turn_gateway_codex_tool_roundtrip_invalid_input",
         ),
         (
             {
@@ -496,12 +499,38 @@ def test_composed_tool_roundtrip_failure_localizer_is_bounded(
         "gateway_structures": [],
         "local_requests": 0,
         "local_statuses": [],
+        "request_projections": [],
+        "gateway_error_code_classes": [],
+        "gateway_error_param_classes": [],
         "qwen_status": {},
         "fake_status": {},
         "accounting_statuses": {"query_ok": False},
     }
     facts.update(overrides)
     assert verifier._localize_composed_codex_failure(**facts) == expected
+
+
+def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None:
+    projection = verifier._safe_roundtrip_request_projection(
+        json.dumps(
+            {
+                "tools": [
+                    {"type": "function", "name": "private-name", "description": "private"},
+                    {"type": "custom", "name": "private-custom"},
+                ],
+                "input": [
+                    {"type": "function_call", "id": "private-id"},
+                    {"type": "function_call_output", "call_id": "private-call", "output": "private"},
+                ],
+                "stream": True,
+            }
+        ).encode()
+    )
+    assert projection == {
+        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+        "input_item_type_sequence": ["function_call", "function_call_output"],
+        "stream_class": "true",
+    }
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:
