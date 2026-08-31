@@ -965,6 +965,15 @@ _SAFE_GATEWAY_ERROR_CODE_CLASSES = frozenset(
 _SAFE_GATEWAY_ERROR_PARAM_CLASSES = frozenset(
     {"none", "input", "stream", "tools", "tool_choice", "other"}
 )
+_SAFE_RAW_METADATA_KEY_CLASSES = {
+    "session_id": "session",
+    "thread_id": "thread",
+    "root_turn_id": "root_turn",
+    "turn_id": "turn",
+    "x-codex-installation-id": "installation",
+    "x-codex-window-id": "window",
+    "x-codex-turn-metadata": "turn_metadata",
+}
 _SSE_CAPTURE_LIMIT = 64 * 1024
 _ERROR_CAPTURE_LIMIT = 16 * 1024
 _SSE_EVENT_RUN_LIMIT = 128
@@ -4092,6 +4101,108 @@ def _assert_local_bound_privacy(
                 raise VerificationError("raw_client_alias_forwarded")
 
 
+def _safe_local_bound_privacy_findings(
+    requests: tuple[CapturedRequest, ...],
+    raw_aliases_by_turn: tuple[dict[str, set[str]], ...],
+    *,
+    service_token: str,
+) -> list[dict[str, object]]:
+    """Compare every source/target turn pair and retain safe classifications."""
+    findings: list[dict[str, object]] = []
+
+    def contains_alias(value: object, aliases: set[str]) -> bool:
+        if isinstance(value, dict):
+            return any(contains_alias(child, aliases) for child in value.values())
+        if isinstance(value, list):
+            return any(contains_alias(child, aliases) for child in value)
+        return isinstance(value, str) and any(alias in value for alias in aliases)
+
+    for target_turn, request in enumerate(requests):
+        for source_turn, aliases_by_class in enumerate(raw_aliases_by_turn):
+            if not aliases_by_class:
+                continue
+            for alias_class, aliases in aliases_by_class.items():
+                try:
+                    payload = json.loads(request.body)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    payload = None
+                if not isinstance(payload, dict):
+                    payload = {}
+                client_metadata = payload.get("client_metadata")
+                if isinstance(client_metadata, dict) and contains_alias(
+                    client_metadata, aliases
+                ):
+                    findings.append(
+                        {
+                            "source_turn": source_turn,
+                            "target_turn": target_turn,
+                            "location_class": "top_level_client_metadata",
+                            "alias_key_class": alias_class,
+                        }
+                    )
+                    continue
+                internal_found = False
+                input_items = payload.get("input")
+                if isinstance(input_items, list):
+                    for item in input_items:
+                        if isinstance(item, dict) and contains_alias(
+                            item.get("internal_chat_message_metadata_passthrough"), aliases
+                        ):
+                            internal_found = True
+                            break
+                if internal_found:
+                    findings.append(
+                        {
+                            "source_turn": source_turn,
+                            "target_turn": target_turn,
+                            "location_class": "input_internal_chat_message_metadata_passthrough",
+                            "alias_key_class": alias_class,
+                        }
+                    )
+                    continue
+                body_without_known = dict(payload)
+                body_without_known.pop("client_metadata", None)
+                if isinstance(input_items, list):
+                    body_without_known["input"] = [
+                        {
+                            key: child
+                            for key, child in item.items()
+                            if key != "internal_chat_message_metadata_passthrough"
+                        }
+                        if isinstance(item, dict)
+                        else item
+                        for item in input_items
+                    ]
+                if contains_alias(body_without_known, aliases):
+                    findings.append(
+                        {
+                            "source_turn": source_turn,
+                            "target_turn": target_turn,
+                            "location_class": "other_json_body_path",
+                            "alias_key_class": alias_class,
+                        }
+                    )
+                    continue
+                service_authorization = f"Bearer {service_token}"
+                for name, value in request.headers.items():
+                    if name.lower().startswith("x-slaif-"):
+                        continue
+                    if name.lower() == "authorization" and value == service_authorization:
+                        continue
+                    if any(alias in value for alias in aliases):
+                        findings.append(
+                            {
+                                "source_turn": source_turn,
+                                "target_turn": target_turn,
+                                "location_class": "non_x_slaif_header",
+                                "alias_key_class": alias_class,
+                            }
+                        )
+                        break
+                del payload, body_without_known
+    return findings
+
+
 def _assert_required_evidence(
     evidence: dict[str, object], *, require_post_cleanup_model: bool = True
 ) -> None:
@@ -4888,23 +4999,51 @@ def _run_composed_codex_tool_roundtrip(
     if tool_result_counts != [0, 1]:
         raise VerificationError("composed_tool_roundtrip_tool_result_count")
 
-    raw_aliases: set[str] = set()
+    raw_aliases_by_turn: list[dict[str, set[str]]] = []
     for request in gateway_requests:
         try:
             payload = json.loads(request.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise VerificationError("composed_tool_roundtrip_gateway_body_invalid") from exc
+        aliases_by_class: dict[str, set[str]] = {}
         metadata = payload.get("client_metadata") if isinstance(payload, dict) else None
         if isinstance(metadata, dict):
-            raw_aliases.update(
-                value for value in metadata.values() if isinstance(value, str)
-            )
+            for key, value in metadata.items():
+                alias_class = _SAFE_RAW_METADATA_KEY_CLASSES.get(key)
+                if alias_class is not None and isinstance(value, str):
+                    aliases_by_class.setdefault(alias_class, set()).add(value)
+        raw_aliases_by_turn.append(aliases_by_class)
         del payload
-    _assert_local_bound_privacy(
+    privacy_findings = _safe_local_bound_privacy_findings(
         local_requests,
-        raw_aliases=raw_aliases,
+        tuple(raw_aliases_by_turn),
         service_token=service_token,
     )
+    if privacy_findings:
+        finding = privacy_findings[0]
+        location = finding.get("location_class")
+        alias_class = finding.get("alias_key_class")
+        source_turn = finding.get("source_turn")
+        target_turn = finding.get("target_turn")
+        if (
+            type(source_turn) is not int
+            or type(target_turn) is not int
+            or not 0 <= source_turn < len(raw_aliases_by_turn)
+            or not 0 <= target_turn < len(local_requests)
+            or location not in {
+                "top_level_client_metadata",
+                "input_internal_chat_message_metadata_passthrough",
+                "other_json_body_path",
+                "non_x_slaif_header",
+            }
+            or alias_class not in set(_SAFE_RAW_METADATA_KEY_CLASSES.values())
+        ):
+            raise VerificationError("composed_tool_roundtrip_privacy_invalid")
+        raise VerificationError(
+            f"composed_tool_roundtrip_privacy_source_{source_turn}_target_{target_turn}_"
+            f"{location}_{alias_class}"
+        )
+    del privacy_findings, raw_aliases_by_turn
     signed_header_facts = [
         {
             "service_bearer": request.headers.get("authorization")

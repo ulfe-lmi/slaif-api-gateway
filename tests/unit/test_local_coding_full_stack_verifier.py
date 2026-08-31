@@ -663,6 +663,69 @@ def test_local_bound_privacy_allows_only_service_and_signed_headers() -> None:
         )
 
 
+def test_local_bound_privacy_classifier_preserves_source_target_and_locations() -> None:
+    requests = (
+        verifier.CapturedRequest(
+            path="/v1/responses",
+            body=b'{"client_metadata":{"session_id":"alias-a"}}',
+            headers={"authorization": "Bearer service-token", "x-slaif-session": "opaque"},
+        ),
+        verifier.CapturedRequest(
+            path="/v1/responses",
+            body=b'{"input":[{"internal_chat_message_metadata_passthrough":{"thread_id":"alias-b"}}]}',
+            headers={"authorization": "Bearer service-token", "x-slaif-signature": "v1=opaque"},
+        ),
+    )
+    findings = verifier._safe_local_bound_privacy_findings(
+        requests,
+        (
+            {"session": {"alias-a"}},
+            {"thread": {"alias-b"}},
+        ),
+        service_token="service-token",
+    )
+    assert findings == [
+        {
+            "source_turn": 0,
+            "target_turn": 0,
+            "location_class": "top_level_client_metadata",
+            "alias_key_class": "session",
+        },
+        {
+            "source_turn": 1,
+            "target_turn": 1,
+            "location_class": "input_internal_chat_message_metadata_passthrough",
+            "alias_key_class": "thread",
+        },
+    ]
+    cross_turn = verifier._safe_local_bound_privacy_findings(
+        (
+            requests[0],
+            verifier.CapturedRequest(
+                path="/v1/responses",
+                body=b'{"prompt_cache_key":"prefix-alias-a"}',
+                headers={"authorization": "Bearer service-token"},
+            ),
+        ),
+        ({"session": {"alias-a"}},),
+        service_token="service-token",
+    )
+    assert cross_turn == [
+        {
+            "source_turn": 0,
+            "target_turn": 0,
+            "location_class": "top_level_client_metadata",
+            "alias_key_class": "session",
+        },
+        {
+            "source_turn": 0,
+            "target_turn": 1,
+            "location_class": "other_json_body_path",
+            "alias_key_class": "session",
+        },
+    ]
+
+
 def test_local_config_is_validated_before_composition(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
