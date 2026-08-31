@@ -687,8 +687,10 @@ class ResponsesStreamEventValidator:
             "call_id",
         }
         added_fields = (base_fields, base_fields | {"caller"})
-        done_base_fields = base_fields | {"output_index", "sequence_number"}
-        done_fields = (done_base_fields, done_base_fields | {"caller"})
+        # vLLM/OpenAI 0.149 serializes the event coordinates at the event
+        # level only.  Inner coordinates are not part of the reviewed done
+        # item contract and must be rejected as smuggled fields.
+        done_fields = (base_fields, base_fields | {"caller"})
         allowed_fields = added_fields if event_type == "response.output_item.added" else done_fields
         if not isinstance(item, Mapping) or set(item) not in allowed_fields:
             return False
@@ -741,8 +743,6 @@ class ResponsesStreamEventValidator:
             or item_id in self._function_output_done
             or item_id not in self._function_arguments_done
             or item.get("arguments") != state.delta_text
-            or item.get("output_index") != output_index
-            or item.get("sequence_number") != payload["sequence_number"]
         ):
             return False
         self._function_output_done.add(item_id)

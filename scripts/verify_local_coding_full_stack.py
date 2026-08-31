@@ -3462,8 +3462,6 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                         "arguments": arguments,
                         "call_id": "call_1",
                         "caller": None,
-                        "output_index": 0,
-                        "sequence_number": 5,
                     },
                 },
             ),

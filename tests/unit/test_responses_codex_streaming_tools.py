@@ -619,8 +619,6 @@ def _strict_function_events() -> list[dict[str, object]]:
                 "arguments": arguments,
                 "call_id": "call_1",
                 "caller": None,
-                "output_index": 0,
-                "sequence_number": 6,
             },
         },
         {
@@ -749,14 +747,20 @@ def test_codex_0149_function_item_shapes_are_event_specific(mutation) -> None:
     assert not validator.validate(events[6])
 
 
-def test_codex_0149_function_lifecycle_rejects_reordering_and_missing_inner_indices() -> None:
+def test_codex_0149_function_lifecycle_rejects_reordering_and_inner_index_smuggling() -> None:
     events = _strict_function_events()
     validator = ResponsesStreamEventValidator(_strict_function_profile())
     assert all(validator.validate(event) for event in events[:5])
     assert not validator.validate(events[6])
 
     events = _strict_function_events()
-    events[6]["item"].pop("output_index")
+    events[6]["item"]["output_index"] = 0
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6].pop("output_index")
     validator = ResponsesStreamEventValidator(_strict_function_profile())
     assert all(validator.validate(event) for event in events[:6])
     assert not validator.validate(events[6])
