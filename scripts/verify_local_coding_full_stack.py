@@ -2909,7 +2909,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
 
     def _stream(self, payload: dict[str, object]) -> None:
         if self.server.qualification_rejection_mode:
-            self._stream_qualification_rejection()
+            self._stream_qualification_rejection(payload)
             return
         if self.server.tool_roundtrip_mode:
             input_items = payload.get("input")
@@ -2940,7 +2940,20 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             return
         self._stream_message()
 
-    def _stream_qualification_rejection(self) -> None:
+    def _stream_qualification_rejection(self, payload: dict[str, object]) -> None:
+        tool_name = next(
+            (
+                tool.get("name")
+                for tool in payload.get("tools", [])
+                if isinstance(tool, dict)
+                and tool.get("type") == "function"
+                and tool.get("name") in {"shell_command", "exec_command"}
+            ),
+            None,
+        )
+        if not isinstance(tool_name, str):
+            self._json(400, {"error": {"code": "known_local_tool_missing"}})
+            return
         self._write_stream_events(
             (
                 (
@@ -2962,7 +2975,16 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                         "type": "response.output_item.added",
                         "sequence_number": 1,
                         "output_index": 0,
-                        "item": {"type": "function_call"},
+                        "item": {
+                            "type": "function_call",
+                            "id": "qualification_function",
+                            "status": "in_progress",
+                            "name": tool_name,
+                            "arguments": "",
+                            "call_id": "qualification_call",
+                            "caller": None,
+                            "namespace": "functions",
+                        },
                     },
                 ),
             )

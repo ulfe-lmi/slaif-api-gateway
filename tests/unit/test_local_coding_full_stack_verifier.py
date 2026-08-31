@@ -438,6 +438,10 @@ def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
     )
     assert artifact.stat().st_mode & 0o777 == 0o600
     first = artifact.read_bytes()
+    assert b"shell_command" not in first
+    assert b"qualification_function" not in first
+    assert b"qualification_call" not in first
+    assert b"printf" not in first
     responses_gateway._record_qualification_rejection(
         {**event, "type": "response.other"},
         profile=exact,
