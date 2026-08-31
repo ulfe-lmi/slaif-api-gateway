@@ -404,6 +404,21 @@ def test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted() -> None:
         fake.server_close()
 
 
+def test_exec_command_0149_pins_zero_request_and_stream_retries() -> None:
+    import scripts.capture_codex_protocol as capture
+
+    command = capture._exec_command_0149(
+        Path("/task/codex"),
+        workdir=Path("/task/work"),
+        port=12345,
+        model=capture.PINNED_MODEL,
+        model_catalog=Path("/task/catalog.json"),
+        output_path=Path("/task/output.json"),
+    )
+    assert "model_providers.slaif-capture.request_max_retries=0" in command
+    assert "model_providers.slaif-capture.stream_max_retries=0" in command
+
+
 def test_forced_fake_rejection_emits_full_bounded_function_item() -> None:
     fake = verifier._FakeQwenServer(
         ("127.0.0.1", 0),

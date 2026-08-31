@@ -57,19 +57,6 @@ def _checked_in_fixture() -> dict[str, object]:
     return json.loads(FIXTURE.read_bytes())
 
 
-def test_exec_command_0149_pins_zero_request_and_stream_retries() -> None:
-    command = capture._exec_command_0149(
-        Path("/task/codex"),
-        workdir=Path("/task/work"),
-        port=12345,
-        model=capture.PINNED_MODEL,
-        model_catalog=Path("/task/catalog.json"),
-        output_path=Path("/task/output.json"),
-    )
-    assert "model_providers.slaif-capture.request_max_retries=0" in command
-    assert "model_providers.slaif-capture.stream_max_retries=0" in command
-
-
 def test_exact_version_parser_and_mismatch_precedes_server_or_write(monkeypatch) -> None:
     assert capture.parse_codex_version("codex-cli 0.147.0\n") == "0.147.0"
     with pytest.raises(capture.CaptureError, match="unrecognized version"):
