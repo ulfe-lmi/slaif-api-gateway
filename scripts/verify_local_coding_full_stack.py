@@ -4880,17 +4880,17 @@ def _localize_composed_codex_failure(
     ):
         return "composed_tool_roundtrip_first_gateway_rejection"
     if (
-        gateway_requests >= 2
-        and len(gateway_codes) >= 2
-        and gateway_codes[1] >= 400
-    ):
-        return "composed_tool_roundtrip_second_turn_gateway_rejection"
-    if (
         local_requests >= 2
         and len(local_codes) >= 2
         and local_codes[1] >= 400
     ):
         return "composed_tool_roundtrip_second_turn_local_rejection"
+    if (
+        gateway_requests >= 2
+        and len(gateway_codes) >= 2
+        and gateway_codes[1] >= 400
+    ):
+        return "composed_tool_roundtrip_second_turn_gateway_rejection"
     if codex_failure_category in stream_categories or any(
         isinstance(structure, dict) and structure.get("invalid") is True
         for structure in gateway_shapes
