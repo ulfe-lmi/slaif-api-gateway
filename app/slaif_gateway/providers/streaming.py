@@ -25,6 +25,7 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         "response.output_item.added",
         "response.output_item.done",
         "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
         "response.custom_tool_call_input.delta",
         "response.reasoning_summary_part.added",
         "response.reasoning_summary_text.delta",
@@ -62,6 +63,7 @@ class ResponsesStreamValidationProfile:
     """Request-scoped permission profile for typed Responses SSE validation."""
 
     codex_streaming_tool_events: bool = False
+    codex_0149_function_tool_events: bool = False
     codex_encrypted_reasoning_replay: bool = False
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
     web_search: bool = False
@@ -111,6 +113,11 @@ class ResponsesStreamEventValidator:
         self._message_text_done: set[tuple[str, int]] = set()
         self._message_parts_done: set[tuple[str, int]] = set()
         self._message_output_done: set[str] = set()
+        self._function_output_indices: dict[str, int] = {}
+        self._function_arguments_done: set[str] = set()
+        self._function_output_done: set[str] = set()
+        self._function_delta_seen: set[str] = set()
+        self._function_done_states: dict[str, _StreamItemState] = {}
         self._strict_response_id: str | None = None
         self._strict_response_completed = False
         self._strict_last_sequence: int | None = None
@@ -169,7 +176,20 @@ class ResponsesStreamEventValidator:
                 self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
             return valid
         if self._profile.codex_reasoning_events:
-            if event_type in {"response.output_item.added", "response.output_item.done"}:
+            function_item_event = (
+                event_type in {"response.output_item.added", "response.output_item.done"}
+                and isinstance(payload.get("item"), Mapping)
+                and payload["item"].get("type") == "function_call"
+            )
+            function_argument_event = event_type in {
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            }
+            if self._profile.codex_0149_function_tool_events and (
+                function_item_event or function_argument_event
+            ):
+                valid = self._validate_codex_function_event(payload, event_type)
+            elif event_type in {"response.output_item.added", "response.output_item.done"}:
                 item = payload.get("item")
                 if isinstance(item, Mapping) and item.get("type") == "message":
                     valid = self._validate_codex_message_output_item(payload, event_type)
@@ -568,6 +588,165 @@ class ResponsesStreamEventValidator:
         state.delta_text += delta
         return True
 
+    def _validate_codex_function_event(
+        self, payload: Mapping[str, Any], event_type: str
+    ) -> bool:
+        """Validate the exact 0.149 function-call lifecycle, in sequence."""
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            return self._validate_codex_function_output_item(payload, event_type)
+        if event_type == "response.function_call_arguments.delta":
+            allowed = {"type", "item_id", "output_index", "sequence_number", "delta"}
+            if not _only_fields(payload, allowed):
+                return False
+            item_id = payload.get("item_id")
+            if not _bounded_identifier(item_id, required=True) or not _required_index(
+                payload, "output_index"
+            ):
+                return False
+            assert isinstance(item_id, str)
+            state = self._active_items.get(item_id)
+            if (
+                state is None
+                or state.item_type != "function_call"
+                or self._function_output_indices.get(item_id) != payload["output_index"]
+                or item_id in self._function_arguments_done
+                or item_id in self._function_output_done
+            ):
+                return False
+            delta = payload.get("delta")
+            if not isinstance(delta, str) or not _bounded_utf8(delta, _MAX_STREAM_DELTA_BYTES):
+                return False
+            if not _bounded_utf8(
+                state.delta_text + delta, _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+            ) or not self._accept_strict_sequence(payload):
+                return False
+            state.delta_text += delta
+            self._function_delta_seen.add(item_id)
+            return True
+
+        allowed = {
+            "type",
+            "item_id",
+            "output_index",
+            "sequence_number",
+            "name",
+            "arguments",
+        }
+        if not _only_fields(payload, allowed):
+            return False
+        item_id = payload.get("item_id")
+        name = payload.get("name")
+        arguments = payload.get("arguments")
+        if (
+            not _bounded_identifier(item_id, required=True)
+            or not _required_index(payload, "output_index")
+            or not isinstance(name, str)
+            or not _bounded_utf8(name, 256, nonempty=True)
+            or not isinstance(arguments, str)
+            or not _bounded_utf8(arguments, _MAX_STREAM_ITEM_TEXT_BYTES)
+        ):
+            return False
+        assert isinstance(item_id, str)
+        state = self._active_items.get(item_id)
+        if (
+            state is None
+            or state.item_type != "function_call"
+            or self._function_output_indices.get(item_id) != payload["output_index"]
+            or state.name != name
+            or item_id in self._function_arguments_done
+            or item_id in self._function_output_done
+            or item_id not in self._function_delta_seen
+            or arguments != state.delta_text
+            or not self._accept_strict_sequence(payload)
+        ):
+            return False
+        self._function_arguments_done.add(item_id)
+        return True
+
+    def _validate_codex_function_output_item(
+        self, payload: Mapping[str, Any], event_type: str
+    ) -> bool:
+        if not _only_fields(payload, {"type", "output_index", "sequence_number", "item"}):
+            return False
+        if not _required_index(payload, "output_index") or not _required_index(
+            payload, "sequence_number"
+        ):
+            return False
+        item = payload.get("item")
+        base_fields = {
+            "type",
+            "id",
+            "status",
+            "namespace",
+            "name",
+            "arguments",
+            "call_id",
+        }
+        added_fields = (base_fields, base_fields | {"caller"})
+        done_base_fields = base_fields | {"output_index", "sequence_number"}
+        done_fields = (done_base_fields, done_base_fields | {"caller"})
+        allowed_fields = added_fields if event_type == "response.output_item.added" else done_fields
+        if not isinstance(item, Mapping) or set(item) not in allowed_fields:
+            return False
+        item_id = item.get("id")
+        call_id = item.get("call_id")
+        name = item.get("name")
+        if (
+            not _bounded_identifier(item_id, required=True)
+            or not _bounded_identifier(call_id, required=True)
+            or not isinstance(name, str)
+            or not _bounded_utf8(name, 256, nonempty=True)
+            or item.get("type") != "function_call"
+            or item.get("namespace") is not None
+            or item.get("caller") is not None
+            or not isinstance(item.get("arguments"), str)
+            or not _bounded_utf8(item["arguments"], _MAX_STREAM_ITEM_TEXT_BYTES)
+            or not self._accept_strict_sequence(payload)
+        ):
+            return False
+        assert isinstance(item_id, str)
+        assert isinstance(call_id, str)
+        assert isinstance(name, str)
+        output_index = int(payload["output_index"])
+        if event_type == "response.output_item.added":
+            if (
+                item.get("status") != "in_progress"
+                or item.get("arguments") != ""
+                or item_id in self._seen_item_ids
+                or call_id in self._seen_call_ids
+                or len(self._function_output_indices) >= _MAX_STREAM_CONTENT_PARTS
+                or self._resolve_declared_tool(None, name, "function") is None
+            ):
+                return False
+            self._seen_item_ids.add(item_id)
+            self._seen_call_ids.add(call_id)
+            self._function_output_indices[item_id] = output_index
+            self._active_items[item_id] = _StreamItemState(
+                "function_call", "functions", name, call_id
+            )
+            return True
+
+        state = self._active_items.get(item_id)
+        if (
+            item.get("status") != "completed"
+            or state is None
+            or state.item_type != "function_call"
+            or self._function_output_indices.get(item_id) != output_index
+            or state.call_id != call_id
+            or state.name != name
+            or item_id in self._function_output_done
+            or item_id not in self._function_arguments_done
+            or item.get("arguments") != state.delta_text
+            or item.get("output_index") != output_index
+            or item.get("sequence_number") != payload["sequence_number"]
+        ):
+            return False
+        self._function_output_done.add(item_id)
+        self._function_done_states[item_id] = state
+        del self._active_items[item_id]
+        self._capture_replay_candidate(item_id=item_id, state=state)
+        return True
+
     def _validate_reasoning_event(
         self,
         payload: Mapping[str, Any],
@@ -918,14 +1097,22 @@ class ResponsesStreamEventValidator:
             or response.get("status") != "completed"
             or self._strict_response_completed
             or self._active_items
-            or not (self._reasoning_output_done or self._message_output_done)
+            or not (
+                self._reasoning_output_done
+                or self._message_output_done
+                or self._function_output_done
+            )
         ):
             return False
         usage = response.get("usage")
         if (
             not isinstance(usage, Mapping)
             or not _validate_completed_usage(usage, strict_vllm_responses=True)
-            or not _validate_codex_completed_output(response.get("output"))
+            or not _validate_codex_completed_output(
+                response.get("output"),
+                allow_function_calls=self._profile.codex_0149_function_tool_events,
+                function_states=self._function_done_states,
+            )
         ):
             return False
         if not self._accept_strict_sequence(payload):
@@ -1156,13 +1343,30 @@ def _validate_per_turn_counts(value: Any) -> bool:
     )
 
 
-def _validate_codex_completed_output(output: Any) -> bool:
+def _validate_codex_completed_output(
+    output: Any,
+    *,
+    allow_function_calls: bool = False,
+    function_states: Mapping[str, _StreamItemState] | None = None,
+) -> bool:
     if not isinstance(output, list) or not output or len(output) > _MAX_STREAM_CONTENT_PARTS:
         return False
-    return all(_validate_codex_completed_output_item(item) for item in output)
+    return all(
+        _validate_codex_completed_output_item(
+            item,
+            allow_function_call=allow_function_calls,
+            function_states=function_states,
+        )
+        for item in output
+    )
 
 
-def _validate_codex_completed_output_item(item: Any) -> bool:
+def _validate_codex_completed_output_item(
+    item: Any,
+    *,
+    allow_function_call: bool = False,
+    function_states: Mapping[str, _StreamItemState] | None = None,
+) -> bool:
     if not isinstance(item, Mapping):
         return False
     item_type = item.get("type")
@@ -1188,6 +1392,30 @@ def _validate_codex_completed_output_item(item: Any) -> bool:
             and _bounded_utf8(part["text"], _MAX_STREAM_ITEM_TEXT_BYTES)
             for part in content
         )
+    if item_type == "function_call":
+        if not allow_function_call or function_states is None:
+            return False
+        function_fields = {
+            "type", "id", "status", "namespace", "name", "arguments", "call_id", "caller"
+        }
+        if set(item) not in (function_fields, function_fields - {"caller"}):
+            return False
+        if (
+            item.get("status") != "completed"
+            or item.get("namespace") is not None
+            or item.get("caller") is not None
+            or not isinstance(item.get("name"), str)
+            or not _bounded_utf8(item["name"], 256, nonempty=True)
+            or not isinstance(item.get("call_id"), str)
+            or not _bounded_identifier(item.get("call_id"), required=True)
+            or not isinstance(item.get("arguments"), str)
+            or not _bounded_utf8(item["arguments"], _MAX_STREAM_ITEM_TEXT_BYTES)
+        ):
+            return False
+        if len(function_states) != 1:
+            return False
+        state = next(iter(function_states.values()))
+        return state.name == item.get("name") and state.delta_text == item.get("arguments")
     if item_type != "message" or set(item) != {
         "type", "id", "status", "role", "content", "phase"
     }:

@@ -317,6 +317,205 @@ def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -
     assert all(ordinary_validator.validate(event) for event in _strict_message_prefix_events())
 
 
+def _strict_function_events() -> list[dict[str, object]]:
+    arguments = '{"value":"ok"}'
+    return [
+        _strict_response_event("response.created", 0),
+        _strict_response_event("response.in_progress", 1),
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 2,
+            "item": {
+                "type": "function_call",
+                "id": "function_1",
+                "status": "in_progress",
+                "namespace": None,
+                "name": "wait",
+                "arguments": "",
+                "call_id": "call_1",
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": '{"value":',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 4,
+            "delta": '"ok"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 5,
+            "name": "wait",
+            "arguments": arguments,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 6,
+            "item": {
+                "type": "function_call",
+                "id": "function_1",
+                "status": "completed",
+                "namespace": None,
+                "name": "wait",
+                "arguments": arguments,
+                "call_id": "call_1",
+                "caller": None,
+                "output_index": 0,
+                "sequence_number": 6,
+            },
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 7,
+            "response": {
+                "id": "response_1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "id": "parser_function_1",
+                        "status": "completed",
+                        "namespace": None,
+                        "name": "wait",
+                        "arguments": arguments,
+                        "call_id": "parser_call_1",
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "input_tokens_per_turn": [1],
+                        "cached_tokens_per_turn": [0],
+                    },
+                    "output_tokens": 1,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "tool_output_tokens": 0,
+                        "output_tokens_per_turn": [1],
+                        "tool_output_tokens_per_turn": [0],
+                    },
+                    "total_tokens": 2,
+                },
+            },
+        },
+    ]
+
+
+def _strict_function_profile() -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        codex_0149_function_tool_events=True,
+        declared_client_tools=frozenset({("functions", "wait", "function")}),
+    )
+
+
+def test_codex_0149_function_lifecycle_is_ordered_and_declared() -> None:
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    assert all(validator.validate(event) for event in _strict_function_events())
+    assert validator.take_replay_reference_candidates()[0].item_kind == "function_call"
+
+
+def test_codex_0149_function_profile_accepts_second_turn_message_lifecycle() -> None:
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    assert all(validator.validate(event) for event in _strict_message_prefix_events())
+    assert validator.validate(_strict_response_event("response.completed", 9))
+
+
+def test_codex_0149_function_terminal_matches_semantics_not_stream_ids() -> None:
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["name"] = "other"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["type"] = "message"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+
+def test_codex_0149_function_terminal_rejects_multiple_completed_states() -> None:
+    events = _strict_function_events()
+    second = copy.deepcopy(events[2:7])
+    for event in second:
+        event["sequence_number"] += 6
+        if isinstance(event.get("item_id"), str):
+            event["item_id"] = "function_2"
+        item = event.get("item")
+        if isinstance(item, dict):
+            item["id"] = "function_2"
+            item["call_id"] = "call_2"
+            if event.get("type") == "response.output_item.done":
+                item["sequence_number"] = event["sequence_number"]
+        if event.get("type") == "response.function_call_arguments.done":
+            event["name"] = "wait"
+    events[-1]["sequence_number"] = 13
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert all(validator.validate(event) for event in second)
+    assert not validator.validate(events[-1])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(caller={"type": "direct"}),
+        lambda event: event["item"].update(namespace="functions"),
+        lambda event: event["item"].update(output_index=1),
+        lambda event: event["item"].update(sequence_number=3),
+    ],
+)
+def test_codex_0149_function_item_shapes_are_event_specific(mutation) -> None:
+    events = _strict_function_events()
+    mutation(events[2])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert validator.validate(events[0])
+    assert validator.validate(events[1])
+    assert not validator.validate(events[2])
+
+    events = _strict_function_events()
+    mutation(events[6])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
+def test_codex_0149_function_lifecycle_rejects_reordering_and_missing_inner_indices() -> None:
+    events = _strict_function_events()
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:5])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"].pop("output_index")
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
 def _message_added_event() -> dict[str, object]:
     return {
         "type": "response.output_item.added",

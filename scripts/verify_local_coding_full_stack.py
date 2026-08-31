@@ -852,6 +852,7 @@ _FAKE_STANDARD_SSE_STRUCTURE = {
         "response.content_part.added": 1,
         "response.content_part.done": 1,
         "response.created": 1,
+        "response.in_progress": 1,
         "response.output_item.added": 1,
         "response.output_item.done": 1,
         "response.output_text.delta": 1,
@@ -859,6 +860,7 @@ _FAKE_STANDARD_SSE_STRUCTURE = {
     },
     "event_trace": [
         {"event": "response.created", "count": 1},
+        {"event": "response.in_progress", "count": 1},
         {"event": "response.output_item.added", "count": 1},
         {"event": "response.content_part.added", "count": 1},
         {"event": "response.output_text.delta", "count": 1},
@@ -880,6 +882,7 @@ _FAKE_STANDARD_SSE_STRUCTURE = {
     "response_field_names": {
         "response.completed": ["id", "model", "object", "output", "status", "usage"],
         "response.created": ["id", "model", "object", "status"],
+        "response.in_progress": ["id", "model", "object", "status"],
     },
     "response_id_relation": True,
     "created_status_in_progress": True,
@@ -2242,13 +2245,24 @@ class _FailureHandler(http.server.BaseHTTPRequestHandler):
 class _FakeQwenServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address: tuple[str, int], token: str) -> None:
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        token: str,
+        *,
+        tool_roundtrip_mode: bool = False,
+    ) -> None:
         super().__init__(server_address, _FakeQwenHandler)
         self.token = token
+        self.tool_roundtrip_mode = tool_roundtrip_mode
         self.calls = 0
         self.compiler_calls = 0
         self.inference_calls = 0
         self.stream_calls = 0
+        self.tool_roundtrip_turns = 0
+        self.tool_result_observed = 0
+        self.function_lifecycle_count = 0
+        self.message_lifecycle_count = 0
         self.first_event_sent = threading.Event()
         self._lock = threading.Lock()
 
@@ -2261,6 +2275,30 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
                 self.inference_calls += 1
                 if streaming:
                     self.stream_calls += 1
+
+    def record_tool_roundtrip_phase(self, *, has_one_tool_result: bool) -> None:
+        with self._lock:
+            self.tool_roundtrip_turns += 1
+            if has_one_tool_result:
+                self.tool_result_observed += 1
+                self.message_lifecycle_count += 1
+            else:
+                self.function_lifecycle_count += 1
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "calls": self.calls,
+                "compiler_calls": self.compiler_calls,
+                "inference_calls": self.inference_calls,
+                "stream_calls": self.stream_calls,
+                "tool_roundtrip_mode": self.tool_roundtrip_mode,
+                "tool_roundtrip_turns": self.tool_roundtrip_turns,
+                "tool_result_observed": self.tool_result_observed,
+                "function_lifecycle_count": self.function_lifecycle_count,
+                "message_lifecycle_count": self.message_lifecycle_count,
+                "first_event_sent": self.first_event_sent.is_set(),
+            }
 
 
 class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
@@ -2391,7 +2429,224 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
         }
 
-    def _stream(self) -> None:
+    @staticmethod
+    def _function_arguments(
+        payload: dict[str, object], *, tool_name: str | None = None
+    ) -> str:
+        tools = payload.get("tools")
+        if not isinstance(tools, list):
+            return "{}"
+        declaration = next(
+            (
+                tool
+                for tool in tools
+                if isinstance(tool, dict)
+                and tool.get("type") == "function"
+                and (tool_name is None or tool.get("name") == tool_name)
+            ),
+            None,
+        )
+        if not isinstance(declaration, dict):
+            return "{}"
+        parameters = declaration.get("parameters")
+        if not isinstance(parameters, dict):
+            return "{}"
+        properties = parameters.get("properties")
+        required = parameters.get("required")
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return "{}"
+        values: dict[str, object] = {}
+        for name in required[:8]:
+            schema = properties.get(name)
+            schema_type = schema.get("type") if isinstance(schema, dict) else None
+            values[name] = (
+                "printf bounded fake tool"
+                if schema_type == "string"
+                else 1
+                if schema_type == "integer"
+                else False
+                if schema_type == "boolean"
+                else []
+                if schema_type == "array"
+                else {}
+            )
+        return json.dumps(values, separators=(",", ":"))
+
+    def _stream(self, payload: dict[str, object]) -> None:
+        if self.server.tool_roundtrip_mode:
+            input_items = payload.get("input")
+            result_count = (
+                sum(
+                    1
+                    for item in input_items
+                    if isinstance(item, dict) and item.get("type") == "function_call_output"
+                )
+                if isinstance(input_items, list)
+                else 0
+            )
+            if result_count > 1:
+                self._json(400, {"error": {"code": "tool_result_cardinality"}})
+                return
+            if (
+                (self.server.tool_roundtrip_turns == 0 and result_count != 0)
+                or (self.server.tool_roundtrip_turns == 1 and result_count != 1)
+                or self.server.tool_roundtrip_turns >= 2
+            ):
+                self._json(400, {"error": {"code": "tool_roundtrip_order"}})
+                return
+            self.server.record_tool_roundtrip_phase(has_one_tool_result=result_count == 1)
+            if result_count == 0:
+                self._stream_function(payload)
+            else:
+                self._stream_message()
+            return
+        self._stream_message()
+
+    def _stream_function(self, payload: dict[str, object]) -> None:
+        tool_name = next(
+            (
+                tool.get("name")
+                for tool in payload.get("tools", [])
+                if isinstance(tool, dict)
+                and tool.get("type") == "function"
+                and tool.get("name") in {"shell_command", "exec_command"}
+            ),
+            None,
+        )
+        if not isinstance(tool_name, str):
+            self._json(400, {"error": {"code": "known_local_tool_missing"}})
+            return
+        arguments = self._function_arguments(payload, tool_name=tool_name)
+        events = (
+            (
+                "response.created",
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {
+                        "id": "resp_function",
+                        "object": "response",
+                        "status": "in_progress",
+                        "model": CODEX_MODEL,
+                    },
+                },
+            ),
+            (
+                "response.in_progress",
+                {
+                    "type": "response.in_progress",
+                    "sequence_number": 1,
+                    "response": {
+                        "id": "resp_function",
+                        "object": "response",
+                        "status": "in_progress",
+                        "model": CODEX_MODEL,
+                    },
+                },
+            ),
+            (
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "sequence_number": 2,
+                    "item": {
+                        "type": "function_call",
+                        "id": "function_1",
+                        "status": "in_progress",
+                        "namespace": None,
+                        "name": tool_name,
+                        "arguments": "",
+                        "call_id": "call_1",
+                        "caller": None,
+                    },
+                },
+            ),
+            (
+                "response.function_call_arguments.delta",
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "function_1",
+                    "output_index": 0,
+                    "sequence_number": 3,
+                    "delta": arguments,
+                },
+            ),
+            (
+                "response.function_call_arguments.done",
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "function_1",
+                    "output_index": 0,
+                    "sequence_number": 4,
+                    "name": tool_name,
+                    "arguments": arguments,
+                },
+            ),
+            (
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "sequence_number": 5,
+                    "item": {
+                        "type": "function_call",
+                        "id": "function_1",
+                        "status": "completed",
+                        "namespace": None,
+                        "name": tool_name,
+                        "arguments": arguments,
+                        "call_id": "call_1",
+                        "caller": None,
+                        "output_index": 0,
+                        "sequence_number": 5,
+                    },
+                },
+            ),
+            (
+                "response.completed",
+                {
+                    "type": "response.completed",
+                    "sequence_number": 6,
+                    "response": {
+                        "id": "resp_function",
+                        "object": "response",
+                        "status": "completed",
+                        "model": CODEX_MODEL,
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "id": "parser_function_1",
+                                "status": "completed",
+                                "namespace": None,
+                                "name": tool_name,
+                                "arguments": arguments,
+                                "call_id": "parser_call_1",
+                            }
+                        ],
+                        "usage": {
+                            "input_tokens": 2,
+                            "input_tokens_details": {
+                                "cached_tokens": 0,
+                                "input_tokens_per_turn": [2],
+                                "cached_tokens_per_turn": [0],
+                            },
+                            "output_tokens": 2,
+                            "output_tokens_details": {
+                                "reasoning_tokens": 0,
+                                "tool_output_tokens": 0,
+                                "output_tokens_per_turn": [2],
+                                "tool_output_tokens_per_turn": [0],
+                            },
+                            "total_tokens": 4,
+                        },
+                    },
+                },
+            ),
+        )
+        self._write_stream_events(events)
+
+    def _stream_message(self) -> None:
         stream_item_id = "fake-stream-message"
         created = {
             "type": "response.created",
@@ -2406,10 +2661,23 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         events = (
             ("response.created", created),
             (
+                "response.in_progress",
+                {
+                    "type": "response.in_progress",
+                    "sequence_number": 1,
+                    "response": {
+                        "id": "resp_capture",
+                        "object": "response",
+                        "status": "in_progress",
+                        "model": CODEX_MODEL,
+                    },
+                },
+            ),
+            (
                 "response.output_item.added",
                 {
                     "type": "response.output_item.added",
-                    "sequence_number": 1,
+                    "sequence_number": 2,
                     "output_index": 0,
                     "item": {
                         "type": "message",
@@ -2425,7 +2693,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.content_part.added",
                 {
                     "type": "response.content_part.added",
-                    "sequence_number": 2,
+                    "sequence_number": 3,
                     "item_id": stream_item_id,
                     "output_index": 0,
                     "content_index": 0,
@@ -2441,7 +2709,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.output_text.delta",
                 {
                     "type": "response.output_text.delta",
-                    "sequence_number": 3,
+                    "sequence_number": 4,
                     "item_id": stream_item_id,
                     "output_index": 0,
                     "content_index": 0,
@@ -2453,7 +2721,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.output_text.done",
                 {
                     "type": "response.output_text.done",
-                    "sequence_number": 4,
+                    "sequence_number": 5,
                     "item_id": stream_item_id,
                     "output_index": 0,
                     "content_index": 0,
@@ -2465,7 +2733,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.content_part.done",
                 {
                     "type": "response.content_part.done",
-                    "sequence_number": 5,
+                    "sequence_number": 6,
                     "item_id": stream_item_id,
                     "output_index": 0,
                     "content_index": 0,
@@ -2481,7 +2749,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.output_item.done",
                 {
                     "type": "response.output_item.done",
-                    "sequence_number": 6,
+                    "sequence_number": 7,
                     "output_index": 0,
                     "item": {
                         "type": "message",
@@ -2505,7 +2773,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.completed",
                 {
                     "type": "response.completed",
-                    "sequence_number": 7,
+                    "sequence_number": 8,
                     "response": {
                         "id": "resp_capture",
                         "object": "response",
@@ -2548,6 +2816,11 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 },
             ),
         )
+        self._write_stream_events(events)
+
+    def _write_stream_events(
+        self, events: tuple[tuple[str, dict[str, object]], ...]
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -2587,7 +2860,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             streaming = payload.get("stream") is True
             self.server.record(compiler=False, streaming=streaming)
             if streaming:
-                self._stream()
+                self._stream(payload)
             else:
                 self._json(200, self._response())
             return
@@ -3024,12 +3297,72 @@ def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     return server, thread
 
 
-def _start_fake_qwen() -> tuple[_FakeQwenServer, threading.Thread, str]:
+def _start_fake_qwen(
+    *, tool_roundtrip_mode: bool = False
+) -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
-    server = _FakeQwenServer(("127.0.0.1", 0), token)
+    server = _FakeQwenServer(
+        ("127.0.0.1", 0), token, tool_roundtrip_mode=tool_roundtrip_mode
+    )
     thread = threading.Thread(target=server.serve_forever, name="155r-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
+
+
+def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
+    """Run one actual Codex process against the opt-in two-turn fake Qwen."""
+    import scripts.capture_codex_protocol as capture
+
+    fake, thread, token = _start_fake_qwen(tool_roundtrip_mode=True)
+    try:
+        home = root / "codex-home"
+        work = root / "codex-work"
+        catalog = root / "codex-catalog.json"
+        home.mkdir(mode=0o700)
+        work.mkdir(mode=0o700)
+        environment = capture._isolated_environment(home)
+        environment["SLAIF_CODEX_CAPTURE_API_KEY"] = token
+        capture._write_0149_model_catalog(
+            codex_binary,
+            catalog,
+            environment=environment,
+            model=CODEX_MODEL,
+        )
+        result = _run(
+            capture._exec_command_0149(
+                codex_binary,
+                workdir=work,
+                port=fake.server_address[1],
+                model=CODEX_MODEL,
+                model_catalog=catalog,
+                output_path=root / "codex-output.json",
+                ephemeral=True,
+            ),
+            cwd=REPO_ROOT,
+            env=environment,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            raise VerificationError("fake_tool_roundtrip_codex_failed")
+        status = fake.status()
+        if (
+            status["tool_roundtrip_turns"] != 2
+            or status["tool_result_observed"] != 1
+            or status["function_lifecycle_count"] != 1
+            or status["message_lifecycle_count"] != 1
+        ):
+            raise VerificationError("fake_tool_roundtrip_counts_invalid")
+        return {
+            "codex_exit_success": True,
+            "tool_roundtrip_turns": 2,
+            "tool_result_observed": 1,
+            "function_lifecycle_count": 1,
+            "message_lifecycle_count": 1,
+        }
+    finally:
+        fake.shutdown()
+        fake.server_close()
+        thread.join(timeout=10)
 
 
 def _start_process(
@@ -4799,6 +5132,7 @@ def main() -> int:
     parser.add_argument("--stream-differential", action="store_true")
     parser.add_argument("--composed-only", action="store_true")
     parser.add_argument("--composed-only-fake", action="store_true")
+    parser.add_argument("--tool-roundtrip-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
@@ -4813,6 +5147,21 @@ def main() -> int:
             return 1
         try:
             _emit_stream_summary(_stream_summary_lines(result))
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
+        return 0
+    if arguments.tool_roundtrip_fake:
+        try:
+            _verify_commit_topology()
+            with tempfile.TemporaryDirectory(
+                prefix="slaif-155t-tool-roundtrip-", dir="/tmp"
+            ) as temporary:
+                root = Path(temporary)
+                root.chmod(0o700)
+                codex_binary = _install_codex(root)
+                run_codex_tool_roundtrip_fake(root=root, codex_binary=codex_binary)
+            print("FAKE_TOOL_ROUNDTRIP=OK turns=2 tool_result=1 function=1 message=1")
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")
             return 1

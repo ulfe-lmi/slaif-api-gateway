@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import http.server
 import queue
@@ -343,6 +344,58 @@ def test_fake_qwen_rehearsal_double_has_bounded_wire_contract() -> None:
         fake.shutdown()
         fake.server_close()
         thread.join(timeout=2)
+
+
+def test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted() -> None:
+    tree = ast.parse(Path(verifier.__file__).read_text(encoding="utf-8"))
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "_FakeQwenHandler"
+    )
+    assert sum(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_stream_function"
+        for node in handler.body
+    ) == 1
+
+    fake = verifier._FakeQwenServer(
+        ("127.0.0.1", 0), "synthetic-token", tool_roundtrip_mode=True
+    )
+    try:
+        calls: list[str] = []
+        handler_instance = object.__new__(verifier._FakeQwenHandler)
+        handler_instance.server = fake
+        handler_instance._stream_function = lambda _payload: calls.append("function")
+        handler_instance._stream_message = lambda: calls.append("message")
+        handler_instance._stream({"stream": True, "input": []})
+        handler_instance._stream(
+            {
+                "stream": True,
+                "input": [{"type": "function_call_output", "call_id": "bounded", "output": "ok"}],
+            }
+        )
+        assert calls == ["function", "message"]
+        status = fake.status()
+        assert status["tool_roundtrip_mode"] is True
+        assert status["tool_roundtrip_turns"] == 2
+        assert status["tool_result_observed"] == 1
+        assert status["function_lifecycle_count"] == 1
+        assert status["message_lifecycle_count"] == 1
+    finally:
+        fake.server_close()
+
+
+def test_fake_qwen_tool_roundtrip_function_requires_known_local_tool() -> None:
+    responses: list[tuple[int, str]] = []
+    handler_instance = object.__new__(verifier._FakeQwenHandler)
+    handler_instance._json = lambda status, payload: responses.append(
+        (status, payload["error"]["code"])
+    )
+    handler_instance._stream_function(
+        {"tools": [{"type": "function", "name": "unreviewed_tool"}]}
+    )
+    assert responses == [(400, "known_local_tool_missing")]
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:

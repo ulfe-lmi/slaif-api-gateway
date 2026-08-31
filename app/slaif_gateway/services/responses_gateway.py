@@ -1255,6 +1255,7 @@ async def handle_response_create(
                             codex_streaming_tool_events_requested
                             or pair_local_codex_streaming_tools
                         ),
+                        codex_0149_function_tool_events=pair_local_codex_streaming_tools,
                         codex_reasoning_events=_codex_reasoning_events_enabled(
                             client_module_id=client_module.module_id,
                             server_context=local_coding_server_context,
