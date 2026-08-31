@@ -14,6 +14,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import socket
 import stat
@@ -61,6 +62,19 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
+QUALIFICATION_HOOK_ENV = "SLAIF_155T_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155T_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155T_REJECTION_ROOT"
+QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
+QUALIFICATION_MAX_BYTES = 64 * 1024
+QUALIFICATION_MAX_FIELDS = 32
+QUALIFICATION_FIELD_TYPES = frozenset(
+    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
+)
+QUALIFICATION_DECLARED_TOOL_CLASSES = frozenset({"none", "bounded", "many"})
+QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
+QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 
 
 class VerificationError(RuntimeError):
@@ -752,8 +766,17 @@ def _gateway_environment(
     signing_secret: str,
     derivation_secret: str,
     encryption_key: str,
+    qualification_artifact: Path | None = None,
 ) -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(REPO_ROOT / "app"), "PYTHONDONTWRITEBYTECODE": "1", "APP_ENV": "test", "DATABASE_URL": database_url, "GATEWAY_KEY_PREFIX": "sk-slaif-", "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-", "ACTIVE_HMAC_KEY_VERSION": "1", "TOKEN_HMAC_SECRET_V1": "155f-gateway-hmac-secret-012345678901", "ADMIN_SESSION_SECRET": "155f-admin-secret-012345678901", "ONE_TIME_SECRET_ENCRYPTION_KEY": encryption_key, "ENABLE_REDIS_RATE_LIMITS": "false", "ENABLE_ADMIN_DASHBOARD": "false", "ENABLE_EMAIL_DELIVERY": "false", "ENABLE_METRICS": "true", "LOG_LEVEL": "WARNING", "STRUCTURED_LOGS": "true", "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token, "LOCAL_CODING_SERVICE_TOKEN": service_token, "LOCAL_CODING_SIGNING_SECRET_V1": signing_secret, "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": derivation_secret, "SLAIF_155F_FAILURE_KEY": "synthetic-failure-key", "UVICORN_ACCESS_LOG": "false", "APP_BASE_URL": f"http://127.0.0.1:{gateway_port}"}
+    if qualification_artifact is not None:
+        env.update(
+            {
+                QUALIFICATION_HOOK_ENV: "1",
+                QUALIFICATION_ROOT_ENV: str(qualification_artifact.parent),
+                QUALIFICATION_ARTIFACT_ENV: str(qualification_artifact),
+            }
+        )
     return env
 
 
@@ -806,6 +829,146 @@ def _validate_local_config(root: Path, runtime: RuntimeReference | None) -> Path
     ):
         raise VerificationError("local_config_policy_mismatch")
     return config
+
+
+def _qualification_name(value: object, *, event: bool = False) -> str:
+    if value == "other":
+        return "other"
+    if not isinstance(value, str):
+        raise VerificationError("qualification_artifact_invalid")
+    pattern = QUALIFICATION_EVENT_RE if event else QUALIFICATION_NAME_RE
+    if pattern.fullmatch(value) is None:
+        raise VerificationError("qualification_artifact_invalid")
+    return value
+
+
+def _sanitize_qualification_fields(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) > QUALIFICATION_MAX_FIELDS:
+        raise VerificationError("qualification_artifact_invalid")
+    fields: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"name", "type"}:
+            raise VerificationError("qualification_artifact_invalid")
+        name = _qualification_name(item["name"])
+        field_type = item["type"]
+        if not isinstance(field_type, str) or field_type not in QUALIFICATION_FIELD_TYPES:
+            raise VerificationError("qualification_artifact_invalid")
+        fields.append({"name": name, "type": field_type})
+    if fields != sorted(fields, key=lambda item: item["name"]):
+        raise VerificationError("qualification_artifact_invalid")
+    if len({item["name"] for item in fields}) != len(fields):
+        raise VerificationError("qualification_artifact_invalid")
+    return fields
+
+
+def _sanitize_qualification_rejection(value: object) -> dict[str, object]:
+    required = {
+        "schema", "event_type", "top_level_fields", "nested_object_fields",
+        "validator_profile", "rejection",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise VerificationError("qualification_artifact_invalid")
+    if value["schema"] != "responses_stream_rejection_v1":
+        raise VerificationError("qualification_artifact_invalid")
+    nested_value = value["nested_object_fields"]
+    if not isinstance(nested_value, list) or len(nested_value) > QUALIFICATION_MAX_FIELDS:
+        raise VerificationError("qualification_artifact_invalid")
+    nested: list[dict[str, object]] = []
+    for item in nested_value:
+        if not isinstance(item, dict) or set(item) != {"name", "fields"}:
+            raise VerificationError("qualification_artifact_invalid")
+        nested.append(
+            {
+                "name": _qualification_name(item["name"]),
+                "fields": _sanitize_qualification_fields(item["fields"]),
+            }
+        )
+    if nested != sorted(nested, key=lambda item: item["name"]):
+        raise VerificationError("qualification_artifact_invalid")
+    if len({item["name"] for item in nested}) != len(nested):
+        raise VerificationError("qualification_artifact_invalid")
+    profile = value["validator_profile"]
+    profile_keys = {
+        "codex_reasoning_events", "codex_0149_function_tool_events",
+        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
+        "declared_client_tools_class", "web_search_max_tool_calls_class",
+    }
+    if not isinstance(profile, dict) or set(profile) != profile_keys:
+        raise VerificationError("qualification_artifact_invalid")
+    if any(
+        type(profile[name]) is not bool
+        for name in (
+            "codex_reasoning_events",
+            "codex_0149_function_tool_events",
+            "codex_streaming_tool_events",
+            "codex_encrypted_reasoning_replay",
+            "web_search",
+        )
+    ):
+        raise VerificationError("qualification_artifact_invalid")
+    if profile["declared_client_tools_class"] not in QUALIFICATION_DECLARED_TOOL_CLASSES:
+        raise VerificationError("qualification_artifact_invalid")
+    if profile["web_search_max_tool_calls_class"] not in QUALIFICATION_WEB_SEARCH_CLASSES:
+        raise VerificationError("qualification_artifact_invalid")
+    rejection = value["rejection"]
+    if not isinstance(rejection, dict) or set(rejection) != {"outcome", "code"}:
+        raise VerificationError("qualification_artifact_invalid")
+    if rejection["outcome"] != "validator_rejected" or rejection["code"] not in {
+        "responses_stream_event_not_supported",
+        "responses_stream_provider_failure",
+        "other",
+    }:
+        raise VerificationError("qualification_artifact_invalid")
+    return {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": _qualification_name(value["event_type"], event=True),
+        "top_level_fields": _sanitize_qualification_fields(value["top_level_fields"]),
+        "nested_object_fields": nested,
+        "validator_profile": {
+            name: profile[name]
+            for name in (
+                "codex_reasoning_events",
+                "codex_0149_function_tool_events",
+                "codex_streaming_tool_events",
+                "codex_encrypted_reasoning_replay",
+                "web_search",
+                "declared_client_tools_class",
+                "web_search_max_tool_calls_class",
+            )
+        },
+        "rejection": {"outcome": "validator_rejected", "code": rejection["code"]},
+    }
+
+
+def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
+    artifact = root / QUALIFICATION_ARTIFACT_NAME
+    try:
+        artifact_stat = artifact.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+    if (
+        not stat.S_ISREG(artifact_stat.st_mode)
+        or stat.S_IMODE(artifact_stat.st_mode) != 0o600
+        or artifact_stat.st_uid != os.getuid()
+    ):
+        raise VerificationError("qualification_artifact_invalid")
+    try:
+        payload = artifact.read_bytes()
+        if len(payload) > QUALIFICATION_MAX_BYTES:
+            raise VerificationError("qualification_artifact_too_large")
+        value = json.loads(payload)
+    except VerificationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError("qualification_artifact_invalid") from exc
+    return _sanitize_qualification_rejection(value)
+
+
+def _assert_fake_qualification_artifact_absent(root: Path) -> None:
+    if _read_qualification_rejection(root) is not None:
+        raise VerificationError("fake_rejection_artifact_present")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3947,6 +4110,7 @@ async def _safe_roundtrip_accounting_status_counts(
         "reservation_released": 0,
         "ledger_finalized": 0,
         "ledger_failed": 0,
+        "ledger_estimated": 0,
         "ledger_pending": 0,
     }
     try:
@@ -3987,6 +4151,126 @@ async def _safe_roundtrip_accounting_status_counts(
     finally:
         await engine.dispose()
     return result
+
+
+async def _verify_qualification_accounting(
+    database_url: str, key: SeededKey, turn_count: int
+) -> dict[str, int | bool]:
+    """Verify terminal rows while allowing a rejected terminal to release."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from slaif_gateway.db.models import GatewayKey, QuotaReservation, UsageLedger
+
+    engine = create_async_engine(database_url, future=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    result: dict[str, int | bool] = {
+        "query_ok": False,
+        "reservation_rows": 0,
+        "ledger_rows": 0,
+        "reservation_finalized": 0,
+        "reservation_released": 0,
+        "ledger_finalized": 0,
+        "ledger_failed": 0,
+        "reservation_pending": 0,
+        "ledger_pending": 0,
+    }
+    try:
+        async with sessions() as session:
+            gateway_key = await session.get(GatewayKey, key.gateway_key_id)
+            reservations = list(
+                (
+                    await session.execute(
+                        select(QuotaReservation)
+                        .where(QuotaReservation.gateway_key_id == key.gateway_key_id)
+                        .order_by(QuotaReservation.created_at)
+                    )
+                ).scalars()
+            )
+            ledgers = list(
+                (
+                    await session.execute(
+                        select(UsageLedger)
+                        .where(UsageLedger.gateway_key_id == key.gateway_key_id)
+                        .order_by(UsageLedger.created_at)
+                    )
+                ).scalars()
+            )
+            result["reservation_rows"] = len(reservations)
+            result["ledger_rows"] = len(ledgers)
+            if (
+                gateway_key is None
+                or len(reservations) != turn_count
+                or len(ledgers) != turn_count
+                or len(reservations) != len(ledgers)
+                or gateway_key.tokens_reserved_total != 0
+            ):
+                return result
+            for reservation in reservations:
+                if reservation.status == "finalized":
+                    result["reservation_finalized"] += 1
+                elif reservation.status == "released":
+                    result["reservation_released"] += 1
+                elif reservation.status == "pending":
+                    result["reservation_pending"] += 1
+                else:
+                    return result
+            for ledger in ledgers:
+                if ledger.accounting_status == "finalized":
+                    result["ledger_finalized"] += 1
+                elif ledger.accounting_status == "failed":
+                    result["ledger_failed"] += 1
+                elif ledger.accounting_status == "estimated":
+                    result["ledger_estimated"] += 1
+                elif ledger.accounting_status == "pending":
+                    result["ledger_pending"] += 1
+                else:
+                    return result
+            if not _qualification_terminal_sequence_valid(
+                [reservation.status for reservation in reservations],
+                [ledger.accounting_status for ledger in ledgers],
+                turn_count,
+            ) or any(
+                reservation.quota_mode != "strict_bounded"
+                or reservation.external_tool_capabilities != []
+                or reservation.external_tool_destination_ids != []
+                or reservation.external_tool_provider is not None
+                or reservation.external_tool_route_id is not None
+                for reservation in reservations
+            ):
+                return result
+            result["query_ok"] = True
+    finally:
+        await engine.dispose()
+    return result
+
+
+def _qualification_terminal_sequence_valid(
+    reservation_statuses: list[str], ledger_statuses: list[str], turn_count: int
+) -> bool:
+    """Accept finalized or released/failed terminal outcomes, never pending rows."""
+    if (
+        turn_count not in (1, 2)
+        or len(reservation_statuses) != turn_count
+        or len(ledger_statuses) != turn_count
+        or any(status not in {"finalized", "released"} for status in reservation_statuses)
+        or any(status not in {"finalized", "failed", "estimated"} for status in ledger_statuses)
+        or reservation_statuses.count("finalized") + reservation_statuses.count("released") != turn_count
+        or ledger_statuses.count("finalized")
+        + ledger_statuses.count("failed")
+        + ledger_statuses.count("estimated")
+        != turn_count
+    ):
+        return False
+    if not all(
+        reservation_statuses[index] == "finalized"
+        and ledger_statuses[index] == "finalized"
+        for index in range(turn_count - 1)
+    ):
+        return False
+    return (reservation_statuses[-1], ledger_statuses[-1]) in {
+        ("released", "failed"),
+        ("finalized", "estimated"),
+    }
 
 
 async def _verify_failure_accounting(database_url: str, key: SeededKey) -> None:
@@ -4978,10 +5262,11 @@ def _run_composed_codex_tool_roundtrip(
     postgres_url: str,
     relay: _ForwardingRelay,
     gateway_output: _ForwardingRelay,
-    fake_qwen_server: _FakeQwenServer,
+    fake_qwen_server: _FakeQwenServer | None,
     qwen_port: int,
     service_token: str,
     tracker: StageTracker,
+    qualification_hook: bool = False,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
 
@@ -5027,13 +5312,12 @@ def _run_composed_codex_tool_roundtrip(
         gateway_status = gateway_output.status()
         local_status = relay.status()
         qwen_status = _qwen_relay_status(qwen_port)
-        fake_status = fake_qwen_server.status()
+        fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
         gateway_requests = gateway_output.snapshot()
         request_projections = [
             _safe_roundtrip_request_projection(request.body)
             for request in gateway_requests
         ]
-        del gateway_requests
         try:
             accounting_statuses = asyncio.run(
                 _safe_roundtrip_accounting_status_counts(postgres_url, key)
@@ -5046,6 +5330,7 @@ def _run_composed_codex_tool_roundtrip(
                 "reservation_released": 0,
                 "ledger_finalized": 0,
                 "ledger_failed": 0,
+                "ledger_estimated": 0,
                 "ledger_pending": 0,
             }
         failure_code = _localize_composed_codex_failure(
@@ -5062,6 +5347,64 @@ def _run_composed_codex_tool_roundtrip(
             fake_status=fake_status,
             accounting_statuses=accounting_statuses,
         )
+        qualification_rejection = (
+            _read_qualification_rejection(root) if qualification_hook else None
+        )
+        if qualification_hook and qualification_rejection is not None:
+            local_requests = relay.snapshot()
+            turn_counts = (
+                len(gateway_requests),
+                len(local_requests),
+                qwen_status.get("inference_calls"),
+            )
+            if (
+                any(count not in (1, 2) for count in turn_counts)
+                or len(set(turn_counts)) != 1
+            ):
+                raise VerificationError("qualification_evidence_incomplete")
+            function_call_output_count = 0
+            for request in local_requests:
+                try:
+                    payload = json.loads(request.body)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise VerificationError("qualification_body_invalid") from exc
+                items = payload.get("input") if isinstance(payload, dict) else None
+                if isinstance(items, list):
+                    function_call_output_count += sum(
+                        1
+                        for item in items
+                        if isinstance(item, dict)
+                        and item.get("type") == "function_call_output"
+                    )
+                del payload
+            qualification_accounting = asyncio.run(
+                _verify_qualification_accounting(
+                    postgres_url,
+                    key,
+                    turn_counts[0],
+                )
+            )
+            if (
+                qualification_accounting.get("query_ok") is not True
+            ):
+                raise VerificationError("qualification_accounting_incomplete")
+            accounting_rows = (
+                qualification_accounting["reservation_finalized"]
+                + qualification_accounting["reservation_released"]
+            )
+            return {
+                "codex_exit_success": False,
+                "qualification_rejection": qualification_rejection,
+                "gateway_to_local_turns": turn_counts[0],
+                "local_to_qwen_inference_turns": turn_counts[2],
+                "function_call_output_count": function_call_output_count,
+                "accounting_rows": accounting_rows,
+                "accounting_reservation_released": qualification_accounting[
+                    "reservation_released"
+                ],
+                "accounting_ledger_failed": qualification_accounting["ledger_failed"],
+                "failure_code": failure_code,
+            }
         del accounting_statuses, codex_failure_category, request_projections
         raise VerificationError(failure_code)
 
@@ -5193,12 +5536,17 @@ def _run_composed_codex_tool_roundtrip(
     local_status = relay.status()
     gateway_status = gateway_output.status()
     qwen_status = _qwen_relay_status(qwen_port)
-    fake_status = fake_qwen_server.status()
+    fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
     _assert_two_turn_sse_structures(
         gateway_status.get("sse_structures"),
         error_code="composed_tool_roundtrip_gateway_sse_invalid",
     )
-    _assert_function_then_message_structure(gateway_status.get("sse_structures"))
+    if fake_qwen_server is not None:
+        _assert_function_then_message_structure(gateway_status.get("sse_structures"))
+    else:
+        _assert_protected_function_then_message_structure(
+            gateway_status.get("sse_structures")
+        )
     _assert_two_turn_sse_structures(
         local_status.get("sse_structures"),
         error_code="composed_tool_roundtrip_local_sse_invalid",
@@ -5223,10 +5571,15 @@ def _run_composed_codex_tool_roundtrip(
         or qwen_status.get("upstream_truncated") is True
         or qwen_status.get("downstream_closed_early") is True
         or not set(qwen_status.get("tool_types", [])).issubset({"function", "custom"})
-        or fake_status.get("tool_roundtrip_turns") != 2
-        or fake_status.get("tool_result_observed") != 1
-        or fake_status.get("function_lifecycle_count") != 1
-        or fake_status.get("message_lifecycle_count") != 1
+        or (
+            fake_qwen_server is not None
+            and (
+                fake_status.get("tool_roundtrip_turns") != 2
+                or fake_status.get("tool_result_observed") != 1
+                or fake_status.get("function_lifecycle_count") != 1
+                or fake_status.get("message_lifecycle_count") != 1
+            )
+        )
     ):
         raise VerificationError("composed_tool_roundtrip_boundary_invalid")
     tracker.set("tool_roundtrip_accounting")
@@ -5433,6 +5786,49 @@ def _assert_function_then_message_structure(structures: object) -> None:
         raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
 
 
+def _assert_protected_function_then_message_structure(structures: object) -> None:
+    """Require the function/message lifecycle while permitting reviewed reasoning items."""
+    if not isinstance(structures, list) or len(structures) != 2:
+        raise VerificationError("composed_tool_roundtrip_lifecycle_missing")
+    first, second = structures
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
+
+    def count(structure: dict[str, object], event: str) -> int | None:
+        counts = structure.get("event_counts")
+        if not isinstance(counts, dict):
+            return None
+        value = counts.get(event, 0)
+        return value if type(value) is int and 0 <= value <= _SSE_EVENT_COUNT_LIMIT else None
+
+    if (
+        count(first, "response.output_item.added") is None
+        or count(first, "response.output_item.added") < 1
+        or count(first, "response.output_item.done") is None
+        or count(first, "response.output_item.done") < 1
+        or count(first, "response.function_call_arguments.delta") is None
+        or count(first, "response.function_call_arguments.delta") < 1
+        or count(first, "response.function_call_arguments.done") != 1
+        or count(first, "response.output_item.added") < count(first, "response.function_call_arguments.done")
+        or count(first, "response.content_part.added") != 0
+        or count(first, "response.content_part.done") != 0
+        or count(first, "response.output_text.delta") != 0
+        or count(first, "response.output_text.done") != 0
+        or count(second, "response.function_call_arguments.delta") != 0
+        or count(second, "response.function_call_arguments.done") != 0
+        or count(second, "response.output_item.added") is None
+        or count(second, "response.output_item.added") < 1
+        or count(second, "response.content_part.added") != 1
+        or count(second, "response.output_text.delta") is None
+        or count(second, "response.output_text.delta") < 1
+        or count(second, "response.output_text.done") != 1
+        or count(second, "response.content_part.done") != 1
+        or count(second, "response.output_item.done") is None
+        or count(second, "response.output_item.done") < 1
+    ):
+        raise VerificationError("composed_tool_roundtrip_lifecycle_invalid")
+
+
 def _run_composed_stream_diagnostic(
     root: Path,
     runtime: RuntimeReference | None,
@@ -5441,6 +5837,7 @@ def _run_composed_stream_diagnostic(
     tool_roundtrip_mode: bool = False,
     codex_binary: Path | None = None,
     tracker: StageTracker | None = None,
+    qualification_hook: bool = False,
 ) -> dict[str, object]:
     from openai import OpenAI
 
@@ -5466,6 +5863,9 @@ def _run_composed_stream_diagnostic(
         signing_secret=signing_secret,
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
+        qualification_artifact=(
+            root / QUALIFICATION_ARTIFACT_NAME if qualification_hook else None
+        ),
     )
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
@@ -5596,7 +5996,7 @@ def _run_composed_stream_diagnostic(
             boundary_class="gateway_output",
         )
         if tool_roundtrip_mode:
-            if codex_binary is None or fake_qwen_server is None:
+            if codex_binary is None:
                 raise VerificationError("composed_tool_roundtrip_setup_invalid")
             return _run_composed_codex_tool_roundtrip(
                 root=root,
@@ -5609,6 +6009,7 @@ def _run_composed_stream_diagnostic(
                 qwen_port=qwen_port,
                 service_token=service_token,
                 tracker=tracker,
+                qualification_hook=qualification_hook,
             )
         client = OpenAI(
             api_key=key.plaintext,
@@ -5769,6 +6170,64 @@ def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str
         fake_qwen=True,
         tool_roundtrip_mode=True,
         codex_binary=codex_binary,
+    )
+
+
+def _run_dedicated_codex_tool_roundtrip(
+    *, fake_qwen: bool, qualification_hook: bool
+) -> dict[str, object]:
+    """Run one dedicated Codex tool roundtrip, with optional disposable hook."""
+    _verify_commit_topology()
+    runtime = None if fake_qwen else _read_runtime_reference()
+    _verify_fixtures()
+    if not fake_qwen:
+        _source_qwen_credential_only_for_local(runtime)
+        _verify_protected_model_health(runtime)
+    with tempfile.TemporaryDirectory(prefix="slaif-155t-qualification-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        root.chmod(0o700)
+        _validate_local_config(root, runtime)
+        codex_binary = _install_codex(root)
+        result = _run_composed_stream_diagnostic(
+            root,
+            runtime,
+            fake_qwen=fake_qwen,
+            tool_roundtrip_mode=True,
+            codex_binary=codex_binary,
+            qualification_hook=qualification_hook,
+            tracker=StageTracker(),
+        )
+        rejection = _read_qualification_rejection(root)
+        if fake_qwen and qualification_hook:
+            _assert_fake_qualification_artifact_absent(root)
+            if result.get("codex_exit_success") is not True:
+                raise VerificationError("fake_tool_roundtrip_failed")
+        elif qualification_hook and result.get("codex_exit_success") is not True and rejection is None:
+            raise VerificationError("qualification_evidence_incomplete")
+        result["qualification_rejection"] = rejection
+    if not fake_qwen:
+        post_runtime = _read_runtime_reference()
+        _source_qwen_credential_only_for_local(post_runtime)
+        _verify_protected_model_health(post_runtime)
+    if not fake_qwen and qualification_hook and result.get("codex_exit_success") is not True:
+        if result.get("qualification_rejection") is None:
+            raise VerificationError("qualification_evidence_incomplete")
+    return result
+
+
+def run_codex_tool_roundtrip_qualification(*, fake_qwen: bool = False) -> dict[str, object]:
+    """Run one dedicated Codex tool roundtrip with the disposable rejection hook."""
+    return _run_dedicated_codex_tool_roundtrip(
+        fake_qwen=fake_qwen,
+        qualification_hook=True,
+    )
+
+
+def run_codex_tool_roundtrip_protected(*, fake_qwen: bool = False) -> dict[str, object]:
+    """Permanent hook-free dedicated runner for the decisive protected roundtrip."""
+    return _run_dedicated_codex_tool_roundtrip(
+        fake_qwen=fake_qwen,
+        qualification_hook=False,
     )
 
 
@@ -6083,6 +6542,10 @@ def main() -> int:
     parser.add_argument("--composed-only", action="store_true")
     parser.add_argument("--composed-only-fake", action="store_true")
     parser.add_argument("--tool-roundtrip-fake", action="store_true")
+    parser.add_argument("--tool-roundtrip-qualification", action="store_true")
+    parser.add_argument("--tool-roundtrip-qualification-fake", action="store_true")
+    parser.add_argument("--tool-roundtrip-protected", action="store_true")
+    parser.add_argument("--tool-roundtrip-protected-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
@@ -6112,6 +6575,42 @@ def main() -> int:
                 codex_binary = _install_codex(root)
                 run_codex_tool_roundtrip_fake(root=root, codex_binary=codex_binary)
             print("FAKE_TOOL_ROUNDTRIP=OK turns=2 tool_result=1 function=1 message=1")
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
+        return 0
+    if (
+        arguments.tool_roundtrip_qualification
+        or arguments.tool_roundtrip_qualification_fake
+    ):
+        try:
+            result = run_codex_tool_roundtrip_qualification(
+                fake_qwen=arguments.tool_roundtrip_qualification_fake
+            )
+            rejection = result.get("qualification_rejection")
+            if rejection is None:
+                print(
+                    "QUALIFICATION=PASSED turns=2 function=1 message=1 accounting_rows=2"
+                )
+            else:
+                rejection = _sanitize_qualification_rejection(rejection)
+                print(
+                    "QUALIFICATION=REJECTED "
+                    + json.dumps(rejection, sort_keys=True, separators=(",", ":"))
+                )
+                return 1
+        except VerificationError as exc:
+            print(f"RESULT=BLOCKED code={exc}")
+            return 1
+        return 0
+    if arguments.tool_roundtrip_protected or arguments.tool_roundtrip_protected_fake:
+        try:
+            result = run_codex_tool_roundtrip_protected(
+                fake_qwen=arguments.tool_roundtrip_protected_fake
+            )
+            if result.get("codex_exit_success") is not True:
+                raise VerificationError("protected_tool_roundtrip_incomplete")
+            print("PROTECTED_TOOL_ROUNDTRIP=OK turns=2 function=1 message=1 accounting_rows=2")
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")
             return 1

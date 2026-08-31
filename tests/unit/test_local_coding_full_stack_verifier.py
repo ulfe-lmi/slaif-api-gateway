@@ -4,6 +4,7 @@ import ast
 import hashlib
 import http.server
 import json
+import os
 import queue
 import socket
 import struct
@@ -401,6 +402,180 @@ def test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted() -> None:
         assert status["message_lifecycle_count"] == 1
     finally:
         fake.server_close()
+
+
+def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from slaif_gateway.providers.streaming import ResponsesStreamValidationProfile
+    from slaif_gateway.services import responses_gateway
+
+    exact_root = tmp_path / "exact"
+    ordinary_root = tmp_path / "ordinary"
+    hosted_root = tmp_path / "hosted"
+    symlink_root = tmp_path / "symlink"
+    for root in (exact_root, ordinary_root, hosted_root, symlink_root):
+        root.mkdir()
+        root.chmod(0o700)
+    artifact = exact_root / verifier.QUALIFICATION_ARTIFACT_NAME
+    monkeypatch.setenv(verifier.QUALIFICATION_HOOK_ENV, "1")
+    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(exact_root))
+    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(artifact))
+    exact = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_0149_function_tool_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=frozenset({("functions", "shell_command", "function")}),
+        web_search=False,
+    )
+    event = {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "item": {"type": "function_call", "status": "in_progress"},
+    }
+    responses_gateway._record_qualification_rejection(
+        event, profile=exact, rejection_code="responses_stream_event_not_supported"
+    )
+    assert artifact.stat().st_mode & 0o777 == 0o600
+    first = artifact.read_bytes()
+    responses_gateway._record_qualification_rejection(
+        {**event, "type": "response.other"},
+        profile=exact,
+        rejection_code="responses_stream_provider_failure",
+    )
+    assert artifact.read_bytes() == first
+
+    ordinary = ResponsesStreamValidationProfile()
+    ordinary_artifact = ordinary_root / verifier.QUALIFICATION_ARTIFACT_NAME
+    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(ordinary_root))
+    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(ordinary_artifact))
+    responses_gateway._record_qualification_rejection(
+        event, profile=ordinary, rejection_code="responses_stream_event_not_supported"
+    )
+    assert not ordinary_artifact.exists()
+
+    hosted = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_0149_function_tool_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=exact.declared_client_tools,
+        web_search=True,
+    )
+    hosted_artifact = hosted_root / verifier.QUALIFICATION_ARTIFACT_NAME
+    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(hosted_root))
+    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(hosted_artifact))
+    responses_gateway._record_qualification_rejection(
+        event, profile=hosted, rejection_code="responses_stream_event_not_supported"
+    )
+    assert not hosted_artifact.exists()
+
+    symlink_target = symlink_root / "target.json"
+    symlink_target.write_bytes(b"unchanged")
+    symlink = symlink_root / verifier.QUALIFICATION_ARTIFACT_NAME
+    symlink.symlink_to(symlink_target)
+    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(symlink_root))
+    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(symlink))
+    responses_gateway._record_qualification_rejection(
+        event, profile=exact, rejection_code="responses_stream_event_not_supported"
+    )
+    assert symlink_target.read_bytes() == b"unchanged"
+
+
+def test_qualification_reader_rejects_foreign_owner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "owned"
+    root.mkdir()
+    root.chmod(0o700)
+    artifact = root / verifier.QUALIFICATION_ARTIFACT_NAME
+    artifact.write_bytes(b"{}")
+    artifact.chmod(0o600)
+    real_lstat = Path.lstat
+
+    def foreign_lstat(path: Path) -> object:
+        result = real_lstat(path)
+        if path == artifact:
+            return types.SimpleNamespace(
+                st_mode=result.st_mode,
+                st_uid=os.getuid() + 1,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "lstat", foreign_lstat)
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
+        verifier._read_qualification_rejection(root)
+
+
+def test_dedicated_tool_roundtrip_modes_select_hook_and_hook_free_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def run_mode(*, fake_qwen: bool, qualification_hook: bool) -> dict[str, object]:
+        calls.append((fake_qwen, qualification_hook))
+        return {"codex_exit_success": True}
+
+    monkeypatch.setattr(verifier, "_run_dedicated_codex_tool_roundtrip", run_mode)
+    assert verifier.run_codex_tool_roundtrip_qualification(fake_qwen=True)[
+        "codex_exit_success"
+    ] is True
+    assert verifier.run_codex_tool_roundtrip_protected(fake_qwen=True)[
+        "codex_exit_success"
+    ] is True
+    assert calls == [(True, True), (True, False)]
+
+
+def test_qualification_cli_returns_failure_for_safe_rejection(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rejection = {
+        "schema": "responses_stream_rejection_v1",
+        "event_type": "response.other",
+        "top_level_fields": [],
+        "nested_object_fields": [],
+        "validator_profile": {
+            "codex_reasoning_events": True,
+            "codex_0149_function_tool_events": True,
+            "codex_streaming_tool_events": True,
+            "codex_encrypted_reasoning_replay": False,
+            "web_search": False,
+            "declared_client_tools_class": "bounded",
+            "web_search_max_tool_calls_class": "none",
+        },
+        "rejection": {"outcome": "validator_rejected", "code": "other"},
+    }
+    monkeypatch.setattr(
+        verifier,
+        "run_codex_tool_roundtrip_qualification",
+        lambda **_kwargs: {"qualification_rejection": rejection},
+    )
+    monkeypatch.setattr(sys, "argv", ["verify", "--tool-roundtrip-qualification"])
+    assert verifier.main() == 1
+    assert capsys.readouterr().out.startswith("QUALIFICATION=REJECTED ")
+
+
+@pytest.mark.parametrize(
+    ("reservations", "ledgers", "turn_count", "expected"),
+    [
+        (["released"], ["failed"], 1, True),
+        (["finalized", "released"], ["finalized", "failed"], 2, True),
+        (["finalized"], ["estimated"], 1, True),
+        (["finalized", "finalized"], ["finalized", "estimated"], 2, True),
+        (["released"], ["estimated"], 1, False),
+        (["finalized"], ["failed"], 1, False),
+        (["finalized", "released"], ["failed", "failed"], 2, False),
+        (["pending"], ["pending"], 1, False),
+    ],
+)
+def test_qualification_accounting_accepts_only_coherent_terminal_pairs(
+    reservations: list[str],
+    ledgers: list[str],
+    turn_count: int,
+    expected: bool,
+) -> None:
+    assert verifier._qualification_terminal_sequence_valid(
+        reservations, ledgers, turn_count
+    ) is expected
 
 
 def test_composed_roundtrip_does_not_shadow_seeded_key_in_metadata_loop() -> None:
