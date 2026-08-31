@@ -440,6 +440,61 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
         )
 
 
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [
+        ({"gateway_requests": 0}, "composed_tool_roundtrip_launch_config"),
+        (
+            {"gateway_requests": 1, "gateway_statuses": [400]},
+            "composed_tool_roundtrip_first_gateway_rejection",
+        ),
+        (
+            {
+                "gateway_requests": 1,
+                "gateway_statuses": [200],
+                "gateway_structures": [{"invalid": True}],
+                "codex_failure_category": "mock_stream_rejected",
+            },
+            "composed_tool_roundtrip_codex_stream_parse",
+        ),
+        (
+            {
+                "gateway_requests": 2,
+                "gateway_statuses": [200, 400],
+                "local_requests": 2,
+                "local_statuses": [200, 400],
+            },
+            "composed_tool_roundtrip_second_turn_rejection",
+        ),
+        (
+            {
+                "gateway_requests": 2,
+                "gateway_statuses": [200, 200],
+                "local_requests": 2,
+                "local_statuses": [200, 200],
+            },
+            "composed_tool_roundtrip_final_message_failure",
+        ),
+    ],
+)
+def test_composed_tool_roundtrip_failure_localizer_is_bounded(
+    overrides: dict[str, object], expected: str
+) -> None:
+    facts: dict[str, object] = {
+        "codex_failure_category": "unclassified",
+        "gateway_requests": 0,
+        "gateway_statuses": [],
+        "gateway_structures": [],
+        "local_requests": 0,
+        "local_statuses": [],
+        "qwen_status": {},
+        "fake_status": {},
+        "accounting_statuses": {"query_ok": False},
+    }
+    facts.update(overrides)
+    assert verifier._localize_composed_codex_failure(**facts) == expected
+
+
 def test_composed_evidence_rejects_placeholder_counts() -> None:
     evidence = {name: True for name in (
         "session_a1_a2_equal", "session_b_different", "session_second_key_different",

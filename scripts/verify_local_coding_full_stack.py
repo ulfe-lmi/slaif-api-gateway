@@ -3681,6 +3681,65 @@ async def _verify_accounting(database_url: str, keys: tuple[SeededKey, SeededKey
     return total_rows
 
 
+async def _safe_roundtrip_accounting_status_counts(
+    database_url: str, key: SeededKey
+) -> dict[str, int | bool]:
+    """Read only bounded terminal status counts for safe failure localization."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from slaif_gateway.db.models import QuotaReservation, UsageLedger
+
+    engine = create_async_engine(database_url, future=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    result: dict[str, int | bool] = {
+        "query_ok": False,
+        "reservation_finalized": 0,
+        "reservation_pending": 0,
+        "reservation_released": 0,
+        "ledger_finalized": 0,
+        "ledger_failed": 0,
+        "ledger_pending": 0,
+    }
+    try:
+        async with sessions() as session:
+            reservations = list(
+                (
+                    await session.execute(
+                        select(QuotaReservation.status).where(
+                            QuotaReservation.gateway_key_id == key.gateway_key_id
+                        )
+                    )
+                ).scalars()
+            )
+            ledgers = list(
+                (
+                    await session.execute(
+                        select(UsageLedger.accounting_status).where(
+                            UsageLedger.gateway_key_id == key.gateway_key_id
+                        )
+                    )
+                ).scalars()
+            )
+            for status in reservations:
+                if status == "finalized":
+                    result["reservation_finalized"] += 1
+                elif status == "pending":
+                    result["reservation_pending"] += 1
+                elif status == "released":
+                    result["reservation_released"] += 1
+            for status in ledgers:
+                if status == "finalized":
+                    result["ledger_finalized"] += 1
+                elif status == "failed":
+                    result["ledger_failed"] += 1
+                elif status == "pending":
+                    result["ledger_pending"] += 1
+            result["query_ok"] = True
+    finally:
+        await engine.dispose()
+    return result
+
+
 async def _verify_failure_accounting(database_url: str, key: SeededKey) -> None:
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -4578,7 +4637,40 @@ def _run_composed_codex_tool_roundtrip(
         timeout=180,
     )
     if result.returncode != 0:
-        raise VerificationError("composed_tool_roundtrip_codex_failed")
+        codex_failure_category = capture.classify_codex_failure(
+            result.stderr, result.stdout
+        )
+        gateway_status = gateway_output.status()
+        local_status = relay.status()
+        qwen_status = _qwen_relay_status(qwen_port)
+        fake_status = fake_qwen_server.status()
+        try:
+            accounting_statuses = asyncio.run(
+                _safe_roundtrip_accounting_status_counts(postgres_url, key)
+            )
+        except Exception:
+            accounting_statuses = {
+                "query_ok": False,
+                "reservation_finalized": 0,
+                "reservation_pending": 0,
+                "reservation_released": 0,
+                "ledger_finalized": 0,
+                "ledger_failed": 0,
+                "ledger_pending": 0,
+            }
+        failure_code = _localize_composed_codex_failure(
+            codex_failure_category=codex_failure_category,
+            gateway_requests=len(gateway_output.snapshot()),
+            gateway_statuses=gateway_status.get("response_statuses"),
+            gateway_structures=gateway_status.get("sse_structures"),
+            local_requests=len(relay.snapshot()),
+            local_statuses=local_status.get("response_statuses"),
+            qwen_status=qwen_status,
+            fake_status=fake_status,
+            accounting_statuses=accounting_statuses,
+        )
+        del accounting_statuses, codex_failure_category
+        raise VerificationError(failure_code)
 
     gateway_requests = gateway_output.snapshot()
     local_requests = relay.snapshot()
@@ -4736,6 +4828,84 @@ def _assert_two_turn_sse_structures(
         )
     ):
         raise VerificationError(error_code)
+
+
+def _localize_composed_codex_failure(
+    *,
+    codex_failure_category: str,
+    gateway_requests: int,
+    gateway_statuses: object,
+    gateway_structures: object,
+    local_requests: int,
+    local_statuses: object,
+    qwen_status: dict[str, object],
+    fake_status: dict[str, object],
+    accounting_statuses: dict[str, int | bool],
+) -> str:
+    """Map one failed fake roundtrip to a fixed, bounded boundary code."""
+    launch_categories = {
+        "configuration_rejected",
+        "argument_rejected",
+        "argument_separator_rejected",
+        "argument_or_configuration_rejected",
+        "dummy_auth_environment_rejected",
+        "workdir_rejected",
+        "custom_provider_auth_rejected",
+        "loopback_connection_failed",
+    }
+    stream_categories = {
+        "mock_stream_rejected",
+        "mock_stream_closed_early",
+        "mock_stream_idle_timeout",
+        "mock_completed_event_rejected",
+        "mock_response_failed",
+        "incomplete_event_sequence",
+    }
+
+    def statuses(value: object) -> list[int]:
+        return [status for status in value if type(status) is int] if isinstance(value, list) else []
+
+    gateway_codes = statuses(gateway_statuses)
+    local_codes = statuses(local_statuses)
+    gateway_shapes = gateway_structures if isinstance(gateway_structures, list) else []
+    if codex_failure_category in launch_categories or gateway_requests == 0:
+        return "composed_tool_roundtrip_launch_config"
+    if (
+        gateway_requests == 1
+        and (not gateway_codes or gateway_codes[0] >= 400)
+    ) or (
+        gateway_shapes
+        and isinstance(gateway_shapes[0], dict)
+        and gateway_shapes[0].get("error_event") is True
+    ):
+        return "composed_tool_roundtrip_first_gateway_rejection"
+    if (
+        gateway_requests >= 2
+        and len(gateway_codes) >= 2
+        and gateway_codes[1] >= 400
+    ) or (
+        local_requests >= 2
+        and len(local_codes) >= 2
+        and local_codes[1] >= 400
+    ):
+        return "composed_tool_roundtrip_second_turn_rejection"
+    if codex_failure_category in stream_categories or any(
+        isinstance(structure, dict) and structure.get("invalid") is True
+        for structure in gateway_shapes
+    ):
+        return "composed_tool_roundtrip_codex_stream_parse"
+    # Keep the remaining facts in the bounded decision input so a future
+    # reviewer can distinguish a final-message failure without retaining data.
+    _ = (
+        qwen_status.get("inference_calls"),
+        qwen_status.get("successful_calls"),
+        fake_status.get("function_lifecycle_count"),
+        fake_status.get("message_lifecycle_count"),
+        accounting_statuses.get("reservation_finalized"),
+        accounting_statuses.get("ledger_finalized"),
+        accounting_statuses.get("ledger_failed"),
+    )
+    return "composed_tool_roundtrip_final_message_failure"
 
 
 def _assert_function_then_message_structure(structures: object) -> None:
