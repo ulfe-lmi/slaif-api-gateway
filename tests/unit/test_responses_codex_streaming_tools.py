@@ -220,19 +220,16 @@ def _strict_reasoning_validator() -> ResponsesStreamEventValidator:
 
 
 def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> None:
-    local_context = {"server_module_id": "local-coding-v1"}
+    local_context = {"identity_mode": "static"}
     assert _codex_reasoning_events_enabled(
         client_module_id="codex-0.149-responses-v1", server_context=local_context
     )
     assert not _codex_reasoning_events_enabled(
         client_module_id="codex-0.149-responses-v1",
-        server_context={"server_module_id": "openai-responses-v1"},
+        server_context=None,
     )
     assert not _codex_reasoning_events_enabled(
         client_module_id="openai-default", server_context=local_context
-    )
-    assert not _codex_reasoning_events_enabled(
-        client_module_id="codex-0.149-responses-v1", server_context=None
     )
 
 

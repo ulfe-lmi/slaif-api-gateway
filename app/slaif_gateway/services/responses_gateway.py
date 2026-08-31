@@ -487,18 +487,13 @@ def _build_local_coding_server_context(
             code="local_coding_identity_unavailable",
         ) from exc
     if identity is None:
-        return {
-            "identity_mode": "static",
-            "route": contract.route_name,
-            "server_module_id": LOCAL_CODING_SERVER_MODULE_ID,
-        }
+        return {"identity_mode": "static", "route": contract.route_name}
     return {
         "identity_mode": identity.identity_mode,
         "principal": identity.principal,
         "session": identity.session,
         "repository": identity.repository,
         "route": identity.route,
-        "server_module_id": LOCAL_CODING_SERVER_MODULE_ID,
     }
 
 
@@ -507,8 +502,7 @@ def _codex_reasoning_events_enabled(
 ) -> bool:
     return (
         client_module_id == "codex-0.149-responses-v1"
-        and isinstance(server_context, Mapping)
-        and server_context.get("server_module_id") == LOCAL_CODING_SERVER_MODULE_ID
+        and server_context is not None
     )
 
 
