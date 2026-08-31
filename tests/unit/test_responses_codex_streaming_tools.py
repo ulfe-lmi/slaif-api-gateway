@@ -20,6 +20,7 @@ from slaif_gateway.providers.streaming import (
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
 )
+from slaif_gateway.providers import streaming as streaming_module
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
 from slaif_gateway.services.policy_errors import RequestPolicyError
@@ -572,6 +573,93 @@ def test_codex_0149_function_branch_fails_closed_for_lifecycle_boundaries() -> N
     assert not ResponsesStreamEventValidator(_strict_function_profile()).validate(
         {"type": "response.unknown"}
     )
+
+
+def test_codex_0149_function_branch_rejects_exact_duplicate_and_order_errors() -> None:
+    events = _strict_function_events()
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert not validator.validate(copy.deepcopy(events[3]))
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(copy.deepcopy(events[5]))
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(copy.deepcopy(events[6]))
+
+    mismatch = copy.deepcopy(events[3])
+    mismatch["output_index"] = 1
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(mismatch)
+
+    non_monotonic = copy.deepcopy(events[3])
+    non_monotonic["sequence_number"] = 2
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(non_monotonic)
+
+    after_done = copy.deepcopy(events[3])
+    after_done["sequence_number"] = 7
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(after_done)
+
+
+@pytest.mark.parametrize(
+    "mutation, prefix_length",
+    [
+        (lambda event: event["item"].update(name="undeclared"), 2),
+        (lambda event: event["item"].update(extra="unexpected"), 2),
+        (lambda event: event.update(extra="unexpected"), 3),
+    ],
+)
+def test_codex_0149_function_branch_rejects_undeclared_and_extra_fields(
+    mutation, prefix_length: int
+) -> None:
+    events = _strict_function_events()
+    target_index = 2 if prefix_length == 2 else 3
+    mutation(events[target_index])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:prefix_length])
+    assert not validator.validate(events[target_index])
+
+
+def test_codex_0149_function_branch_rejects_inactive_exact_profile() -> None:
+    profile = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=frozenset({("functions", "wait", "function")}),
+    )
+    validator = ResponsesStreamEventValidator(profile)
+    assert validator.validate(_strict_function_events()[0])
+    assert validator.validate(_strict_function_events()[1])
+    assert not validator.validate(_strict_function_events()[2])
+
+
+def test_codex_0149_function_branch_rejects_per_delta_overflow() -> None:
+    events = _strict_function_events()
+    events[3]["delta"] = "x" * (streaming_module._MAX_STREAM_DELTA_BYTES + 1)
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+
+def test_codex_0149_function_branch_rejects_cumulative_argument_overflow() -> None:
+    events = _strict_function_events()
+    delta_events = []
+    for sequence_number in range(3, 20):
+        delta = copy.deepcopy(events[3])
+        delta["sequence_number"] = sequence_number
+        delta["delta"] = "x" * streaming_module._MAX_STREAM_DELTA_BYTES
+        delta_events.append(delta)
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert all(validator.validate(event) for event in delta_events[:-1])
+    assert not validator.validate(delta_events[-1])
 
 
 def _message_added_event() -> dict[str, object]:
