@@ -462,9 +462,18 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
                 "gateway_requests": 2,
                 "gateway_statuses": [200, 400],
                 "local_requests": 2,
+                "local_statuses": [200, 200],
+            },
+            "composed_tool_roundtrip_second_turn_gateway_rejection",
+        ),
+        (
+            {
+                "gateway_requests": 2,
+                "gateway_statuses": [200, 200],
+                "local_requests": 2,
                 "local_statuses": [200, 400],
             },
-            "composed_tool_roundtrip_second_turn_rejection",
+            "composed_tool_roundtrip_second_turn_local_rejection",
         ),
         (
             {
