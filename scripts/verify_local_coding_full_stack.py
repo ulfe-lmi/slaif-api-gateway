@@ -14,7 +14,6 @@ import hashlib
 import http.server
 import json
 import os
-import re
 import secrets
 import socket
 import stat
@@ -54,11 +53,6 @@ HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
 ORDER_PATH = REPO_ROOT / "oap/orders/155-r-retained-event-qualification-and-final-stream.md"
 TASK_DB = "slaif_gateway_oap_155r_diff"
-SAFE_OUTPUT_ARTIFACT_ENV = "SLAIF_155R_SAFE_OUTPUT_ARTIFACT"
-SAFE_OUTPUT_ROOT_ENV = "SLAIF_155R_SAFE_OUTPUT_ROOT"
-QUALIFICATION_HOOK_ENV = "SLAIF_155R_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155R_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155R_REJECTION_ROOT"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -721,127 +715,6 @@ async def _seed_database(
 def _gateway_environment(database_url: str, *, gateway_port: int, service_token: str, signing_secret: str, derivation_secret: str, encryption_key: str) -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(REPO_ROOT / "app"), "PYTHONDONTWRITEBYTECODE": "1", "APP_ENV": "test", "DATABASE_URL": database_url, "GATEWAY_KEY_PREFIX": "sk-slaif-", "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-", "ACTIVE_HMAC_KEY_VERSION": "1", "TOKEN_HMAC_SECRET_V1": "155f-gateway-hmac-secret-012345678901", "ADMIN_SESSION_SECRET": "155f-admin-secret-012345678901", "ONE_TIME_SECRET_ENCRYPTION_KEY": encryption_key, "ENABLE_REDIS_RATE_LIMITS": "false", "ENABLE_ADMIN_DASHBOARD": "false", "ENABLE_EMAIL_DELIVERY": "false", "ENABLE_METRICS": "true", "LOG_LEVEL": "WARNING", "STRUCTURED_LOGS": "true", "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token, "LOCAL_CODING_SERVICE_TOKEN": service_token, "LOCAL_CODING_SIGNING_SECRET_V1": signing_secret, "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": derivation_secret, "SLAIF_155F_FAILURE_KEY": "synthetic-failure-key", "UVICORN_ACCESS_LOG": "false", "APP_BASE_URL": f"http://127.0.0.1:{gateway_port}"}
     return env
-
-
-def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
-    artifact = root / "qualification-rejection.json"
-    if not artifact.exists() or artifact.is_symlink():
-        return None
-    try:
-        payload = artifact.read_bytes()
-        if len(payload) > 64 * 1024:
-            raise VerificationError("qualification_artifact_too_large")
-        value = json.loads(payload)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise VerificationError("qualification_artifact_invalid") from exc
-    try:
-        return _sanitize_qualification_rejection(value)
-    except VerificationError:
-        raise
-    except Exception as exc:
-        raise VerificationError("qualification_artifact_invalid") from exc
-
-
-_QUALIFICATION_FIELD_TYPES = frozenset(
-    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
-)
-_QUALIFICATION_DECLARED_TOOL_CLASSES = frozenset({"none", "bounded", "many"})
-_QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
-_QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
-
-
-def _sanitize_qualification_name(value: object, *, event: bool = False) -> str:
-    if value == "other":
-        return "other"
-    if not isinstance(value, str):
-        raise VerificationError("qualification_artifact_invalid")
-    pattern = _QUALIFICATION_EVENT_RE if event else _QUALIFICATION_NAME_RE
-    if pattern.fullmatch(value) is None:
-        raise VerificationError("qualification_artifact_invalid")
-    return value
-
-
-def _sanitize_qualification_fields(value: object) -> list[dict[str, str]]:
-    if not isinstance(value, list) or len(value) > 32:
-        raise VerificationError("qualification_artifact_invalid")
-    fields: list[dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict) or set(item) != {"name", "type"}:
-            raise VerificationError("qualification_artifact_invalid")
-        name = _sanitize_qualification_name(item["name"])
-        field_type = item["type"]
-        if not isinstance(field_type, str) or field_type not in _QUALIFICATION_FIELD_TYPES:
-            raise VerificationError("qualification_artifact_invalid")
-        fields.append({"name": name, "type": field_type})
-    canonical = sorted(fields, key=lambda item: item["name"])
-    if fields != canonical or len({item["name"] for item in fields}) != len(fields):
-        raise VerificationError("qualification_artifact_invalid")
-    return fields
-
-
-def _sanitize_qualification_rejection(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {
-        "schema", "event_type", "top_level_fields", "nested_object_fields",
-        "validator_profile", "rejection",
-    }:
-        raise VerificationError("qualification_artifact_invalid")
-    if value["schema"] != "responses_stream_rejection_v1":
-        raise VerificationError("qualification_artifact_invalid")
-    nested_value = value["nested_object_fields"]
-    if not isinstance(nested_value, list) or len(nested_value) > 32:
-        raise VerificationError("qualification_artifact_invalid")
-    nested: list[dict[str, object]] = []
-    for item in nested_value:
-        if not isinstance(item, dict) or set(item) != {"name", "fields"}:
-            raise VerificationError("qualification_artifact_invalid")
-        nested.append(
-            {
-                "name": _sanitize_qualification_name(item["name"]),
-                "fields": _sanitize_qualification_fields(item["fields"]),
-            }
-        )
-    profile = value["validator_profile"]
-    if not isinstance(profile, dict) or set(profile) != {
-        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
-        "declared_client_tools_class", "web_search_max_tool_calls_class",
-    }:
-        raise VerificationError("qualification_artifact_invalid")
-    if any(type(profile[name]) is not bool for name in (
-        "codex_streaming_tool_events", "codex_encrypted_reasoning_replay", "web_search",
-    )) or profile["declared_client_tools_class"] not in _QUALIFICATION_DECLARED_TOOL_CLASSES or profile[
-        "web_search_max_tool_calls_class"
-    ] not in _QUALIFICATION_WEB_SEARCH_CLASSES:
-        raise VerificationError("qualification_artifact_invalid")
-    rejection = value["rejection"]
-    if not isinstance(rejection, dict) or set(rejection) != {"outcome", "code"}:
-        raise VerificationError("qualification_artifact_invalid")
-    if rejection["outcome"] != "validator_rejected" or rejection["code"] not in {
-        "responses_stream_event_not_supported", "responses_stream_provider_failure", "other",
-    }:
-        raise VerificationError("qualification_artifact_invalid")
-    canonical_nested = sorted(nested, key=lambda item: str(item["name"]))
-    if nested != canonical_nested or len({item["name"] for item in nested}) != len(nested):
-        raise VerificationError("qualification_artifact_invalid")
-    return {
-        "schema": "responses_stream_rejection_v1",
-        "event_type": _sanitize_qualification_name(value["event_type"], event=True),
-        "top_level_fields": _sanitize_qualification_fields(value["top_level_fields"]),
-        "nested_object_fields": nested,
-        "validator_profile": {
-            "codex_streaming_tool_events": profile["codex_streaming_tool_events"],
-            "codex_encrypted_reasoning_replay": profile["codex_encrypted_reasoning_replay"],
-            "web_search": profile["web_search"],
-            "declared_client_tools_class": profile["declared_client_tools_class"],
-            "web_search_max_tool_calls_class": profile["web_search_max_tool_calls_class"],
-        },
-        "rejection": {"outcome": "validator_rejected", "code": rejection["code"]},
-    }
-
-
-def _assert_fake_qualification_artifact_absent(root: Path) -> None:
-    if _read_qualification_rejection(root) is not None:
-        raise VerificationError("fake_rejection_artifact_present")
 
 
 def _local_config(
@@ -1900,17 +1773,6 @@ def _stream_summary_lines(result: object) -> tuple[str, ...]:
                 separators=(",", ":"),
             )
         )
-    qualification_rejection = source.get("qualification_rejection")
-    if qualification_rejection is not None:
-        qualification_rejection = _sanitize_qualification_rejection(qualification_rejection)
-        lines.append(
-            "QUALIFICATION_REJECTION "
-            + json.dumps(
-                qualification_rejection,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
     lines.append("STREAM_DECISION " + json.dumps(decision, separators=(",", ":")))
     return tuple(lines)
 
@@ -2074,36 +1936,6 @@ def _composed_path_from_statuses(
 
 def _emit_stream_summary(lines: tuple[str, ...]) -> None:
     payload = "\n".join(lines) + "\n"
-    artifact_name = os.environ.get(SAFE_OUTPUT_ARTIFACT_ENV)
-    if artifact_name:
-        artifact = Path(artifact_name)
-        root_name = os.environ.get(SAFE_OUTPUT_ROOT_ENV)
-        try:
-            root = Path(root_name) if root_name else None
-            if (
-                root is None
-                or root != artifact.parent
-                or root.is_symlink()
-                or not root.is_dir()
-                or stat.S_IMODE(root.stat().st_mode) != 0o700
-                or root.stat().st_uid != os.getuid()
-                or artifact.exists()
-                or artifact.is_symlink()
-            ):
-                raise VerificationError("safe_output_artifact_invalid")
-            descriptor = os.open(
-                artifact,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-            )
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(payload.encode("ascii"))
-                stream.flush()
-                os.fsync(stream.fileno())
-        except VerificationError:
-            raise
-        except (OSError, UnicodeEncodeError) as exc:
-            raise VerificationError("safe_output_artifact_failed") from exc
     sys.stdout.write(payload)
 
 
@@ -2500,8 +2332,10 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
         }
 
     def _stream(self) -> None:
+        stream_item_id = "fake-stream-message"
         created = {
             "type": "response.created",
+            "sequence_number": 0,
             "response": {
                 "id": "resp_capture",
                 "object": "response",
@@ -2509,20 +2343,150 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "model": CODEX_MODEL,
             },
         }
-        completed = {
-            "type": "response.completed",
-            "response": {
-                "id": "resp_capture",
-                "object": "response",
-                "status": "completed",
-                "model": CODEX_MODEL,
-                "output": [],
-                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-            },
-        }
         events = (
             ("response.created", created),
-            ("response.completed", completed),
+            (
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "sequence_number": 1,
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "id": stream_item_id,
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                        "phase": None,
+                    },
+                },
+            ),
+            (
+                "response.content_part.added",
+                {
+                    "type": "response.content_part.added",
+                    "sequence_number": 2,
+                    "item_id": stream_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                        "logprobs": [],
+                    },
+                },
+            ),
+            (
+                "response.output_text.delta",
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 3,
+                    "item_id": stream_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "bounded fake response",
+                    "logprobs": [],
+                },
+            ),
+            (
+                "response.output_text.done",
+                {
+                    "type": "response.output_text.done",
+                    "sequence_number": 4,
+                    "item_id": stream_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": "bounded fake response",
+                    "logprobs": [],
+                },
+            ),
+            (
+                "response.content_part.done",
+                {
+                    "type": "response.content_part.done",
+                    "sequence_number": 5,
+                    "item_id": stream_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "bounded fake response",
+                        "annotations": [],
+                        "logprobs": None,
+                    },
+                },
+            ),
+            (
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 6,
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "id": stream_item_id,
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "bounded fake response",
+                                "annotations": [],
+                                "logprobs": None,
+                            }
+                        ],
+                        "phase": None,
+                        "summary": [],
+                    },
+                },
+            ),
+            (
+                "response.completed",
+                {
+                    "type": "response.completed",
+                    "sequence_number": 7,
+                    "response": {
+                        "id": "resp_capture",
+                        "object": "response",
+                        "status": "completed",
+                        "model": CODEX_MODEL,
+                        "output": [
+                            {
+                                "id": "fake-message",
+                                "type": "message",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": "bounded fake response",
+                                        "annotations": [],
+                                        "logprobs": None,
+                                    }
+                                ],
+                                "phase": None,
+                            }
+                        ],
+                        "usage": {
+                            "input_tokens": 2,
+                            "input_tokens_details": {
+                                "cached_tokens": 0,
+                                "input_tokens_per_turn": [2],
+                                "cached_tokens_per_turn": [0],
+                            },
+                            "output_tokens": 2,
+                            "output_tokens_details": {
+                                "reasoning_tokens": 0,
+                                "tool_output_tokens": 0,
+                                "output_tokens_per_turn": [2],
+                                "tool_output_tokens_per_turn": [0],
+                            },
+                            "total_tokens": 4,
+                        },
+                    },
+                },
+            ),
         )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -4169,7 +4133,6 @@ def _run_composed_stream_diagnostic(
     runtime: RuntimeReference | None,
     *,
     fake_qwen: bool = False,
-    qualification_hook: bool = False,
     tracker: StageTracker | None = None,
 ) -> dict[str, object]:
     from openai import OpenAI
@@ -4197,14 +4160,6 @@ def _run_composed_stream_diagnostic(
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
     )
-    if qualification_hook:
-        gateway_env.update(
-            {
-                QUALIFICATION_HOOK_ENV: "1",
-                QUALIFICATION_ROOT_ENV: str(root),
-                QUALIFICATION_ARTIFACT_ENV: str(root / "qualification-rejection.json"),
-            }
-        )
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
     relay = failure_server = qwen_relay = local = gateway = gateway_output = None
@@ -4360,9 +4315,6 @@ def _run_composed_stream_diagnostic(
         except Exception:
             failure_code = "composed_client_stream_failed"
         tracker.set("boundary_capture")
-        qualification_rejection = _read_qualification_rejection(root)
-        if fake_qwen:
-            _assert_fake_qualification_artifact_absent(root)
         local_status = relay.status()
         gateway_status = gateway_output.status()
         qwen_status = _qwen_relay_status(qwen_port)
@@ -4434,7 +4386,6 @@ def _run_composed_stream_diagnostic(
             "qwen_status_before": qwen_status_before,
             "local_status": local_status,
             "gateway_status": gateway_status,
-            "qualification_rejection": qualification_rejection,
         }
     finally:
         primary = sys.exc_info()[1]
@@ -4625,7 +4576,7 @@ def _classify_composed_boundaries(
 
 
 def _run_composed_only_impl(
-    *, fake_qwen: bool, qualification_hook: bool, tracker: StageTracker
+    *, fake_qwen: bool, tracker: StageTracker
 ) -> dict[str, object]:
     """Run only the composed boundary using the immutable direct baseline."""
     tracker.set("topology")
@@ -4650,7 +4601,6 @@ def _run_composed_only_impl(
             root,
             runtime,
             fake_qwen=fake_qwen,
-            qualification_hook=qualification_hook,
             tracker=tracker,
         )
     local_output = _safe_stream_summary(
@@ -4694,18 +4644,14 @@ def _run_composed_only_impl(
         "gateway_output": gateway_output,
         "composed_path": composed_path,
         "accounting_verified": composed.get("accounting_verified") is True,
-        "qualification_rejection": composed.get("qualification_rejection"),
     }
 
 
-def run_composed_only(
-    *, fake_qwen: bool = False, qualification_hook: bool = False
-) -> dict[str, object]:
+def run_composed_only(*, fake_qwen: bool = False) -> dict[str, object]:
     tracker = StageTracker()
     try:
         return _run_composed_only_impl(
             fake_qwen=fake_qwen,
-            qualification_hook=qualification_hook,
             tracker=tracker,
         )
     except VerificationError:
@@ -4793,8 +4739,6 @@ def main() -> int:
     parser.add_argument("--stream-differential", action="store_true")
     parser.add_argument("--composed-only", action="store_true")
     parser.add_argument("--composed-only-fake", action="store_true")
-    parser.add_argument("--qualification-composed", action="store_true")
-    parser.add_argument("--qualification-composed-fake", action="store_true")
     arguments = parser.parse_args()
     if arguments.qwen_relay:
         return _qwen_relay_main()
@@ -4816,18 +4760,11 @@ def main() -> int:
     if (
         arguments.composed_only
         or arguments.composed_only_fake
-        or arguments.qualification_composed
-        or arguments.qualification_composed_fake
     ):
         try:
             result = run_composed_only(
                 fake_qwen=(
                     arguments.composed_only_fake
-                    or arguments.qualification_composed_fake
-                ),
-                qualification_hook=(
-                    arguments.qualification_composed
-                    or arguments.qualification_composed_fake
                 ),
             )
             _emit_stream_summary(_stream_summary_lines(result))

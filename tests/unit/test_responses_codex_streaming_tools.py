@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import stat
 import subprocess
 import uuid
 from types import SimpleNamespace
@@ -29,10 +28,7 @@ from slaif_gateway.services.responses_request_policy import (
     codex_client_tool_declarations,
     responses_codex_streaming_tool_events_allowed,
 )
-from slaif_gateway.services.responses_gateway import (
-    _codex_reasoning_events_enabled,
-    _record_qualification_rejection,
-)
+from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
     enforce_responses_route_capabilities,
@@ -626,185 +622,6 @@ def test_codex_0149_reasoning_item_rejects_non_exact_shapes(mutation) -> None:
     assert not ResponsesStreamEventValidator(
         ResponsesStreamValidationProfile(codex_reasoning_events=True)
     ).validate(event)
-
-
-def test_qualification_rejection_hook_writes_one_exact_safe_shape(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "qualification"
-    root.mkdir()
-    root.chmod(0o700)
-    artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
-    event = {
-        "type": "response.unreviewed",
-        "secret": PRIVATE_CANARY,
-        "response": {
-            "id": "resp_private",
-            "status": "in_progress",
-            "usage": {"input_tokens": 3},
-            "text": "private response text",
-        },
-    }
-    _record_qualification_rejection(
-        event,
-        profile=ResponsesStreamValidationProfile(
-            codex_streaming_tool_events=True,
-            declared_client_tools=frozenset({("functions", "exec", "custom")}),
-        ),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    first = artifact.read_bytes()
-    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
-    assert PRIVATE_CANARY.encode() not in first
-    assert b"resp_private" not in first
-    assert b"private response text" not in first
-    assert json.loads(first) == {
-        "event_type": "response.unreviewed",
-        "nested_object_fields": [
-            {
-                "fields": [
-                    {"name": "id", "type": "string"},
-                    {"name": "status", "type": "string"},
-                    {"name": "text", "type": "string"},
-                    {"name": "usage", "type": "object"},
-                ],
-                "name": "response",
-            }
-        ],
-        "rejection": {
-            "code": "responses_stream_event_not_supported",
-            "outcome": "validator_rejected",
-        },
-        "schema": "responses_stream_rejection_v1",
-        "top_level_fields": [
-            {"name": "response", "type": "object"},
-            {"name": "secret", "type": "string"},
-            {"name": "type", "type": "string"},
-        ],
-        "validator_profile": {
-            "codex_encrypted_reasoning_replay": False,
-            "codex_streaming_tool_events": True,
-            "declared_client_tools_class": "bounded",
-            "web_search": False,
-            "web_search_max_tool_calls_class": "none",
-        },
-    }
-    _record_qualification_rejection(
-        {"type": "response.other", "secret": "changed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_provider_failure",
-    )
-    assert artifact.read_bytes() == first
-
-
-def test_qualification_rejection_hook_is_disabled_without_exact_task_env(
-    monkeypatch, tmp_path: Path
-) -> None:
-    root = tmp_path / "qualification"
-    root.mkdir()
-    root.chmod(0o700)
-    monkeypatch.delenv("SLAIF_155R_QUALIFICATION", raising=False)
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(root / "rejection.json"))
-    _record_qualification_rejection(
-        {"type": "response.unreviewed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    assert not (root / "rejection.json").exists()
-
-
-@pytest.mark.parametrize("unsafe_root", ["mode", "symlink"])
-def test_qualification_rejection_hook_rejects_unsafe_root(monkeypatch, tmp_path: Path, unsafe_root: str) -> None:
-    target = tmp_path / "target"
-    target.mkdir()
-    root = target if unsafe_root == "mode" else tmp_path / "root-link"
-    if unsafe_root == "mode":
-        root.chmod(0o755)
-    else:
-        root.symlink_to(target, target_is_directory=True)
-    artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
-    _record_qualification_rejection(
-        {"type": "response.unreviewed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    assert not artifact.exists()
-
-
-def test_qualification_rejection_hook_rejects_symlink_or_wrong_parent(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    root.chmod(0o700)
-    target = tmp_path / "target.json"
-    symlink = root / "symlink.json"
-    symlink.symlink_to(target)
-    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(symlink))
-    _record_qualification_rejection(
-        {"type": "response.unreviewed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    assert symlink.is_symlink()
-    outside = tmp_path / "outside.json"
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(outside))
-    _record_qualification_rejection(
-        {"type": "response.unreviewed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    assert not outside.exists()
-
-
-def test_qualification_rejection_hook_bounds_names_fields_and_nesting(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    root.chmod(0o700)
-    artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
-    event = {
-        "type": "Ω" * 200,
-        "bad key": "value",
-        "x" * 65: "value",
-        **{f"field_{index}": {f"nested_{index}": {"deeper": "discarded"}} for index in range(64)},
-    }
-    _record_qualification_rejection(
-        event,
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    payload = json.loads(artifact.read_bytes())
-    assert payload["event_type"] == "other"
-    assert len(payload["top_level_fields"]) <= 32
-    assert len(payload["nested_object_fields"]) <= 32
-    assert all(len(item["fields"]) <= 32 for item in payload["nested_object_fields"])
-    assert "bad key" not in (verifier_repr := json.dumps(payload))
-    assert "Ω" not in verifier_repr
-
-
-def test_qualification_rejection_hook_skips_oversized_safe_output(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    root.chmod(0o700)
-    artifact = root / "rejection.json"
-    monkeypatch.setenv("SLAIF_155R_QUALIFICATION", "1")
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ROOT", str(root))
-    monkeypatch.setenv("SLAIF_155R_REJECTION_ARTIFACT", str(artifact))
-    monkeypatch.setattr("slaif_gateway.services.responses_gateway._QUALIFICATION_MAX_BYTES", 1)
-    _record_qualification_rejection(
-        {"type": "response.unreviewed"},
-        profile=ResponsesStreamValidationProfile(),
-        rejection_code="responses_stream_event_not_supported",
-    )
-    assert not artifact.exists()
 
 
 def _done_reasoning(

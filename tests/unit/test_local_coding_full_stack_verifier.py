@@ -1393,111 +1393,16 @@ def test_composed_only_mode_never_calls_direct_diagnostic(
                 "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE],
                 "path_rejections": 0,
             },
-            "qualification_rejection": {
-                "schema": "responses_stream_rejection_v1",
-                "event_type": "response.unreviewed",
-                "top_level_fields": [],
-                "nested_object_fields": [],
-                "validator_profile": {
-                    "codex_streaming_tool_events": False,
-                    "codex_encrypted_reasoning_replay": False,
-                    "web_search": False,
-                    "declared_client_tools_class": "none",
-                    "web_search_max_tool_calls_class": "none",
-                },
-                "rejection": {
-                    "outcome": "validator_rejected",
-                    "code": "responses_stream_event_not_supported",
-                },
-            },
         },
     )
-    result = verifier.run_composed_only(fake_qwen=True, qualification_hook=True)
+    result = verifier.run_composed_only(fake_qwen=True)
     assert result["decision"] == "terminal_boundaries_completed"
     assert result["ran_boundaries"] == ["direct_qwen", "local_output", "gateway_output"]
     assert result["direct_qwen"]["evidence_source"] == "pinned_155l"
     assert result["direct_qwen"]["ran_current_invocation"] is False
-    assert result["qualification_rejection"]["schema"] == "responses_stream_rejection_v1"
-    assert any(line.startswith("QUALIFICATION_REJECTION ") for line in verifier._stream_summary_lines(result))
     for boundary in ("local_output", "gateway_output"):
         assert result[boundary]["evidence_source"] == "current_155r"
         assert result[boundary]["ran_current_invocation"] is True
-
-
-def test_composed_only_qualification_mode_is_the_only_hook_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[bool, bool]] = []
-
-    def fake_impl(*, fake_qwen: bool, qualification_hook: bool, tracker):
-        calls.append((fake_qwen, qualification_hook))
-        return {"decision": "ambiguous_stream_evidence"}
-
-    monkeypatch.setattr(verifier, "_run_composed_only_impl", fake_impl)
-    verifier.run_composed_only(fake_qwen=True)
-    verifier.run_composed_only(fake_qwen=True, qualification_hook=True)
-    assert calls == [(True, False), (True, True)]
-
-
-def test_fake_qualification_requires_no_rejection_artifact(tmp_path: Path) -> None:
-    verifier._assert_fake_qualification_artifact_absent(tmp_path)
-    artifact = tmp_path / "qualification-rejection.json"
-    artifact.write_text(
-        verifier.json.dumps(_canonical_qualification_artifact()), encoding="ascii"
-    )
-    with pytest.raises(verifier.VerificationError, match="fake_rejection_artifact_present"):
-        verifier._assert_fake_qualification_artifact_absent(tmp_path)
-
-
-def _canonical_qualification_artifact() -> dict[str, object]:
-    return {
-        "schema": "responses_stream_rejection_v1",
-        "event_type": "response.unreviewed",
-        "top_level_fields": [
-            {"name": "response", "type": "object"},
-            {"name": "type", "type": "string"},
-        ],
-        "nested_object_fields": [
-            {"name": "a", "fields": []},
-            {"name": "response", "fields": [{"name": "id", "type": "string"}]}
-        ],
-        "validator_profile": {
-            "codex_streaming_tool_events": False,
-            "codex_encrypted_reasoning_replay": False,
-            "web_search": False,
-            "declared_client_tools_class": "none",
-            "web_search_max_tool_calls_class": "none",
-        },
-        "rejection": {
-            "outcome": "validator_rejected",
-            "code": "responses_stream_event_not_supported",
-        },
-    }
-
-
-@pytest.mark.parametrize("mutation", ["top_duplicate", "top_order", "nested_duplicate", "nested_order", "class_mismatch"])
-def test_qualification_sanitizer_requires_writer_canonical_shape(mutation: str) -> None:
-    artifact = _canonical_qualification_artifact()
-    if mutation == "top_duplicate":
-        artifact["top_level_fields"].append({"name": "type", "type": "string"})
-    elif mutation == "top_order":
-        artifact["top_level_fields"].reverse()
-    elif mutation == "nested_duplicate":
-        artifact["nested_object_fields"].append(
-            {"name": "response", "fields": [{"name": "id", "type": "string"}]}
-        )
-    elif mutation == "nested_order":
-        artifact["nested_object_fields"].reverse()
-    else:
-        artifact["validator_profile"]["declared_client_tools_class"] = "other"
-        artifact["validator_profile"]["web_search_max_tool_calls_class"] = "many"
-    with pytest.raises(verifier.VerificationError, match="qualification_artifact_invalid"):
-        verifier._sanitize_qualification_rejection(artifact)
-
-
-def test_qualification_sanitizer_accepts_only_canonical_writer_shape() -> None:
-    artifact = _canonical_qualification_artifact()
-    assert verifier._sanitize_qualification_rejection(artifact) == artifact
 
 
 def test_relay_handle_error_is_safe_and_fail_closed() -> None:
@@ -1879,38 +1784,3 @@ def test_normalized_summary_rebuild_discards_unexpected_extra_keys() -> None:
     )
     assert "raw_private_extra" not in rebuilt
     assert "opaque" not in verifier.json.dumps(rebuilt)
-
-
-def test_stream_summary_artifact_is_exact_bounded_output(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    result = _stream_result_for_summary("ambiguous_stream_evidence")
-    artifact = tmp_path / "safe-output.log"
-    tmp_path.chmod(0o700)
-    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(artifact))
-    monkeypatch.setenv(verifier.SAFE_OUTPUT_ROOT_ENV, str(tmp_path))
-    lines = verifier._stream_summary_lines(result)
-    verifier._emit_stream_summary(lines)
-    expected = "\n".join(lines) + "\n"
-    assert capsys.readouterr().out == expected
-    assert artifact.read_bytes() == expected.encode("ascii")
-    assert artifact.stat().st_mode & 0o777 == 0o600
-
-
-def test_stream_summary_artifact_rejects_existing_or_symlink_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    tmp_path.chmod(0o700)
-    result = _stream_result_for_summary()
-    lines = verifier._stream_summary_lines(result)
-    existing = tmp_path / "existing.log"
-    existing.write_bytes(b"old")
-    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(existing))
-    monkeypatch.setenv(verifier.SAFE_OUTPUT_ROOT_ENV, str(tmp_path))
-    with pytest.raises(verifier.VerificationError, match="safe_output_artifact_invalid"):
-        verifier._emit_stream_summary(lines)
-    link = tmp_path / "link.log"
-    link.symlink_to(existing)
-    monkeypatch.setenv(verifier.SAFE_OUTPUT_ARTIFACT_ENV, str(link))
-    with pytest.raises(verifier.VerificationError, match="safe_output_artifact_invalid"):
-        verifier._emit_stream_summary(lines)
