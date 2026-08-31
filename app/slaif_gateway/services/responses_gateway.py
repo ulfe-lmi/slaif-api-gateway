@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import re
-import stat
 import time
 import uuid
 from collections.abc import Mapping
@@ -212,144 +208,6 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_responses_upstream_request,
 )
 
-
-_QUALIFICATION_HOOK_ENV = "SLAIF_155S_QUALIFICATION"
-_QUALIFICATION_ARTIFACT_ENV = "SLAIF_155S_REJECTION_ARTIFACT"
-_QUALIFICATION_ROOT_ENV = "SLAIF_155S_REJECTION_ROOT"
-_QUALIFICATION_EVENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
-_QUALIFICATION_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_QUALIFICATION_MAX_BYTES = 64 * 1024
-_QUALIFICATION_MAX_FIELDS = 32
-_QUALIFICATION_FIELD_TYPES = frozenset(
-    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
-)
-
-
-def _qualification_type_class(value: object) -> str:
-    if value is None:
-        return "null"
-    if type(value) is bool:
-        return "boolean"
-    if type(value) is int:
-        return "integer"
-    if type(value) is float:
-        return "number"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, Mapping):
-        return "object"
-    if isinstance(value, list):
-        return "array"
-    return "other"
-
-
-def _qualification_name(value: object, *, event: bool = False) -> str:
-    if not isinstance(value, str):
-        return "other"
-    pattern = _QUALIFICATION_EVENT_NAME_RE if event else _QUALIFICATION_FIELD_NAME_RE
-    return value if pattern.fullmatch(value) else "other"
-
-
-def _qualification_fields(value: Mapping[object, object]) -> list[dict[str, str]]:
-    fields: dict[str, str] = {}
-    for key, item in list(value.items())[:_QUALIFICATION_MAX_FIELDS]:
-        fields[_qualification_name(key)] = _qualification_type_class(item)
-    return [
-        {"name": name, "type": fields[name]}
-        for name in sorted(fields)
-    ]
-
-
-def _qualification_profile(profile: ResponsesStreamValidationProfile) -> dict[str, object]:
-    tool_count = len(profile.declared_client_tools)
-    return {
-        "codex_streaming_tool_events": profile.codex_streaming_tool_events is True,
-        "codex_encrypted_reasoning_replay": profile.codex_encrypted_reasoning_replay is True,
-        "web_search": profile.web_search is True,
-        "declared_client_tools_class": (
-            "none" if tool_count == 0 else "bounded" if tool_count <= 32 else "many"
-        ),
-        "web_search_max_tool_calls_class": (
-            "none"
-            if profile.web_search_max_tool_calls is None
-            else "bounded"
-            if type(profile.web_search_max_tool_calls) is int
-            and 1 <= profile.web_search_max_tool_calls <= 256
-            else "other"
-        ),
-    }
-
-
-def _record_qualification_rejection(
-    event: Mapping[str, object] | None,
-    *,
-    profile: ResponsesStreamValidationProfile,
-    rejection_code: str,
-) -> None:
-    """Write one bounded rejection shape only in the disposable 155-s env."""
-
-    if os.environ.get(_QUALIFICATION_HOOK_ENV) != "1":
-        return
-    artifact_name = os.environ.get(_QUALIFICATION_ARTIFACT_ENV)
-    root_name = os.environ.get(_QUALIFICATION_ROOT_ENV)
-    if not artifact_name or not root_name or not isinstance(event, Mapping):
-        return
-    root = os.path.abspath(root_name)
-    artifact = os.path.abspath(artifact_name)
-    if os.path.dirname(artifact) != root or os.path.basename(artifact) != "rejection.json":
-        return
-    try:
-        if os.path.commonpath((root, "/tmp")) != "/tmp":
-            return
-        root_stat = os.stat(root, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(root_stat.st_mode)
-            or stat.S_IMODE(root_stat.st_mode) != 0o700
-            or root_stat.st_uid != os.getuid()
-            or os.path.lexists(artifact)
-        ):
-            return
-    except OSError:
-        return
-    nested: dict[str, list[dict[str, str]]] = {}
-    for key, item in list(event.items())[:_QUALIFICATION_MAX_FIELDS]:
-        if isinstance(item, Mapping):
-            nested[_qualification_name(key)] = _qualification_fields(item)
-    if rejection_code not in {
-        "responses_stream_event_not_supported",
-        "responses_stream_provider_failure",
-    }:
-        rejection_code = "other"
-    payload = {
-        "schema": "responses_stream_rejection_v1",
-        "event_type": _qualification_name(event.get("type"), event=True),
-        "top_level_fields": _qualification_fields(event),
-        "nested_object_fields": [
-            {"name": name, "fields": nested[name]} for name in sorted(nested)
-        ],
-        "validator_profile": _qualification_profile(profile),
-        "rejection": {"outcome": "validator_rejected", "code": rejection_code},
-    }
-    try:
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
-        if len(encoded) > _QUALIFICATION_MAX_BYTES:
-            return
-        descriptor = os.open(
-            artifact,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        directory_descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    except (FileExistsError, OSError, UnicodeEncodeError):
-        return
 
 
 RESPONSES_ENDPOINT = "/v1/responses"
@@ -2593,16 +2451,6 @@ def _streaming_responses_response(
                     terminal_done_event = chunk.raw_sse_event
                     continue
                 if not stream_event_validator.validate(chunk.json_body):
-                    _record_qualification_rejection(
-                        chunk.json_body,
-                        profile=stream_event_validator.profile,
-                        rejection_code=(
-                            "responses_stream_provider_failure"
-                            if isinstance(chunk.json_body, dict)
-                            and chunk.json_body.get("type") in RESPONSES_PROVIDER_FAILURE_EVENT_TYPES
-                            else "responses_stream_event_not_supported"
-                        ),
-                    )
                     event_type = (
                         chunk.json_body.get("type") if isinstance(chunk.json_body, dict) else None
                     )
