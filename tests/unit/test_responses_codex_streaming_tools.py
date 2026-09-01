@@ -34,6 +34,7 @@ from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_client_tool_declarations,
     codex_replay_request_candidates,
+    codex_standalone_function_output_call_ids,
     responses_codex_streaming_tool_events_allowed,
 )
 from slaif_gateway.services.responses_gateway import (
@@ -424,6 +425,126 @@ def test_codex_0149_continuation_detector_rejects_custom_or_multiple_pairs() -> 
         {"input": [call, output], "stream": False}
     )
     assert not responses_codex_tool_roundtrip_requested({"input": [call, output]})
+
+
+def test_codex_0149_standalone_function_output_uses_full_taxonomy() -> None:
+    output = {
+        "type": "function_call_output",
+        "id": "fco_1",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [output],
+        "tools": [
+            _function("wait"),
+            {"type": "custom", "name": "exec", "format": {"type": "text"}},
+        ],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    assert responses_codex_tool_roundtrip_requested(body)
+    assert codex_standalone_function_output_call_ids(body) == ("call_1",)
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    assert taxonomy == frozenset(
+        {("functions", "wait", "function"), ("functions", "exec", "custom")}
+    )
+    common = {
+        "allow_codex_request_envelope": True,
+        "allow_codex_client_tools": True,
+        "allow_codex_streaming_tool_events": True,
+        "adapter_managed_declaration_candidates": frozenset({"tool_search"}),
+        "adapter_managed_declaration_shapes": {"tool_search": frozenset()},
+    }
+    result = _policy_0149(Settings()).apply(
+        body,
+        **common,
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    assert result.effective_body["input"] == [output]
+
+    for altered in (
+        {**body, "input": [output, {"type": "function_call_output", "call_id": "call_2", "output": "x"}]},
+        {**body, "input": [output], "stream": False},
+    ):
+        if altered["stream"] is False:
+            assert not responses_codex_tool_roundtrip_requested(altered)
+            continue
+        with pytest.raises(RequestPolicyError):
+            _policy_0149(Settings()).apply(
+                altered,
+                **common,
+                codex_top_level_tool_taxonomy=taxonomy,
+            )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(body, **common)
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_codex_0149_reasoning_replay_plus_standalone_output_is_the_second_turn_contract() -> None:
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_replay_1",
+        "summary": [],
+        "encrypted_content": "opaque-replay-content",
+    }
+    output = {
+        "type": "function_call_output",
+        "id": "fco_2",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [reasoning, output],
+        "tools": [
+            _function("wait"),
+            {"type": "custom", "name": "exec", "format": {"type": "text"}},
+        ],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    assert [item["type"] for item in body["input"]] != [
+        "function_call",
+        "function_call_output",
+    ]
+    assert responses_codex_tool_roundtrip_requested(body)
+    assert codex_standalone_function_output_call_ids(body) == ("call_1",)
+
+    policy = _policy_0149(Settings())
+    common = {
+        "allow_codex_request_envelope": True,
+        "allow_codex_client_tools": True,
+        "allow_codex_streaming_tool_events": True,
+        "allow_codex_encrypted_reasoning_replay": True,
+    }
+    # This is the pre-155-y path: the non-adjacent shape supplied no
+    # continuation taxonomy and therefore failed before the correction.
+    with pytest.raises(RequestPolicyError):
+        policy._validate_codex_tool_roundtrip_items(  # noqa: SLF001
+            [reasoning, output],
+            allow_codex_streaming_tool_events=True,
+            top_level_tool_taxonomy=None,
+        )
+
+    result = policy.apply(
+        body,
+        **common,
+        adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    assert [item["type"] for item in result.effective_body["input"]] == [
+        "reasoning",
+        "function_call_output",
+    ]
+    candidates = codex_replay_request_candidates(
+        result.effective_body,
+        top_level_tool_taxonomy=taxonomy,
+    )
+    assert [candidate.item_kind for candidate in candidates] == ["reasoning"]
 
 
 def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_authority() -> None:

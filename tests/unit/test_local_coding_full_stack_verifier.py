@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155x_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155y_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155x-head"
+    current_head = "current-155y-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-w-live-function-done-shape-and-final-acceptance.md"
+    report_path = "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155x_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-x-preserved-qualification-output-and-final-closure.md"
+            return "oap/active\noap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155x_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155x_topology_anchors_are_the_155w_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "5385d066d2a869afd217e354996fe2027770a276"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b7b7f7ec00ec365fb245185a7e7588aa6c41ccbc"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "fe7d641352bedaad5bd217c17f03e61299742fb2"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-w-live-function-done-shape-and-final-acceptance.md"
+def test_155y_topology_anchors_are_the_155x_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "db7d67a83fa72b6e642147195d759556d33527b0"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "00a50beaa91caa524c98476e4c42d86ea0e22e55"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "b860216cc6218920ffc5cf086359f582de8176d0"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
 
 
-def test_155x_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155y_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -1222,7 +1222,47 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
         verifier._safe_roundtrip_projection_class(projection)
         == "top_level_function_pair_without_additional_tools"
     )
+    standalone = {
+        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+        "input_item_type_sequence": ["reasoning", "function_call_output"],
+        "stream_class": "true",
+    }
+    assert (
+        verifier._safe_roundtrip_projection_class(standalone)
+        == "standalone_function_output_continuation"
+    )
     assert verifier._safe_roundtrip_projection_class({}) == "other"
+
+
+def test_preclassification_summary_records_bounded_request_ordinals() -> None:
+    initial = {
+        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+        "input_item_type_sequence": ["message"],
+        "stream_class": "true",
+    }
+    continuation = {
+        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+        "input_item_type_sequence": ["reasoning", "function_call_output"],
+        "stream_class": "true",
+    }
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_codex_failure_projection",
+        codex_failure_category="turn_failed",
+        gateway_requests=2,
+        gateway_status={"response_statuses": [200, 400]},
+        local_requests=1,
+        local_status={"response_statuses": [200]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [200]},
+        request_projections=[initial, continuation],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    assert summary["request_profile_classes"] == [
+        "other",
+        "standalone_function_output_continuation",
+    ]
+    assert verifier._sanitize_preclassification_summary(summary) == summary
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:

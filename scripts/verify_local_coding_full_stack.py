@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-x verifier for preserved qualification output and closure.
+"""Bounded 155-y verifier for second-turn continuation admission and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "5385d066d2a869afd217e354996fe2027770a276"
-GATEWAY_IMPLEMENTATION_HEAD = "b7b7f7ec00ec365fb245185a7e7588aa6c41ccbc"
-GATEWAY_ACTIVATION_HEAD = "fe7d641352bedaad5bd217c17f03e61299742fb2"
-GATEWAY_REPORT_PATH = "oap/reports/155-w-live-function-done-shape-and-final-acceptance.md"
+GATEWAY_REPORT_HEAD = "db7d67a83fa72b6e642147195d759556d33527b0"
+GATEWAY_IMPLEMENTATION_HEAD = "00a50beaa91caa524c98476e4c42d86ea0e22e55"
+GATEWAY_ACTIVATION_HEAD = "b860216cc6218920ffc5cf086359f582de8176d0"
+GATEWAY_REPORT_PATH = "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-x-preserved-qualification-output-and-final-closure.md"
-TASK_DB = "slaif_gateway_oap_155x_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
+TASK_DB = "slaif_gateway_oap_155y_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -62,9 +62,9 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
-QUALIFICATION_HOOK_ENV = "SLAIF_155X_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155X_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155X_REJECTION_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155Y_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Y_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155Y_REJECTION_ROOT"
 QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
 QUALIFICATION_SUMMARY_NAME = "qualification-summary.json"
 QUALIFICATION_MAX_BYTES = 64 * 1024
@@ -253,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-x-preserved-qualification-output-and-final-closure.md",
+        "oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-x-preserved-qualification-output-and-final-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-x\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-y\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1129,11 +1129,10 @@ def _safe_preclassification_summary(
     )
     safe_stage = stage if isinstance(stage, str) and stage in _SUMMARY_STAGES else "other"
     projections = request_projections if isinstance(request_projections, list) else []
-    profile = (
-        _safe_roundtrip_projection_class(projections[0])
-        if projections
-        else "other"
-    )
+    request_profile_classes = [
+        _safe_roundtrip_projection_class(projection)
+        for projection in projections[:2]
+    ]
     accounting_section = {
         "query_ok": accounting.get("query_ok") is True,
         "row_count": _safe_summary_count(
@@ -1199,7 +1198,7 @@ def _safe_preclassification_summary(
             "handler_error": qwen.get("handler_error") is True,
             "truncated": qwen.get("upstream_truncated") is True,
         },
-        "request_profile_class": profile,
+        "request_profile_classes": request_profile_classes,
         "qualification_rejection": {
             "present": isinstance(qualification_rejection, dict),
             "artifact_equal": artifact_equal is True,
@@ -1228,16 +1227,27 @@ def _validate_task_summary_root(root: Path) -> None:
 def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != {
         "schema", "stage", "codex_failure_category", "gateway", "local", "qwen",
-        "request_profile_class", "qualification_rejection", "accounting",
+        "request_profile_classes", "qualification_rejection", "accounting",
     }:
         raise VerificationError("qualification_summary_invalid")
     if value["schema"] != _SUMMARY_SCHEMA:
         raise VerificationError("qualification_summary_invalid")
     if value["stage"] not in _SUMMARY_STAGES or value["codex_failure_category"] not in _SUMMARY_FAILURE_CATEGORIES:
         raise VerificationError("qualification_summary_invalid")
-    if value["request_profile_class"] not in {
-        "top_level_function_pair_without_additional_tools", "other"
-    }:
+    request_profile_classes = value["request_profile_classes"]
+    if (
+        not isinstance(request_profile_classes, list)
+        or len(request_profile_classes) > 2
+        or any(
+            not isinstance(profile, str)
+            or profile not in {
+                "top_level_function_pair_without_additional_tools",
+                "standalone_function_output_continuation",
+                "other",
+            }
+            for profile in request_profile_classes
+        )
+    ):
         raise VerificationError("qualification_summary_invalid")
     for boundary in ("gateway", "local"):
         section = value[boundary]
@@ -1502,6 +1512,13 @@ def _safe_roundtrip_projection_class(value: object) -> str:
         input_types[index : index + 2] == ["function_call", "function_call_output"]
         for index in range(len(input_types) - 1)
     )
+    has_standalone_function_output = (
+        input_types.count("function_call_output") == 1
+        and "function_call" not in input_types
+        and "custom_tool_call" not in input_types
+        and "custom_tool_call_output" not in input_types
+        and "additional_tools" not in input_types
+    )
     has_bounded_top_level_tool = (
         counts.get("function", 0) + counts.get("custom", 0) > 0
         and counts.get("other", 0) == 0
@@ -1512,6 +1529,8 @@ def _safe_roundtrip_projection_class(value: object) -> str:
         and "additional_tools" not in input_types
     ):
         return "top_level_function_pair_without_additional_tools"
+    if has_bounded_top_level_tool and has_standalone_function_output:
+        return "standalone_function_output_continuation"
     return "other"
 
 
@@ -4176,14 +4195,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155x-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155y-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155x-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155y-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -4202,7 +4221,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155x-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155y-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -6723,7 +6742,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155x-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155y-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -6831,7 +6850,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -6990,7 +7009,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7092,7 +7111,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155x-", dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             stage = "local_config_preflight"
@@ -7166,7 +7185,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155x-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155y-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

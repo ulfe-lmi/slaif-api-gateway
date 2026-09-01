@@ -55,6 +55,16 @@ class FakeRepository:
             and row.expires_at > now
         ]
 
+    async def list_active_by_call_digests(self, *, gateway_key_id, call_digests, now):
+        allowed = set(call_digests)
+        return [
+            row
+            for row in self.rows
+            if row.gateway_key_id == gateway_key_id
+            and (row.item_kind, row.call_id_hmac) in allowed
+            and row.expires_at > now
+        ]
+
     async def upsert_many(self, records):
         self.upsert_calls += 1
         for record in records:
@@ -98,6 +108,16 @@ def _tool() -> Candidate:
         call_id="call_1",
         tool_namespace="functions",
         tool_name="exec",
+    )
+
+
+def _function_tool() -> Candidate:
+    return Candidate(
+        item_kind="function_call",
+        item_id="fc_1",
+        call_id="call_1",
+        tool_namespace="functions",
+        tool_name="wait",
     )
 
 
@@ -229,6 +249,94 @@ async def test_persist_and_verify_are_hmac_only_idempotent_and_route_bound() -> 
         "reasoning",
         "custom_tool_call",
     ]
+
+
+@pytest.mark.asyncio
+async def test_standalone_function_output_uses_active_call_hmac_and_exact_taxonomy() -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    await service.persist_validated_references(
+        candidates=(_function_tool(),),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_function_call",
+        provider="openai",
+        route_id=uuid.uuid4(),
+        upstream_model="gpt-test",
+        session_scope="session-a",
+        now=now,
+    )
+
+    authorization = await service.verify_owned_function_output_calls(
+        call_ids=("call_1",),
+        gateway_key_id=key_id,
+        tool_taxonomy=frozenset(
+            {
+                ("functions", "wait", "function"),
+                ("functions", "exec", "custom"),
+            }
+        ),
+        session_scope="session-a",
+        now=now + timedelta(minutes=1),
+    )
+    assert [reference.item_kind for reference in authorization.references] == ["function_call"]
+    assert repository.rows[0].call_id_hmac is not None
+
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_function_output_calls(
+            call_ids=("call_1",),
+            gateway_key_id=key_id,
+            tool_taxonomy=frozenset({("functions", "wait", "function")}),
+            session_scope="session-b",
+            now=now + timedelta(minutes=1),
+        )
+
+    duplicate = SimpleNamespace(**vars(repository.rows[0]))
+    duplicate.item_id_hmac = "0" * 64
+    repository.rows.append(duplicate)
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_function_output_calls(
+            call_ids=("call_1",),
+            gateway_key_id=key_id,
+            tool_taxonomy=frozenset({("functions", "wait", "function")}),
+            session_scope="session-a",
+            now=now + timedelta(minutes=1),
+        )
+    repository.rows.pop()
+
+    for kwargs in (
+        {"gateway_key_id": uuid.uuid4()},
+        {"gateway_key_id": key_id, "tool_name": "other"},
+        {"gateway_key_id": key_id, "tool_namespace": "collaboration"},
+    ):
+        with pytest.raises(CodexReplayReferenceError) as exc_info:
+            await service.verify_owned_function_output_calls(
+                call_ids=("call_1",),
+                gateway_key_id=kwargs.get("gateway_key_id", key_id),
+                tool_taxonomy=frozenset(
+                    {
+                        (
+                            kwargs.get("tool_namespace", "functions"),
+                            kwargs.get("tool_name", "wait"),
+                            "function",
+                        )
+                    }
+                ),
+                now=now + timedelta(minutes=1),
+                session_scope="session-a",
+            )
+        assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
+
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_function_output_calls(
+            call_ids=("call_1", "call_2"),
+            gateway_key_id=key_id,
+            tool_taxonomy=frozenset({("functions", "wait", "function")}),
+            session_scope="session-a",
+            now=now + timedelta(minutes=1),
+        )
 
 
 @pytest.mark.asyncio

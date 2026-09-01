@@ -264,8 +264,7 @@ class ResponsesRequestPolicy:
                 allow_codex_request_envelope
                 and allow_codex_client_tools
                 and allow_codex_streaming_tool_events
-                and effective_body.get("stream") is True
-                and _input_contains_codex_tool_roundtrip(effective_body.get("input"))
+                and responses_codex_tool_roundtrip_requested(effective_body)
             )
             else None
         )
@@ -989,8 +988,16 @@ class ResponsesRequestPolicy:
                     "responses_codex_tool_roundtrip_invalid",
                     "Codex tool-call continuation requires the exact client-tool declarations.",
                 )
-        if codex_client_tool_items or codex_reasoning_items or (
-            codex_tool_call_items and codex_top_level_tool_taxonomy is not None
+        codex_0149_function_output_present = (
+            self._codex_spec is not None
+            and self._codex_spec.taxonomy_id_0148 == "codex_0_149"
+            and any(item.get("type") == "function_call_output" for item in canonical_items)
+        )
+        if (
+            codex_client_tool_items
+            or codex_reasoning_items
+            or codex_0149_function_output_present
+            or (codex_tool_call_items and codex_top_level_tool_taxonomy is not None)
         ):
             self._validate_codex_tool_roundtrip_items(
                 canonical_items,
@@ -1734,6 +1741,36 @@ class ResponsesRequestPolicy:
             declarations = input_declarations or top_level_declarations
         else:
             declarations = input_declarations
+        standalone_outputs = [
+            item for item in items if item.get("type") == "function_call_output"
+        ]
+        if standalone_outputs and _input_contains_codex_standalone_function_output(items):
+            if not allow_codex_streaming_tool_events:
+                _raise(
+                    "input",
+                    "responses_codex_streaming_tool_events_not_allowed",
+                    "Codex tool-call continuation is not enabled for this gateway key.",
+                )
+            allowed_standalone_types = {None, "message", "reasoning", "function_call_output"}
+            if len(standalone_outputs) != 1 or any(
+                item.get("type") not in allowed_standalone_types for item in items
+            ):
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex standalone function output must be the only tool continuation item.",
+                )
+            if (
+                top_level_tool_taxonomy is None
+                or not declarations
+                or not any(declaration[2] == "function" for declaration in declarations)
+            ):
+                _raise(
+                    "input",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex standalone function output requires an approved function taxonomy.",
+                )
+            return
         calls: dict[str, tuple[str, str, str]] = {}
         outputs: dict[str, str] = {}
         item_ids: set[str] = set()
@@ -4561,9 +4598,44 @@ def _input_contains_codex_tool_roundtrip(value: Any) -> bool:
     return function_pair_count == 1 and custom_pair_count == 0
 
 
+def _input_contains_codex_standalone_function_output(value: Any) -> bool:
+    """Detect the exact 0.149 second-turn output-only continuation shape."""
+    if not isinstance(value, list):
+        return False
+    item_types = [
+        item.get("type")
+        for item in value
+        if isinstance(item, Mapping)
+    ]
+    return (
+        item_types.count("function_call_output") == 1
+        and "function_call" not in item_types
+        and "custom_tool_call" not in item_types
+        and "custom_tool_call_output" not in item_types
+    )
+
+
 def responses_codex_tool_roundtrip_requested(body: Mapping[str, Any]) -> bool:
-    """Detect one adjacent Codex call/output continuation pair."""
-    return body.get("stream") is True and _input_contains_codex_tool_roundtrip(body.get("input"))
+    """Detect one reviewed Codex call/output continuation form."""
+    return body.get("stream") is True and (
+        _input_contains_codex_tool_roundtrip(body.get("input"))
+        or _input_contains_codex_standalone_function_output(body.get("input"))
+    )
+
+
+def codex_standalone_function_output_call_ids(body: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return only bounded standalone function-output call IDs for HMAC lookup."""
+    if not _input_contains_codex_standalone_function_output(body.get("input")):
+        return ()
+    input_value = body.get("input")
+    if not isinstance(input_value, list):
+        return ()
+    outputs = [
+        item.get("call_id")
+        for item in input_value
+        if isinstance(item, Mapping) and item.get("type") == "function_call_output"
+    ]
+    return tuple(value for value in outputs if isinstance(value, str))
 
 
 def _input_contains_custom_tool_call_output(value: Any) -> bool:
