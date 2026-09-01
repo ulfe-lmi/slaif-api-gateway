@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155y_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155z_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155y-head"
+    current_head = "current-155z-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
+    report_path = "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155y_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
+            return "oap/active\noap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155y_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155y_topology_anchors_are_the_155x_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "db7d67a83fa72b6e642147195d759556d33527b0"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "00a50beaa91caa524c98476e4c42d86ea0e22e55"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "b860216cc6218920ffc5cf086359f582de8176d0"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
+def test_155z_topology_anchors_are_the_155y_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "b499323eacbd450f566df0a6ad768a9437dff025"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "70a5224ff9e7dd07bf2d957baf4cb6717a39e896"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "dfa7454f067a545e6fd6d0a2157250168e05497f"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
 
 
-def test_155y_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155z_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -1331,6 +1331,119 @@ def test_gateway_error_parameter_projection_is_bounded_to_root_and_leaf() -> Non
     assert verifier._safe_gateway_error_param_field_class("input") == "none"
     assert verifier._safe_gateway_error_param_class("private-value") == "other"
     assert verifier._safe_gateway_error_param_field_class("private-value") == "other"
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "safe_code"),
+    [
+        ("responses_codex_tool_roundtrip_invalid", "codex_tool_roundtrip_invalid"),
+        ("responses_codex_replay_reference_not_found", "replay_reference_not_found"),
+        ("responses_codex_replay_route_mismatch", "replay_route_mismatch"),
+        ("responses_route_capability_not_supported", "route_capability_not_supported"),
+        ("responses_route_capability_missing", "route_capability_not_supported"),
+        ("responses_function_tool_capability_not_supported", "route_capability_not_supported"),
+        ("responses_custom_tool_capability_not_supported", "route_capability_not_supported"),
+        ("responses_codex_streaming_tool_events_not_allowed", "route_capability_not_supported"),
+        ("unrecognized_gateway_error", "other"),
+    ],
+)
+def test_gateway_error_code_allowlist_maps_only_bounded_classes(
+    raw_code: str, safe_code: str
+) -> None:
+    assert verifier._safe_gateway_error_code_class(raw_code) == safe_code
+
+
+@pytest.mark.parametrize(
+    "safe_code",
+    [
+        "codex_tool_roundtrip_invalid",
+        "replay_reference_not_found",
+        "replay_route_mismatch",
+        "route_capability_not_supported",
+        "other",
+    ],
+)
+def test_second_gateway_error_matrix_is_bounded_for_g2_l1_q1(
+    safe_code: str,
+) -> None:
+    expected = (
+        "composed_tool_roundtrip_second_turn_gateway_"
+        f"{safe_code}_input_top_level_function_pair_without_additional_tools"
+    )
+    assert verifier._localize_composed_codex_failure(
+        codex_failure_category="unclassified",
+        gateway_requests=2,
+        gateway_statuses=[200, 400],
+        gateway_structures=[],
+        local_requests=1,
+        local_statuses=[200],
+        request_projections=[
+            {},
+            {
+                "top_level_tool_type_counts": {"function": 1},
+                "input_item_type_sequence": [
+                    "function_call",
+                    "function_call_output",
+                ],
+                "stream_class": "true",
+            },
+        ],
+        gateway_error_code_classes=["none", safe_code],
+        gateway_error_param_classes=["none", "input"],
+        qwen_status={"inference_statuses": [200]},
+        fake_status={},
+        accounting_statuses={},
+    ) == expected
+
+
+def test_summary_sanitizer_rejects_duplicate_fields_and_unaligned_error_ordinals() -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="turn_failed",
+        gateway_requests=2,
+        gateway_status={
+            "response_statuses": [200, 400],
+            "error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
+            "error_param_classes": ["none", "input"],
+            "error_param_field_classes": ["none", "type"],
+        },
+        local_requests=1,
+        local_status={"response_statuses": [200]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [200]},
+        request_projections=[
+            {},
+            {
+                "top_level_tool_type_counts": {"function": 1},
+                "input_item_type_sequence": [
+                    "function_call",
+                    "function_call_output",
+                ],
+                "function_call_fields": [
+                    {"name": "id", "type": "string"},
+                    {"name": "type", "type": "string"},
+                ],
+                "function_call_output_fields": [
+                    {"name": "call_id", "type": "string"},
+                    {"name": "output", "type": "string"},
+                    {"name": "type", "type": "string"},
+                ],
+                "stream_class": "true",
+            },
+        ],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    duplicate = json.loads(json.dumps(summary))
+    duplicate["second_function_call_fields"].append(
+        duplicate["second_function_call_fields"][0]
+    )
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(duplicate)
+    unaligned = json.loads(json.dumps(summary))
+    unaligned["gateway_error_code_classes"] = ["none"]
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(unaligned)
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-y verifier for second-turn continuation admission and closure.
+"""Bounded 155-z verifier for exact second-request error and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "db7d67a83fa72b6e642147195d759556d33527b0"
-GATEWAY_IMPLEMENTATION_HEAD = "00a50beaa91caa524c98476e4c42d86ea0e22e55"
-GATEWAY_ACTIVATION_HEAD = "b860216cc6218920ffc5cf086359f582de8176d0"
-GATEWAY_REPORT_PATH = "oap/reports/155-x-preserved-qualification-output-and-final-closure.md"
+GATEWAY_REPORT_HEAD = "b499323eacbd450f566df0a6ad768a9437dff025"
+GATEWAY_IMPLEMENTATION_HEAD = "70a5224ff9e7dd07bf2d957baf4cb6717a39e896"
+GATEWAY_ACTIVATION_HEAD = "dfa7454f067a545e6fd6d0a2157250168e05497f"
+GATEWAY_REPORT_PATH = "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
-TASK_DB = "slaif_gateway_oap_155y_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
+TASK_DB = "slaif_gateway_oap_155z_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -253,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md",
+        "oap/orders/155-z-exact-second-request-error-and-decisive-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-y-second-turn-continuation-admission-and-final-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-y\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-z\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1028,8 +1028,9 @@ _SUMMARY_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "none",
         "input_tool_item_not_supported",
         "codex_tool_roundtrip_invalid",
-        "codex_streaming_tool_events_not_allowed",
         "replay_reference_not_found",
+        "replay_route_mismatch",
+        "route_capability_not_supported",
         "other",
     }
 )
@@ -1144,10 +1145,26 @@ def _safe_summary_content_classes(value: object) -> list[str]:
     return [item if item in _SUMMARY_CONTENT_TYPES else "other" for item in value[:8]]
 
 
-def _safe_summary_classes(value: object, allowed: frozenset[str]) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item if isinstance(item, str) and item in allowed else "other" for item in value[:2]]
+def _safe_summary_error_classes(
+    value: object, response_statuses: object, allowed: frozenset[str]
+) -> list[str]:
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    ordinal_count = len(statuses)
+    raw = value if isinstance(value, list) else []
+    if len(raw) != ordinal_count:
+        if raw:
+            raw = ["other"] * ordinal_count
+        else:
+            raw = [
+                "none"
+                if type(status) is int and status < 400
+                else "other"
+                for status in statuses
+            ]
+    return [
+        item if isinstance(item, str) and item in allowed else "other"
+        for item in raw[:2]
+    ]
 
 
 def _safe_summary_tool_counts(value: object) -> dict[str, int | str]:
@@ -1312,14 +1329,20 @@ def _safe_preclassification_summary(
             "truncated": qwen.get("upstream_truncated") is True,
         },
         "request_profile_classes": request_profile_classes,
-        "gateway_error_code_classes": _safe_summary_classes(
-            gateway.get("error_code_classes"), _SUMMARY_GATEWAY_ERROR_CODE_CLASSES
+        "gateway_error_code_classes": _safe_summary_error_classes(
+            gateway.get("error_code_classes"),
+            gateway.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_CODE_CLASSES,
         ),
-        "gateway_error_param_classes": _safe_summary_classes(
-            gateway.get("error_param_classes"), _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES
+        "gateway_error_param_classes": _safe_summary_error_classes(
+            gateway.get("error_param_classes"),
+            gateway.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES,
         ),
-        "gateway_error_param_field_classes": _safe_summary_classes(
-            gateway.get("error_param_field_classes"), _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS
+        "gateway_error_param_field_classes": _safe_summary_error_classes(
+            gateway.get("error_param_field_classes"),
+            gateway.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
         ),
         "second_request_input_item_type_sequence": [
             item
@@ -1400,6 +1423,10 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         if (
             not isinstance(classes, list)
             or len(classes) > 2
+            or (
+                value["gateway"]["response_count"] != "other"
+                and value["gateway"]["response_count"] != str(len(classes))
+            )
             or any(not isinstance(item, str) or item not in allowed for item in classes)
         ):
             raise VerificationError("qualification_summary_invalid")
@@ -1433,6 +1460,7 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
                 or item["type"] not in _SUMMARY_FIELD_TYPES
                 for item in fields
             )
+            or len({item["name"] for item in fields}) != len(fields)
             or fields != sorted(fields, key=lambda item: (item["name"], item["type"]))
         ):
             raise VerificationError("qualification_summary_invalid")
@@ -1715,10 +1743,19 @@ def _safe_gateway_error_code_class(value: object) -> str:
         return "input_tool_item_not_supported"
     if value == "responses_codex_tool_roundtrip_invalid":
         return "codex_tool_roundtrip_invalid"
-    if value == "responses_codex_streaming_tool_events_not_allowed":
-        return "codex_streaming_tool_events_not_allowed"
     if value == "responses_codex_replay_reference_not_found":
         return "replay_reference_not_found"
+    if value == "responses_codex_replay_route_mismatch":
+        return "replay_route_mismatch"
+    if value in {
+        "responses_route_capability_not_supported",
+        "responses_route_capability_missing",
+        "responses_function_tool_capability_not_supported",
+        "responses_custom_tool_capability_not_supported",
+        "responses_codex_streaming_tool_events_not_allowed",
+        "responses_codex_compaction_capability_not_supported",
+    }:
+        return "route_capability_not_supported"
     return "other"
 
 
@@ -1833,8 +1870,9 @@ _SAFE_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "none",
         "input_tool_item_not_supported",
         "codex_tool_roundtrip_invalid",
-        "codex_streaming_tool_events_not_allowed",
         "replay_reference_not_found",
+        "replay_route_mismatch",
+        "route_capability_not_supported",
         "other",
     }
 )
@@ -4465,14 +4503,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155y-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155z-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155y-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155z-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -4491,7 +4529,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155y-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155z-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -7022,7 +7060,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155y-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155z-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7130,7 +7168,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7289,7 +7327,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7391,7 +7429,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155y-", dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             stage = "local_config_preflight"
@@ -7465,7 +7503,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155y-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155z-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
