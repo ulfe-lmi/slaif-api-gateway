@@ -622,40 +622,6 @@ def test_same_key_ownership_denial_precedes_route_and_all_later_side_effects(
     assert timeline == ["ownership"]
 
 
-def test_standalone_output_authorization_is_not_entered_for_codex_0147(
-    monkeypatch,
-) -> None:
-    import slaif_gateway.services.responses_gateway as gateway
-
-    def unexpected_standalone_extraction(body):
-        raise AssertionError("standalone 0.149 extraction must not run")
-
-    monkeypatch.setattr(
-        gateway,
-        "codex_standalone_function_output_call_ids",
-        unexpected_standalone_extraction,
-    )
-    with pytest.raises(OpenAICompatibleError) as exc_info:
-        asyncio.run(
-            gateway.handle_response_create(
-                payload=ResponsesCreateRequest.model_validate(
-                    _body(
-                        [
-                            {
-                                "type": "function_call_output",
-                                "call_id": "call_1",
-                                "output": "bounded result",
-                            }
-                        ]
-                    )
-                ),
-                authenticated_key=_replay_key(),
-                settings=Settings(),
-            )
-        )
-    assert exc_info.value.code == "responses_function_tool_streaming_not_supported"
-
-
 def test_route_mismatch_denial_precedes_redis_pricing_quota_and_provider(monkeypatch) -> None:
     import slaif_gateway.services.responses_gateway as gateway
 

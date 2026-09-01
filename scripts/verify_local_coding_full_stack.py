@@ -62,9 +62,9 @@ QWEN_RELAY_TOKEN_ENV = "SLAIF_155F_QWEN_RELAY_TOKEN"
 MAX_OUTPUT_BYTES = 256 * 1024
 LOCAL_METRICS_URL_PATH = "/metrics"
 RELAY_BODY_LIMIT = 512 * 1024
-QUALIFICATION_HOOK_ENV = "SLAIF_155Y_QUALIFICATION"
-QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Y_REJECTION_ARTIFACT"
-QUALIFICATION_ROOT_ENV = "SLAIF_155Y_REJECTION_ROOT"
+QUALIFICATION_HOOK_ENV = "SLAIF_155X_QUALIFICATION"
+QUALIFICATION_ARTIFACT_ENV = "SLAIF_155X_REJECTION_ARTIFACT"
+QUALIFICATION_ROOT_ENV = "SLAIF_155X_REJECTION_ROOT"
 QUALIFICATION_ARTIFACT_NAME = "qualification-rejection.json"
 QUALIFICATION_SUMMARY_NAME = "qualification-summary.json"
 QUALIFICATION_MAX_BYTES = 64 * 1024
@@ -1242,7 +1242,6 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
             not isinstance(profile, str)
             or profile not in {
                 "top_level_function_pair_without_additional_tools",
-                "standalone_function_output_continuation",
                 "other",
             }
             for profile in request_profile_classes
@@ -1512,13 +1511,6 @@ def _safe_roundtrip_projection_class(value: object) -> str:
         input_types[index : index + 2] == ["function_call", "function_call_output"]
         for index in range(len(input_types) - 1)
     )
-    has_standalone_function_output = (
-        input_types.count("function_call_output") == 1
-        and "function_call" not in input_types
-        and "custom_tool_call" not in input_types
-        and "custom_tool_call_output" not in input_types
-        and "additional_tools" not in input_types
-    )
     has_bounded_top_level_tool = (
         counts.get("function", 0) + counts.get("custom", 0) > 0
         and counts.get("other", 0) == 0
@@ -1529,8 +1521,6 @@ def _safe_roundtrip_projection_class(value: object) -> str:
         and "additional_tools" not in input_types
     ):
         return "top_level_function_pair_without_additional_tools"
-    if has_bounded_top_level_tool and has_standalone_function_output:
-        return "standalone_function_output_continuation"
     return "other"
 
 

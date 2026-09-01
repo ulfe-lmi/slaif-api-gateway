@@ -1222,15 +1222,6 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
         verifier._safe_roundtrip_projection_class(projection)
         == "top_level_function_pair_without_additional_tools"
     )
-    standalone = {
-        "top_level_tool_type_counts": {"custom": 1, "function": 1},
-        "input_item_type_sequence": ["reasoning", "function_call_output"],
-        "stream_class": "true",
-    }
-    assert (
-        verifier._safe_roundtrip_projection_class(standalone)
-        == "standalone_function_output_continuation"
-    )
     assert verifier._safe_roundtrip_projection_class({}) == "other"
 
 
@@ -1242,7 +1233,7 @@ def test_preclassification_summary_records_bounded_request_ordinals() -> None:
     }
     continuation = {
         "top_level_tool_type_counts": {"custom": 1, "function": 1},
-        "input_item_type_sequence": ["reasoning", "function_call_output"],
+        "input_item_type_sequence": ["function_call", "function_call_output"],
         "stream_class": "true",
     }
     summary = verifier._safe_preclassification_summary(
@@ -1260,7 +1251,7 @@ def test_preclassification_summary_records_bounded_request_ordinals() -> None:
     )
     assert summary["request_profile_classes"] == [
         "other",
-        "standalone_function_output_continuation",
+        "top_level_function_pair_without_additional_tools",
     ]
     assert verifier._sanitize_preclassification_summary(summary) == summary
 

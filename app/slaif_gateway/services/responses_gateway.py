@@ -154,7 +154,6 @@ from slaif_gateway.services.responses_request_policy import (
     codex_client_tool_declarations,
     codex_client_tool_taxonomy_id,
     codex_replay_request_candidates,
-    codex_standalone_function_output_call_ids,
     conversation_requested,
     previous_response_id_requested,
     responses_codex_client_tools_allowed,
@@ -220,9 +219,9 @@ from slaif_gateway.services.upstream_request_contracts import (
 )
 
 
-_QUALIFICATION_HOOK_ENV = "SLAIF_155Y_QUALIFICATION"
-_QUALIFICATION_ARTIFACT_ENV = "SLAIF_155Y_REJECTION_ARTIFACT"
-_QUALIFICATION_ROOT_ENV = "SLAIF_155Y_REJECTION_ROOT"
+_QUALIFICATION_HOOK_ENV = "SLAIF_155X_QUALIFICATION"
+_QUALIFICATION_ARTIFACT_ENV = "SLAIF_155X_REJECTION_ARTIFACT"
+_QUALIFICATION_ROOT_ENV = "SLAIF_155X_REJECTION_ROOT"
 _QUALIFICATION_EVENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 _QUALIFICATION_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _QUALIFICATION_FIELD_TYPES = frozenset(
@@ -1209,46 +1208,12 @@ async def handle_response_create(
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
-    codex_0149_effective_tool_taxonomy = (
-        codex_0149_declared_tool_taxonomy(policy_result.effective_body)
-        if client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
-        else None
-    )
     replay_candidates = codex_replay_request_candidates(
         policy_result.effective_body,
-        top_level_tool_taxonomy=codex_0149_effective_tool_taxonomy
-        if codex_0149_continuation_taxonomy is not None
-        else None,
-    )
-    codex_0149_standalone_continuation = (
-        client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
-        and codex_0149_continuation_taxonomy is not None
-    )
-    standalone_function_output_call_ids = (
-        codex_standalone_function_output_call_ids(policy_result.effective_body)
-        if codex_0149_standalone_continuation
-        else ()
-    )
-    exact_pair_function_candidates = (
-        codex_0149_standalone_continuation
-        and any(candidate.item_kind == "function_call" for candidate in replay_candidates)
-    )
-    deferred_replay_candidates = (
-        replay_candidates
-        if standalone_function_output_call_ids
-        else tuple(
-            candidate
-            for candidate in replay_candidates
-            if exact_pair_function_candidates and candidate.item_kind == "function_call"
-        )
-    )
-    early_replay_candidates = tuple(
-        candidate
-        for candidate in replay_candidates
-        if candidate not in deferred_replay_candidates
+        top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
     )
     replay_authorization = await _verify_owned_codex_replay_references(
-        candidates=early_replay_candidates,
+        candidates=replay_candidates,
         authenticated_key=authenticated_key,
         settings=settings,
         request=request,
@@ -1290,50 +1255,12 @@ async def handle_response_create(
         route=route,
         settings=settings,
     )
-    replay_session_scope = (
-        local_coding_server_context.get("session")
-        if (
-            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
-            and local_coding_server_context is not None
-            and isinstance(local_coding_server_context.get("session"), str)
-        )
-        else None
-    )
-    if deferred_replay_candidates:
-        deferred_authorization = await _verify_owned_codex_replay_references(
-            candidates=deferred_replay_candidates,
-            authenticated_key=authenticated_key,
-            settings=settings,
-            request=request,
-            session_scope=replay_session_scope,
-        )
-        replay_authorization = CodexReplayAuthorization(
-            references=(
-                *replay_authorization.references,
-                *deferred_authorization.references,
-            )
-        )
-    if standalone_function_output_call_ids:
-        standalone_authorization = await _verify_owned_codex_function_output_references(
-            call_ids=standalone_function_output_call_ids,
-            top_level_tool_taxonomy=codex_0149_effective_tool_taxonomy,
-            authenticated_key=authenticated_key,
-            settings=settings,
-            request=request,
-            session_scope=replay_session_scope,
-        )
-        replay_authorization = CodexReplayAuthorization(
-            references=(
-                *replay_authorization.references,
-                *standalone_authorization.references,
-            )
-        )
     pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
         _derive_pair_local_codex_top_level_profile(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
             effective_body=policy_result.effective_body,
-            declared_tool_taxonomy=codex_0149_effective_tool_taxonomy,
+            declared_tool_taxonomy=codex_0149_full_tool_taxonomy,
         )
     )
     if pair_local_codex_streaming_tools:
@@ -1566,7 +1493,6 @@ async def handle_response_create(
                     external_web_search_admission=external_web_search_admission,
                     external_tool_pricing=quota.external_tool_pricing,
                     server_context=local_coding_server_context,
-                    replay_session_scope=replay_session_scope,
                 )
                 return response
             except ProviderError as exc:
@@ -2292,7 +2218,6 @@ async def _verify_owned_codex_replay_references(
     authenticated_key: AuthenticatedGatewayKey,
     settings: Settings,
     request: Request | None,
-    session_scope: str | None = None,
 ) -> CodexReplayAuthorization:
     if not candidates:
         return CodexReplayAuthorization(references=())
@@ -2310,48 +2235,6 @@ async def _verify_owned_codex_replay_references(
             return await service.verify_owned_replay(
                 candidates=candidates,
                 gateway_key_id=authenticated_key.gateway_key_id,
-                session_scope=session_scope,
-            )
-        except CodexReplayReferenceError as exc:
-            raise _openai_error_from_codex_replay_error(exc) from exc
-    finally:
-        await session_iterator.aclose()
-
-
-async def _verify_owned_codex_function_output_references(
-    *,
-    call_ids: tuple[str, ...],
-    top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None,
-    authenticated_key: AuthenticatedGatewayKey,
-    settings: Settings,
-    request: Request | None,
-    session_scope: str | None,
-) -> CodexReplayAuthorization:
-    """Authorize one 0.149 function output using its prior call reference."""
-
-    if top_level_tool_taxonomy is None or not top_level_tool_taxonomy:
-        raise _openai_error_from_codex_replay_error(
-            CodexReplayReferenceError(
-                "One or more Codex replay references are unavailable.",
-                error_code="responses_codex_replay_reference_not_found",
-            )
-        )
-    session_iterator = _db_session_iterator(request)
-    try:
-        session = await anext(session_iterator)
-    except StopAsyncIteration as exc:
-        raise _database_session_unavailable_error() from exc
-    try:
-        service = CodexReplayService(
-            repository=CodexReplayReferencesRepository(session),
-            settings=settings,
-        )
-        try:
-            return await service.verify_owned_function_output_calls(
-                call_ids=call_ids,
-                gateway_key_id=authenticated_key.gateway_key_id,
-                tool_taxonomy=top_level_tool_taxonomy,
-                session_scope=session_scope,
             )
         except CodexReplayReferenceError as exc:
             raise _openai_error_from_codex_replay_error(exc) from exc
@@ -2479,7 +2362,6 @@ async def _persist_codex_replay_references(
     route: RouteResolutionResult,
     settings: Settings,
     request: Request | None,
-    session_scope: str | None = None,
 ) -> int:
     if not candidates:
         return 0
@@ -2505,7 +2387,6 @@ async def _persist_codex_replay_references(
                 provider=route.provider,
                 route_id=route.route_id,
                 upstream_model=route.resolved_model,
-                session_scope=session_scope,
             )
             await session.commit()
             return count
@@ -2817,7 +2698,6 @@ def _streaming_responses_response(
     external_web_search_admission=None,
     external_tool_pricing=None,
     server_context: Mapping[str, object] | None = None,
-    replay_session_scope: str | None = None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -3059,7 +2939,6 @@ def _streaming_responses_response(
                             route=route,
                             settings=settings,
                             request=request,
-                            session_scope=replay_session_scope,
                         )
                     except CodexReplayReferenceError as exc:
                         provider_status = "incomplete"

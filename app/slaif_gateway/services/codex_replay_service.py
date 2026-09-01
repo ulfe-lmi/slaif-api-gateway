@@ -61,14 +61,6 @@ class _CodexReplayRepository(Protocol):
         now: datetime,
     ) -> list[CodexReplayReference]: ...
 
-    async def list_active_by_call_digests(
-        self,
-        *,
-        gateway_key_id: uuid.UUID,
-        call_digests: Sequence[tuple[str, str]],
-        now: datetime,
-    ) -> list[CodexReplayReference]: ...
-
     async def upsert_many(self, records: Sequence[CodexReplayReferenceInsert]) -> None: ...
 
 
@@ -118,13 +110,10 @@ class CodexReplayService:
         *,
         candidates: Sequence[CodexReplayCandidate],
         gateway_key_id: uuid.UUID,
-        session_scope: str | None = None,
         now: datetime | None = None,
     ) -> CodexReplayAuthorization:
         """Prove same-key active ownership before route or quota side effects."""
 
-        if session_scope is not None and not _valid_session_scope(session_scope):
-            raise _ownership_error()
         checked = _validated_candidates(candidates)
         if not checked:
             return CodexReplayAuthorization(references=())
@@ -178,12 +167,7 @@ class CodexReplayService:
             if len(matches) != 1:
                 raise _ownership_error()
             row, secret = matches[0]
-            _validate_row_matches_candidate(
-                row,
-                candidate,
-                secret=secret,
-                session_scope=session_scope,
-            )
+            _validate_row_matches_candidate(row, candidate, secret=secret)
             authorized.append(
                 AuthorizedCodexReplayReference(
                     item_kind=row.item_kind,
@@ -196,131 +180,6 @@ class CodexReplayService:
                 )
             )
         return CodexReplayAuthorization(references=tuple(authorized))
-
-    async def verify_owned_function_output_calls(
-        self,
-        *,
-        call_ids: Sequence[str],
-        gateway_key_id: uuid.UUID,
-        tool_taxonomy: frozenset[tuple[str, str, str]],
-        session_scope: str,
-        now: datetime | None = None,
-    ) -> CodexReplayAuthorization:
-        """Authorize one standalone function output against its stored call HMAC."""
-
-        checked_ids = tuple(call_ids)
-        if (
-            len(checked_ids) != 1
-            or not isinstance(tool_taxonomy, frozenset)
-            or not _valid_session_scope(session_scope)
-        ):
-            raise _ownership_error()
-        if any(_IDENTIFIER_RE.fullmatch(call_id) is None for call_id in checked_ids):
-            raise _ownership_error()
-        if not tool_taxonomy or any(
-            not isinstance(declaration, tuple)
-            or len(declaration) != 3
-            or not isinstance(declaration[0], str)
-            or not isinstance(declaration[1], str)
-            or declaration[0] != "functions"
-            or declaration[2] not in {"function", "custom"}
-            or not _bounded_safe_tool_name(declaration[0])
-            or not _bounded_safe_tool_name(declaration[1])
-            for declaration in tool_taxonomy
-        ):
-            raise _ownership_error()
-        if not any(declaration[2] == "function" for declaration in tool_taxonomy):
-            raise _ownership_error()
-        checked_now = now or datetime.now(UTC)
-        try:
-            versions = await self._repository.list_active_hmac_versions_for_key(
-                gateway_key_id=gateway_key_id,
-                item_kinds=frozenset({"function_call"}),
-                now=checked_now,
-            )
-        except Exception:
-            raise _ownership_error() from None
-        if not versions or len(versions) > _MAX_ACTIVE_HMAC_VERSIONS:
-            raise _ownership_error()
-        secrets: dict[int, str] = {}
-        for version in versions:
-            secret = self._settings.get_hmac_secret(str(version))
-            if not secret:
-                raise CodexReplayReferenceError(
-                    "Codex replay reference key material is unavailable.",
-                    error_code="responses_codex_replay_hmac_unavailable",
-                )
-            secrets[version] = secret
-        call_id = checked_ids[0]
-        digest_candidates = [
-            (
-                "function_call",
-                _call_digest_for_item_kind(
-                    "function_call",
-                    call_id,
-                    secret=secret,
-                    session_scope=session_scope,
-                ),
-            )
-            for secret in secrets.values()
-        ]
-        try:
-            rows = await self._repository.list_active_by_call_digests(
-                gateway_key_id=gateway_key_id,
-                call_digests=[
-                    (kind, digest)
-                    for kind, digest in digest_candidates
-                    if digest is not None
-                ],
-                now=checked_now,
-            )
-        except Exception:
-            raise _ownership_error() from None
-        expected_by_version = {
-            version: _call_digest_for_item_kind(
-                "function_call",
-                call_id,
-                secret=secret,
-                session_scope=session_scope,
-            )
-            for version, secret in secrets.items()
-        }
-        matches = []
-        for row in rows:
-            expected_digest = expected_by_version.get(row.hmac_key_version)
-            if (
-                row.item_kind == "function_call"
-                and expected_digest is not None
-                and isinstance(row.call_id_hmac, str)
-                and hmac.compare_digest(row.call_id_hmac, expected_digest)
-            ):
-                matches.append(row)
-        if len(matches) != 1:
-            raise _ownership_error()
-        row = matches[0]
-        if not isinstance(row.item_id_hmac, str) or not row.item_id_hmac:
-            raise _ownership_error()
-        matching_declarations = [
-            declaration
-            for declaration in tool_taxonomy
-            if declaration
-            == (row.tool_namespace, row.tool_name, "function")
-        ]
-        if len(matching_declarations) != 1:
-            raise _ownership_error()
-        return CodexReplayAuthorization(
-            references=(
-                AuthorizedCodexReplayReference(
-                    item_kind=row.item_kind,
-                    provider=row.provider,
-                    route_id=row.route_id,
-                    upstream_model=row.upstream_model,
-                    tool_namespace=row.tool_namespace,
-                    tool_name=row.tool_name,
-                    expires_at=row.expires_at,
-                ),
-            )
-        )
 
     @staticmethod
     def verify_route_compatibility(
@@ -364,7 +223,6 @@ class CodexReplayService:
         provider: str,
         route_id: uuid.UUID,
         upstream_model: str,
-        session_scope: str | None = None,
         now: datetime | None = None,
     ) -> int:
         """HMAC and upsert validated completion candidates after accounting."""
@@ -372,8 +230,6 @@ class CodexReplayService:
         checked = _validated_candidates(candidates)
         if not checked:
             return 0
-        if session_scope is not None and not _valid_session_scope(session_scope):
-            raise _persistence_error()
         if not source_request_id.strip() or not provider.strip() or not upstream_model.strip():
             raise _persistence_error()
         try:
@@ -413,11 +269,7 @@ class CodexReplayService:
                 upstream_model=upstream_model,
                 item_kind=candidate.item_kind,
                 item_id_hmac=_item_digest(candidate, secret=secret),
-                call_id_hmac=_call_digest(
-                    candidate,
-                    secret=secret,
-                    session_scope=session_scope,
-                ),
+                call_id_hmac=_call_digest(candidate, secret=secret),
                 hmac_key_version=version,
                 tool_namespace=candidate.tool_namespace,
                 tool_name=candidate.tool_name,
@@ -445,7 +297,6 @@ class CodexReplayService:
                 candidate,
                 record=record,
                 secret=secret,
-                session_scope=session_scope,
             )
         return len(records)
 
@@ -503,10 +354,6 @@ def _bounded_safe_tool_name(value: str) -> bool:
     return bool(value.strip()) and len(value) <= 256
 
 
-def _valid_session_scope(value: object) -> bool:
-    return isinstance(value, str) and 0 < len(value.encode("utf-8")) <= 512
-
-
 def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
     if candidate.item_kind == "compaction":
         encrypted_content = getattr(candidate, "encrypted_content", None)
@@ -523,36 +370,11 @@ def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
     )
 
 
-def _call_digest(
-    candidate: CodexReplayCandidate,
-    *,
-    secret: str,
-    session_scope: str | None = None,
-) -> str | None:
+def _call_digest(candidate: CodexReplayCandidate, *, secret: str) -> str | None:
     if candidate.call_id is None:
         return None
-    return _call_digest_for_item_kind(
-        candidate.item_kind,
-        candidate.call_id,
-        secret=secret,
-        session_scope=session_scope,
-    )
-
-
-def _call_digest_for_item_kind(
-    item_kind: str,
-    call_id: str,
-    *,
-    secret: str,
-    session_scope: str | None = None,
-) -> str:
-    token = f"slaif-codex-replay:v1:call:{item_kind}:{call_id}"
-    if item_kind == "function_call" and session_scope is not None:
-        token += (
-            f":session:{len(session_scope.encode('utf-8'))}:{session_scope}"
-        )
     return hmac_sha256_token(
-        token=token,
+        token=f"slaif-codex-replay:v1:call:{candidate.item_kind}:{candidate.call_id}",
         secret=secret,
     )
 
@@ -562,13 +384,8 @@ def _validate_row_matches_candidate(
     candidate: CodexReplayCandidate,
     *,
     secret: str,
-    session_scope: str | None = None,
 ) -> None:
-    expected_call_digest = _call_digest(
-        candidate,
-        secret=secret,
-        session_scope=session_scope,
-    )
+    expected_call_digest = _call_digest(candidate, secret=secret)
     call_matches = (
         row.call_id_hmac is None
         if expected_call_digest is None
@@ -589,14 +406,8 @@ def _validate_persisted_row(
     *,
     record: CodexReplayReferenceInsert,
     secret: str,
-    session_scope: str | None = None,
 ) -> None:
-    _validate_row_matches_candidate(
-        row,
-        candidate,
-        secret=secret,
-        session_scope=session_scope,
-    )
+    _validate_row_matches_candidate(row, candidate, secret=secret)
     if (
         row.gateway_key_id != record.gateway_key_id
         or row.usage_ledger_id != record.usage_ledger_id
