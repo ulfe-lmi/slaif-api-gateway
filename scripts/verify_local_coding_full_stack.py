@@ -1344,6 +1344,21 @@ def _safe_preclassification_summary(
             gateway.get("response_statuses"),
             _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
         ),
+        "local_error_code_classes": _safe_summary_error_classes(
+            local.get("error_code_classes"),
+            local.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_CODE_CLASSES,
+        ),
+        "local_error_param_classes": _safe_summary_error_classes(
+            local.get("error_param_classes"),
+            local.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES,
+        ),
+        "local_error_param_field_classes": _safe_summary_error_classes(
+            local.get("error_param_field_classes"),
+            local.get("response_statuses"),
+            _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
+        ),
         "second_request_input_item_type_sequence": [
             item
             if isinstance(item, str) and item in _SUMMARY_INPUT_TYPES
@@ -1391,6 +1406,8 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "schema", "stage", "codex_failure_category", "gateway", "local", "qwen",
         "request_profile_classes", "gateway_error_code_classes",
         "gateway_error_param_classes", "gateway_error_param_field_classes",
+        "local_error_code_classes", "local_error_param_classes",
+        "local_error_param_field_classes",
         "second_request_input_item_type_sequence",
         "second_request_top_level_tool_type_counts", "second_function_call_fields",
         "second_function_call_output_fields", "qualification_rejection", "accounting",
@@ -1414,18 +1431,37 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         )
     ):
         raise VerificationError("qualification_summary_invalid")
-    for field, allowed in (
-        ("gateway_error_code_classes", _SUMMARY_GATEWAY_ERROR_CODE_CLASSES),
-        ("gateway_error_param_classes", _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES),
-        ("gateway_error_param_field_classes", _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS),
+    for field, allowed, boundary in (
+        (
+            "gateway_error_code_classes",
+            _SUMMARY_GATEWAY_ERROR_CODE_CLASSES,
+            "gateway",
+        ),
+        (
+            "gateway_error_param_classes",
+            _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES,
+            "gateway",
+        ),
+        (
+            "gateway_error_param_field_classes",
+            _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
+            "gateway",
+        ),
+        ("local_error_code_classes", _SUMMARY_GATEWAY_ERROR_CODE_CLASSES, "local"),
+        ("local_error_param_classes", _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES, "local"),
+        (
+            "local_error_param_field_classes",
+            _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
+            "local",
+        ),
     ):
         classes = value[field]
         if (
             not isinstance(classes, list)
             or len(classes) > 2
             or (
-                value["gateway"]["response_count"] != "other"
-                and value["gateway"]["response_count"] != str(len(classes))
+                value[boundary]["response_count"] != "other"
+                and value[boundary]["response_count"] != str(len(classes))
             )
             or any(not isinstance(item, str) or item not in allowed for item in classes)
         ):
