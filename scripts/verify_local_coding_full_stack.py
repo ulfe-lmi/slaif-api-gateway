@@ -1031,6 +1031,7 @@ _SUMMARY_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "replay_reference_not_found",
         "replay_route_mismatch",
         "route_capability_not_supported",
+        "request_policy_invalid",
         "other",
     }
 )
@@ -1291,6 +1292,10 @@ def _safe_preclassification_summary(
     second_projection = (
         second_projection if isinstance(second_projection, dict) else {}
     )
+    first_projection = projections[0] if projections else {}
+    first_projection = (
+        first_projection if isinstance(first_projection, dict) else {}
+    )
     return {
         "schema": _SUMMARY_SCHEMA,
         "stage": safe_stage,
@@ -1329,6 +1334,17 @@ def _safe_preclassification_summary(
             "truncated": qwen.get("upstream_truncated") is True,
         },
         "request_profile_classes": request_profile_classes,
+        "first_request_input_item_type_sequence": [
+            item
+            if isinstance(item, str) and item in _SUMMARY_INPUT_TYPES
+            else "other"
+            for item in first_projection.get("input_item_type_sequence", [])[:128]
+        ]
+        if isinstance(first_projection.get("input_item_type_sequence"), list)
+        else [],
+        "first_request_top_level_tool_type_counts": _safe_summary_tool_counts(
+            first_projection.get("top_level_tool_type_counts")
+        ),
         "gateway_error_code_classes": _safe_summary_error_classes(
             gateway.get("error_code_classes"),
             gateway.get("response_statuses"),
@@ -1411,6 +1427,8 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "second_request_input_item_type_sequence",
         "second_request_top_level_tool_type_counts", "second_function_call_fields",
         "second_function_call_output_fields", "qualification_rejection", "accounting",
+        "first_request_input_item_type_sequence",
+        "first_request_top_level_tool_type_counts",
     }:
         raise VerificationError("qualification_summary_invalid")
     if value["schema"] != _SUMMARY_SCHEMA:
@@ -1471,6 +1489,30 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         not isinstance(input_types, list)
         or len(input_types) > 128
         or any(not isinstance(item, str) or item not in _SUMMARY_INPUT_TYPES for item in input_types)
+    ):
+        raise VerificationError("qualification_summary_invalid")
+    for field in (
+        "first_request_input_item_type_sequence",
+    ):
+        first_input_types = value[field]
+        if (
+            not isinstance(first_input_types, list)
+            or len(first_input_types) > 128
+            or any(
+                not isinstance(item, str) or item not in _SUMMARY_INPUT_TYPES
+                for item in first_input_types
+            )
+        ):
+            raise VerificationError("qualification_summary_invalid")
+    first_tool_counts = value["first_request_top_level_tool_type_counts"]
+    if (
+        not isinstance(first_tool_counts, dict)
+        or any(
+            not isinstance(tool_type, str)
+            or tool_type not in _SUMMARY_TOOL_TYPES
+            or not (type(count) is int and 0 <= count <= 64 or count == "other")
+            for tool_type, count in first_tool_counts.items()
+        )
     ):
         raise VerificationError("qualification_summary_invalid")
     tool_counts = value["second_request_top_level_tool_type_counts"]
@@ -1792,6 +1834,18 @@ def _safe_gateway_error_code_class(value: object) -> str:
         "responses_codex_compaction_capability_not_supported",
     }:
         return "route_capability_not_supported"
+    if value in {
+        "responses_tool_policy_invalid",
+        "responses_disabled_tool_choice",
+        "responses_codex_envelope_invalid",
+        "responses_codex_client_tools_invalid",
+        "responses_function_call_output_invalid",
+        "responses_function_call_output_too_large",
+        "responses_custom_tool_call_output_invalid",
+        "responses_custom_tool_call_output_too_large",
+        "responses_input_invalid",
+    }:
+        return "request_policy_invalid"
     return "other"
 
 
@@ -1909,6 +1963,7 @@ _SAFE_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "replay_reference_not_found",
         "replay_route_mismatch",
         "route_capability_not_supported",
+        "request_policy_invalid",
         "other",
     }
 )
