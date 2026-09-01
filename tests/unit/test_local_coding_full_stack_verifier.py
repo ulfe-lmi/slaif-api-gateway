@@ -1136,6 +1136,29 @@ def test_composed_tool_roundtrip_requires_function_then_message_gateway_lifecycl
             {
                 "gateway_requests": 2,
                 "gateway_statuses": [200, 400],
+                "local_requests": 1,
+                "local_statuses": [200],
+                "qwen_status": {"inference_statuses": [200]},
+                "gateway_error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
+                "gateway_error_param_classes": ["none", "input"],
+                "request_projections": [
+                    {},
+                    {
+                        "top_level_tool_type_counts": {"custom": 1, "function": 1},
+                        "input_item_type_sequence": [
+                            "function_call",
+                            "function_call_output",
+                        ],
+                        "stream_class": "true",
+                    },
+                ],
+            },
+            "composed_tool_roundtrip_second_turn_gateway_codex_tool_roundtrip_invalid_input_top_level_function_pair_without_additional_tools",
+        ),
+        (
+            {
+                "gateway_requests": 2,
+                "gateway_statuses": [200, 400],
                 "local_requests": 2,
                 "local_statuses": [200, 200],
                 "gateway_error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
@@ -1216,6 +1239,15 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
     assert projection == {
         "top_level_tool_type_counts": {"custom": 1, "function": 1},
         "input_item_type_sequence": ["function_call", "function_call_output"],
+        "function_call_fields": [
+            {"name": "id", "type": "string"},
+            {"name": "type", "type": "string"},
+        ],
+        "function_call_output_fields": [
+            {"name": "call_id", "type": "string"},
+            {"name": "output", "type": "string"},
+            {"name": "type", "type": "string"},
+        ],
         "stream_class": "true",
     }
     assert (
@@ -1234,13 +1266,27 @@ def test_preclassification_summary_records_bounded_request_ordinals() -> None:
     continuation = {
         "top_level_tool_type_counts": {"custom": 1, "function": 1},
         "input_item_type_sequence": ["function_call", "function_call_output"],
+        "function_call_fields": [
+            {"name": "id", "type": "string"},
+            {"name": "type", "type": "string"},
+        ],
+        "function_call_output_fields": [
+            {"name": "call_id", "type": "string"},
+            {"name": "output", "type": "string"},
+            {"name": "type", "type": "string"},
+        ],
         "stream_class": "true",
     }
     summary = verifier._safe_preclassification_summary(
         stage="tool_roundtrip_codex_failure_projection",
         codex_failure_category="turn_failed",
         gateway_requests=2,
-        gateway_status={"response_statuses": [200, 400]},
+        gateway_status={
+            "response_statuses": [200, 400],
+            "error_code_classes": ["none", "codex_tool_roundtrip_invalid"],
+            "error_param_classes": ["none", "input"],
+            "error_param_field_classes": ["none", "type"],
+        },
         local_requests=1,
         local_status={"response_statuses": [200]},
         qwen_status={"inference_calls": 1, "inference_statuses": [200]},
@@ -1253,7 +1299,38 @@ def test_preclassification_summary_records_bounded_request_ordinals() -> None:
         "other",
         "top_level_function_pair_without_additional_tools",
     ]
+    assert summary["gateway_error_code_classes"] == [
+        "none",
+        "codex_tool_roundtrip_invalid",
+    ]
+    assert summary["gateway_error_param_classes"] == ["none", "input"]
+    assert summary["gateway_error_param_field_classes"] == ["none", "type"]
+    assert summary["second_request_input_item_type_sequence"] == [
+        "function_call",
+        "function_call_output",
+    ]
+    assert summary["second_request_top_level_tool_type_counts"] == {
+        "custom": 1,
+        "function": 1,
+    }
+    assert summary["second_function_call_fields"] == [
+        {"name": "id", "type": "string"},
+        {"name": "type", "type": "string"},
+    ]
+    assert summary["second_function_call_output_fields"] == [
+        {"name": "call_id", "type": "string"},
+        {"name": "output", "type": "string"},
+        {"name": "type", "type": "string"},
+    ]
     assert verifier._sanitize_preclassification_summary(summary) == summary
+
+
+def test_gateway_error_parameter_projection_is_bounded_to_root_and_leaf() -> None:
+    assert verifier._safe_gateway_error_param_class("input[1].type") == "input"
+    assert verifier._safe_gateway_error_param_field_class("input[1].type") == "type"
+    assert verifier._safe_gateway_error_param_field_class("input") == "none"
+    assert verifier._safe_gateway_error_param_class("private-value") == "other"
+    assert verifier._safe_gateway_error_param_field_class("private-value") == "other"
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:

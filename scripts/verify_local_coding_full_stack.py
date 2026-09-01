@@ -1023,6 +1023,71 @@ _SUMMARY_FAILURE_CATEGORIES = frozenset(
 )
 _SUMMARY_STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "other"})
 _SUMMARY_CONTENT_TYPES = frozenset({"sse", "json", "other", "none"})
+_SUMMARY_GATEWAY_ERROR_CODE_CLASSES = frozenset(
+    {
+        "none",
+        "input_tool_item_not_supported",
+        "codex_tool_roundtrip_invalid",
+        "codex_streaming_tool_events_not_allowed",
+        "replay_reference_not_found",
+        "other",
+    }
+)
+_SUMMARY_GATEWAY_ERROR_PARAM_CLASSES = frozenset(
+    {"none", "input", "stream", "tools", "tool_choice", "other"}
+)
+_SUMMARY_GATEWAY_ERROR_PARAM_FIELDS = frozenset(
+    {
+        "none",
+        "type",
+        "id",
+        "status",
+        "name",
+        "namespace",
+        "arguments",
+        "call_id",
+        "output",
+        "input",
+        "tools",
+        "tool_choice",
+        "stream",
+        "other",
+    }
+)
+_SUMMARY_TOOL_TYPES = frozenset(
+    {"function", "custom", "namespace", "tool_search", "web_search", "other"}
+)
+_SUMMARY_INPUT_TYPES = frozenset(
+    {
+        "message",
+        "reasoning",
+        "additional_tools",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "other",
+    }
+)
+_SUMMARY_FIELD_TYPES = frozenset(
+    {"null", "boolean", "integer", "number", "string", "object", "array", "other"}
+)
+_SUMMARY_FUNCTION_FIELDS = frozenset(
+    {
+        "type",
+        "id",
+        "status",
+        "name",
+        "namespace",
+        "arguments",
+        "call_id",
+        "output",
+        "caller",
+        "output_index",
+        "sequence_number",
+        "other",
+    }
+)
 _SUMMARY_BOOL_KEYS = frozenset(
     {
         "disconnect",
@@ -1077,6 +1142,50 @@ def _safe_summary_content_classes(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item if item in _SUMMARY_CONTENT_TYPES else "other" for item in value[:8]]
+
+
+def _safe_summary_classes(value: object, allowed: frozenset[str]) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item if isinstance(item, str) and item in allowed else "other" for item in value[:2]]
+
+
+def _safe_summary_tool_counts(value: object) -> dict[str, int | str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int | str] = {}
+    for tool_type, count in value.items():
+        safe_type = (
+            tool_type
+            if isinstance(tool_type, str) and tool_type in _SUMMARY_TOOL_TYPES
+            else "other"
+        )
+        safe_count = count if type(count) is int and 0 <= count <= 64 else "other"
+        result[safe_type] = safe_count
+    return result
+
+
+def _safe_summary_field_types(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value[:32]:
+        if not isinstance(item, dict):
+            result.append({"name": "other", "type": "other"})
+            continue
+        name = item.get("name")
+        field_type = item.get("type")
+        result.append(
+            {
+                "name": name
+                if isinstance(name, str) and name in _SUMMARY_FUNCTION_FIELDS
+                else "other",
+                "type": field_type
+                if isinstance(field_type, str) and field_type in _SUMMARY_FIELD_TYPES
+                else "other",
+            }
+        )
+    return sorted(result, key=lambda item: (item["name"], item["type"]))
 
 
 def _safe_summary_bool(value: object) -> bool:
@@ -1161,6 +1270,10 @@ def _safe_preclassification_summary(
         accounting_section[name] == "0"
         for name in ("reservation_pending", "ledger_pending")
     )
+    second_projection = projections[1] if len(projections) > 1 else {}
+    second_projection = (
+        second_projection if isinstance(second_projection, dict) else {}
+    )
     return {
         "schema": _SUMMARY_SCHEMA,
         "stage": safe_stage,
@@ -1199,6 +1312,32 @@ def _safe_preclassification_summary(
             "truncated": qwen.get("upstream_truncated") is True,
         },
         "request_profile_classes": request_profile_classes,
+        "gateway_error_code_classes": _safe_summary_classes(
+            gateway.get("error_code_classes"), _SUMMARY_GATEWAY_ERROR_CODE_CLASSES
+        ),
+        "gateway_error_param_classes": _safe_summary_classes(
+            gateway.get("error_param_classes"), _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES
+        ),
+        "gateway_error_param_field_classes": _safe_summary_classes(
+            gateway.get("error_param_field_classes"), _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS
+        ),
+        "second_request_input_item_type_sequence": [
+            item
+            if isinstance(item, str) and item in _SUMMARY_INPUT_TYPES
+            else "other"
+            for item in second_projection.get("input_item_type_sequence", [])[:128]
+        ]
+        if isinstance(second_projection.get("input_item_type_sequence"), list)
+        else [],
+        "second_request_top_level_tool_type_counts": _safe_summary_tool_counts(
+            second_projection.get("top_level_tool_type_counts")
+        ),
+        "second_function_call_fields": _safe_summary_field_types(
+            second_projection.get("function_call_fields")
+        ),
+        "second_function_call_output_fields": _safe_summary_field_types(
+            second_projection.get("function_call_output_fields")
+        ),
         "qualification_rejection": {
             "present": isinstance(qualification_rejection, dict),
             "artifact_equal": artifact_equal is True,
@@ -1227,7 +1366,11 @@ def _validate_task_summary_root(root: Path) -> None:
 def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != {
         "schema", "stage", "codex_failure_category", "gateway", "local", "qwen",
-        "request_profile_classes", "qualification_rejection", "accounting",
+        "request_profile_classes", "gateway_error_code_classes",
+        "gateway_error_param_classes", "gateway_error_param_field_classes",
+        "second_request_input_item_type_sequence",
+        "second_request_top_level_tool_type_counts", "second_function_call_fields",
+        "second_function_call_output_fields", "qualification_rejection", "accounting",
     }:
         raise VerificationError("qualification_summary_invalid")
     if value["schema"] != _SUMMARY_SCHEMA:
@@ -1248,6 +1391,51 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         )
     ):
         raise VerificationError("qualification_summary_invalid")
+    for field, allowed in (
+        ("gateway_error_code_classes", _SUMMARY_GATEWAY_ERROR_CODE_CLASSES),
+        ("gateway_error_param_classes", _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES),
+        ("gateway_error_param_field_classes", _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS),
+    ):
+        classes = value[field]
+        if (
+            not isinstance(classes, list)
+            or len(classes) > 2
+            or any(not isinstance(item, str) or item not in allowed for item in classes)
+        ):
+            raise VerificationError("qualification_summary_invalid")
+    input_types = value["second_request_input_item_type_sequence"]
+    if (
+        not isinstance(input_types, list)
+        or len(input_types) > 128
+        or any(not isinstance(item, str) or item not in _SUMMARY_INPUT_TYPES for item in input_types)
+    ):
+        raise VerificationError("qualification_summary_invalid")
+    tool_counts = value["second_request_top_level_tool_type_counts"]
+    if (
+        not isinstance(tool_counts, dict)
+        or any(
+            not isinstance(tool_type, str)
+            or tool_type not in _SUMMARY_TOOL_TYPES
+            or not (type(count) is int and 0 <= count <= 64 or count == "other")
+            for tool_type, count in tool_counts.items()
+        )
+    ):
+        raise VerificationError("qualification_summary_invalid")
+    for field in ("second_function_call_fields", "second_function_call_output_fields"):
+        fields = value[field]
+        if (
+            not isinstance(fields, list)
+            or len(fields) > 32
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"name", "type"}
+                or item["name"] not in _SUMMARY_FUNCTION_FIELDS
+                or item["type"] not in _SUMMARY_FIELD_TYPES
+                for item in fields
+            )
+            or fields != sorted(fields, key=lambda item: (item["name"], item["type"]))
+        ):
+            raise VerificationError("qualification_summary_invalid")
     for boundary in ("gateway", "local"):
         section = value[boundary]
         if not isinstance(section, dict) or set(section) - {
@@ -1384,6 +1572,57 @@ def _qualification_turn_count_error(counts: tuple[object, object, object]) -> Ve
     )
 
 
+_SAFE_FUNCTION_PROJECTION_FIELDS = frozenset(
+    {
+        "type",
+        "id",
+        "status",
+        "name",
+        "namespace",
+        "arguments",
+        "call_id",
+        "output",
+        "caller",
+        "output_index",
+        "sequence_number",
+    }
+)
+
+
+def _safe_json_type_class(value: object) -> str:
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "boolean"
+    if type(value) is int:
+        return "integer"
+    if type(value) is float:
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return "other"
+
+
+def _safe_function_projection_fields(item: object) -> list[dict[str, str]]:
+    if not isinstance(item, dict):
+        return []
+    fields = [
+        {
+            "name": (
+                name if name in _SAFE_FUNCTION_PROJECTION_FIELDS else "other"
+            ),
+            "type": _safe_json_type_class(field_value),
+        }
+        for name, field_value in item.items()
+        if isinstance(name, str)
+    ]
+    return sorted(fields, key=lambda field: (field["name"], field["type"]))[:32]
+
+
 @dataclass(frozen=True, slots=True)
 class CapturedRequest:
     path: str
@@ -1400,12 +1639,16 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
             "top_level_tool_type_counts": {},
             "input_item_type_sequence": [],
             "stream_class": "invalid",
+            "function_call_fields": [],
+            "function_call_output_fields": [],
         }
     if not isinstance(payload, dict):
         return {
             "top_level_tool_type_counts": {},
             "input_item_type_sequence": [],
             "stream_class": "invalid",
+            "function_call_fields": [],
+            "function_call_output_fields": [],
         }
     tools = payload.get("tools")
     counts: dict[str, int] = {}
@@ -1421,8 +1664,10 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
             counts[safe_type] = min(counts.get(safe_type, 0) + 1, 64)
     input_items = payload.get("input")
     item_types: list[str] = []
+    safe_items: list[object] = []
     if isinstance(input_items, list):
         for item in input_items[:128]:
+            safe_items.append(item)
             item_type = item.get("type") if isinstance(item, dict) else None
             item_types.append(
                 item_type
@@ -1440,9 +1685,25 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
                 else "other"
             )
     stream = payload.get("stream")
+    pair_indices = [
+        index
+        for index in range(len(item_types) - 1)
+        if item_types[index : index + 2]
+        == ["function_call", "function_call_output"]
+    ]
+    function_call_fields: list[dict[str, str]] = []
+    function_call_output_fields: list[dict[str, str]] = []
+    if len(pair_indices) == 1:
+        pair_index = pair_indices[0]
+        function_call_fields = _safe_function_projection_fields(safe_items[pair_index])
+        function_call_output_fields = _safe_function_projection_fields(
+            safe_items[pair_index + 1]
+        )
     return {
         "top_level_tool_type_counts": dict(sorted(counts.items())),
         "input_item_type_sequence": item_types,
+        "function_call_fields": function_call_fields,
+        "function_call_output_fields": function_call_output_fields,
         "stream_class": (
             "true" if stream is True else "false" if stream is False else "other"
         ),
@@ -1473,6 +1734,20 @@ def _safe_gateway_error_param_class(value: object) -> str:
         if value == prefix or value.startswith(f"{prefix}[") or value.startswith(f"{prefix}."):
             return safe_class
     return "other"
+
+
+def _safe_gateway_error_param_field_class(value: object) -> str:
+    if not isinstance(value, str):
+        return "other"
+    if value in {"input", "stream", "tools", "tool_choice"}:
+        return "none"
+    leaf = value.rsplit(".", 1)[-1]
+    return (
+        leaf
+        if leaf in _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS
+        and leaf not in {"none", "other", "input", "tools", "tool_choice", "stream"}
+        else "other"
+    )
 
 
 def _safe_roundtrip_projection_class(value: object) -> str:
@@ -2815,6 +3090,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.sse_boundaries: list[str] = []
         self.error_code_classes: list[str] = []
         self.error_param_classes: list[str] = []
+        self.error_param_field_classes: list[str] = []
         self.forwarded = 0
         self.rejected = 0
         self.downstream_closed_early = False
@@ -2855,14 +3131,17 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         error = error if isinstance(error, dict) else {}
         code_class = _safe_gateway_error_code_class(error.get("code"))
         param_class = _safe_gateway_error_param_class(error.get("param"))
+        param_field_class = _safe_gateway_error_param_field_class(error.get("param"))
         with self._capture_lock:
             self.error_code_classes.append(code_class)
             self.error_param_classes.append(param_class)
+            self.error_param_field_classes.append(param_field_class)
 
     def remember_no_error(self) -> None:
         with self._capture_lock:
             self.error_code_classes.append("none")
             self.error_param_classes.append("none")
+            self.error_param_field_classes.append("none")
 
     def mark_downstream_closed_early(self) -> None:
         with self._capture_lock:
@@ -2885,6 +3164,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
                 "sse_boundaries": list(self.sse_boundaries),
                 "error_code_classes": list(self.error_code_classes),
                 "error_param_classes": list(self.error_param_classes),
+                "error_param_field_classes": list(self.error_param_field_classes),
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -5866,9 +6146,19 @@ def _run_composed_codex_tool_roundtrip(
                 len(local_requests),
                 qwen_status.get("inference_calls"),
             )
-            if (
+            turn_count_mismatch = (
                 any(count not in (1, 2) for count in turn_counts)
                 or len(set(turn_counts)) != 1
+            )
+            # A recognized second Gateway rejection is the bounded diagnostic
+            # evidence for the expected g2/l1/q1 topology.  Preserve its
+            # status/error/profile summary instead of replacing it with the
+            # generic count mismatch that motivated this continuation.
+            if turn_count_mismatch and not (
+                turn_counts == (2, 1, 1)
+                and failure_code.startswith(
+                    "composed_tool_roundtrip_second_turn_gateway_"
+                )
             ):
                 raise _qualification_turn_count_error(turn_counts)
             function_call_output_count = 0
