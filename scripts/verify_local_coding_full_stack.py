@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-z verifier for exact second-request error and closure.
+"""Bounded 155-aa verifier for exact input-item error branch and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "b499323eacbd450f566df0a6ad768a9437dff025"
-GATEWAY_IMPLEMENTATION_HEAD = "70a5224ff9e7dd07bf2d957baf4cb6717a39e896"
-GATEWAY_ACTIVATION_HEAD = "dfa7454f067a545e6fd6d0a2157250168e05497f"
-GATEWAY_REPORT_PATH = "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
+GATEWAY_REPORT_HEAD = "c8dff50ea60d4e4f515d970751508e9630455eda"
+GATEWAY_IMPLEMENTATION_HEAD = "65d20cf5d9ed58db95847f8f60f6a122dc3ec77f"
+GATEWAY_ACTIVATION_HEAD = "d5730b1d981562585a0951e4b490444eb7b0f9f0"
+GATEWAY_REPORT_PATH = "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
-TASK_DB = "slaif_gateway_oap_155z_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155aa_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -253,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-z-exact-second-request-error-and-decisive-closure.md",
+        "oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-z\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-aa\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1206,6 +1206,85 @@ def _safe_summary_field_types(value: object) -> list[dict[str, str]]:
     return sorted(result, key=lambda item: (item["name"], item["type"]))
 
 
+def _safe_summary_input_item_error_projection(value: object) -> dict[str, object]:
+    """Rebuild one input-error observation from a fixed, value-free schema."""
+    default = {
+        "input_item_error_shape_class": "other",
+        "item_json_type_class": "other",
+        "item_type_class": "other",
+        "rejected_item_fields": [],
+        "rejected_field_name_class": "other",
+        "index_syntactically_bounded": False,
+        "index_in_range": False,
+        "selected_item_object": False,
+        "rejected_field_present": False,
+    }
+    if not isinstance(value, dict):
+        return default
+    shape = value.get("input_item_error_shape_class")
+    default["input_item_error_shape_class"] = (
+        shape if isinstance(shape, str) and shape in _SAFE_INPUT_ERROR_SHAPES else "other"
+    )
+    json_type = value.get("item_json_type_class")
+    default["item_json_type_class"] = (
+        json_type
+        if isinstance(json_type, str) and json_type in _SUMMARY_FIELD_TYPES
+        else "other"
+    )
+    item_type = value.get("item_type_class")
+    default["item_type_class"] = (
+        item_type
+        if isinstance(item_type, str) and item_type in _SAFE_INPUT_ITEM_TYPES
+        else "other"
+    )
+    field_name = value.get("rejected_field_name_class")
+    default["rejected_field_name_class"] = (
+        field_name
+        if isinstance(field_name, str)
+        and (field_name in _SAFE_INPUT_ITEM_FIELDS or field_name in {"none", "other"})
+        else "other"
+    )
+    fields = value.get("rejected_item_fields")
+    safe_fields: set[tuple[str, str]] = set()
+    if isinstance(fields, list):
+        for item in fields[:32]:
+            if not isinstance(item, dict):
+                safe_fields.add(("other", "other"))
+                continue
+            name = item.get("name")
+            field_type = item.get("type")
+            safe_fields.add(
+                (
+                    name if isinstance(name, str) and name in _SAFE_INPUT_ITEM_FIELDS else "other",
+                    field_type
+                    if isinstance(field_type, str) and field_type in _SUMMARY_FIELD_TYPES
+                    else "other",
+                )
+            )
+    default["rejected_item_fields"] = [
+        {"name": name, "type": field_type}
+        for name, field_type in sorted(safe_fields)
+    ][:32]
+    for name in (
+        "index_syntactically_bounded",
+        "index_in_range",
+        "selected_item_object",
+        "rejected_field_present",
+    ):
+        default[name] = value.get(name) is True
+    return default
+
+
+def _safe_summary_input_item_error_projections(
+    value: object, response_statuses: object
+) -> list[dict[str, object]]:
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    projections = value if isinstance(value, list) else []
+    if len(projections) != len(statuses):
+        projections = [_empty_input_item_error_projection() for _ in statuses]
+    return [_safe_summary_input_item_error_projection(item) for item in projections[:2]]
+
+
 def _safe_summary_bool(value: object) -> bool:
     return value is True
 
@@ -1360,6 +1439,10 @@ def _safe_preclassification_summary(
             gateway.get("response_statuses"),
             _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
         ),
+        "gateway_input_item_error_projections": _safe_summary_input_item_error_projections(
+            gateway.get("input_item_error_projections"),
+            gateway.get("response_statuses"),
+        ),
         "local_error_code_classes": _safe_summary_error_classes(
             local.get("error_code_classes"),
             local.get("response_statuses"),
@@ -1422,6 +1505,7 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "schema", "stage", "codex_failure_category", "gateway", "local", "qwen",
         "request_profile_classes", "gateway_error_code_classes",
         "gateway_error_param_classes", "gateway_error_param_field_classes",
+        "gateway_input_item_error_projections",
         "local_error_code_classes", "local_error_param_classes",
         "local_error_param_field_classes",
         "second_request_input_item_type_sequence",
@@ -1482,6 +1566,63 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
                 and value[boundary]["response_count"] != str(len(classes))
             )
             or any(not isinstance(item, str) or item not in allowed for item in classes)
+        ):
+            raise VerificationError("qualification_summary_invalid")
+    input_error_projections = value["gateway_input_item_error_projections"]
+    gateway_response_count = value["gateway"]["response_count"]
+    if (
+        not isinstance(input_error_projections, list)
+        or len(input_error_projections) > 2
+        or (
+            gateway_response_count != "other"
+            and gateway_response_count != str(len(input_error_projections))
+        )
+    ):
+        raise VerificationError("qualification_summary_invalid")
+    expected_input_error_keys = {
+        "input_item_error_shape_class",
+        "item_json_type_class",
+        "item_type_class",
+        "rejected_item_fields",
+        "rejected_field_name_class",
+        "index_syntactically_bounded",
+        "index_in_range",
+        "selected_item_object",
+        "rejected_field_present",
+    }
+    for projection in input_error_projections:
+        if not isinstance(projection, dict) or set(projection) != expected_input_error_keys:
+            raise VerificationError("qualification_summary_invalid")
+        if (
+            projection["input_item_error_shape_class"] not in _SAFE_INPUT_ERROR_SHAPES
+            or projection["item_json_type_class"] not in _SUMMARY_FIELD_TYPES
+            or projection["item_type_class"] not in _SAFE_INPUT_ITEM_TYPES
+            or projection["rejected_field_name_class"] not in _SAFE_INPUT_ITEM_FIELDS
+            | {"none", "other"}
+            or any(
+                type(projection[name]) is not bool
+                for name in (
+                    "index_syntactically_bounded",
+                    "index_in_range",
+                    "selected_item_object",
+                    "rejected_field_present",
+                )
+            )
+        ):
+            raise VerificationError("qualification_summary_invalid")
+        fields = projection["rejected_item_fields"]
+        if (
+            not isinstance(fields, list)
+            or len(fields) > 32
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"name", "type"}
+                or item["name"] not in _SAFE_INPUT_ITEM_FIELDS | {"other"}
+                or item["type"] not in _SUMMARY_FIELD_TYPES
+                for item in fields
+            )
+            or len({(item["name"], item["type"]) for item in fields}) != len(fields)
+            or fields != sorted(fields, key=lambda item: (item["name"], item["type"]))
         ):
             raise VerificationError("qualification_summary_invalid")
     input_types = value["second_request_input_item_type_sequence"]
@@ -1693,6 +1834,40 @@ _SAFE_FUNCTION_PROJECTION_FIELDS = frozenset(
         "sequence_number",
     }
 )
+_SAFE_INPUT_ITEM_TYPES = frozenset(
+    {
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "additional_tools",
+        "compaction",
+        "other",
+    }
+)
+_SAFE_INPUT_ITEM_FIELDS = frozenset(
+    {
+        "type",
+        "id",
+        "status",
+        "role",
+        "content",
+        "summary",
+        "encrypted_content",
+        "call_id",
+        "name",
+        "arguments",
+        "namespace",
+        "caller",
+        "output",
+        "input",
+        "phase",
+        "internal_chat_message_metadata_passthrough",
+    }
+)
+_SAFE_INPUT_ERROR_SHAPES = frozenset({"item", "field", "other"})
 
 
 def _safe_json_type_class(value: object) -> str:
@@ -1727,6 +1902,89 @@ def _safe_function_projection_fields(item: object) -> list[dict[str, str]]:
         if isinstance(name, str)
     ]
     return sorted(fields, key=lambda field: (field["name"], field["type"]))[:32]
+
+
+def _empty_input_item_error_projection() -> dict[str, object]:
+    return {
+        "input_item_error_shape_class": "other",
+        "item_json_type_class": "other",
+        "item_type_class": "other",
+        "rejected_item_fields": [],
+        "rejected_field_name_class": "other",
+        "index_syntactically_bounded": False,
+        "index_in_range": False,
+        "selected_item_object": False,
+        "rejected_field_present": False,
+    }
+
+
+def _safe_input_item_error_projection(
+    param: object, request_body: bytes
+) -> dict[str, object]:
+    """Correlate one transient input parameter with a request, retaining no index/value."""
+    result = _empty_input_item_error_projection()
+    if not isinstance(param, str):
+        return result
+    item_match = re.fullmatch(r"input\[([0-9]+)\]", param)
+    field_match = re.fullmatch(
+        r"input\[([0-9]+)\]\.([A-Za-z_][A-Za-z0-9_]{0,63})", param
+    )
+    if item_match is None and field_match is None:
+        return result
+    result["input_item_error_shape_class"] = (
+        "field" if field_match is not None else "item"
+    )
+    digits = (field_match or item_match).group(1)
+    bounded = len(digits) <= 3
+    index = int(digits) if bounded else None
+    result["index_syntactically_bounded"] = bounded and index is not None and index <= 128
+    try:
+        payload = json.loads(request_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    items = payload.get("input") if isinstance(payload, dict) else None
+    selected: object = None
+    in_range = (
+        isinstance(items, list)
+        and index is not None
+        and 0 <= index < len(items)
+    )
+    result["index_in_range"] = in_range
+    if in_range:
+        assert isinstance(index, int)
+        selected = items[index]
+    result["selected_item_object"] = isinstance(selected, dict)
+    result["item_json_type_class"] = _safe_json_type_class(selected)
+    if isinstance(selected, dict):
+        item_type = selected.get("type")
+        result["item_type_class"] = (
+            item_type
+            if isinstance(item_type, str) and item_type in _SAFE_INPUT_ITEM_TYPES
+            else "other"
+        )
+        fields = {
+            (
+                name if name in _SAFE_INPUT_ITEM_FIELDS else "other",
+                _safe_json_type_class(value),
+            )
+            for name, value in selected.items()
+            if isinstance(name, str)
+        }
+        result["rejected_item_fields"] = sorted(
+            ({"name": name, "type": field_type} for name, field_type in fields),
+            key=lambda field: (field["name"], field["type"]),
+        )[:32]
+        if field_match is not None:
+            field_name = field_match.group(2)
+            result["rejected_field_name_class"] = (
+                field_name
+                if field_name in _SAFE_INPUT_ITEM_FIELDS
+                else "other"
+            )
+            result["rejected_field_present"] = field_name in selected
+        else:
+            result["rejected_field_name_class"] = "none"
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -3220,6 +3478,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.error_code_classes: list[str] = []
         self.error_param_classes: list[str] = []
         self.error_param_field_classes: list[str] = []
+        self.input_item_error_projections: list[dict[str, object]] = []
         self.forwarded = 0
         self.rejected = 0
         self.downstream_closed_early = False
@@ -3251,7 +3510,7 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.sse_structures.append(structure)
             self.sse_boundaries.append(self.boundary_class)
 
-    def remember_error_body(self, body: bytes) -> None:
+    def remember_error_body(self, body: bytes, *, request_body: bytes) -> None:
         try:
             payload = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -3261,16 +3520,21 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         code_class = _safe_gateway_error_code_class(error.get("code"))
         param_class = _safe_gateway_error_param_class(error.get("param"))
         param_field_class = _safe_gateway_error_param_field_class(error.get("param"))
+        input_item_projection = _safe_input_item_error_projection(
+            error.get("param"), request_body
+        )
         with self._capture_lock:
             self.error_code_classes.append(code_class)
             self.error_param_classes.append(param_class)
             self.error_param_field_classes.append(param_field_class)
+            self.input_item_error_projections.append(input_item_projection)
 
     def remember_no_error(self) -> None:
         with self._capture_lock:
             self.error_code_classes.append("none")
             self.error_param_classes.append("none")
             self.error_param_field_classes.append("none")
+            self.input_item_error_projections.append(_empty_input_item_error_projection())
 
     def mark_downstream_closed_early(self) -> None:
         with self._capture_lock:
@@ -3294,6 +3558,9 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
                 "error_code_classes": list(self.error_code_classes),
                 "error_param_classes": list(self.error_param_classes),
                 "error_param_field_classes": list(self.error_param_field_classes),
+                "input_item_error_projections": [
+                    dict(projection) for projection in self.input_item_error_projections
+                ],
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -3397,12 +3664,16 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
                                 recorder.mark_downstream_closed_early()
                             self.server.remember_sse_structure(recorder.snapshot())
                             if response_status is not None and response_status >= 400:
-                                self.server.remember_error_body(bytes(error_body))
+                                self.server.remember_error_body(
+                                    bytes(error_body), request_body=body
+                                )
                             else:
                                 self.server.remember_no_error()
                             del error_body
                         elif response_status is not None and response_status >= 400:
-                            self.server.remember_error_body(bytes(error_body))
+                            self.server.remember_error_body(
+                                bytes(error_body), request_body=body
+                            )
                             del error_body
                         elif response_status is not None:
                             self.server.remember_no_error()
@@ -4594,14 +4865,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155z-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155aa-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155z-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155aa-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -4620,7 +4891,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155z-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155aa-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -7151,7 +7422,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155z-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aa-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7259,7 +7530,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7418,7 +7689,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7520,31 +7791,31 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-        with tempfile.TemporaryDirectory(prefix="slaif-155z-", dir="/tmp") as temporary:
-            root = Path(temporary)
-            root.chmod(0o700)
-            stage = "local_config_preflight"
-            _validate_local_config(root, runtime)
-            stage = "codex_install"
-            codex_binary = _install_codex(root)
-            stage = "exact_capture_preflight"
-            import scripts.capture_codex_protocol as capture
+            with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
+                root = Path(temporary)
+                root.chmod(0o700)
+                stage = "local_config_preflight"
+                _validate_local_config(root, runtime)
+                stage = "codex_install"
+                codex_binary = _install_codex(root)
+                stage = "exact_capture_preflight"
+                import scripts.capture_codex_protocol as capture
 
-            live = capture.capture_live_0149_session(
-                codex_binary=codex_binary,
-                expected_version=CODEX_VERSION,
-                model=CODEX_MODEL,
-                profile="responses-session-relationship-v3",
-            )
-            if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
-                raise VerificationError("exact_relationship_fixture_mismatch")
-            stage = "composition"
-            result = _run_composed(
-                root,
-                runtime,
-                codex_binary,
-                fake_qwen=fake_qwen,
-            )
+                live = capture.capture_live_0149_session(
+                    codex_binary=codex_binary,
+                    expected_version=CODEX_VERSION,
+                    model=CODEX_MODEL,
+                    profile="responses-session-relationship-v3",
+                )
+                if capture.canonical_json_bytes(live) != SESSION_FIXTURE.read_bytes():
+                    raise VerificationError("exact_relationship_fixture_mismatch")
+                stage = "composition"
+                result = _run_composed(
+                    root,
+                    runtime,
+                    codex_binary,
+                    fake_qwen=fake_qwen,
+                )
         if not fake_qwen:
             stage = "protected_postcheck"
             _verify_protected_model_health(runtime)
@@ -7594,7 +7865,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155z-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155aa-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

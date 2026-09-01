@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155z_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155aa_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155z-head"
+    current_head = "current-155aa-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
+    report_path = "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155z_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-z-exact-second-request-error-and-decisive-closure.md"
+            return "oap/active\noap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155z_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155z_topology_anchors_are_the_155y_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "b499323eacbd450f566df0a6ad768a9437dff025"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "70a5224ff9e7dd07bf2d957baf4cb6717a39e896"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "dfa7454f067a545e6fd6d0a2157250168e05497f"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-y-second-turn-continuation-admission-and-final-closure.md"
+def test_155aa_topology_anchors_are_the_155z_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "c8dff50ea60d4e4f515d970751508e9630455eda"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "65d20cf5d9ed58db95847f8f60f6a122dc3ec77f"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "d5730b1d981562585a0951e4b490444eb7b0f9f0"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
 
 
-def test_155z_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155aa_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -1331,6 +1331,124 @@ def test_gateway_error_parameter_projection_is_bounded_to_root_and_leaf() -> Non
     assert verifier._safe_gateway_error_param_field_class("input") == "none"
     assert verifier._safe_gateway_error_param_class("private-value") == "other"
     assert verifier._safe_gateway_error_param_field_class("private-value") == "other"
+
+
+def test_input_item_error_projection_distinguishes_item_and_field_without_values() -> None:
+    body = json.dumps(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "content": [],
+                    "private_field_canary": "private-value-canary",
+                },
+                "not-an-object",
+            ]
+        }
+    ).encode()
+    item = verifier._safe_input_item_error_projection("input[0]", body)
+    assert item["input_item_error_shape_class"] == "item"
+    assert item["item_json_type_class"] == "object"
+    assert item["item_type_class"] == "message"
+    assert item["index_syntactically_bounded"] is True
+    assert item["index_in_range"] is True
+    assert item["selected_item_object"] is True
+    assert item["rejected_field_name_class"] == "none"
+    assert {
+        (field["name"], field["type"])
+        for field in item["rejected_item_fields"]
+    } >= {
+        ("content", "array"),
+        ("other", "string"),
+        ("type", "string"),
+    }
+    field = verifier._safe_input_item_error_projection("input[0].content", body)
+    assert field["input_item_error_shape_class"] == "field"
+    assert field["rejected_field_name_class"] == "content"
+    assert field["rejected_field_present"] is True
+    unknown = verifier._safe_input_item_error_projection("input[0].private_field_canary", body)
+    assert unknown["rejected_field_name_class"] == "other"
+    assert unknown["rejected_field_present"] is True
+    for projection in (item, field, unknown):
+        rendered = json.dumps(projection, sort_keys=True)
+        assert "private-value-canary" not in rendered
+        assert "private_field_canary" not in rendered
+        assert "input[0]" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("param", "shape", "in_range"),
+    [
+        ("input[0]", "item", True),
+        ("input[1]", "item", True),
+        ("input[2]", "item", False),
+        ("input[999]", "item", False),
+        ("input[0].content", "field", True),
+        ("input[0].content.text", "other", False),
+        ("input[0].content-text", "other", False),
+        ("input[0].content\u0000", "other", False),
+        ("input[x]", "other", False),
+        ("input[-1]", "other", False),
+        ("input[0000]", "item", False),
+    ],
+)
+def test_input_item_error_projection_is_closed_over_parameter_shapes(
+    param: str, shape: str, in_range: bool
+) -> None:
+    body = b'{"input":[null,{"type":"reasoning"}]}'
+    projection = verifier._safe_input_item_error_projection(param, body)
+    assert projection["input_item_error_shape_class"] == shape
+    assert projection["index_in_range"] is in_range
+    assert set(projection) == {
+        "input_item_error_shape_class",
+        "item_json_type_class",
+        "item_type_class",
+        "rejected_item_fields",
+        "rejected_field_name_class",
+        "index_syntactically_bounded",
+        "index_in_range",
+        "selected_item_object",
+        "rejected_field_present",
+    }
+
+
+def test_input_item_error_summary_is_ordinal_and_rejects_duplicate_fields() -> None:
+    safe = verifier._safe_input_item_error_projection(
+        "input[1].type", b'{"input":[{"type":"message"},{"type":"reasoning"}]}'
+    )
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="turn_failed",
+        gateway_requests=2,
+        gateway_status={
+            "response_statuses": [200, 400],
+            "input_item_error_projections": [
+                verifier._empty_input_item_error_projection(),
+                safe,
+            ],
+        },
+        local_requests=1,
+        local_status={"response_statuses": [200]},
+        qwen_status={"inference_calls": 1, "inference_statuses": [200]},
+        request_projections=[],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    assert len(summary["gateway_input_item_error_projections"]) == 2
+    assert verifier._sanitize_preclassification_summary(summary) == summary
+    duplicate = json.loads(json.dumps(summary))
+    duplicate["gateway_input_item_error_projections"][1]["rejected_item_fields"].append(
+        duplicate["gateway_input_item_error_projections"][1]["rejected_item_fields"][0]
+    )
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(duplicate)
+    unaligned = json.loads(json.dumps(summary))
+    unaligned["gateway_input_item_error_projections"] = [
+        verifier._empty_input_item_error_projection()
+    ]
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(unaligned)
 
 
 @pytest.mark.parametrize(
