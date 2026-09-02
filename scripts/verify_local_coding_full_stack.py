@@ -1441,12 +1441,16 @@ def _validate_local_config(root: Path, runtime: RuntimeReference | None) -> Path
         qwen_relay_token="synthetic-qwen-relay-token",
     )
     sys.path.insert(0, str(LOCAL_ROOT / "src"))
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
         from slaif_local_coding.config import load_settings
 
         settings = load_settings(config)
     except Exception as exc:
         raise VerificationError("local_config_invalid") from exc
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
     if (
         settings.server.listen_host != "127.0.0.1"
         or settings.server.listen_port != 18031
@@ -6125,6 +6129,8 @@ def _localize_constitution_failure(
 def _observe_project_safely(payload: dict[str, object]) -> dict[str, object]:
     local_source = str(LOCAL_ROOT / "src")
     sys.path.insert(0, local_source)
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
         from slaif_local_coding.config import ObservationPolicy
         from slaif_local_coding.constitution.detector import observe_request_for_pipeline
@@ -6159,6 +6165,7 @@ def _observe_project_safely(payload: dict[str, object]) -> dict[str, object]:
     except (ImportError, OSError, TypeError, ValueError, AttributeError) as exc:
         raise VerificationError("constitution_detector_failed") from exc
     finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
         if sys.path and sys.path[0] == local_source:
             del sys.path[0]
 
